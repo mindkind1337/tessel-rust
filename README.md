@@ -41,6 +41,20 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - User-selected download folder, completion/failure status and copyable saved paths. Download URLs, cookies and tokens are not logged.
 - New-window requests can be opened explicitly in the existing tab. Native/file URL schemes from websites are refused.
 
+### Native LAN sharing
+
+- Explicit read-only host and guest sessions over TLS with an invitation-pinned certificate and a random access token. Stopping sharing revokes the invitation.
+- Project-confined listing and original-file downloads (8 MiB per file), with no shell, write, browser or vault APIs. Dot paths, app-data paths and known credential filenames are excluded; ordinary project files still need to be suitable for sharing.
+- Connection deadlines, concurrency and frame-size limits; guest downloads never overwrite existing files.
+- Direct LAN connectivity only. This protocol does not interoperate with Electron Tessel Live Share or provide its cloud relay and collaborative editing yet.
+
+### Private Windows password vault
+
+- Explicit CSV import from Chrome, Edge or Firefox exports, stored with Windows user-bound DPAPI encryption outside project folders.
+- Atomic saves, exclusive vault lock, duplicate-account updates, account removal and manual locking. Invalid input retains existing records.
+- Manual fill in the private browser only, restricted to the account's exact HTTPS origin; no automatic form submission. Ambiguous forms are left untouched.
+- No vault tools are available to agents or guests. Existing browser password databases and Tessel credentials are not accessed automatically.
+
 ## Run and verify
 
 Install Rust stable and native C/C++ build tools. Windows requires MSVC build tools, the Windows SDK and WebView2 Runtime. Agents, Git and OpenSSH must be installed separately for their corresponding features.
@@ -66,8 +80,8 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 
 ## Validation and remaining migration
 
-Current Windows evidence: 19 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 25 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Manual password filling has not yet received native browser acceptance testing. No live SSH server or paid inference turn has been used for acceptance testing.
 
-See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes Live Share, encrypted credentials/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. The native Codex chat does not yet render prior history or support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
+See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. The native Codex chat does not yet render prior history or support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 
 No existing Tessel configuration, credentials, browser profiles or personal records are automatically imported or committed.

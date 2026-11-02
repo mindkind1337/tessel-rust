@@ -52,6 +52,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => break,
             };
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = stream.set_nonblocking(false);
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let mut request = Vec::new();
             let mut buf = [0; 2048];

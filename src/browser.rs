@@ -95,6 +95,40 @@ fn download_target(
 }
 
 impl Browser {
+    pub fn fill_account(&self, account: &crate::vault::Account) -> Result<(), String> {
+        let view = self
+            .view
+            .as_ref()
+            .ok_or("Start the private browser and open the login page first")?;
+        let current = view.url().map_err(|_| "Cannot read browser location")?;
+        if crate::vault::origin(&current)? != account.origin {
+            return Err("The browser must be on this account's exact HTTPS site".into());
+        }
+        let payload = zeroize::Zeroizing::new(
+            serde_json::to_string(account).map_err(|_| "Cannot prepare fill")?,
+        );
+        let script = zeroize::Zeroizing::new(format!(
+            r#"(() => {{
+            const account = {};
+            if (location.origin !== account.origin || window !== window.top) return;
+            const visible = el => !el.disabled && !el.readOnly && el.getClientRects().length > 0;
+            const fields = [...document.querySelectorAll('input[type=password]')].filter(visible);
+            if (fields.length !== 1) return;
+            const password = fields[0];
+            const form = password.form;
+            if (!form) return;
+            const users = [...form.querySelectorAll('input[type=email],input[type=text],input:not([type])')].filter(visible);
+            if (users.length > 1) return;
+            const set = (el,value) => {{ Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value); el.dispatchEvent(new Event('input',{{bubbles:true}})); el.dispatchEvent(new Event('change',{{bubbles:true}})); }};
+            if (users.length === 1) set(users[0],account.username);
+            set(password,account.password);
+        }})()"#,
+            payload.as_str()
+        ));
+        view.evaluate_script(&script)
+            .map_err(|_| "Browser refused the fill request".into())
+    }
+
     pub fn visible(&self, visible: bool) {
         if let Some(view) = &self.view {
             let _ = view.set_visible(visible);

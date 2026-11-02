@@ -66,8 +66,11 @@ enum View {
     Settings,
     Git,
     Chat,
+    Share,
     #[cfg(windows)]
     Browser,
+    #[cfg(windows)]
+    Vault,
 }
 pub struct Tessel {
     state: Workspace,
@@ -96,8 +99,11 @@ pub struct Tessel {
     git_path: String,
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
+    share: crate::share_panel::SharePanel,
     #[cfg(windows)]
     browser: crate::browser::Browser,
+    #[cfg(windows)]
+    vault: crate::vault_panel::VaultPanel,
 }
 impl Tessel {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -150,8 +156,11 @@ impl Tessel {
             git_path: String::new(),
             commit_message: String::new(),
             chats: Vec::new(),
+            share: crate::share_panel::SharePanel::default(),
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
+            #[cfg(windows)]
+            vault: crate::vault_panel::VaultPanel::default(),
         };
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
@@ -841,7 +850,8 @@ impl eframe::App for Tessel {
             && !self.allow_exit
             && (self.documents.iter().any(Document::dirty)
                 || !self.sessions.is_empty()
-                || self.chats.iter().any(crate::chat::Chat::busy))
+                || self.chats.iter().any(crate::chat::Chat::busy)
+                || self.share.hosting())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
@@ -855,8 +865,11 @@ impl eframe::App for Tessel {
                 ui.selectable_value(&mut self.view, View::Settings, "Settings");
                 ui.selectable_value(&mut self.view, View::Git, "Git");
                 ui.selectable_value(&mut self.view, View::Chat, "Chat");
+                ui.selectable_value(&mut self.view, View::Share, "Share");
                 #[cfg(windows)]
                 ui.selectable_value(&mut self.view, View::Browser, "Browser");
+                #[cfg(windows)]
+                ui.selectable_value(&mut self.view, View::Vault, "Passwords");
                 ui.separator();
                 if ui.button("+ Terminal").clicked() {
                     self.new_session(Launch::Shell);
@@ -916,6 +929,11 @@ impl eframe::App for Tessel {
             View::Settings => self.settings(ui),
             View::Git => self.git_view(ui),
             View::Chat => self.chat_view(ui),
+            View::Share => self
+                .share
+                .show(ui, self.state.active().map(|p| p.path.as_path())),
+            #[cfg(windows)]
+            View::Vault => self.vault.show(ui, &mut self.browser),
             #[cfg(windows)]
             View::Browser => {
                 if !self.pending_exit && self.pending_close.is_none() {

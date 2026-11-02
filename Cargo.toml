@@ -19,6 +19,14 @@ tempfile = "3"
 rfd = "0.15"
 fs2 = "0.4"
 url = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = "0.14"
+base64 = "0.22"
+getrandom = "0.4"
+subtle = "2"
+csv = "1"
+zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 wry = "=0.57.1"
+windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

@@ -7,7 +7,13 @@ mod chat;
 mod files;
 mod git;
 mod launch;
+mod share;
+mod share_panel;
 mod terminal;
+#[cfg(windows)]
+mod vault;
+#[cfg(windows)]
+mod vault_panel;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--self-test-codex") {
