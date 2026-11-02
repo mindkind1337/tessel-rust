@@ -1,4 +1,5 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
+mod control;
 pub mod smoke;
 pub mod vault_smoke;
 use eframe::egui;
@@ -32,6 +33,9 @@ pub struct Browser {
     sender: Sender<Event>,
     receiver: Receiver<Event>,
     downloads_open: bool,
+    agent_root: Option<PathBuf>,
+    agent_profile: Option<tempfile::TempDir>,
+    planned_download: Arc<Mutex<Option<(PathBuf, std::time::Instant)>>>,
 }
 
 impl Default for Browser {
@@ -51,6 +55,9 @@ impl Default for Browser {
             sender,
             receiver,
             downloads_open: false,
+            agent_root: None,
+            agent_profile: None,
+            planned_download: Default::default(),
         }
     }
 }
@@ -95,6 +102,15 @@ fn download_target(
     )))
 }
 
+fn download_key(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|p| p.canonicalize().ok())
+            .zip(path.file_name())
+            .map(|(p, n)| p.join(n))
+            .unwrap_or_else(|| path.clone())
+    })
+}
 impl Browser {
     pub fn open_address(&mut self, address: String) {
         self.address = address;
@@ -102,6 +118,9 @@ impl Browser {
     }
 
     pub fn fill_account(&self, account: &crate::vault::Account) -> Result<(), String> {
+        if self.agent_root.is_some() {
+            return Err("The owner vault is unavailable to agent browsers".into());
+        }
         let view = self
             .view
             .as_ref()
@@ -158,6 +177,9 @@ impl Browser {
         let popup = self.sender.clone();
         let navigation = self.sender.clone();
         let destination = self.destination.clone();
+        let agent_root = self.agent_root.clone();
+        let agent = agent_root.is_some();
+        let planned = self.planned_download.clone();
         let view = WebViewBuilder::new_with_web_context(
             self.context.as_mut().ok_or("Missing browser environment")?,
         )
@@ -179,10 +201,38 @@ impl Browser {
             wry::NewWindowResponse::Deny
         })
         .with_download_started_handler(move |_, path| {
-            let result = destination
-                .lock()
-                .map_err(|_| "Download settings unavailable".to_string())
-                .and_then(|folder| download_target(&folder, path));
+            let result = if agent {
+                planned
+                    .lock()
+                    .map_err(|_| "Download settings unavailable".to_string())
+                    .and_then(|mut plan| {
+                        let (path, deadline) = plan
+                            .take()
+                            .ok_or("Prepare a download with the agent tool first")?;
+                        if std::time::Instant::now() > deadline || path.exists() {
+                            return Err(
+                                "Download plan expired or destination already exists".into()
+                            );
+                        }
+                        let parent = path
+                            .parent()
+                            .ok_or("Download folder unavailable")?
+                            .canonicalize()
+                            .map_err(|_| "Download folder unavailable")?;
+                        if agent_root
+                            .as_ref()
+                            .is_none_or(|root| !parent.starts_with(root))
+                        {
+                            return Err("Download folder left this project".into());
+                        }
+                        Ok(path)
+                    })
+            } else {
+                destination
+                    .lock()
+                    .map_err(|_| "Download settings unavailable".to_string())
+                    .and_then(|folder| download_target(&folder, path))
+            };
             match result {
                 Ok(target) => {
                     *path = target.clone();
@@ -222,15 +272,17 @@ impl Browser {
                 .unwrap_or_default();
         }
     }
-    pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+    pub fn poll(&mut self) {
         while let Ok(event) = self.receiver.try_recv() {
             match event {
                 Event::Started(path) => {
+                    let path = download_key(path);
                     self.downloads.push_front((path, "Downloading".into()));
                     self.downloads.truncate(100);
                 }
                 Event::Completed(path, ok) => {
                     if let Some(path) = path {
+                        let path = download_key(path);
                         if let Some(d) = self.downloads.iter_mut().find(|d| d.0 == path) {
                             d.1 = if ok {
                                 "Completed"
@@ -257,6 +309,9 @@ impl Browser {
                 Event::Navigation(address) => self.address = address,
             }
         }
+    }
+    pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+        self.poll();
         if self.view.is_none() {
             ui.label("Private browser profile for this Rust app. No cookies or passwords are imported from Tessel.");
             if ui.button("Start browser").clicked()
@@ -315,7 +370,7 @@ impl Browser {
             if let Ok(folder) = self.destination.lock() {
                 ui.label(format!("Save original files to: {}", folder.display()));
             }
-            if ui.button("Choose download folder").clicked() {
+            if self.agent_root.is_none() && ui.button("Choose download folder").clicked() {
                 // File dialog is deliberately user initiated; no page can invoke it.
                 if let Some(path) = rfd::FileDialog::new().pick_folder()
                     && let Ok(mut folder) = self.destination.lock()

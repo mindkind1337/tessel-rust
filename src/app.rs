@@ -106,6 +106,10 @@ pub struct Tessel {
     #[cfg(windows)]
     browser: crate::browser::Browser,
     #[cfg(windows)]
+    agent_browsers: crate::agent_browser::AgentBrowsers,
+    #[cfg(windows)]
+    show_agent_browser: bool,
+    #[cfg(windows)]
     vault: crate::vault_panel::VaultPanel,
 }
 impl Tessel {
@@ -164,6 +168,10 @@ impl Tessel {
             remote: crate::remote_panel::RemotePanel::default(),
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
+            #[cfg(windows)]
+            agent_browsers: Default::default(),
+            #[cfg(windows)]
+            show_agent_browser: false,
             #[cfg(windows)]
             vault: crate::vault_panel::VaultPanel::default(),
         };
@@ -288,10 +296,22 @@ impl Tessel {
     }
     fn poll(&mut self) {
         self.remote.poll();
+        #[cfg(windows)]
+        {
+            self.browser.poll();
+            self.agent_browsers.retain(&self.state.projects);
+        }
         let mut chat_metadata_changed = false;
         for chat in &mut self.chats {
             chat.poll();
+            #[cfg(windows)]
+            self.agent_browsers.poll(chat);
             while let Some(call) = chat.tool_calls.pop_front() {
+                #[cfg(windows)]
+                if call.name == "tessel_browser" {
+                    self.agent_browsers.dispatch(chat, call);
+                    continue;
+                }
                 let result = crate::agent_tools::execute(
                     &mut self.state,
                     chat.project,
@@ -668,6 +688,7 @@ impl Tessel {
                 Ok((_, crate::preview::Link::Web(url))) => {
                     #[cfg(windows)]
                     {
+                        self.show_agent_browser = false;
                         self.browser.open_address(url);
                         self.view = View::Browser;
                     }
@@ -1046,8 +1067,13 @@ impl eframe::App for Tessel {
         });
         self.sidebar(ctx);
         #[cfg(windows)]
+        self.agent_browsers.hide_all();
+        #[cfg(windows)]
         self.browser.visible(
-            self.view == View::Browser && !self.pending_exit && self.pending_close.is_none(),
+            !self.show_agent_browser
+                && self.view == View::Browser
+                && !self.pending_exit
+                && self.pending_close.is_none(),
         );
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
             View::Work => self.work(ui),
@@ -1065,7 +1091,21 @@ impl eframe::App for Tessel {
             #[cfg(windows)]
             View::Browser => {
                 if !self.pending_exit && self.pending_close.is_none() {
-                    self.browser.show(ui, frame);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.show_agent_browser, false, "Owner browser");
+                        ui.selectable_value(&mut self.show_agent_browser, true, "Project agent");
+                    });
+                    if self.show_agent_browser {
+                        self.browser.visible(false);
+                        if let Some(project) = self.state.active() {
+                            self.agent_browsers
+                                .show(ui, frame, project.id, &project.path);
+                        } else {
+                            ui.label("Select a project first.");
+                        }
+                    } else {
+                        self.browser.show(ui, frame);
+                    }
                 }
             }
         });

@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg(windows)]
+mod agent_browser;
 mod agent_tools;
 mod app;
 #[cfg(windows)]
@@ -32,6 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     if std::env::args().any(|arg| arg == "--self-test-browser") {
         return browser::smoke::run();
+    }
+    #[cfg(windows)]
+    if std::env::args().any(|arg| arg == "--self-test-agent-browser") {
+        return browser::smoke::run_agent();
     }
     #[cfg(windows)]
     if std::env::args().any(|arg| arg == "--self-test-vault") {

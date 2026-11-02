@@ -822,6 +822,10 @@ impl Chat {
     pub fn set_resume(&mut self, id: String) {
         self.resume = id;
     }
+    #[cfg(windows)]
+    pub fn tool_scope(&self) -> Option<(String, String)> {
+        Some((self.thread_id.clone()?, self.turn.clone()?))
+    }
     pub fn tool_result(&mut self, id: Value, result: Result<Value, String>) {
         let (success, text) = match result {
             Ok(value) => (true, value.to_string()),

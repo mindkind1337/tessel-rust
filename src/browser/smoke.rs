@@ -33,6 +33,12 @@ fn pdf() -> Vec<u8> {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    run_mode(false)
+}
+pub fn run_agent() -> Result<(), Box<dyn std::error::Error>> {
+    run_mode(true)
+}
+fn run_mode(agent: bool) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -72,7 +78,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 l.to_ascii_lowercase().starts_with("cookie:")
                     && l.contains("fixture_session=synthetic-only")
             });
-            let (status, extra, body) = if matches!(path, "/" | "/case-auth" | "/case-blob") {
+            let (status, extra, body) = if path == "/controls" {
+                ("200 OK","Content-Type: text/html".to_string()+"\r\n", br#"<!doctype html><title>Agent controls fixture</title><input id='query'><input id='secret' type='password'><button id='apply' onclick="document.getElementById('result').textContent=document.getElementById('query').value">Apply</button><p id='result'>untouched</p>"#.to_vec())
+            } else if matches!(path, "/" | "/case-auth" | "/case-blob") {
                 let script = match path {
                     "/" => "save('/direct','direct.pdf');",
                     "/case-auth" => "save('/auth','auth.pdf');",
@@ -128,6 +136,8 @@ setTimeout(async()=>{{{script}}},700);</script>"#
                 .map_err(|_| "Download lock failed")? = root.join("downloads");
             Ok(Box::new(Smoke {
                 browser,
+                agent,
+                probe: Probe::default(),
                 root,
                 address,
                 expected,
@@ -150,6 +160,8 @@ setTimeout(async()=>{{{script}}},700);</script>"#
 }
 struct Smoke {
     browser: Browser,
+    agent: bool,
+    probe: Probe,
     root: std::path::PathBuf,
     address: String,
     expected: Vec<u8>,
@@ -162,15 +174,17 @@ impl eframe::App for Smoke {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if !self.initialized {
             self.initialized = true;
-            if let Err(e) = self
-                .browser
-                .create_with_profile(frame, self.root.join("profile"))
-            {
-                if let Ok(mut r) = self.result.lock() {
-                    *r = Some(Err(e));
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                return;
+            let start = if self.agent {
+                Browser::start_agent(frame, &self.root).map(|browser| self.browser = browser)
+            } else {
+                self.browser
+                    .create_with_profile(frame, self.root.join("profile"))
+            };
+            if let Err(e) = start.and_then(|()| {
+                if self.agent { self.browser.control(&serde_json::json!({"operation":"prepare_download","folder":".","filename":"chosen-0.pdf"}))?; } Ok(())
+            }) {
+                if let Ok(mut r)=self.result.lock(){*r=Some(Err(e));}
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);return;
             }
             self.browser.address = self.address.clone();
             self.browser.navigate();
@@ -182,7 +196,7 @@ impl eframe::App for Smoke {
             .iter()
             .filter(|d| d.1 == "Completed")
             .collect();
-        let outcome = if completed.len() == 3 {
+        let mut outcome = if completed.len() == 3 {
             let all_original = completed
                 .iter()
                 .all(|d| std::fs::read(&d.0).is_ok_and(|bytes| bytes == self.expected));
@@ -192,9 +206,13 @@ impl eframe::App for Smoke {
                 .collect();
             Some(
                 if all_original
-                    && ["direct.pdf", "auth.pdf", "blob.pdf"]
-                        .iter()
-                        .all(|n| names.contains(*n))
+                    && (if self.agent {
+                        ["chosen-0.pdf", "chosen-1.pdf", "chosen-2.pdf"]
+                    } else {
+                        ["direct.pdf", "auth.pdf", "blob.pdf"]
+                    })
+                    .iter()
+                    .all(|n| names.contains(*n))
                 {
                     Ok(())
                 } else {
@@ -211,6 +229,14 @@ impl eframe::App for Smoke {
             None
         };
         let completed_count = completed.len();
+        if self.agent && outcome.as_ref().is_some_and(Result::is_ok) {
+            outcome = self
+                .probe
+                .advance(&mut self.browser, frame, &self.root, &self.address);
+        }
+        if self.started.elapsed() > Duration::from_secs(45) {
+            outcome = Some(Err("Agent acceptance timed out".into()));
+        }
         if outcome.is_none() && completed_count > self.stage && completed_count < 3 {
             self.stage = completed_count;
             self.browser.address = format!(
@@ -222,6 +248,7 @@ impl eframe::App for Smoke {
                     "case-blob"
                 }
             );
+            if self.agent && let Err(e)=self.browser.control(&serde_json::json!({"operation":"prepare_download","folder":".","filename":format!("chosen-{completed_count}.pdf")})) { outcome=Some(Err(e)); }
             self.browser.navigate();
         }
         if let Some(outcome) = outcome {
@@ -231,5 +258,124 @@ impl eframe::App for Smoke {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(50));
+    }
+}
+
+#[derive(Default)]
+struct Probe {
+    phase: usize,
+    pending: Option<super::control::ControlReply>,
+    owner: Option<Browser>,
+}
+impl Probe {
+    fn advance(
+        &mut self,
+        b: &mut Browser,
+        frame: &eframe::Frame,
+        root: &std::path::Path,
+        address: &str,
+    ) -> Option<Result<(), String>> {
+        use serde_json::json;
+        if let Some(rx) = &self.pending {
+            let Ok(result) = rx.try_recv() else {
+                return None;
+            };
+            self.pending = None;
+            if self.phase == 2
+                && result
+                    .as_ref()
+                    .is_ok_and(|v| v["title"] != "Agent controls fixture")
+            {
+                self.phase = 1;
+                return None;
+            }
+            if self.phase == 5
+                && !result.as_ref().is_ok_and(|v| {
+                    v["text"]
+                        .as_str()
+                        .is_some_and(|t| t.contains("native-agent-fill"))
+                })
+            {
+                return Some(Err("DOM fill/click did not update fixture".into()));
+            }
+            if self.phase == 6 || self.phase == 7 {
+                if result.is_ok() {
+                    return Some(Err(
+                        "Origin/password guard accepted an invalid action".into()
+                    ));
+                }
+            } else if let Err(e) = result {
+                return Some(Err(e));
+            }
+        }
+        if self.phase == 0 {
+            let status = b.control(&json!({"operation":"downloads"})).and_then(|rx| {
+                rx.try_recv()
+                    .map_err(|_| "Missing download status".to_string())?
+            });
+            if !status.is_ok_and(|v| {
+                v["downloads"].as_array().is_some_and(|items| {
+                    items.len() == 3
+                        && items.iter().all(|d| {
+                            d["status"] == "Completed"
+                                && d["path"]
+                                    .as_str()
+                                    .is_some_and(|p| std::path::Path::new(p).is_file())
+                        })
+                })
+            }) {
+                return Some(Err("Agent download status/path verification failed".into()));
+            }
+        }
+        let origin = address.trim_end_matches('/');
+        let args = match self.phase {
+            0 => json!({"operation":"navigate","url":format!("{address}controls")}),
+            1 => json!({"operation":"snapshot"}),
+            2 => {
+                json!({"operation":"fill","origin":origin,"selector":"#query","text":"native-agent-fill"})
+            }
+            3 => json!({"operation":"click","origin":origin,"selector":"#apply"}),
+            4 => json!({"operation":"snapshot"}),
+            5 => json!({"operation":"click","origin":"https://wrong.invalid","selector":"#apply"}),
+            6 => {
+                json!({"operation":"fill","origin":origin,"selector":"#secret","text":"must-not-fill"})
+            }
+            _ => {
+                let result = (|| -> Result<(), String> {
+                    let cookies = b
+                        .view
+                        .as_ref()
+                        .ok_or("Missing agent browser")?
+                        .cookies_for_url(address)
+                        .map_err(|_| "Cannot inspect fixture cookies")?;
+                    if cookies.is_empty() {
+                        return Err("Authenticated fixture cookie was lost".into());
+                    }
+                    let mut owner = Browser::default();
+                    owner.create_with_profile(frame, root.join("isolated-owner"))?;
+                    if !owner
+                        .view
+                        .as_ref()
+                        .unwrap()
+                        .cookies_for_url(address)
+                        .map_err(|_| "Cannot inspect owner isolation")?
+                        .is_empty()
+                    {
+                        return Err("Agent fixture cookies leaked to another profile".into());
+                    }
+                    self.owner = Some(owner);
+                    Ok(())
+                })();
+                return Some(result);
+            }
+        };
+        match b.control(&args) {
+            Ok(rx) => {
+                self.pending = Some(rx);
+                self.phase += 1;
+                None
+            }
+            Err(e) => Some(Err(e)),
+        }
     }
 }
