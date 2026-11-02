@@ -11,6 +11,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Layout | Persistent grid; project switching retains sessions | In progress |
 | Agent terminals | Detect installed CLIs; project cwd; no invented provider flags | In progress |
 | SSH | Host verification, keepalive, explicit reconnect, remote cwd | In progress; live host acceptance pending |
+| Remote filesystem | SFTP listing/read/save/download; host verification; conflict protection | Protocol fixture passes; live SSH authentication, remote management and direct previews pending |
 | Task board | Per-project cards; persistence; safe movement | Implemented, including scoped native chat tools |
 | Git | Nonblocking, bounded status/diff/log; explicit mutations; no auto polling storms | Implemented; real temporary-repository test passes |
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; other providers pending |

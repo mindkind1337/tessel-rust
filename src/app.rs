@@ -67,6 +67,7 @@ enum View {
     Git,
     Chat,
     Share,
+    Remote,
     #[cfg(windows)]
     Browser,
     #[cfg(windows)]
@@ -101,6 +102,7 @@ pub struct Tessel {
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
     share: crate::share_panel::SharePanel,
+    remote: crate::remote_panel::RemotePanel,
     #[cfg(windows)]
     browser: crate::browser::Browser,
     #[cfg(windows)]
@@ -159,6 +161,7 @@ impl Tessel {
             commit_message: String::new(),
             chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
+            remote: crate::remote_panel::RemotePanel::default(),
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
             #[cfg(windows)]
@@ -284,6 +287,7 @@ impl Tessel {
         });
     }
     fn poll(&mut self) {
+        self.remote.poll();
         let mut chat_metadata_changed = false;
         for chat in &mut self.chats {
             chat.poll();
@@ -837,7 +841,8 @@ impl Tessel {
                 if ui.button("Keep working").clicked() {
                     self.pending_exit = false;
                 }
-                if ui.button("Save all and close").clicked() {
+                if self.remote.needs_close_confirmation() {ui.label("Finish remote requests and save remote edits in Remote files before saving and closing.");}
+                if ui.add_enabled(!self.remote.needs_close_confirmation(),egui::Button::new("Save all and close")).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -852,7 +857,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.button("Discard edits and close").clicked() {
+                if ui.add_enabled(!self.remote.busy(),egui::Button::new("Discard edits and close")).clicked() {
                     self.allow_exit = true;
                     self.save();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -971,7 +976,8 @@ impl eframe::App for Tessel {
             && (self.documents.iter().any(Document::dirty)
                 || !self.sessions.is_empty()
                 || self.chats.iter().any(crate::chat::Chat::busy)
-                || self.share.hosting())
+                || self.share.hosting()
+                || self.remote.needs_close_confirmation())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
@@ -986,6 +992,7 @@ impl eframe::App for Tessel {
                 ui.selectable_value(&mut self.view, View::Git, "Git");
                 ui.selectable_value(&mut self.view, View::Chat, "Chat");
                 ui.selectable_value(&mut self.view, View::Share, "Share");
+                ui.selectable_value(&mut self.view, View::Remote, "Remote files");
                 #[cfg(windows)]
                 ui.selectable_value(&mut self.view, View::Browser, "Browser");
                 #[cfg(windows)]
@@ -1049,6 +1056,7 @@ impl eframe::App for Tessel {
             View::Settings => self.settings(ui),
             View::Git => self.git_view(ui),
             View::Chat => self.chat_view(ui),
+            View::Remote => self.remote.show(ui, &self.state.hosts),
             View::Share => self
                 .share
                 .show(ui, self.state.active().map(|p| p.path.as_path())),

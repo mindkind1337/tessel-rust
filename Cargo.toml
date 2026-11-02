@@ -26,6 +26,8 @@ getrandom = "0.4"
 subtle = "2"
 csv = "1"
 zeroize = "1"
+tokio = { version = "1", features = ["rt", "process", "io-util", "time", "sync", "net"] }
+russh-sftp = "3"
 hayro = { version = "0.8", features = ["embed-fonts"] }
 scraper = "0.29"
 pulldown-cmark = "0.13"

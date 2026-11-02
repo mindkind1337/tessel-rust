@@ -9,6 +9,8 @@ mod git;
 mod launch;
 mod pdf;
 mod preview;
+mod remote;
+mod remote_panel;
 mod share;
 mod share_panel;
 mod terminal;

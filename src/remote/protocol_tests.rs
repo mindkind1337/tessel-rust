@@ -1,0 +1,261 @@
+use super::*;
+use russh_sftp::{
+    protocol::{Attrs, Data, File, Handle, Name, Status, Version},
+    server::Handler,
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+#[derive(Clone)]
+struct Record {
+    bytes: Vec<u8>,
+    attrs: FileAttributes,
+}
+struct Fixture {
+    files: Arc<Mutex<HashMap<String, Record>>>,
+    listed: bool,
+}
+fn status(id: u32) -> Status {
+    Status {
+        id,
+        status_code: StatusCode::Ok,
+        error_message: String::new(),
+        language_tag: String::new(),
+    }
+}
+impl Handler for Fixture {
+    type Error = StatusCode;
+    fn unimplemented(&self) -> Self::Error {
+        StatusCode::OpUnsupported
+    }
+    async fn init(&mut self, _: u32, _: HashMap<String, String>) -> Result<Version, Self::Error> {
+        let mut v = Version::new();
+        v.extensions
+            .insert("posix-rename@openssh.com".into(), "1".into());
+        Ok(v)
+    }
+    async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        Ok(Name {
+            id,
+            files: vec![File::dummy(match path.as_str() {
+                "." => "/root",
+                "/root/escape" => "/outside/private",
+                _ => &path,
+            })],
+        })
+    }
+    async fn opendir(&mut self, id: u32, _: String) -> Result<Handle, Self::Error> {
+        self.listed = false;
+        Ok(Handle {
+            id,
+            handle: "directory".into(),
+        })
+    }
+    async fn readdir(&mut self, id: u32, _: String) -> Result<Name, Self::Error> {
+        if self.listed {
+            return Err(StatusCode::Eof);
+        }
+        self.listed = true;
+        let files = self.files.lock().unwrap();
+        let mut names: Vec<_> = files
+            .iter()
+            .filter(|(p, _)| p.starts_with("/root/"))
+            .map(|(p, r)| File::new(p.trim_start_matches("/root/"), r.attrs.clone()))
+            .collect();
+        names.push(File::new(
+            "../escape",
+            FileAttributes {
+                permissions: Some(0o100600),
+                ..Default::default()
+            },
+        ));
+        Ok(Name { id, files: names })
+    }
+    async fn open(
+        &mut self,
+        id: u32,
+        filename: String,
+        flags: OpenFlags,
+        attrs: FileAttributes,
+    ) -> Result<Handle, Self::Error> {
+        let mut files = self.files.lock().unwrap();
+        if flags.contains(OpenFlags::CREATE) {
+            if files.contains_key(&filename) && flags.contains(OpenFlags::EXCLUDE) {
+                return Err(StatusCode::Failure);
+            }
+            files.insert(
+                filename.clone(),
+                Record {
+                    bytes: vec![],
+                    attrs: FileAttributes {
+                        permissions: Some(0o100000 | attrs.permissions.unwrap_or(0o600)),
+                        ..attrs
+                    },
+                },
+            );
+        }
+        if !files.contains_key(&filename) {
+            return Err(StatusCode::NoSuchFile);
+        }
+        Ok(Handle {
+            id,
+            handle: filename,
+        })
+    }
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        let files = self.files.lock().unwrap();
+        let file = files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
+        let mut attrs = file.attrs.clone();
+        attrs.size = Some(file.bytes.len() as u64);
+        Ok(Attrs { id, attrs })
+    }
+    async fn read(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        len: u32,
+    ) -> Result<Data, Self::Error> {
+        let files = self.files.lock().unwrap();
+        let bytes = &files.get(&handle).ok_or(StatusCode::NoSuchFile)?.bytes;
+        let offset = offset as usize;
+        if offset >= bytes.len() {
+            return Err(StatusCode::Eof);
+        }
+        Ok(Data {
+            id,
+            data: bytes[offset..(offset + len as usize).min(bytes.len())].to_vec(),
+        })
+    }
+    async fn write(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<Status, Self::Error> {
+        let mut files = self.files.lock().unwrap();
+        let bytes = &mut files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?.bytes;
+        let offset = offset as usize;
+        bytes.resize(bytes.len().max(offset + data.len()), 0);
+        bytes[offset..offset + data.len()].copy_from_slice(&data);
+        Ok(status(id))
+    }
+    async fn fsetstat(
+        &mut self,
+        id: u32,
+        handle: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        self.files
+            .lock()
+            .unwrap()
+            .get_mut(&handle)
+            .ok_or(StatusCode::NoSuchFile)?
+            .attrs = FileAttributes {
+            permissions: Some(0o100000 | attrs.permissions.unwrap_or(0o600)),
+            ..attrs
+        };
+        Ok(status(id))
+    }
+    async fn close(&mut self, id: u32, _: String) -> Result<Status, Self::Error> {
+        Ok(status(id))
+    }
+    async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        self.files.lock().unwrap().remove(&path);
+        Ok(status(id))
+    }
+    async fn extended(
+        &mut self,
+        id: u32,
+        request: String,
+        data: Vec<u8>,
+    ) -> Result<Packet, Self::Error> {
+        if request != "posix-rename@openssh.com" {
+            return Err(StatusCode::OpUnsupported);
+        }
+        let first = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
+        let old = String::from_utf8(data[4..4 + first].to_vec()).unwrap();
+        let next = 4 + first;
+        let len = u32::from_be_bytes(data[next..next + 4].try_into().unwrap()) as usize;
+        let new = String::from_utf8(data[next + 4..next + 4 + len].to_vec()).unwrap();
+        let mut files = self.files.lock().unwrap();
+        let file = files.remove(&old).ok_or(StatusCode::NoSuchFile)?;
+        files.insert(new, file);
+        Ok(Packet::Status(status(id)))
+    }
+}
+#[test]
+fn real_sftp_frames_preserve_originals_and_refuse_conflicts() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let files = Arc::new(Mutex::new(HashMap::from([(
+                "/root/file.txt".into(),
+                Record {
+                    bytes: b"original".to_vec(),
+                    attrs: FileAttributes {
+                        permissions: Some(0o100640),
+                        uid: Some(7),
+                        gid: Some(8),
+                        ..Default::default()
+                    },
+                },
+            )])));
+            let (client, server) = tokio::io::duplex(65536);
+            let server = tokio::spawn(russh_sftp::server::run(
+                server,
+                Fixture {
+                    files: files.clone(),
+                    listed: false,
+                },
+            ));
+            let session = RawSftpSession::new(client);
+            session.init().await.unwrap();
+            let root = canonical(&session, ".").await.unwrap();
+            assert_eq!(root, "/root");
+            let Reply::Listing { entries, .. } =
+                operate(&session, &root, Action::List(String::new()), true)
+                    .await
+                    .unwrap()
+            else {
+                panic!("expected listing")
+            };
+            assert_eq!(entries.len(), 1);
+            let Reply::File { bytes, .. } =
+                operate(&session, &root, Action::Read("file.txt".into()), true)
+                    .await
+                    .unwrap()
+            else {
+                panic!("expected file")
+            };
+            assert_eq!(bytes, b"original");
+            assert!(
+                operate(&session, &root, Action::Read("escape".into()), true)
+                    .await
+                    .is_err()
+            );
+            let save = || Action::Save {
+                path: "/root/file.txt".into(),
+                original: b"original".to_vec(),
+                replacement: b"updated".to_vec(),
+            };
+            assert!(operate(&session, &root, save(), false).await.is_err());
+            operate(&session, &root, save(), true).await.unwrap();
+            {
+                let files = files.lock().unwrap();
+                let file = &files["/root/file.txt"];
+                assert_eq!(file.bytes, b"updated");
+                assert_eq!(file.attrs.permissions, Some(0o100640));
+                assert_eq!(file.attrs.uid, Some(7));
+                assert_eq!(files.len(), 1);
+            }
+            assert!(operate(&session, &root, save(), true).await.is_err());
+            assert_eq!(files.lock().unwrap()["/root/file.txt"].bytes, b"updated");
+            session.close_session().unwrap();
+            server.abort();
+        });
+}

@@ -26,6 +26,12 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - UTF-8 text editor tabs (2 MiB limit), atomic saves, detection of external edits and unsaved-change guards on close.
 - On-demand Git status, working/staged diffs, recent history, literal-path staging and explicit commits. No continuous Git polling; operations have a 20-second deadline and bounded captured output.
 
+### Remote files
+
+- On-demand SFTP browsing, original-file downloads (16 MiB) and UTF-8 editing (2 MiB) through OpenSSH config and existing key/agent authentication. Unknown host keys are refused; no background polling or automatic production connections.
+- Canonical remote-root checks, bounded directory reads and a 30-second operation deadline. Saves compare the opened bytes again before atomic replacement and preserve ordinary permissions/ownership; servers without atomic rename support are read-only.
+- Unsaved edits and active requests block accidental close or host changes. Local downloads never overwrite an existing file. Password-only SSH authentication, remote file creation/deletion and direct remote previews are not implemented yet.
+
 ### Document previews
 
 - Native readable HTML and Markdown views, with source/preview switching and copy-as-plain-text. Scripts, CSS and external resources are never executed or fetched by this view; it is not a full webpage renderer.
@@ -92,8 +98,8 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 
 ## Validation and remaining migration
 
-Current Windows evidence: 34 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 37 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. Framed SFTP fixture tests cover listing, original reads, root escape refusal, atomic saves and edit conflicts. No live SSH server or paid inference turn has been used for acceptance testing.
 
-See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. Native Codex history depends on server support, and chat does not yet support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
+See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, full remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. Native Codex history depends on server support, and chat does not yet support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 
 No existing Tessel configuration, credentials, browser profiles or personal records are automatically imported or committed.
