@@ -7,6 +7,7 @@ mod chat;
 mod files;
 mod git;
 mod launch;
+mod pdf;
 mod preview;
 mod share;
 mod share_panel;
@@ -17,6 +18,12 @@ mod vault;
 mod vault_panel;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--pdf-worker") {
+        std::process::exit(if pdf::worker().is_ok() { 0 } else { 1 });
+    }
+    if std::env::args().any(|a| a == "--self-test-pdf") {
+        return pdf::smoke();
+    }
     if std::env::args().any(|arg| arg == "--self-test-codex") {
         return chat::smoke();
     }

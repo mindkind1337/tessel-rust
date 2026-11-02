@@ -188,7 +188,12 @@ impl Tessel {
             && let Some(root) = path.parent()
         {
             match Document::open(root, &path) {
-                Ok(document) => {
+                Ok(mut document) => {
+                    if let Some(pdf) = &mut document.pdf
+                        && let Err(e) = pdf.prime(&cc.egui_ctx)
+                    {
+                        app.error = e;
+                    }
                     app.documents.push(document);
                     app.view = View::Files;
                 }
@@ -592,7 +597,9 @@ impl Tessel {
             ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
         }
         let mut link = None;
-        if d.media {
+        if let Some(pdf) = &mut d.pdf {
+            pdf.show(ui);
+        } else if d.media {
             if d.texture.is_none()
                 && let Some(image) = d.image.take()
             {

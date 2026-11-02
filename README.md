@@ -31,7 +31,9 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Native readable HTML and Markdown views, with source/preview switching and copy-as-plain-text. Scripts, CSS and external resources are never executed or fetched by this view; it is not a full webpage renderer.
 - Local links open another editor tab while preserving the source; HTTP(S) links open the private browser. Native URL schemes, network-share links and paths outside the source project are refused.
 - Read-only PNG, JPEG, WebP, GIF-first-frame and BMP previews, with background decoding, compressed-size/dimension/allocation limits and fit-to-width display.
-- Bounded document loading and up to 24 open or loading documents. PDF rendering and office-document previews remain pending.
+- Original PDF page rendering in Rust with previous/next page, zoom and fit-width controls. Rendering runs in a disposable worker with a 20-second deadline; Windows additionally enforces a 512 MiB process-memory limit. Closing the document cancels its worker.
+- PDF inputs are limited to 32 MiB/2,000 pages; raster output is bounded to 4,096 pixels per side and 8 million pixels. The source file is never rewritten. Unsupported or damaged documents report an error; forms, text selection and every PDF feature are not supported yet.
+- Bounded document loading and up to 24 open or loading documents. Office-document previews remain pending.
 
 ### Native Codex chat
 
@@ -83,13 +85,14 @@ Optional native acceptance checks:
 .\target\debug\tessel-rust.exe --self-test-browser
 .\target\debug\tessel-rust.exe --self-test-codex
 .\target\debug\tessel-rust.exe --self-test-vault
+.\target\debug\tessel-rust.exe --self-test-pdf
 ```
 
-The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
+The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The PDF check renders two synthetic original pages in the resource-limited worker and rejects invalid input. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
 
 ## Validation and remaining migration
 
-Current Windows evidence: 32 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 34 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
 
 See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. Native Codex history depends on server support, and chat does not yet support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 

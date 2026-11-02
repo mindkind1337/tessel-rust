@@ -74,6 +74,7 @@ pub struct Document {
     pub image: Option<eframe::egui::ColorImage>,
     pub texture: Option<eframe::egui::TextureHandle>,
     pub media: bool,
+    pub pdf: Option<crate::pdf::PdfView>,
 }
 impl Document {
     pub fn open(root: &Path, path: &Path) -> Result<Self> {
@@ -83,6 +84,22 @@ impl Document {
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
+        if extension == "pdf" {
+            let pdf = crate::pdf::PdfView::open(&path)?;
+            return Ok(Self {
+                root: root.to_owned(),
+                path,
+                text: String::new(),
+                original: vec![],
+                error: String::new(),
+                preview_mode: true,
+                preview: None,
+                image: None,
+                texture: None,
+                media: true,
+                pdf: Some(pdf),
+            });
+        }
         if matches!(
             extension.as_str(),
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
@@ -120,6 +137,7 @@ impl Document {
                 image: Some(image),
                 texture: None,
                 media: true,
+                pdf: None,
             });
         }
         let original = read(&path)?;
@@ -139,6 +157,7 @@ impl Document {
             image: None,
             texture: None,
             media: false,
+            pdf: None,
         })
     }
     pub fn dirty(&self) -> bool {
@@ -146,7 +165,7 @@ impl Document {
     }
     pub fn save(&mut self) -> Result<()> {
         if self.media {
-            return Err("Images are read-only".into());
+            return Err("This document is read-only".into());
         }
         let actual = confined(&self.root, &self.path)?;
         if actual != self.path {
