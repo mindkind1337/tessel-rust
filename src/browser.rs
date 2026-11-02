@@ -367,7 +367,12 @@ impl Browser {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
         if self.downloads_open {
-            if let Ok(folder) = self.destination.lock() {
+            if let Some(root) = &self.agent_root {
+                ui.label(format!(
+                    "Prepare agent downloads within project: {}",
+                    root.display()
+                ));
+            } else if let Ok(folder) = self.destination.lock() {
                 ui.label(format!("Save original files to: {}", folder.display()));
             }
             if self.agent_root.is_none() && ui.button("Choose download folder").clicked() {

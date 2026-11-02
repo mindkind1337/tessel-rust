@@ -131,6 +131,8 @@ impl Tessel {
             Ok((s, w)) => (Some(s), w, String::new()),
             Err(e) => (None, Workspace::default(), e),
         };
+        #[cfg(windows)]
+        crate::terminal::configure_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(if state.dark {
             egui::Visuals::dark()
         } else {
@@ -209,6 +211,28 @@ impl Tessel {
                     app.view = View::Files;
                 }
                 Err(error) => app.error = error,
+            }
+        }
+        #[cfg(feature = "visual-test")]
+        if std::env::args().any(|a| a == "--terminal-fixture") {
+            match Terminal::visual_fixture() {
+                Ok(terminal) => {
+                    let id = app.next_session;
+                    app.next_session += 1;
+                    app.sessions.push(Session {
+                        id,
+                        project: app.state.active_project,
+                        title: "Terminal rendering fixture".into(),
+                        launch: Launch::Shell,
+                        cwd: launch::default_directory(),
+                        terminal: Some(terminal),
+                        loading: None,
+                        error: String::new(),
+                    });
+                    app.active_session = Some(id);
+                    app.view = View::Work;
+                }
+                Err(e) => app.error = e.to_string(),
             }
         }
         app

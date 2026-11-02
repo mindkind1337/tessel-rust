@@ -21,7 +21,17 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |
 | Connectors/account/sync | Match existing service contracts; token isolation and consent | Pending |
-| Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Pending |
+| Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending |
 | Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Pending |
 
 The Rust application can invoke external shells and agent CLIs. An embedded browser requires an external browser engine. Those are dependencies, not a JavaScript implementation of Tessel. Existing service credentials and production endpoints are not exercised automatically.
+
+## Account / connector backend boundary
+
+Read-only inspection of `C:\tessel-server` on 2026-11-02 found that `src/auth.js` accepts `tessel`, `tessel-dev` and `admin`, while `src/connect.js` accepts only the first two. The Rust client needs its own `tessel-rust://` callback and must not register over either running Electron application's protocol.
+
+`integration/tessel-server-rust-scheme.patch` adds the separate scheme to those two allowlists. `git apply --check --ignore-space-change` passes against server commit `35ba421` (the checkout has mixed line endings). In an isolated archive of that commit, all 116 authentication/connector tests pass, including new Rust callback and one-use token-exchange coverage. It has **not** been applied to the live checkout or deployed, and is not sufficient by itself to enable native accounts. Rust PKCE/state/expiry validation, OS-protected session storage, protocol registration, logout/revocation and end-to-end acceptance are still required.
+
+The existing account contract uses `https://tesselcode.com/login?challenge=...&state=...&app=...`, a code/verifier POST to `/auth/token`, `/api/me` and `/auth/logout`. Connector flows additionally use `/api/connect/services`, `/api/connect/start` and service-specific exchange/refresh/revocation contracts. Tokens must remain outside projects, agent outputs and sharing. Native code must not copy the current Electron account/session files.
+
+The existing sync contract at `/api/sync` and `/api/sync/versions` carries account-bound encrypted, compressed and padded snapshots with revision/conflict handling. Rust workspace metadata has a different schema: uploading it as an Electron snapshot would be unsafe. An explicit schema/compatibility design and opt-in restore preview are still pending. No account, connector or sync production endpoint was exercised during this inspection.

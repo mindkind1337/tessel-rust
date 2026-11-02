@@ -15,7 +15,8 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 
 - Real PTYs (ConPTY on Windows), independent tabs and grid layout. Switching projects keeps existing sessions running and drains their output.
 - PowerShell without user profiles on Windows; `/bin/sh` on Unix.
-- ANSI colors, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys.
+- ANSI colors, underlines, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys. Wide glyphs render above both cell backgrounds; painting is clipped to each pane. Installed Windows emoji/symbol fonts are used as fallbacks.
+- Ctrl+A–Z, Ctrl+Space, Shift+Tab, Insert/Delete, Page Up/Down, F1–F12 and modified navigation/function keys. The input cursor is hidden while viewing scrollback.
 - Bounded input/output queues and shell termination on sleep or close.
 - Detection and explicit launch of installed Claude, Codex, OpenCode, Gemini, Copilot, Aider, Amp, Kimi, Qwen, Grok, Cline and Cursor agent CLIs.
 - SSH terminals through OpenSSH, config aliases, host verification, explicit reconnect, remote working directory and keepalives. No production server is contacted automatically.
@@ -80,6 +81,11 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Manual fill in the private browser only, restricted to the account's exact HTTPS origin; no automatic form submission. Ambiguous forms are left untouched.
 - No vault tools are available to agents or guests. Existing browser password databases and Tessel credentials are not accessed automatically.
 
+### Windows distribution
+
+- An optimized portable Windows x64 ZIP can be built with `./scripts/package-windows.ps1` from a clean committed checkout. The script builds with two compiler jobs, runs the original-PDF worker acceptance check, writes commit/build metadata and SHA-256 checksums, and extracts the ZIP to verify the executable bytes.
+- GitHub Actions runs formatting, tests and strict Clippy before packaging. This is an unsigned portable development build, not an installer or published product release. Windows, WebView2 Runtime, Git/OpenSSH and agent CLI requirements still apply.
+
 ## Run and verify
 
 Install Rust stable and native C/C++ build tools. Windows requires MSVC build tools, the Windows SDK and WebView2 Runtime. Agents, Git and OpenSSH must be installed separately for their corresponding features.
@@ -92,7 +98,7 @@ cargo clippy --locked -j 2 --all-targets -- -D warnings
 cargo build --locked -j 2
 ```
 
-Windows executable: `target/debug/tessel-rust.exe`. CI provides a development artifact; no installer or release is published yet. `--data-dir <folder>` selects a separate workspace metadata directory for testing.
+Windows executable: `target/debug/tessel-rust.exe`. CI produces an optimized portable ZIP with its checksum; no installer or product release is published yet. `--data-dir <folder>` selects a separate workspace metadata directory for testing.
 
 Optional native acceptance checks:
 

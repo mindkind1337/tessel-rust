@@ -15,9 +15,22 @@ pub struct Terminal {
     size: (u16, u16),
     status: String,
     query_tail: Vec<u8>,
+    #[cfg(feature = "visual-test")]
+    fixture: bool,
 }
 
 impl Terminal {
+    #[cfg(feature = "visual-test")]
+    pub fn visual_fixture() -> Result<Self, Box<dyn std::error::Error>> {
+        let command = crate::launch::command(
+            &crate::launch::Launch::Shell,
+            &crate::launch::default_directory(),
+        )?;
+        let mut terminal = Self::spawn_command(command)?;
+        terminal.process_output("\x1b[2J\x1b[HTessel Rust terminal fixture\r\nFrançais : Québec, été, déjà.\r\nWide cells: A🙂B🙂C\r\n\x1b[44m Blue background 🙂 continues \x1b[0m\r\n\x1b[4mUnderlined text and 🙂\x1b[0m\r\n\x1b[32mGreen foreground\x1b[0m\r\nCtrl+A-Z / Shift+Tab / F1-F12 / modified navigation".as_bytes());
+        terminal.fixture = true;
+        Ok(terminal)
+    }
     #[cfg(test)]
     pub fn spawn() -> Result<Self, Box<dyn std::error::Error>> {
         let command = crate::launch::command(
@@ -74,6 +87,8 @@ impl Terminal {
             size: (30, 100),
             status: String::new(),
             query_tail: Vec::new(),
+            #[cfg(feature = "visual-test")]
+            fixture: false,
         })
     }
 
@@ -103,6 +118,10 @@ impl Terminal {
     }
 
     pub fn poll(&mut self) {
+        #[cfg(feature = "visual-test")]
+        if self.fixture {
+            return;
+        }
         for _ in 0..64 {
             let Ok(bytes) = self.output.try_recv() else {
                 break;
@@ -161,40 +180,83 @@ impl Terminal {
             }
         });
         let screen = self.parser.screen();
+        let painter = ui.painter().with_clip_rect(rect);
+        let default_bg = color(vt100::Color::Default, false);
+        painter.rect_filled(rect, 0.0, default_bg);
+        // Paint every background before any glyph. Otherwise the continuation cell
+        // erases the right half of a wide character painted immediately before it.
         for row in 0..rows {
             for col in 0..cols {
                 if let Some(cell) = screen.cell(row, col) {
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+                    let bg = if cell.inverse() {
+                        color(cell.fgcolor(), true)
+                    } else {
+                        color(cell.bgcolor(), false)
+                    };
+                    if bg != default_bg {
+                        let pos = rect.min
+                            + egui::vec2(col as f32 * cell_width, row as f32 * line_height);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                pos,
+                                egui::vec2(
+                                    cell_width * if cell.is_wide() { 2.0 } else { 1.0 },
+                                    line_height,
+                                ),
+                            ),
+                            0.0,
+                            bg,
+                        );
+                    }
+                }
+            }
+        }
+        for row in 0..rows {
+            for col in 0..cols {
+                if let Some(cell) = screen.cell(row, col) {
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+                    let text = cell.contents();
                     let pos =
                         rect.min + egui::vec2(col as f32 * cell_width, row as f32 * line_height);
-                    let (mut fg, mut bg) =
-                        (color(cell.fgcolor(), true), color(cell.bgcolor(), false));
-                    if cell.inverse() {
-                        std::mem::swap(&mut fg, &mut bg);
+                    let fg = if cell.inverse() {
+                        color(cell.bgcolor(), false)
+                    } else {
+                        color(cell.fgcolor(), true)
+                    };
+                    if !text.is_empty() && text != " " {
+                        painter.text(pos, egui::Align2::LEFT_TOP, text, font.clone(), fg);
                     }
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(pos, egui::vec2(cell_width, line_height)),
-                        0.0,
-                        bg,
-                    );
-                    ui.painter().text(
-                        pos,
-                        egui::Align2::LEFT_TOP,
-                        cell.contents(),
-                        font.clone(),
-                        fg,
-                    );
+                    if cell.underline() {
+                        let start = pos + egui::vec2(0.0, line_height - 2.0);
+                        painter.line_segment(
+                            [
+                                start,
+                                start
+                                    + egui::vec2(
+                                        cell_width * if cell.is_wide() { 2.0 } else { 1.0 },
+                                        0.0,
+                                    ),
+                            ],
+                            (1.0, fg),
+                        );
+                    }
                 }
             }
         }
         if response.has_focus() {
             let (row, col) = screen.cursor_position();
-            if !screen.hide_cursor() {
+            if !screen.hide_cursor() && screen.scrollback() == 0 {
                 let pos = rect.min
                     + egui::vec2(
                         col as f32 * cell_width,
                         (row as f32 + 1.0) * line_height - 2.0,
                     );
-                ui.painter().line_segment(
+                painter.line_segment(
                     [pos, pos + egui::vec2(cell_width, 0.0)],
                     (2.0, egui::Color32::WHITE),
                 );
@@ -218,7 +280,7 @@ impl Terminal {
                         modifiers,
                         ..
                     } => {
-                        let mut bytes = key_bytes(key, modifiers.ctrl);
+                        let mut bytes = key_bytes(key, modifiers);
                         if self.parser.screen().application_cursor()
                             && bytes.len() == 3
                             && bytes[0] == 27
@@ -246,31 +308,83 @@ impl Terminal {
     }
 }
 
-fn key_bytes(key: egui::Key, ctrl: bool) -> Vec<u8> {
-    if ctrl {
-        if key == egui::Key::C {
-            return vec![3];
+fn key_bytes(key: egui::Key, modifiers: egui::Modifiers) -> Vec<u8> {
+    use egui::Key::*;
+    if modifiers.ctrl {
+        let letters = [
+            A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        ];
+        if let Some(index) = letters.iter().position(|k| *k == key) {
+            return vec![(index + 1) as u8];
         }
-        if key == egui::Key::D {
-            return vec![4];
-        }
-        if key == egui::Key::L {
-            return vec![12];
+        if key == Space {
+            return vec![0];
         }
     }
+    let modifier =
+        1 + u8::from(modifiers.shift) + 2 * u8::from(modifiers.alt) + 4 * u8::from(modifiers.ctrl);
+    let final_byte = match key {
+        ArrowUp => Some('A'),
+        ArrowDown => Some('B'),
+        ArrowRight => Some('C'),
+        ArrowLeft => Some('D'),
+        Home => Some('H'),
+        End => Some('F'),
+        _ => None,
+    };
+    if let Some(end) = final_byte {
+        return if modifier == 1 {
+            format!("\x1b[{end}")
+        } else {
+            format!("\x1b[1;{modifier}{end}")
+        }
+        .into_bytes();
+    }
+    let function = match key {
+        F1 => Some('P'),
+        F2 => Some('Q'),
+        F3 => Some('R'),
+        F4 => Some('S'),
+        _ => None,
+    };
+    if let Some(end) = function {
+        return if modifier == 1 {
+            format!("\x1bO{end}")
+        } else {
+            format!("\x1b[1;{modifier}{end}")
+        }
+        .into_bytes();
+    }
+    let tilde = match key {
+        Insert => Some(2),
+        Delete => Some(3),
+        PageUp => Some(5),
+        PageDown => Some(6),
+        F5 => Some(15),
+        F6 => Some(17),
+        F7 => Some(18),
+        F8 => Some(19),
+        F9 => Some(20),
+        F10 => Some(21),
+        F11 => Some(23),
+        F12 => Some(24),
+        _ => None,
+    };
+    if let Some(code) = tilde {
+        return if modifier == 1 {
+            format!("\x1b[{code}~")
+        } else {
+            format!("\x1b[{code};{modifier}~")
+        }
+        .into_bytes();
+    }
     match key {
-        egui::Key::Enter => b"\r".to_vec(),
-        egui::Key::Backspace => vec![127],
-        egui::Key::Tab => vec![9],
-        egui::Key::Escape => vec![27],
-        egui::Key::ArrowUp => b"\x1b[A".to_vec(),
-        egui::Key::ArrowDown => b"\x1b[B".to_vec(),
-        egui::Key::ArrowRight => b"\x1b[C".to_vec(),
-        egui::Key::ArrowLeft => b"\x1b[D".to_vec(),
-        egui::Key::Home => b"\x1b[H".to_vec(),
-        egui::Key::End => b"\x1b[F".to_vec(),
-        egui::Key::Delete => b"\x1b[3~".to_vec(),
-        _ => Vec::new(),
+        Enter => vec![13],
+        Backspace => vec![127],
+        Tab if modifiers.shift => b"\x1b[Z".to_vec(),
+        Tab => vec![9],
+        Escape => vec![27],
+        _ => vec![],
     }
 }
 
@@ -329,14 +443,68 @@ impl Drop for Terminal {
     }
 }
 
+#[cfg(windows)]
+pub fn configure_fonts(ctx: &egui::Context) {
+    use std::io::Read;
+    let windows = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "C:/Windows".into());
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, file) in [
+        ("windows-emoji", "seguiemj.ttf"),
+        ("windows-symbols", "seguisym.ttf"),
+    ] {
+        let Ok(file) = std::fs::File::open(windows.join("Fonts").join(file)) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if file
+            .take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() > 32 * 1024 * 1024
+        {
+            continue;
+        }
+        fonts.font_data.insert(
+            name.into(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
+            fonts.families.entry(family).or_default().push(name.into());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn interrupt_and_navigation_are_terminal_sequences() {
-        assert_eq!(key_bytes(egui::Key::C, true), vec![3]);
-        assert_eq!(key_bytes(egui::Key::Enter, false), b"\r");
-        assert_eq!(key_bytes(egui::Key::ArrowUp, false), b"\x1b[A");
+        assert_eq!(key_bytes(egui::Key::C, egui::Modifiers::CTRL), vec![3]);
+        assert_eq!(key_bytes(egui::Key::Enter, egui::Modifiers::NONE), b"\r");
+        assert_eq!(
+            key_bytes(egui::Key::ArrowUp, egui::Modifiers::NONE),
+            b"\x1b[A"
+        );
+        assert_eq!(key_bytes(egui::Key::R, egui::Modifiers::CTRL), vec![18]);
+        assert_eq!(key_bytes(egui::Key::Z, egui::Modifiers::CTRL), vec![26]);
+        assert_eq!(key_bytes(egui::Key::Space, egui::Modifiers::CTRL), vec![0]);
+        assert_eq!(key_bytes(egui::Key::Tab, egui::Modifiers::SHIFT), b"\x1b[Z");
+        assert_eq!(
+            key_bytes(egui::Key::ArrowLeft, egui::Modifiers::CTRL),
+            b"\x1b[1;5D"
+        );
+        assert_eq!(key_bytes(egui::Key::F1, egui::Modifiers::NONE), b"\x1bOP");
+        assert_eq!(
+            key_bytes(egui::Key::F12, egui::Modifiers::NONE),
+            b"\x1b[24~"
+        );
+        assert_eq!(
+            key_bytes(egui::Key::PageDown, egui::Modifiers::SHIFT),
+            b"\x1b[6;2~"
+        );
     }
     #[test]
     fn shell_really_runs_in_a_pty() {

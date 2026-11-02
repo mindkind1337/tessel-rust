@@ -120,6 +120,7 @@ impl Browser {
                         "Filename must be a safe single filename, at most 160 characters".into(),
                     );
                 }
+                self.error.clear();
                 let mut plan = self
                     .planned_download
                     .lock()

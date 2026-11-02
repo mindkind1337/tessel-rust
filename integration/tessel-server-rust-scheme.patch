@@ -1,0 +1,62 @@
+--- a/src/auth.js
++++ b/src/auth.js
+@@ -20,7 +20,7 @@
+ 
+ const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/
+ const STATE_RE = /^[A-Za-z0-9_-]{16,128}$/
+-const APPS = ['tessel', 'tessel-dev', 'admin']
++const APPS = ['tessel', 'tessel-dev', 'tessel-rust', 'admin']
+ const SIGN_IN_METHODS = { password_hash: 'password', google_sub: 'google', github_id: 'github' }
+ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/
+ 
+--- a/src/connect.js
++++ b/src/connect.js
+@@ -26,7 +26,7 @@
+ const STATE_RE = /^[A-Za-z0-9_-]{16,128}$/
+ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/
+ const SECRET_RE = /^[A-Za-z0-9_-]{32,128}$/
+-const APPS = ['tessel', 'tessel-dev']
++const APPS = ['tessel', 'tessel-dev', 'tessel-rust']
+ // (Microsoft's and Atlassian's tokens are long, and their size is theirs to change.)
+ const MAX_TOKEN = 16 * 1024
+ const BROWSER_COOKIE = '__Host-tessel-connect'
+--- a/test/auth.test.js
++++ b/test/auth.test.js
+@@ -601,3 +601,19 @@
+     expect(await res.text()).not.toContain('secret table detail')
+   })
+ })
++it('returns a Rust sign-in to its own scheme and exchanges only its PKCE code', async () => {
++  const start = await pressButton(startUrl({ app: 'tessel-rust' }))
++  expect(start.status).toBe(303)
++  const provider = new URL(start.headers.get('location'))
++  google.answer = { ok: true, json: async () => ({ id_token: fakeIdToken(goodClaims(provider.searchParams.get('nonce'))) }) }
++  const response = await get(`/auth/google/callback?${new URLSearchParams({ state: provider.searchParams.get('state'), code: 'fixture-code' })}`)
++  expect(response.status).toBe(200)
++  const html = await response.text()
++  const match = html.match(/href="(tessel-rust:\/\/callback[^\"]+)"/)
++  expect(match).not.toBeNull()
++  const link = new URL(match[1].replaceAll('&amp;', '&'))
++  expect(link.searchParams.get('state')).toBe(CLIENT_STATE)
++  const body = { code: link.searchParams.get('code'), verifier: VERIFIER }
++  expect((await post('/auth/token', body)).status).toBe(200)
++  expect((await post('/auth/token', body)).status).toBe(400)
++})
+--- a/test/connect.test.js
++++ b/test/connect.test.js
+@@ -469,3 +469,15 @@
+     expect(await flows()).toEqual([])
+   })
+ })
++it('returns a Rust connector flow to its separate callback scheme', async () => {
++  const start = await api('/api/connect/start', startBody({ app: 'tessel-rust' }))
++  expect(start.status).toBe(200)
++  const url = new URL((await start.json()).url)
++  const flow = url.searchParams.get('flow')
++  await saidYes(flow)
++  const response = await callback(`state=${flow}&code=fixture-code`)
++  expect(response.status).toBe(200)
++  const link = linkIn(await response.text())
++  expect(link.protocol).toBe('tessel-rust:')
++  expect(link.searchParams.get('state')).toBe(STATE)
++})
