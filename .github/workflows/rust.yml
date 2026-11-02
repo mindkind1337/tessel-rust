@@ -1,0 +1,16 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo test --locked -j 2
+      - run: cargo clippy --locked -j 2 -- -D warnings
+      - run: cargo build --locked -j 2
