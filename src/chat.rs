@@ -139,6 +139,10 @@ pub struct Chat {
     pub error: String,
     composer: String,
     transcript: VecDeque<(String, String)>,
+    history: VecDeque<(String, String)>,
+    history_cursor: Option<String>,
+    history_unavailable: bool,
+    history_seen: std::collections::HashSet<String>,
     items: HashMap<String, Value>,
     approvals: VecDeque<Approval>,
     pub tool_calls: VecDeque<ToolCall>,
@@ -165,6 +169,17 @@ fn safe_posture(value: &Value) -> bool {
             .and_then(Value::as_str)
             .is_none_or(|v| v == "user")
 }
+fn bounded_text(mut text: String, limit: usize) -> String {
+    if text.len() > limit {
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("\n[display truncated]");
+    }
+    text
+}
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
@@ -182,6 +197,10 @@ impl Chat {
             error: String::new(),
             composer: String::new(),
             transcript: VecDeque::new(),
+            history: VecDeque::new(),
+            history_cursor: None,
+            history_unavailable: false,
+            history_seen: Default::default(),
             items: HashMap::new(),
             approvals: VecDeque::new(),
             tool_calls: VecDeque::new(),
@@ -212,6 +231,104 @@ impl Chat {
             self.transcript.pop_front();
         }
     }
+    fn history_page(&mut self) {
+        if self
+            .pending
+            .values()
+            .any(|(method, _)| method == "thread/items/list")
+        {
+            return;
+        }
+        if let Err(e)=self.request("thread/items/list",json!({"threadId":self.thread_id,"limit":40,"sortDirection":"desc","cursor":self.history_cursor})) {self.error=e;}
+    }
+    fn hydrate_history(&mut self, result: &Value) {
+        self.history_cursor = result
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let Some(entries) = result.get("data").and_then(Value::as_array) {
+            for entry in entries {
+                let Some(item) = entry.get("item") else {
+                    continue;
+                };
+                let Some(id) = item.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if self.history_seen.len() >= 5000 {
+                    self.history_cursor = None;
+                    self.error = "History item limit reached".into();
+                    break;
+                }
+                if !self.history_seen.insert(id.into()) {
+                    continue;
+                }
+                let kind = item.get("type").and_then(Value::as_str).unwrap_or("event");
+                let (role, text) = match kind {
+                    "userMessage" => (
+                        "You",
+                        item.get("content")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|i| i.get("text").and_then(Value::as_str))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default(),
+                    ),
+                    "agentMessage" => (
+                        "Codex",
+                        item.get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                    ),
+                    "reasoning" => continue,
+                    _ => (
+                        "Tool / event",
+                        serde_json::to_string_pretty(item).unwrap_or_default(),
+                    ),
+                };
+                let text = bounded_text(text, 64 * 1024);
+                if self.history.len() >= 500
+                    || self.history.iter().map(|m| m.1.len()).sum::<usize>() + text.len()
+                        > MAX_TRANSCRIPT
+                {
+                    self.history_cursor = None;
+                    self.error =
+                        "History display limit reached; older records remain in Codex.".into();
+                    break;
+                }
+                self.history.push_front((role.into(), text));
+            }
+        }
+    }
+    fn approval_has_details(&self, approval: &Approval) -> bool {
+        let p = &approval.params;
+        let item = p
+            .get("itemId")
+            .and_then(Value::as_str)
+            .and_then(|id| self.items.get(id));
+        if approval.method == "item/commandExecution/requestApproval" {
+            let command = p
+                .get("command")
+                .and_then(Value::as_str)
+                .or_else(|| item.and_then(|i| i.get("command")).and_then(Value::as_str));
+            let cwd = p
+                .get("cwd")
+                .and_then(Value::as_str)
+                .or_else(|| item.and_then(|i| i.get("cwd")).and_then(Value::as_str));
+            command.is_some_and(|v| !v.trim().is_empty())
+                && cwd.is_some_and(|v| !v.is_empty())
+                && p.get("kind").is_none_or(|k| k.as_str() == Some("command"))
+        } else {
+            p.get("grantRoot").is_none_or(Value::is_null)
+                && item
+                    .and_then(|i| i.get("changes"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+        }
+    }
     fn start(&mut self) {
         self.error.clear();
         let Some(exe) = executable() else {
@@ -226,6 +343,7 @@ impl Chat {
             }
         }
         self.ready = false;
+        self.history_unavailable = false;
         self.pending.clear();
         self.status = "Initializing Codex…".into();
         if let Err(e)=self.request("initialize",json!({"clientInfo":{"name":"tessel_rust","title":"Tessel Rust","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})){self.error=e;}
@@ -320,8 +438,22 @@ impl Chat {
             {
                 return;
             }
+            if (method.starts_with("turn/")
+                || method.starts_with("item/")
+                || method == "thread/settings/updated")
+                && (self.thread_id.is_none()
+                    || p.get("threadId").and_then(Value::as_str) != self.thread_id.as_deref())
+            {
+                return;
+            }
             match method {
                 "turn/started" => {
+                    if !self.starting_turn {
+                        return;
+                    }
+                    self.approvals.clear();
+                    self.tool_calls.clear();
+                    self.items.clear();
                     self.turn = p
                         .pointer("/turn/id")
                         .and_then(Value::as_str)
@@ -329,6 +461,10 @@ impl Chat {
                     self.starting_turn = false;
                 }
                 "turn/completed" => {
+                    if p.pointer("/turn/id").and_then(Value::as_str) != self.turn.as_deref() {
+                        return;
+                    }
+                    self.tool_calls.clear();
                     self.turn = None;
                     self.starting_turn = false;
                     self.approvals.clear();
@@ -343,6 +479,11 @@ impl Chat {
                     }
                 }
                 "item/agentMessage/delta" => {
+                    if p.get("turnId").and_then(Value::as_str) != self.turn.as_deref()
+                        || self.turn.is_none()
+                    {
+                        return;
+                    }
                     let delta = p.get("delta").and_then(Value::as_str).unwrap_or("");
                     let key = p
                         .get("itemId")
@@ -360,6 +501,11 @@ impl Chat {
                     }
                 }
                 "item/started" | "item/completed" => {
+                    if self.turn.is_none()
+                        || p.get("turnId").and_then(Value::as_str) != self.turn.as_deref()
+                    {
+                        return;
+                    }
                     if let Some(item) = p.get("item")
                         && let Some(id) = item.get("id").and_then(Value::as_str)
                     {
@@ -368,7 +514,10 @@ impl Chat {
                         }
                         self.items.insert(id.into(), item.clone());
                         if method == "item/completed"
-                            && item.get("type").and_then(Value::as_str) != Some("agentMessage")
+                            && !matches!(
+                                item.get("type").and_then(Value::as_str),
+                                Some("agentMessage" | "userMessage" | "reasoning")
+                            )
                         {
                             self.push(
                                 "Tool / event",
@@ -408,6 +557,25 @@ impl Chat {
             return;
         };
         if let Some(error) = value.get("error") {
+            let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+            if method == "thread/items/list"
+                && (message.contains("not supported")
+                    || error.get("code").and_then(Value::as_i64) == Some(-32601))
+            {
+                self.history_cursor = None;
+                if let Err(e) = self.request(
+                    "thread/read",
+                    json!({"threadId":self.thread_id,"includeTurns":true}),
+                ) {
+                    self.error = e;
+                }
+                return;
+            }
+            if method == "thread/read" && message.contains("not supported") {
+                self.history_unavailable = true;
+                self.status = "Ready · installed Codex does not expose conversation history".into();
+                return;
+            }
             self.error = error
                 .get("message")
                 .and_then(Value::as_str)
@@ -428,6 +596,7 @@ impl Chat {
                     "thread/start"
                 } else if valid_id(self.resume.trim()) {
                     params["threadId"] = json!(self.resume.trim());
+                    params["excludeTurns"] = json!(true);
                     "thread/resume"
                 } else {
                     self.error = "Invalid thread ID.".into();
@@ -459,6 +628,37 @@ impl Chat {
                 .into();
                 if let Some(id) = &self.thread_id {
                     self.resume = id.clone();
+                }
+                self.transcript.clear();
+                self.history.clear();
+                self.history_seen.clear();
+                self.history_cursor = None;
+                self.items.clear();
+                if method == "thread/resume" && self.ready {
+                    self.history_page();
+                }
+            }
+            "thread/items/list" => self.hydrate_history(&result),
+            "thread/read" => {
+                if result.pointer("/thread/id").and_then(Value::as_str) != self.thread_id.as_deref()
+                {
+                    self.error = "History response belongs to another thread".into();
+                    return;
+                }
+                if let Some(turns) = result.pointer("/thread/turns").and_then(Value::as_array) {
+                    let entries: Vec<Value> = turns
+                        .iter()
+                        .rev()
+                        .flat_map(|turn| {
+                            turn.get("items")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .rev()
+                                .map(|item| json!({"item":item}))
+                        })
+                        .collect();
+                    self.hydrate_history(&json!({"data":entries,"nextCursor":null}));
                 }
             }
             "turn/start" => {
@@ -535,7 +735,9 @@ impl Chat {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
         if let Some(approval) = self.approvals.front().cloned() {
+            let can_accept = self.approval_has_details(&approval);
             egui::Frame::group(ui.style()).show(ui, |ui| {
+                if !can_accept {ui.colored_label(egui::Color32::YELLOW,"Cannot allow: action details are missing or this permission scope is unsupported.");}
                 ui.strong("Approval requested — no action until you choose");
                 ui.label(&approval.method);
                 let item = approval
@@ -551,7 +753,7 @@ impl Chat {
                     });
                 ui.horizontal(|ui| {
                     for (label, decision) in [("Deny", "decline"), ("Allow once", "accept")] {
-                        if ui.button(label).clicked()
+                        if ui.add_enabled(decision=="decline" || can_accept,egui::Button::new(label)).clicked()
                             && let Some(rpc) = &self.rpc
                         {
                             match rpc.send(json!({"id":approval.id,"result":{"decision":decision}}))
@@ -566,12 +768,22 @@ impl Chat {
                 });
             });
         }
+        if self.history_cursor.is_some()
+            && ui
+                .add_enabled(
+                    !self.pending.values().any(|(m, _)| m == "thread/items/list"),
+                    egui::Button::new("Load older messages"),
+                )
+                .clicked()
+        {
+            self.history_page();
+        }
         let available = (ui.available_height() - 130.0).max(80.0);
         egui::ScrollArea::vertical()
             .max_height(available)
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for (role, text) in &self.transcript {
+                for (role, text) in self.history.iter().chain(self.transcript.iter()) {
                     ui.strong(role);
                     ui.add(egui::Label::new(text).selectable(true));
                     ui.separator();
@@ -624,15 +836,24 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let mut chat = Chat::new(0, directory.path().to_owned());
     chat.start();
+    let mut queried_history = false;
     let deadline = Instant::now() + Duration::from_secs(35);
     while Instant::now() < deadline {
         chat.poll();
-        if chat.ready {
-            chat.stop();
-            return Ok(());
-        }
         if !chat.error.is_empty() {
             return Err(chat.error.clone().into());
+        }
+        if chat.ready && !queried_history {
+            chat.history_page();
+            queried_history = true;
+        } else if chat.ready && chat.pending.is_empty() {
+            if chat.history_unavailable {
+                eprintln!(
+                    "Codex initialization passed; this installed server does not expose history APIs."
+                );
+            }
+            chat.stop();
+            return Ok(());
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -642,6 +863,58 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resumed_history_is_ordered_deduplicated_and_bounded() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.hydrate_history(&json!({"data":[{"item":{"id":"a","type":"agentMessage","text":"answer"}},{"item":{"id":"u","type":"userMessage","content":[{"type":"text","text":"question"}]}}],"nextCursor":"older"}));
+        assert_eq!(chat.history[0].1, "question");
+        assert_eq!(chat.history[1].1, "answer");
+        assert_eq!(chat.history_cursor.as_deref(), Some("older"));
+        chat.hydrate_history(&json!({"data":[{"item":{"id":"u","type":"userMessage","content":[]}},{"item":{"id":"old","type":"agentMessage","text":"previous"}}],"nextCursor":null}));
+        assert_eq!(chat.history.len(), 3);
+        assert_eq!(chat.history[0].1, "previous");
+        assert!(bounded_text("é".repeat(100), 31).ends_with("[display truncated]"));
+    }
+    #[test]
+    fn unsupported_history_is_reported_without_breaking_chat() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.ready = true;
+        chat.pending
+            .insert(1, ("thread/read".into(), Instant::now()));
+        chat.frame(
+            json!({"id":1,"error":{"code":-32603,"message":"list_turns is not supported yet"}}),
+        );
+        assert!(chat.ready);
+        assert!(chat.history_unavailable);
+        assert!(chat.error.is_empty());
+        assert!(chat.status.contains("does not expose"));
+    }
+    #[test]
+    fn incomplete_approval_cannot_be_accepted() {
+        let chat = Chat::new(1, PathBuf::from("."));
+        let mut approval = Approval {
+            id: json!(1),
+            method: "item/commandExecution/requestApproval".into(),
+            params: json!({"command":"echo fixture"}),
+        };
+        assert!(!chat.approval_has_details(&approval));
+        approval.params["cwd"] = json!("C:/fixture");
+        assert!(chat.approval_has_details(&approval));
+        approval.params["kind"] = json!("stdin");
+        assert!(!chat.approval_has_details(&approval));
+    }
+    #[test]
+    fn stale_completion_and_missing_thread_cannot_change_active_turn() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.thread_id = Some("owner".into());
+        chat.turn = Some("current".into());
+        chat.frame(json!({"method":"turn/completed","params":{"threadId":"owner","turn":{"id":"old","status":"completed"}}}));
+        assert_eq!(chat.turn.as_deref(), Some("current"));
+        chat.frame(json!({"method":"turn/completed","params":{"turn":{"id":"current","status":"completed"}}}));
+        assert_eq!(chat.turn.as_deref(), Some("current"));
+        chat.frame(json!({"method":"item/completed","params":{"threadId":"owner","turnId":"old","item":{"id":"stale","type":"agentMessage","text":"stale"}}}));
+        assert!(chat.transcript.is_empty());
+    }
     #[test]
     fn unsafe_or_missing_posture_is_rejected() {
         assert!(!safe_posture(&json!({})));

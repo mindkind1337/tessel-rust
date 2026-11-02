@@ -39,7 +39,8 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Streaming text, tool events, model/effort fields, follow-up steering, interruption, thread-ID persistence and explicit resume.
 - Workspace-write sandbox and approval-on-request explicitly requested and checked. Unknown requests fail closed; approval requests are tied to the active thread and turn.
 - Project-scoped task-list/add/move tools connected to the native task board. Model arguments cannot select another project's authority.
-- Pending approvals are displayed inside the chat instead of stealing focus with a popup.
+- Pending approvals are displayed inside the chat instead of stealing focus with a popup. Allow is disabled when action details are missing or the requested permission scope is unsupported; stale-turn events cannot change the active conversation.
+- Bounded resumed-history rendering, pagination when supported and a legacy read fallback. Some Codex app-server builds advertise these schemas but reject both history methods; the UI explicitly reports that limitation while leaving chat usable.
 
 ### Windows browser
 
@@ -84,12 +85,12 @@ Optional native acceptance checks:
 .\target\debug\tessel-rust.exe --self-test-vault
 ```
 
-The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions; it sends no prompt or model turn. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
+The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
 
 ## Validation and remaining migration
 
-Current Windows evidence: 28 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 32 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
 
-See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. The native Codex chat does not yet render prior history or support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
+See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. Native Codex history depends on server support, and chat does not yet support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 
 No existing Tessel configuration, credentials, browser profiles or personal records are automatically imported or committed.
