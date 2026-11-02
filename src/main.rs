@@ -24,6 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--self-test-browser") {
         return browser::smoke::run();
     }
+    #[cfg(windows)]
+    if std::env::args().any(|arg| arg == "--self-test-vault") {
+        return browser::vault_smoke::run();
+    }
     eframe::run_native(
         "Tessel Rust",
         eframe::NativeOptions {

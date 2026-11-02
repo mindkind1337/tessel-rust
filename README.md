@@ -81,13 +81,14 @@ Optional native acceptance checks:
 ```powershell
 .\target\debug\tessel-rust.exe --self-test-browser
 .\target\debug\tessel-rust.exe --self-test-codex
+.\target\debug\tessel-rust.exe --self-test-vault
 ```
 
-The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions; it sends no prompt or model turn. `cargo build --features visual-test` enables eframe's screenshot test support.
+The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The Codex check initializes the real installed app-server and verifies its applied permissions; it sends no prompt or model turn. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
 
 ## Validation and remaining migration
 
-Current Windows evidence: 28 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Manual password filling has not yet received native browser acceptance testing. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 28 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. No live SSH server or paid inference turn has been used for acceptance testing.
 
 See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. The native Codex chat does not yet render prior history or support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 

@@ -1,5 +1,6 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
 pub mod smoke;
+pub mod vault_smoke;
 use eframe::egui;
 use std::{
     collections::VecDeque,

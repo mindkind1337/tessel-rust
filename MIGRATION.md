@@ -17,7 +17,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Agent tools | Authenticated scoped tools, approval UI, messages and task board | Pending |
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases pass; agent control pending |
 | Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown and bounded image previews implemented; PDF/full webpage/office rendering pending |
-| Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption tests pass; manual fill acceptance and agent consent pending |
+| Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |
 | Connectors/account/sync | Match existing service contracts; token isolation and consent | Pending |
 | Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Pending |
