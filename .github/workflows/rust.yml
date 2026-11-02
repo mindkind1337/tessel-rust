@@ -12,5 +12,12 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo test --locked -j 2
-      - run: cargo clippy --locked -j 2 -- -D warnings
+      - run: cargo clippy --locked -j 2 --all-targets -- -D warnings
       - run: cargo build --locked -j 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tessel-rust-windows-development
+          path: |
+            target/debug/tessel-rust.exe
+            README.md
+            LICENSE

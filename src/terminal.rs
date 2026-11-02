@@ -2,13 +2,13 @@ use eframe::egui;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     io::{Read, Write},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, SyncSender},
     thread,
 };
 
 pub struct Terminal {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    input: Option<SyncSender<Vec<u8>>>,
     child: Box<dyn Child + Send + Sync>,
     output: Receiver<Vec<u8>>,
     parser: vt100::Parser,
@@ -18,30 +18,40 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    #[cfg(test)]
     pub fn spawn() -> Result<Self, Box<dyn std::error::Error>> {
+        let command = crate::launch::command(
+            &crate::launch::Launch::Shell,
+            &crate::launch::default_directory(),
+        )?;
+        Self::spawn_command(command)
+    }
+
+    pub fn spawn_command(command: CommandBuilder) -> Result<Self, Box<dyn std::error::Error>> {
         let pair = native_pty_system().openpty(PtySize {
             rows: 30,
             cols: 100,
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let shell = if cfg!(windows) {
-            "powershell.exe"
-        } else {
-            "/bin/sh"
-        };
-        let mut command = CommandBuilder::new(shell);
-        if cfg!(windows) {
-            command.arg("-NoLogo");
-            command.arg("-NoProfile");
-        }
-        command.env("TERM", "xterm-256color");
         let mut reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
+        let mut writer = pair.master.take_writer()?;
         let child = pair.slave.spawn_command(command)?;
         drop(pair.slave);
         // Bounded queue prevents a noisy subprocess from consuming unlimited memory.
         let (sender, output) = mpsc::sync_channel(64);
+        let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(32);
+        thread::spawn(move || {
+            while let Ok(bytes) = input_rx.recv() {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         thread::spawn(move || {
             let mut buffer = [0; 8192];
             loop {
@@ -57,7 +67,7 @@ impl Terminal {
         });
         Ok(Self {
             master: pair.master,
-            writer,
+            input: Some(input),
             child,
             output,
             parser: vt100::Parser::new(30, 100, 1000),
@@ -74,8 +84,9 @@ impl Terminal {
             if self.query_tail.ends_with(b"\x1b[6n") {
                 let (row, col) = self.parser.screen().cursor_position();
                 let reply = format!("\x1b[{};{}R", row + 1, col + 1);
-                let _ = self.writer.write_all(reply.as_bytes());
-                let _ = self.writer.flush();
+                if let Err(error) = self.send(reply.into_bytes()) {
+                    self.status = error;
+                }
             }
             if self.query_tail.len() > 4 {
                 self.query_tail.remove(0);
@@ -83,7 +94,15 @@ impl Terminal {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
+        self.input
+            .as_ref()
+            .ok_or("Terminal input closed")?
+            .try_send(bytes)
+            .map_err(|_| "Terminal input is busy or closed; input was not sent.".into())
+    }
+
+    pub fn poll(&mut self) {
         for _ in 0..64 {
             let Ok(bytes) = self.output.try_recv() else {
                 break;
@@ -93,7 +112,13 @@ impl Terminal {
         if let Ok(Some(exit)) = self.child.try_wait() {
             self.status = format!("Shell exited: {exit}");
         }
-        let font = egui::FontId::monospace(15.0);
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        if !self.status.is_empty() {
+            ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
+        }
+        let font = egui::FontId::monospace(font_size);
         let cell_width = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
         let line_height = ui.fonts_mut(|f| f.row_height(&font));
         let available = ui.available_size();
@@ -117,6 +142,24 @@ impl Terminal {
         if response.clicked() || ui.memory(|m| m.focused().is_none()) {
             response.request_focus();
         }
+        if response.hovered() {
+            let delta = ui.input(|i| i.smooth_scroll_delta.y);
+            if delta != 0.0 {
+                let scroll =
+                    self.parser.screen().scrollback() as i64 + (delta / line_height).round() as i64;
+                self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
+            }
+        }
+        response.context_menu(|ui| {
+            if ui.button("Copy visible text").clicked() {
+                ui.ctx().copy_text(self.parser.screen().contents());
+                ui.close();
+            }
+            if ui.button("Back to live output").clicked() {
+                self.parser.set_scrollback(0);
+                ui.close();
+            }
+        });
         let screen = self.parser.screen();
         for row in 0..rows {
             for col in 0..cols {
@@ -159,20 +202,39 @@ impl Terminal {
             for event in ui.input(|i| i.events.clone()) {
                 let bytes = match event {
                     egui::Event::Text(text) => text.into_bytes(),
-                    egui::Event::Paste(text) => text.into_bytes(),
+                    egui::Event::Paste(text) => {
+                        if text.len() > 65536 {
+                            self.status = "Paste limit: 64 KiB".into();
+                            Vec::new()
+                        } else if self.parser.screen().bracketed_paste() {
+                            format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                        } else {
+                            text.into_bytes()
+                        }
+                    }
                     egui::Event::Key {
                         key,
                         pressed: true,
                         modifiers,
                         ..
-                    } => key_bytes(key, modifiers.ctrl),
+                    } => {
+                        let mut bytes = key_bytes(key, modifiers.ctrl);
+                        if self.parser.screen().application_cursor()
+                            && bytes.len() == 3
+                            && bytes[0] == 27
+                            && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                        {
+                            bytes[1] = b'O';
+                        }
+                        bytes
+                    }
                     _ => Vec::new(),
                 };
+                if !bytes.is_empty() {
+                    self.parser.set_scrollback(0);
+                }
                 if !bytes.is_empty()
-                    && let Err(error) = self
-                        .writer
-                        .write_all(&bytes)
-                        .and_then(|_| self.writer.flush())
+                    && let Err(error) = self.send(bytes)
                 {
                     self.status = error.to_string();
                 }
@@ -258,6 +320,11 @@ fn color(value: vt100::Color, foreground: bool) -> egui::Color32 {
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        self.input.take();
+        // Unblock the reader before closing ConPTY; a full output queue must not
+        // deadlock window shutdown while ClosePseudoConsole waits for its pipes.
+        let (_, empty) = mpsc::channel();
+        self.output = empty;
         let _ = self.child.wait();
     }
 }
@@ -274,8 +341,7 @@ mod tests {
     #[test]
     fn shell_really_runs_in_a_pty() {
         let mut terminal = Terminal::spawn().expect("create PTY");
-        terminal.writer.write_all(b"echo TESSEL_PTY_OK\r").unwrap();
-        terminal.writer.flush().unwrap();
+        terminal.send(b"echo TESSEL_PTY_OK\r".to_vec()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut found = false;
         while std::time::Instant::now() < deadline {
