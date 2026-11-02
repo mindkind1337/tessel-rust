@@ -49,4 +49,3 @@ The browser will require an embedded browser engine; "Rust application" does not
 Tests include a real PTY round trip that launches a shell and checks actual command output, plus keyboard protocol checks. Native GUI behavior must also be checked on each supported OS; a successful compile alone is not a GUI acceptance test.
 
 Initial Windows validation: formatting, clippy with warnings denied, both tests and debug build pass. A native startup smoke check confirms a live `Tessel Rust` window. Interactive visual acceptance and other platforms are not yet validated.
-
