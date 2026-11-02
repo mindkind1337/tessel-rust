@@ -7,6 +7,7 @@ mod chat;
 mod files;
 mod git;
 mod launch;
+mod preview;
 mod share;
 mod share_panel;
 mod terminal;

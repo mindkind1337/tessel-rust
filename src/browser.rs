@@ -95,6 +95,11 @@ fn download_target(
 }
 
 impl Browser {
+    pub fn open_address(&mut self, address: String) {
+        self.address = address;
+        self.navigate();
+    }
+
     pub fn fill_account(&self, account: &crate::vault::Account) -> Result<(), String> {
         let view = self
             .view
@@ -137,7 +142,9 @@ impl Browser {
     fn create(&mut self, frame: &eframe::Frame) -> Result<(), String> {
         let dirs = directories::ProjectDirs::from("com", "Tessel", "TesselRust")
             .ok_or("No app data directory")?;
-        self.create_with_profile(frame, dirs.data_local_dir().join("browser-owner"))
+        self.create_with_profile(frame, dirs.data_local_dir().join("browser-owner"))?;
+        self.navigate();
+        Ok(())
     }
     fn create_with_profile(
         &mut self,

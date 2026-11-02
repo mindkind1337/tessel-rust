@@ -69,10 +69,59 @@ pub struct Document {
     pub text: String,
     original: Vec<u8>,
     pub error: String,
+    pub preview_mode: bool,
+    pub preview: Option<crate::preview::Preview>,
+    pub image: Option<eframe::egui::ColorImage>,
+    pub texture: Option<eframe::egui::TextureHandle>,
+    pub media: bool,
 }
 impl Document {
     pub fn open(root: &Path, path: &Path) -> Result<Self> {
         let path = confined(root, path)?;
+        let extension = path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        ) {
+            let mut bytes = Vec::new();
+            fs::File::open(&path)
+                .map_err(|e| e.to_string())?
+                .take(16 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() > 16 * 1024 * 1024 {
+                return Err("Image limit is 16 MiB".into());
+            }
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+                .with_guessed_format()
+                .map_err(|e| e.to_string())?;
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(4096);
+            limits.max_image_height = Some(4096);
+            limits.max_alloc = Some(64 * 1024 * 1024);
+            reader.limits(limits);
+            let decoded = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
+            let image = eframe::egui::ColorImage::from_rgba_unmultiplied(
+                [decoded.width() as usize, decoded.height() as usize],
+                decoded.as_raw(),
+            );
+            return Ok(Self {
+                root: root.to_owned(),
+                path,
+                text: String::new(),
+                original: vec![],
+                error: String::new(),
+                preview_mode: true,
+                preview: None,
+                image: Some(image),
+                texture: None,
+                media: true,
+            });
+        }
         let original = read(&path)?;
         if original.contains(&0) {
             return Err("Binary file: text editing is disabled.".into());
@@ -85,12 +134,20 @@ impl Document {
             text,
             original,
             error: String::new(),
+            preview_mode: matches!(extension.as_str(), "html" | "htm" | "md" | "markdown"),
+            preview: None,
+            image: None,
+            texture: None,
+            media: false,
         })
     }
     pub fn dirty(&self) -> bool {
-        self.text.as_bytes() != self.original
+        !self.media && self.text.as_bytes() != self.original
     }
     pub fn save(&mut self) -> Result<()> {
+        if self.media {
+            return Err("Images are read-only".into());
+        }
         let actual = confined(&self.root, &self.path)?;
         if actual != self.path {
             return Err("File target changed since opening.".into());
@@ -123,6 +180,25 @@ mod tests {
         doc.text.push('d');
         assert!(doc.save().is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
+    }
+    #[test]
+    fn images_decode_read_only_and_reject_oversized_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        assert!(doc.media);
+        assert_eq!(doc.image.as_ref().unwrap().size, [2, 2]);
+        assert!(!doc.dirty());
+        assert!(doc.save().is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        image::RgbaImage::from_pixel(4097, 1, image::Rgba([0, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        assert!(Document::open(dir.path(), &path).is_err());
     }
     #[test]
     fn rejects_outside_project_and_binary() {

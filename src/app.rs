@@ -56,7 +56,7 @@ impl Session {
 enum Message {
     Folder(Option<PathBuf>),
     Directory(PathBuf, Result<Vec<Entry>, String>),
-    Document(Result<Document, String>),
+    Document(PathBuf, Result<Box<Document>, String>),
 }
 #[derive(PartialEq)]
 enum View {
@@ -80,6 +80,7 @@ pub struct Tessel {
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
+    document_pending: std::collections::HashSet<PathBuf>,
     active_document: usize,
     view: View,
     directory: Option<PathBuf>,
@@ -137,6 +138,7 @@ impl Tessel {
             next_session: 1,
             active_session: None,
             documents: vec![],
+            document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
             directory: None,
@@ -177,6 +179,22 @@ impl Tessel {
         }
         app.detect_agents();
         app.refresh_project();
+        #[cfg(feature = "visual-test")]
+        if let Some(path) = std::env::args()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find(|a| a[0] == "--preview-file")
+            .map(|a| PathBuf::from(&a[1]))
+            && let Some(root) = path.parent()
+        {
+            match Document::open(root, &path) {
+                Ok(document) => {
+                    app.documents.push(document);
+                    app.view = View::Files;
+                }
+                Err(error) => app.error = error,
+            }
+        }
         app
     }
     fn save(&mut self) {
@@ -235,17 +253,29 @@ impl Tessel {
         }
     }
     fn open_document(&mut self, path: PathBuf) {
+        let Some(root) = self.state.active().map(|p| p.path.clone()) else {
+            return;
+        };
+        self.open_document_at(root, path);
+    }
+    fn open_document_at(&mut self, root: PathBuf, path: PathBuf) {
         if let Some(i) = self.documents.iter().position(|d| d.path == path) {
             self.active_document = i;
             self.view = View::Files;
             return;
         }
-        let Some(root) = self.state.active().map(|p| p.path.clone()) else {
+        if self.document_pending.contains(&path) {
             return;
-        };
+        }
+        if self.documents.len() + self.document_pending.len() >= 24 {
+            self.error = "Close a document before opening more (24-tab limit)".into();
+            return;
+        }
+        self.document_pending.insert(path.clone());
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let _ = sender.send(Message::Document(Document::open(&root, &path)));
+            let result = Document::open(&root, &path).map(Box::new);
+            let _ = sender.send(Message::Document(path, result));
         });
     }
     fn poll(&mut self) {
@@ -296,18 +326,24 @@ impl Tessel {
                     }
                 }
                 Message::Directory(_, _) => {}
-                Message::Document(result) => match result {
-                    Ok(d) => {
-                        if let Some(i) = self.documents.iter().position(|old| old.path == d.path) {
-                            self.active_document = i;
-                        } else {
-                            self.documents.push(d);
-                            self.active_document = self.documents.len() - 1;
+                Message::Document(path, result) => {
+                    self.document_pending.remove(&path);
+                    match result {
+                        Ok(d) => {
+                            let d = *d;
+                            if let Some(i) =
+                                self.documents.iter().position(|old| old.path == d.path)
+                            {
+                                self.active_document = i;
+                            } else {
+                                self.documents.push(d);
+                                self.active_document = self.documents.len() - 1;
+                            }
+                            self.view = View::Files;
                         }
-                        self.view = View::Files;
+                        Err(e) => self.error = e,
                     }
-                    Err(e) => self.error = e,
-                },
+                }
             }
         }
     }
@@ -529,11 +565,23 @@ impl Tessel {
             ui.label("Choose a UTF-8 file in the explorer.");
             return;
         };
+        let extension = d
+            .path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        let readable = matches!(extension.as_str(), "html" | "htm" | "md" | "markdown");
         ui.horizontal(|ui| {
-            if ui.button("Save (Ctrl+S)").clicked()
-                || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S))
+            if !d.media
+                && (ui.button("Save (Ctrl+S)").clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
             {
                 d.error = d.save().err().unwrap_or_default();
+            }
+            if readable {
+                ui.selectable_value(&mut d.preview_mode, false, "Source");
+                ui.selectable_value(&mut d.preview_mode, true, "Readable preview");
             }
             if ui.button("Close").clicked() {
                 close = Some(self.active_document);
@@ -543,18 +591,83 @@ impl Tessel {
         if !d.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
         }
-        egui::ScrollArea::both()
-            .id_salt("editor-scroll")
-            .show(ui, |ui| {
-                ui.add(
-                    egui::TextEdit::multiline(&mut d.text)
-                        .code_editor()
-                        .font(egui::FontId::monospace(self.state.font_size))
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(30)
-                        .lock_focus(true),
-                );
+        let mut link = None;
+        if d.media {
+            if d.texture.is_none()
+                && let Some(image) = d.image.take()
+            {
+                d.texture = Some(ui.ctx().load_texture(
+                    d.path.to_string_lossy(),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+            if let Some(texture) = &d.texture {
+                egui::ScrollArea::both()
+                    .id_salt((&d.path, "image"))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Image::new(texture)
+                                .max_width(ui.available_width())
+                                .maintain_aspect_ratio(true),
+                        );
+                    });
+            }
+        } else if readable && d.preview_mode {
+            ui.small("Native readable view · scripts, CSS and external resources are not loaded");
+            let preview = d.preview.get_or_insert_with(|| {
+                crate::preview::Preview::parse(
+                    &d.text,
+                    matches!(extension.as_str(), "md" | "markdown"),
+                )
             });
+            if ui.button("Copy plain text").clicked() {
+                ui.ctx().copy_text(preview.plain());
+            }
+            egui::ScrollArea::vertical()
+                .id_salt((&d.path, "preview"))
+                .show(ui, |ui| {
+                    link = preview.show(ui);
+                });
+        } else {
+            egui::ScrollArea::both()
+                .id_salt((&d.path, "source"))
+                .show(ui, |ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::multiline(&mut d.text)
+                                .code_editor()
+                                .font(egui::FontId::monospace(self.state.font_size))
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(30)
+                                .lock_focus(true),
+                        )
+                        .changed()
+                    {
+                        d.preview = None;
+                    }
+                });
+        }
+        let resolved = link.map(|href| {
+            crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
+        });
+        if let Some(result) = resolved {
+            match result {
+                Ok((root, crate::preview::Link::File(path))) => self.open_document_at(root, path),
+                Ok((_, crate::preview::Link::Web(url))) => {
+                    #[cfg(windows)]
+                    {
+                        self.browser.open_address(url);
+                        self.view = View::Browser;
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        self.error = format!("Browser is not available on this platform: {url}");
+                    }
+                }
+                Err(error) => self.error = error,
+            }
+        }
         if let Some(i) = close {
             if self.documents[i].dirty() {
                 self.pending_close = Some(i);

@@ -26,6 +26,13 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - UTF-8 text editor tabs (2 MiB limit), atomic saves, detection of external edits and unsaved-change guards on close.
 - On-demand Git status, working/staged diffs, recent history, literal-path staging and explicit commits. No continuous Git polling; operations have a 20-second deadline and bounded captured output.
 
+### Document previews
+
+- Native readable HTML and Markdown views, with source/preview switching and copy-as-plain-text. Scripts, CSS and external resources are never executed or fetched by this view; it is not a full webpage renderer.
+- Local links open another editor tab while preserving the source; HTTP(S) links open the private browser. Native URL schemes, network-share links and paths outside the source project are refused.
+- Read-only PNG, JPEG, WebP, GIF-first-frame and BMP previews, with background decoding, compressed-size/dimension/allocation limits and fit-to-width display.
+- Bounded document loading and up to 24 open or loading documents. PDF rendering and office-document previews remain pending.
+
 ### Native Codex chat
 
 - Rust client for the installed Codex app-server, using its existing sign-in without copying tokens.
@@ -80,7 +87,7 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 
 ## Validation and remaining migration
 
-Current Windows evidence: 25 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Manual password filling has not yet received native browser acceptance testing. No live SSH server or paid inference turn has been used for acceptance testing.
+Current Windows evidence: 28 tests pass, strict Clippy and formatting pass, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Manual password filling has not yet received native browser acceptance testing. No live SSH server or paid inference turn has been used for acceptance testing.
 
 See [MIGRATION.md](MIGRATION.md) for the acceptance ledger. Major remaining work includes full Live Share parity, credential agent consent/connectors/account sync, remote filesystem management, browser tools for agents, other native chat providers, full document previews, comprehensive terminal protocols, installer/updater, localization and accessibility. The native Codex chat does not yet render prior history or support every question/permission/tool type; unsupported requests are rejected explicitly. Popup-based OAuth flows and detailed download progress/cancellation need further implementation. Session metadata survives restart, but processes and terminal output do not survive app exit.
 
