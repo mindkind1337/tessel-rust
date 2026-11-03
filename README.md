@@ -19,6 +19,8 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - PowerShell without user profiles on Windows; `/bin/sh` on Unix.
 - ANSI colors, underlines, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys. Wide glyphs render above both cell backgrounds; painting is clipped to each pane. Installed Windows emoji/symbol fonts are used as fallbacks.
 - Ctrl+A–Z, Ctrl+Space, Shift+Tab, Insert/Delete, Page Up/Down, F1–F12 and modified navigation/function keys. The input cursor is hidden while viewing scrollback.
+- Drag to select terminal text; copy with Ctrl+C when selected, Ctrl+Shift+C or the context menu. Wrapped lines and Unicode are preserved; new output, scrolling or resizing clears the selection. Ctrl+C without a selection still interrupts the shell.
+- Click to focus a terminal; background panes never take focus automatically. Tab, arrows and Escape stay with the focused terminal. IME preedit is drawn locally and only committed text is sent, with the candidate position at the cursor; OS-specific IME acceptance is still pending.
 - Bounded input/output queues and shell termination on sleep or close.
 - Detection and explicit launch of installed Claude, Codex, OpenCode, Gemini, Copilot, Aider, Amp, Kimi, Qwen, Grok, Cline and Cursor agent CLIs.
 - SSH terminals through OpenSSH, config aliases, host verification, explicit reconnect, remote working directory and keepalives. No production server is contacted automatically.

@@ -5,7 +5,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
-| Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Initial PTY verified; improving |
+| Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, real OS IME and mouse protocols pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Implemented; filesystem tests pass |
 | Layout | Persistent grid; project switching retains sessions | In progress |

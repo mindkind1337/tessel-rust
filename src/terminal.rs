@@ -16,6 +16,9 @@ pub struct Terminal {
     size: (u16, u16),
     status: String,
     query_tail: Vec<u8>,
+    selection: Option<Selection>,
+    composition: String,
+    composing: bool,
     #[cfg(feature = "visual-test")]
     fixture: bool,
 }
@@ -88,12 +91,18 @@ impl Terminal {
             size: (30, 100),
             status: String::new(),
             query_tail: Vec::new(),
+            selection: None,
+            composition: String::new(),
+            composing: false,
             #[cfg(feature = "visual-test")]
             fixture: false,
         })
     }
 
     fn process_output(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.selection = None;
+        }
         for &byte in bytes {
             self.parser.process(&[byte]);
             self.query_tail.push(byte);
@@ -155,22 +164,81 @@ impl Terminal {
                 })
                 .is_ok()
         {
+            self.selection = None;
             self.parser.set_size(rows, cols);
             self.size = (rows, cols);
         }
-        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click());
-        if response.clicked() || ui.memory(|m| m.focused().is_none()) {
+        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        if response.clicked() || response.drag_started() {
             response.request_focus();
+        }
+        if response.has_focus() {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    response.id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                    },
+                )
+            });
+        }
+        #[cfg(feature = "visual-test")]
+        if self.fixture {
+            self.selection = Some(Selection {
+                start: (1, 0),
+                end: (1, 9),
+            });
+        }
+        if response.lost_focus() {
+            self.composition.clear();
+            self.composing = false;
+        }
+        let cell_at = |pos: egui::Pos2| {
+            (
+                ((pos.y - rect.min.y) / line_height)
+                    .floor()
+                    .clamp(0.0, f32::from(rows - 1)) as u16,
+                ((pos.x - rect.min.x) / cell_width)
+                    .round()
+                    .clamp(0.0, f32::from(cols)) as u16,
+            )
+        };
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(pos) = ui.input(|i| i.pointer.press_origin())
+        {
+            let start = cell_at(pos);
+            self.selection = Some(Selection { start, end: start });
+        }
+        if (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary))
+            && let (Some(selection), Some(pos)) =
+                (&mut self.selection, response.interact_pointer_pos())
+        {
+            selection.end = cell_at(pos);
+        }
+        if response.clicked() {
+            self.selection = None;
         }
         if response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta != 0.0 {
                 let scroll =
                     self.parser.screen().scrollback() as i64 + (delta / line_height).round() as i64;
+                self.selection = None;
                 self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
             }
         }
         response.context_menu(|ui| {
+            if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
+                if let Some(selection) = self.selection {
+                    ui.ctx().copy_text(selection.text(self.parser.screen()));
+                }
+                ui.close();
+            }
+
             if ui.button(tr("Copy visible text")).clicked() {
                 ui.ctx().copy_text(self.parser.screen().contents());
                 ui.close();
@@ -213,6 +281,29 @@ impl Terminal {
                         );
                     }
                 }
+            }
+        }
+        if let Some(selection) = self.selection {
+            let (start, end) = selection.ordered();
+            for row in start.0..=end.0 {
+                let left = if row == start.0 { start.1 } else { 0 };
+                let right = if row == end.0 { end.1 } else { cols };
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        rect.min
+                            + egui::vec2(
+                                f32::from(left) * cell_width,
+                                f32::from(row) * line_height,
+                            ),
+                        rect.min
+                            + egui::vec2(
+                                f32::from(right) * cell_width,
+                                f32::from(row + 1) * line_height,
+                            ),
+                    ),
+                    0.0,
+                    egui::Color32::from_rgb(45, 75, 115),
+                );
             }
         }
         for row in 0..rows {
@@ -262,9 +353,69 @@ impl Terminal {
                     (2.0, egui::Color32::WHITE),
                 );
             }
+            let cursor = egui::Rect::from_min_size(
+                rect.min + egui::vec2(f32::from(col) * cell_width, f32::from(row) * line_height),
+                egui::vec2(cell_width, line_height),
+            );
+            ui.output_mut(|o| {
+                o.ime = Some(egui::output::IMEOutput {
+                    rect,
+                    cursor_rect: cursor,
+                })
+            });
+            if !self.composition.is_empty() {
+                let text = painter.layout_no_wrap(
+                    self.composition.clone(),
+                    font.clone(),
+                    egui::Color32::WHITE,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(cursor.min, text.size()),
+                    0.0,
+                    default_bg,
+                );
+                painter.galley(cursor.min, text, egui::Color32::WHITE);
+            }
             for event in ui.input(|i| i.events.clone()) {
                 let bytes = match event {
-                    egui::Event::Text(text) => text.into_bytes(),
+                    egui::Event::Text(text) if !self.composing => text.into_bytes(),
+                    egui::Event::Ime(event) => match event {
+                        egui::ImeEvent::Enabled => {
+                            self.composing = true;
+                            Vec::new()
+                        }
+                        egui::ImeEvent::Preedit(text) => {
+                            self.composing = true;
+                            self.composition = text.chars().take(1024).collect();
+                            Vec::new()
+                        }
+                        egui::ImeEvent::Commit(text) => {
+                            self.composing = false;
+                            self.composition.clear();
+                            if text.len() <= 4096 {
+                                text.into_bytes()
+                            } else {
+                                self.status = "Composition limit: 4 KiB".into();
+                                Vec::new()
+                            }
+                        }
+                        egui::ImeEvent::Disabled => {
+                            self.composing = false;
+                            self.composition.clear();
+                            Vec::new()
+                        }
+                    },
+                    egui::Event::Copy => {
+                        if let Some(selection) = self.selection.filter(|s| s.start != s.end) {
+                            ui.ctx().copy_text(selection.text(self.parser.screen()));
+                            Vec::new()
+                        } else if ui.input(|i| i.modifiers.shift) {
+                            ui.ctx().copy_text(self.parser.screen().contents());
+                            Vec::new()
+                        } else {
+                            vec![3]
+                        }
+                    }
                     egui::Event::Paste(text) => {
                         if text.len() > 65536 {
                             self.status = "Paste limit: 64 KiB".into();
@@ -281,6 +432,20 @@ impl Terminal {
                         modifiers,
                         ..
                     } => {
+                        if self.composing {
+                            continue;
+                        }
+                        if key == egui::Key::C
+                            && modifiers.ctrl
+                            && (modifiers.shift || self.selection.is_some_and(|s| s.start != s.end))
+                        {
+                            ui.ctx().copy_text(
+                                self.selection
+                                    .map(|s| s.text(self.parser.screen()))
+                                    .unwrap_or_else(|| self.parser.screen().contents()),
+                            );
+                            continue;
+                        }
                         let mut bytes = key_bytes(key, modifiers);
                         if self.parser.screen().application_cursor()
                             && bytes.len() == 3
@@ -294,6 +459,7 @@ impl Terminal {
                     _ => Vec::new(),
                 };
                 if !bytes.is_empty() {
+                    self.selection = None;
                     self.parser.set_scrollback(0);
                 }
                 if !bytes.is_empty()
@@ -306,6 +472,25 @@ impl Terminal {
         if !self.status.is_empty() {
             response.on_hover_text(&self.status);
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Selection {
+    start: (u16, u16),
+    end: (u16, u16),
+}
+impl Selection {
+    fn ordered(self) -> ((u16, u16), (u16, u16)) {
+        if self.start <= self.end {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        }
+    }
+    fn text(self, screen: &vt100::Screen) -> String {
+        let (start, end) = self.ordered();
+        screen.contents_between(start.0, start.1, end.0, end.1)
     }
 }
 
@@ -505,6 +690,43 @@ mod tests {
         assert_eq!(
             key_bytes(egui::Key::PageDown, egui::Modifiers::SHIFT),
             b"\x1b[6;2~"
+        );
+    }
+    #[test]
+    fn selection_preserves_unicode_and_wrapped_lines_in_both_directions() {
+        let mut parser = vt100::Parser::new(5, 10, 0);
+        parser.process("A🙂B\r\nQuébec\r\n1234567890abc".as_bytes());
+        assert_eq!(
+            Selection {
+                start: (0, 0),
+                end: (0, 4)
+            }
+            .text(parser.screen()),
+            "A🙂B"
+        );
+        assert_eq!(
+            Selection {
+                start: (1, 6),
+                end: (0, 0)
+            }
+            .text(parser.screen()),
+            "A🙂B\nQuébec"
+        );
+        assert_eq!(
+            Selection {
+                start: (2, 0),
+                end: (3, 3)
+            }
+            .text(parser.screen()),
+            "1234567890abc"
+        );
+        assert_eq!(
+            Selection {
+                start: (0, 1),
+                end: (0, 1)
+            }
+            .text(parser.screen()),
+            ""
         );
     }
     #[test]
