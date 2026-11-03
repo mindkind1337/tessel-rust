@@ -2,7 +2,7 @@
 
 Working parity specification between:
 - **Reference Electron/Vue app (`C:\Tessel`, read-only):** commit `2bb41843`
-- **Native Rust rewrite (`C:\Tessel-rust`):** commit `1ddf79c` (`b41`, `CARGO_PKG_VERSION = 0.1.0`)
+- **Native Rust rewrite (`C:\Tessel-rust`):** commit `2cfa7e7` (`b43`, `CARGO_PKG_VERSION = 0.1.0`)
 
 ## Non-Negotiable Parity Rules
 
@@ -32,7 +32,7 @@ Working parity specification between:
 
 - **Container:** Fixed height `40px`, `padding: 0 10px`, `gap: 6px`, background `--chrome` (`#101216` in Classic), bottom border `1px solid --border` (`#252932` in Classic), 3 flex regions (`tb-left`, `tb-center`, `tb-right`).
 - **Left (`tb-left`):**
-  - Tessel tile-T mark (`18×18px` 3-tile SVG; `#f5c542` dev badge/accent in dev mode).
+  - Tessel 6-tile T + cursor mark (`16×16px`, `viewBox="0 0 24 24"`, `App.vue:14734-14748`: release `#6b8fff`/`#5e78d4`/`#44589b`/`#e6e6e6`; dev `#f5c542`/`#c9a23b`/`#957a31`/`#e6e6e6`).
   - App title `"Tessel"` (`12.5px`, weight `600`, `--text`).
   - Native build identity (`CARGO_PKG_VERSION` `0.1.0` + `TESSEL_BUILD` `b<count> (<commit>)`, hover tooltip showing full build identity).
 - **Center (`tb-center`):**
@@ -290,3 +290,8 @@ Terminal base colors (`themes.js:39-64`, `themePalettes.js:10,16,22,28,34`):
 ### Franklin — Batch 6 (Native `egui` `HelpPanel` Composed with `shortcuts.rs`, `supported_keys` Filtering & Two-Step `Escape`)
 - `src/help_panel.rs` — Native `egui` keyboard shortcuts dialog body (`HelpPanel::default()`, `reset()`, `show(ui, french, supported_keys) -> bool`) composing directly with `crate::shortcuts` (`shortcut_groups`, `chords_of`, `fold_for_search`, `route_help_dialog_escape`): filters strictly to caller-supplied `supported_keys` so unimplemented shortcuts/groups are never advertised, applies truthful native descriptions where current Rust scope is narrower (`Ctrl+Shift+T` default shell only; `Ctrl+Shift+P` commands only) prior to search indexing, renders flow-balanced 2-column groups (`>= 600px`, 1 column when narrow) with framed `<kbd>` keycaps, `+` chord joiners, and localized `or`/`ou` chord alternatives, auto-focuses the search input on open/`reset()`, and consumes `Escape` before `egui::TextEdit` and `egui::ModalResponse::should_close` (non-empty query clears search and keeps modal open + focused; empty query returns `true` to close; held key-repeat `Escape` is absorbed).
 - `tests/ui_help_panel.rs` — Integration test suite driving `HelpPanel` inside a real `egui::Modal` (`ModalResponse::should_close`), verifying `supported_keys` gating, truthful `Ctrl+Shift+T`/`Ctrl+Shift+P` labels, EN/FR accent-insensitive search over titles/descriptions/localized keycaps (`maj+t`, `echap`, `fleches`, `editeur`, `controle git`), auto-focus typing, clear button, key-repeat guard, and two-step `Escape` dismissal with zero warnings under `-D warnings`.
+
+### Franklin — Batch 7 (Pure-Rust Vector `icons.rs` from `App.vue` & Lucide + `THIRD_PARTY_NOTICES.md`)
+- `src/icons.rs` — Pure-Rust vector icon painter (`Icon::{Search, Plus, ChevronDown, Close, Help, Settings, Share, Layout, Terminal, PanelLeftOpen, PanelLeftClosed, PanelRightOpen, PanelRightClosed}`, `paint(painter, rect, icon, color)`, `paint_brand(painter, rect, development)`) with zero runtime I/O, zero external crate dependencies, and zero glyph approximations: exact inline SVG coordinates/arcs/Béziers from `App.vue` (`14734..15058`: 6-tile brand mark in release/dev palettes, `16×16` toolbar icons, `24×24` 8-tooth `Settings` gear) and `lucide-vue-next` (`v0.577.0`: `Close`, `Help`, `Terminal`), preserving 1:1 aspect ratio and scaled stroke widths across arbitrary `egui::Rect` sizes.
+- `THIRD_PARTY_NOTICES.md` — Verbatim ISC License + Cole Bemis Feather MIT License attribution from `lucide-vue-next` (`v0.577.0`).
+- `tests/ui_icons.rs` — Standalone `egui` vector shape test suite verifying bounding rects at `10`, `13`, `16`, `24`, and non-square rects, degenerate rect safety, theme color propagation, open/closed sidebar toggle fills, 8-tooth gear tessellation, and 6-tile release/dev brand mark palettes with zero warnings under `-D warnings`.
