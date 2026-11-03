@@ -2622,6 +2622,15 @@ impl Tessel {
         }
     }
     fn git_start(&mut self, args: Vec<String>, input: Option<Vec<u8>>) {
+        self.git_start_work(move |root| {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            crate::git::run(&root, &args, input.as_deref())
+        });
+    }
+    fn git_start_work(
+        &mut self,
+        work: impl FnOnce(PathBuf) -> Result<String, String> + Send + 'static,
+    ) {
         if self.git_result.busy() || self.scm_state.busy() {
             return;
         }
@@ -2639,8 +2648,7 @@ impl Tessel {
         }
         self.scm_state.result = None;
         thread::spawn(move || {
-            let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let _ = sender.send(crate::git::run(&root, &args, input.as_deref()));
+            let _ = sender.send(work(root));
         });
     }
     fn git_view(&mut self, ui: &mut egui::Ui) {
@@ -2727,15 +2735,8 @@ impl Tessel {
                         .char_limit(4096),
                 );
                 if ui.button(tr("Stage file")).clicked() && !self.git_path.trim().is_empty() {
-                    self.git_start(
-                        vec![
-                            "--literal-pathspecs".into(),
-                            "add".into(),
-                            "--".into(),
-                            self.git_path.clone(),
-                        ],
-                        None,
-                    );
+                    let path = self.git_path.clone();
+                    self.git_start_work(move |root| crate::git::stage_file(&root, &path));
                 }
             });
             ui.vertical(|ui| {

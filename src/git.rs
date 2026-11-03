@@ -13,6 +13,35 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
     run_bytes(root, args, input).map(|output| output.text())
 }
 
+/// Stage exactly one project-relative file, including an already tracked deletion.
+/// Literal pathspecs prevent names such as `*.txt` from selecting other files.
+pub fn stage_file(root: &Path, relative: &str) -> Result<String> {
+    let relative =
+        project_relative_path("", relative).ok_or("Choose a file inside this project.")?;
+    let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+    let mut candidate = canonical_root.clone();
+    for component in Path::new(relative).components() {
+        candidate.push(component);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err("Staging through symbolic links is not supported.".into());
+                }
+                let resolved = candidate.canonicalize().map_err(|e| e.to_string())?;
+                if !resolved.starts_with(&canonical_root) {
+                    return Err("Path is outside this project.".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    if root.join(relative).is_dir() {
+        return Err("Choose one file, not a directory.".into());
+    }
+    run(root, &["--literal-pathspecs", "add", "--", relative], None)
+}
+
 pub struct ScopedStatus {
     pub project_prefix: String,
     pub output: Capture,
@@ -319,5 +348,71 @@ mod tests {
             assert!(project_relative_path("", invalid).is_none());
         }
         assert_eq!(scoped_status(dir.path()).unwrap().project_prefix, "");
+    }
+    #[test]
+    fn stage_file_rejects_escape_and_preserves_literal_names_and_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "outside").unwrap();
+        // Reproduce the former UI behavior in this disposable repository only.
+        run(
+            &root,
+            &["--literal-pathspecs", "add", "--", "../outside.txt"],
+            None,
+        )
+        .unwrap();
+        assert!(
+            run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .contains("outside.txt")
+        );
+        run(dir.path(), &["rm", "--cached", "--", "outside.txt"], None).unwrap();
+        for path in [
+            "../outside.txt",
+            ".",
+            "",
+            "/outside.txt",
+            "sub/../outside.txt",
+        ] {
+            assert!(stage_file(&root, path).is_err(), "{path}");
+        }
+        assert!(stage_file(&root, dir.path().join("outside.txt").to_str().unwrap()).is_err());
+        for name in ["..notes.txt", "\u{e9} space.txt", "[file].txt", "f.txt"] {
+            std::fs::write(root.join(name), name).unwrap();
+        }
+        std::fs::create_dir(root.join("folder")).unwrap();
+        assert!(stage_file(&root, "folder").is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path(), root.join("link")).unwrap();
+            assert!(stage_file(&root, "link/outside.txt").is_err());
+            std::fs::remove_file(root.join("link")).unwrap();
+        }
+        stage_file(&root, "[file].txt").unwrap();
+        let staged = run(dir.path(), &["diff", "--cached", "--name-only"], None).unwrap();
+        assert_eq!(staged.trim(), "project/[file].txt");
+        stage_file(&root, "..notes.txt").unwrap();
+        stage_file(&root, "\u{e9} space.txt").unwrap();
+        run(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+            None,
+        )
+        .unwrap();
+        std::fs::remove_file(root.join("..notes.txt")).unwrap();
+        stage_file(&root, "..notes.txt").unwrap();
+        let staged = run(dir.path(), &["diff", "--cached", "--name-status"], None).unwrap();
+        assert_eq!(staged.trim(), "D\tproject/..notes.txt");
+        assert!(!staged.contains("outside.txt"));
     }
 }
