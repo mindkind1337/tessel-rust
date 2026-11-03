@@ -89,6 +89,7 @@ pub struct Workspace {
     pub schema: u32,
     pub projects: Vec<Project>,
     pub hosts: Vec<Host>,
+    pub agent_prefs: std::collections::BTreeMap<String, crate::agent_preferences::Preferences>,
     pub tasks: Vec<Task>,
     pub sessions: Vec<SavedSession>,
     pub next_pane: u64,
@@ -112,6 +113,7 @@ impl Default for Workspace {
             schema: 1,
             projects: vec![],
             hosts: vec![],
+            agent_prefs: Default::default(),
             tasks: vec![],
             sessions: vec![],
             next_pane: 1,
@@ -158,6 +160,13 @@ impl Workspace {
         }
         if self.projects.len() > 1000 || self.hosts.len() > 1000 || self.tasks.len() > 10000 {
             return Err("Workspace exceeds supported limits.".into());
+        }
+        if self
+            .agent_prefs
+            .keys()
+            .any(|id| !crate::launch::AGENTS.contains(&id.as_str()))
+        {
+            return Err("Unknown saved agent preference.".into());
         }
         if self.sessions.len() > 100 || self.next_id == u64::MAX {
             return Err("Workspace limits exceeded.".into());

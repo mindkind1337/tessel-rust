@@ -981,6 +981,11 @@ impl Tessel {
             ("account", "Account"),
         ]
         .into_iter()
+        .filter(|(id, _)| match *id {
+            "chat" => crate::agent_preferences::enabled(&self.state, "codex"),
+            "claude-chat" => crate::agent_preferences::enabled(&self.state, "claude"),
+            _ => true,
+        })
         .map(|(id, title)| {
             let command = PaletteCommand::new(id, "Tessel", tr(title));
             let shortcut = match id {
@@ -1406,7 +1411,7 @@ impl Tessel {
             use crate::empty_state_panel::Entry;
             let mut entries = Vec::new();
             for (name, installed) in self.agents.entries() {
-                if *installed {
+                if *installed && crate::agent_preferences::enabled(&self.state, name) {
                     entries.push(Entry {
                         id: format!("agent:{name}"),
                         label: name.clone(),
@@ -1420,6 +1425,9 @@ impl Tessel {
                     ("codex", "Native Codex chat"),
                     ("claude", "Native Claude chat"),
                 ] {
+                    if !crate::agent_preferences::enabled(&self.state, id) {
+                        continue;
+                    }
                     entries.push(Entry {
                         id: format!("chat:{id}"),
                         label: tr(label).into(),
@@ -2396,7 +2404,15 @@ impl Tessel {
         if !self.agents.loaded() {
             return;
         }
+        let mut visibility_change = None;
         for (name, installed) in self.agents.entries() {
+            let mut enabled = crate::agent_preferences::enabled(&self.state, name);
+            if ui
+                .checkbox(&mut enabled, format!("{} {name}", tr("Offer in menus:")))
+                .changed()
+            {
+                visibility_change = Some((name.clone(), enabled));
+            }
             ui.label(format!(
                 "{name}: {}",
                 if *installed {
@@ -2405,6 +2421,21 @@ impl Tessel {
                     tr("not on PATH")
                 }
             ));
+        }
+        if let Some((id, enabled)) = visibility_change {
+            self.change_agent_visibility(&id, enabled);
+        }
+    }
+    fn change_agent_visibility(&mut self, id: &str, enabled: bool) {
+        let result = self
+            .store
+            .as_ref()
+            .ok_or_else(|| "Settings store unavailable".to_owned())
+            .and_then(|store| {
+                crate::agent_preferences::set_enabled(&mut self.state, store, id, enabled)
+            });
+        if let Err(error) = result {
+            self.error = error;
         }
     }
     fn open_help(&mut self) {
@@ -2438,6 +2469,9 @@ impl Tessel {
             ("codex", "Native Codex chat"),
             ("claude", "Native Claude chat"),
         ] {
+            if !crate::agent_preferences::enabled(&self.state, id) {
+                continue;
+            }
             let available = self.state.active_project.is_some();
             entries.push(LauncherEntry {
                 item: LaunchMenuItem::ChatAgent {
@@ -2452,6 +2486,7 @@ impl Tessel {
             self.agents
                 .entries()
                 .iter()
+                .filter(|(name, _)| crate::agent_preferences::enabled(&self.state, name))
                 .map(|(name, available)| LauncherEntry {
                     item: LaunchMenuItem::Agent {
                         id: name.clone(),

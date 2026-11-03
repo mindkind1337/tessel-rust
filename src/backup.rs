@@ -90,6 +90,10 @@ mod tests {
         let path = dir.path().join("settings.json");
         let mut state = Workspace::default();
         state.add_project(dir.path()).unwrap();
+        state.agent_prefs.insert(
+            "codex".into(),
+            crate::agent_preferences::Preferences { enabled: false },
+        );
         state.sessions.push(crate::workspace::SavedSession {
             pane_name: Some("Custom agent".into()),
             id: 1,
@@ -103,6 +107,7 @@ mod tests {
         let mut imported = import(&path).unwrap();
         imported.migrate_native_threads();
         assert_eq!(imported.projects, state.projects);
+        assert_eq!(imported.agent_prefs, state.agent_prefs);
         assert_eq!(
             imported.sessions[0].pane_name.as_deref(),
             Some("Custom agent")
