@@ -26,10 +26,14 @@ pub enum Icon {
     PanelLeftClosed,
     PanelRightOpen,
     PanelRightClosed,
+    PaneMore,
+    PaneMaximize,
+    PaneRestore,
+    PaneClose,
 }
 
 impl Icon {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 17] = [
         Self::Search,
         Self::Plus,
         Self::ChevronDown,
@@ -43,6 +47,10 @@ impl Icon {
         Self::PanelLeftClosed,
         Self::PanelRightOpen,
         Self::PanelRightClosed,
+        Self::PaneMore,
+        Self::PaneMaximize,
+        Self::PaneRestore,
+        Self::PaneClose,
     ];
 }
 
@@ -126,6 +134,24 @@ pub fn paint_brand(painter: &Painter, rect: Rect, development: bool) {
 /// Paints a crisp vector [`Icon`] inscribed 1:1 inside `rect` with `color`.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     match icon {
+        // Exact inline 16x16 TerminalPane.vue header controls.
+        Icon::PaneMore | Icon::PaneMaximize | Icon::PaneRestore | Icon::PaneClose => {
+            let Some(vp) = Viewport::new(rect, 16.0) else {
+                return;
+            };
+            if icon == Icon::PaneMore {
+                for x in [3.0, 8.0, 13.0] {
+                    painter.circle_filled(vp.pt(x, 8.0), vp.len(1.4), color);
+                }
+            } else {
+                let (path, width) = match icon {
+                    Icon::PaneMaximize => ("M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4", 1.5),
+                    Icon::PaneRestore => ("M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4", 1.5),
+                    _ => ("M3.5 3.5l9 9M12.5 3.5l-9 9", 1.6),
+                };
+                paint_svg_path(painter, vp, path, Stroke::new(vp.len(width), color), true);
+            }
+        }
         Icon::Search => {
             let Some(vp) = Viewport::new(rect, 16.0_f32) else {
                 return;

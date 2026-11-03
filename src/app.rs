@@ -1351,10 +1351,27 @@ impl Tessel {
                                     },
                                 };
                                 let mut action = None;
-                                ui.label(&session.title).context_menu(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let title_width = (ui.available_width() - 84.0).max(0.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(title_width, 22.0),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(title_width);
+                                        ui.add(egui::Label::new(&session.title).truncate())
+                                    },
+                                )
+                                .inner
+                                .on_hover_text(&session.title)
+                                .context_menu(|ui| {
                                     action = crate::pane_header::show(ui, &menu);
                                 });
-                                ui.menu_button("⋯", |ui| {
+                                let more = crate::pane_header::button(
+                                    ui,
+                                    crate::icons::Icon::PaneMore,
+                                    tr("More options"),
+                                );
+                                egui::Popup::menu(&more).show(|ui| {
                                     if let Some(selected) = crate::pane_header::show(ui, &menu) {
                                         action = Some(selected);
                                     }
@@ -1386,14 +1403,26 @@ impl Tessel {
                                         _ => {}
                                     }
                                 }
-                                if ui
-                                    .small_button(if maximized.is_some() { "▣" } else { "□" })
-                                    .on_hover_text(tr("Maximize / restore pane"))
-                                    .clicked()
+                                if crate::pane_header::button(
+                                    ui,
+                                    if maximized.is_some() {
+                                        crate::icons::Icon::PaneRestore
+                                    } else {
+                                        crate::icons::Icon::PaneMaximize
+                                    },
+                                    tr("Maximize / restore pane"),
+                                )
+                                .clicked()
                                 {
                                     maximize = Some(id);
                                 }
-                                if ui.small_button("×").on_hover_text(tr("Close")).clicked() {
+                                if crate::pane_header::button(
+                                    ui,
+                                    crate::icons::Icon::PaneClose,
+                                    tr("Close"),
+                                )
+                                .clicked()
+                                {
                                     close = Some(id);
                                 }
                             });

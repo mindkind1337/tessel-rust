@@ -4,6 +4,36 @@ use crate::pane_menu_model::{
 };
 use eframe::egui;
 
+pub fn button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui::Response {
+    let response = ui.add(
+        egui::Button::new("")
+            .frame(false)
+            .min_size(egui::vec2(24.0, 22.0)),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let danger = icon == crate::icons::Icon::PaneClose && response.hovered() && ui.is_enabled();
+    if danger {
+        ui.painter()
+            .rect_filled(response.rect, 5.0, ui.visuals().error_fg_color);
+    }
+    let color = if danger {
+        egui::Color32::WHITE
+    } else if response.hovered() && ui.is_enabled() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(14.0)),
+        icon,
+        color,
+    );
+    response.on_hover_text(label)
+}
+
 pub struct MenuState<'a> {
     pub title: &'a str,
     pub maximized: bool,
