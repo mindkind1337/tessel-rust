@@ -7,6 +7,7 @@ mod account_panel;
 mod agent_browser;
 mod agent_tools;
 mod app;
+mod backup;
 #[cfg(windows)]
 mod browser;
 mod chat;

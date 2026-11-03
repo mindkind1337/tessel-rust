@@ -65,7 +65,7 @@ pub fn execute(
                     .filter(|c| *c < 4)
                     .ok_or("Column must be 0 to 3")? as usize,
             };
-            let id = state.id();
+            let id = state.id()?;
             state.tasks.push(Task {
                 id,
                 project,

@@ -98,6 +98,8 @@ pub struct Tessel {
     task_title: String,
     pending_close: Option<usize>,
     pending_exit: bool,
+    restore_preview: Option<Workspace>,
+    backup_status: String,
     allow_exit: bool,
     #[cfg(feature = "visual-test")]
     visual_frames: usize,
@@ -168,6 +170,8 @@ impl Tessel {
             task_title: String::new(),
             pending_close: None,
             pending_exit: false,
+            restore_preview: None,
+            backup_status: String::new(),
             allow_exit: false,
             #[cfg(feature = "visual-test")]
             visual_frames: 0,
@@ -215,6 +219,10 @@ impl Tessel {
             if std::env::args().any(|a| a == "--remote-fixture") {
                 app.view = View::Remote;
                 app.remote = crate::remote_panel::RemotePanel::fixture();
+            }
+            if std::env::args().any(|a| a == "--restore-fixture") {
+                app.view = View::Settings;
+                app.restore_preview = Some(Workspace::default());
             }
             if std::env::args().any(|a| a == "--settings-fixture") {
                 app.view = View::Settings;
@@ -457,7 +465,11 @@ impl Tessel {
             Launch::Ssh(h) => format!("SSH · {}", h.alias),
         };
         let id = self.next_session;
-        self.next_session += 1;
+        let Some(next) = self.next_session.checked_add(1) else {
+            self.error = "Session identifiers exhausted".into();
+            return;
+        };
+        self.next_session = next;
         let mut s = Session {
             id,
             project: self.state.active_project,
@@ -786,7 +798,13 @@ impl Tessel {
         ui.horizontal(|ui| {
             ui.text_edit_singleline(&mut self.task_title);
             if ui.button(tr("Add task")).clicked() && !self.task_title.trim().is_empty() {
-                let id = self.state.id();
+                let id = match self.state.id() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.error = e;
+                        return;
+                    }
+                };
                 self.state.tasks.push(Task {
                     id,
                     project,
@@ -831,8 +849,141 @@ impl Tessel {
             self.save();
         }
     }
+    fn can_restore(&self) -> bool {
+        self.store.is_some()
+            && !self
+                .sessions
+                .iter()
+                .any(|s| s.terminal.is_some() || s.loading.is_some())
+            && !self.chats.iter().any(|chat| chat.busy())
+            && !self.remote.needs_close_confirmation()
+            && !self.documents.iter().any(Document::dirty)
+            && self.git_pending.is_none()
+            && !self.account_busy()
+    }
+    fn restore_settings(
+        &mut self,
+        mut state: Workspace,
+        ctx: &egui::Context,
+    ) -> Result<(), String> {
+        if !self.can_restore() {
+            return Err(
+                "Stop active sessions and finish or save pending work before restoring settings"
+                    .into(),
+            );
+        }
+        state.active_project = None;
+        self.save();
+        let backup = self
+            .store
+            .as_ref()
+            .ok_or("Settings store unavailable")?
+            .restore(&self.state, &state)?;
+        self.sessions.clear();
+        self.chats.clear();
+        self.documents.clear();
+        self.document_pending.clear();
+        self.active_session = None;
+        self.active_document = 0;
+        self.pending_close = None;
+        self.share = Default::default();
+        self.remote = Default::default();
+        #[cfg(windows)]
+        {
+            self.agent_browsers = Default::default();
+            self.show_agent_browser = false;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.sender = sender;
+        self.receiver = receiver;
+        self.state = state;
+        self.next_session = 1;
+        for saved in &self.state.sessions {
+            self.next_session = self.next_session.max(saved.id + 1);
+            self.sessions.push(Session {
+                id: saved.id,
+                project: saved.project,
+                title: saved.title.clone(),
+                launch: saved.launch.clone(),
+                cwd: saved.cwd.clone(),
+                terminal: None,
+                loading: None,
+                error: String::new(),
+            });
+        }
+        crate::i18n::set_language(self.state.language);
+        ctx.set_visuals(if self.state.dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        self.refresh_project();
+        self.backup_status = format!(
+            "{} {}",
+            tr("Settings restored. Previous settings saved at:"),
+            backup.display()
+        );
+        Ok(())
+    }
+    fn backup_controls(&mut self, ui: &mut egui::Ui) {
+        ui.heading(tr("Settings backup"));
+        ui.label(tr("Exports project paths, tasks, SSH aliases and sleeping session metadata. No passwords, account tokens, browser data or project files. The JSON file is not encrypted."));
+        if ui.button(tr("Export settings…")).clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .set_file_name("tessel-rust-settings.json")
+                .save_file()
+        {
+            self.save();
+            self.backup_status = match crate::backup::export(&path, &self.state) {
+                Ok(()) => format!("{} {}", tr("Settings exported:"), path.display()),
+                Err(e) => e,
+            };
+        }
+        if ui.button(tr("Import settings…")).clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("JSON", &["json"])
+                .pick_file()
+        {
+            match crate::backup::import(&path) {
+                Ok(state) => self.restore_preview = Some(state),
+                Err(e) => self.backup_status = e,
+            }
+        }
+        if !self.backup_status.is_empty() {
+            ui.label(&self.backup_status);
+        }
+        if let Some(state) = &self.restore_preview {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("restore-settings")).show(ui.ctx(), |ui| {
+                ui.heading(tr("Replace current settings?"));
+                ui.label(format!("{}: {} · {}: {} · {}: {}", tr("Projects"), state.projects.len(), tr("Tasks"), state.tasks.len(), tr("Sessions"), state.sessions.len()));
+                ui.label(tr("Project folders are checked when opened, not during restore."));
+                ui.collapsing(tr("Projects"), |ui| {
+                    egui::ScrollArea::vertical().max_height(180.0).show_rows(ui, 22.0, state.projects.len(), |ui, rows| {
+                        for index in rows { let project = &state.projects[index]; ui.label(format!("{} — {}", project.name, project.path.display())); }
+                    });
+                });
+                ui.label(tr("Current settings are backed up first. Sharing and agent-browser access stop. Restored sessions stay asleep."));
+                if !self.can_restore() { ui.label(tr("Stop active sessions and finish or save pending work before restoring settings")); }
+                apply = ui.add_enabled(self.can_restore(), egui::Button::new(tr("Replace settings"))).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+            if apply
+                && let Some(state) = self.restore_preview.take()
+                && let Err(e) = self.restore_settings(state, ui.ctx())
+            {
+                self.backup_status = e;
+            }
+            if cancel {
+                self.restore_preview = None;
+            }
+        }
+    }
     fn settings(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
+        self.backup_controls(ui);
+        ui.separator();
         ui.horizontal(|ui| {
             ui.label(tr("Language"));
             let previous = self.state.language;

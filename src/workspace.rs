@@ -147,10 +147,13 @@ impl Workspace {
         }
         Ok(())
     }
-    pub fn id(&mut self) -> u64 {
+    pub fn id(&mut self) -> Result<u64> {
         let id = self.next_id;
-        self.next_id += 1;
-        id
+        self.next_id = id
+            .checked_add(1)
+            .filter(|n| *n < u64::MAX)
+            .ok_or("Workspace identifiers exhausted")?;
+        Ok(id)
     }
     pub fn add_project(&mut self, path: &Path) -> Result<u64> {
         let path = path.canonicalize().map_err(|e| e.to_string())?;
@@ -161,7 +164,7 @@ impl Workspace {
             self.active_project = Some(project.id);
             return Ok(project.id);
         }
-        let id = self.id();
+        let id = self.id()?;
         let name = path
             .file_name()
             .unwrap_or(path.as_os_str())
@@ -230,12 +233,28 @@ impl Store {
         };
         Ok((Self { path, _lock: lock }, state))
     }
+    pub fn restore(&self, before: &Workspace, after: &Workspace) -> Result<PathBuf> {
+        after.validate()?;
+        let backup = tempfile::Builder::new()
+            .prefix("workspace-before-restore-")
+            .suffix(".json")
+            .tempfile_in(self.path.parent().ok_or("No settings directory")?)
+            .map_err(|e| e.to_string())?;
+        let (_, path) = backup.keep().map_err(|e| e.to_string())?;
+        atomic_write(
+            &path,
+            &serde_json::to_vec_pretty(before).map_err(|e| e.to_string())?,
+        )?;
+        self.save(after)?;
+        Ok(path)
+    }
     pub fn save(&self, state: &Workspace) -> Result<()> {
         state.validate()?;
-        atomic_write(
-            &self.path,
-            &serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?,
-        )
+        let bytes = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err("Workspace exceeds 4 MiB; previous settings retained".into());
+        }
+        atomic_write(&self.path, &bytes)
     }
 }
 

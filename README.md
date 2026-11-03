@@ -10,6 +10,7 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Saved theme, font size, one/two/three-column terminal layout, SSH hosts and per-project task boards.
 - English/French interface selection in Settings, applied immediately and retained across restarts. Main navigation, settings, task columns, file actions, browser/download controls, PDF controls, sharing, vault and approval captions are translated. User content, tool protocol values and external/technical error messages retain their original text. Settings remain scrollable on smaller windows.
 - Terminal and agent metadata restored asleep: reopening the app never automatically executes saved processes.
+- Export/import portable Rust settings as bounded JSON, with a review of project paths and metadata counts before replacement. A local copy preserves previous settings; restored terminals stay asleep, projects require explicit selection, sharing stops and agent-browser access is revoked. Active work must be stopped or saved first. Exports contain paths and metadata but no credentials, browser profiles or project files, and are not encrypted.
 - Atomic workspace writes, schema validation and a single-instance workspace lock. Corrupt or newer metadata is retained instead of silently replaced.
 
 ### Terminals, agents and SSH

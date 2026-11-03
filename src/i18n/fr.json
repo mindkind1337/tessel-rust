@@ -183,5 +183,18 @@
   "Delete…": "Supprimer…",
   "Delete remote item permanently?": "Supprimer définitivement cet élément distant?",
   "This does not use a recycle bin. Only empty folders can be deleted.": "Cette action ne passe pas par une corbeille. Seuls les dossiers vides peuvent être supprimés.",
-  "Delete permanently": "Supprimer définitivement"
+  "Delete permanently": "Supprimer définitivement",
+  "Settings backup": "Sauvegarde des réglages",
+  "Exports project paths, tasks, SSH aliases and sleeping session metadata. No passwords, account tokens, browser data or project files. The JSON file is not encrypted.": "Exporte les chemins des projets, les tâches, les alias SSH et les sessions endormies. Aucun mot de passe, jeton de compte, donnée de navigateur ou fichier de projet. Le fichier JSON n’est pas chiffré.",
+  "Export settings…": "Exporter les réglages…",
+  "Import settings…": "Importer les réglages…",
+  "Replace current settings?": "Remplacer les réglages actuels?",
+  "Unavailable project folders": "Dossiers de projets indisponibles",
+  "Current settings are backed up first. Sharing and agent-browser access stop. Restored sessions stay asleep.": "Les réglages actuels sont sauvegardés avant le remplacement. Le partage et l’accès au navigateur des agents sont arrêtés. Les sessions restaurées restent endormies.",
+  "Stop active sessions and finish or save pending work before restoring settings": "Arrêtez les sessions actives et terminez ou enregistrez le travail en cours avant de restaurer les réglages.",
+  "Replace settings": "Remplacer les réglages",
+  "Settings restored. Previous settings saved at:": "Réglages restaurés. Réglages précédents sauvegardés ici :",
+  "Settings exported:": "Réglages exportés :",
+  "Sessions": "Sessions",
+  "Project folders are checked when opened, not during restore.": "Les dossiers de projets sont vérifiés à leur ouverture, pas pendant la restauration."
 }
