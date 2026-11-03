@@ -1,6 +1,6 @@
 {
   "source": "src/shared/agentSessionOptions.js",
-  "sha256": "e37811fc43ebd0c85b43484217c5cf647837f4486d3604d83623b793a212ebe6",
+  "sha256": "6fbb1dc110e2dfbe34109f781e487aa21066a9f8bab4207cdafb95bf3de87e1e",
   "catalogs": {
     "pi": {
       "models": [],
@@ -1021,7 +1021,7 @@
               "category": "model_config",
               "kind": {
                 "type": "boolean",
-                "defaultValue": true
+                "defaultValue": false
               },
               "apply": {
                 "composedIntoModel": true
