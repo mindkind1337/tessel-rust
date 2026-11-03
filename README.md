@@ -82,6 +82,13 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Manual fill in the private browser only, restricted to the account's exact HTTPS origin; no automatic form submission. Ambiguous forms are left untouched.
 - No vault tools are available to agents or guests. Existing browser password databases and Tessel credentials are not accessed automatically.
 
+### Private Tessel account
+
+- Owner-only Windows account panel with external-browser PKCE sign-in, bounded HTTP requests, explicit verification and sign-out. Sessions are encrypted with Windows DPAPI outside projects; agents, browsers and LAN guests have no account-token API.
+- Explicit sign-in registers only `tessel-rust://` for this executable. Callback state, expiry and one-use delivery are checked; the Electron protocols and existing account files remain untouched. No account request runs on startup.
+- Local sign-out removes the saved session before server revocation; connection failures are reported. Account requests finish before normal window shutdown.
+- **Production activation is pending:** the account server must accept the separate Rust callback scheme. The prepared backend patch and native fixture tests pass; real sign-in has not been exercised. Connectors, account deletion and cloud sync are not implemented yet.
+
 ### Windows distribution
 
 - An optimized portable Windows x64 ZIP can be built with `./scripts/package-windows.ps1` from a clean committed checkout. The script builds with two compiler jobs, runs the original-PDF worker acceptance check, writes commit/build metadata and SHA-256 checksums, and extracts the ZIP to verify the executable bytes.

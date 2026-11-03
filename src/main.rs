@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #[cfg(windows)]
+mod account;
+#[cfg(windows)]
+mod account_panel;
+#[cfg(windows)]
 mod agent_browser;
 mod agent_tools;
 mod app;
@@ -23,6 +27,11 @@ mod vault;
 mod vault_panel;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("--account-callback") {
+        let raw = std::env::args().nth(2).unwrap_or_default();
+        return account::receive_callback(&raw).map_err(Into::into);
+    }
     if std::env::args().nth(1).as_deref() == Some("--pdf-worker") {
         std::process::exit(if pdf::worker().is_ok() { 0 } else { 1 });
     }

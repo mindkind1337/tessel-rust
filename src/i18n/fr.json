@@ -157,5 +157,21 @@
   "Download the original to view it locally": "Téléchargez l’original pour l’afficher localement",
   "Sharing": "Partage",
   "Listening": "Écoute",
-  "Thread": "Conversation"
+  "Thread": "Conversation",
+  "Account": "Compte",
+  "Tessel account": "Compte Tessel",
+  "Your account session stays encrypted on this PC, outside projects and Live Share. Agents cannot access it.": "Votre session reste chiffrée sur ce PC, hors des projets et de Live Share. Les agents ne peuvent pas y accéder.",
+  "Native sign-in requires the tessel-rust callback update on the account server. Connectors and cloud sync are not enabled yet.": "La connexion native exige la mise à jour du retour tessel-rust sur le serveur de comptes. Les connecteurs et la synchronisation infonuagique ne sont pas encore activés.",
+  "Open account": "Ouvrir le compte",
+  "Finish signing in in your usual browser.": "Terminez la connexion dans votre navigateur habituel.",
+  "Cancel sign-in": "Annuler la connexion",
+  "Refresh account": "Vérifier le compte",
+  "Sign out": "Se déconnecter",
+  "Sign in with your browser": "Se connecter avec votre navigateur",
+  "Signed in": "Connecté",
+  "Signed out": "Déconnecté",
+  "Account verified": "Compte vérifié",
+  "Completing sign-in": "Connexion en cours",
+  "Sign-in cancelled": "Connexion annulée",
+  "Wait for the account request to finish before closing.": "Attendez la fin de la requête du compte avant de fermer."
 }

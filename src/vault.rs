@@ -38,7 +38,7 @@ fn valid(account: &Account) -> bool {
         && !account.password.is_empty()
         && account.password.len() <= 8192
 }
-fn protect(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>, String> {
+pub(crate) fn protect(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>, String> {
     use windows::{
         Win32::{
             Foundation::{HLOCAL, LocalFree},

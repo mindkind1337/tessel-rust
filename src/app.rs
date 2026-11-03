@@ -73,6 +73,8 @@ enum View {
     Browser,
     #[cfg(windows)]
     Vault,
+    #[cfg(windows)]
+    Account,
 }
 pub struct Tessel {
     state: Workspace,
@@ -114,6 +116,8 @@ pub struct Tessel {
     show_agent_browser: bool,
     #[cfg(windows)]
     vault: crate::vault_panel::VaultPanel,
+    #[cfg(windows)]
+    account: crate::account_panel::AccountPanel,
 }
 impl Tessel {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -182,6 +186,8 @@ impl Tessel {
             show_agent_browser: false,
             #[cfg(windows)]
             vault: crate::vault_panel::VaultPanel::default(),
+            #[cfg(windows)]
+            account: Default::default(),
         };
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
@@ -201,6 +207,10 @@ impl Tessel {
             if std::env::args().any(|a| a == "--french-fixture") {
                 app.state.language = crate::i18n::Language::French;
                 crate::i18n::set_language(app.state.language);
+            }
+            #[cfg(windows)]
+            if std::env::args().any(|a| a == "--account-fixture") {
+                app.view = View::Account;
             }
             if std::env::args().any(|a| a == "--settings-fixture") {
                 app.view = View::Settings;
@@ -334,11 +344,22 @@ impl Tessel {
             let _ = sender.send(Message::Document(path, result));
         });
     }
+    fn account_busy(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.account.busy()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
     fn poll(&mut self) {
         self.remote.poll();
         #[cfg(windows)]
         {
             self.browser.poll();
+            self.account.poll();
             self.agent_browsers.retain(&self.state.projects);
         }
         let mut chat_metadata_changed = false;
@@ -936,8 +957,9 @@ impl Tessel {
                 if ui.button(tr("Keep working")).clicked() {
                     self.pending_exit = false;
                 }
+                if self.account_busy() { ui.label(tr("Wait for the account request to finish before closing.")); }
                 if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
-                if ui.add_enabled(!self.remote.needs_close_confirmation(),egui::Button::new(tr("Save all and close"))).clicked() {
+                if ui.add_enabled(!self.remote.needs_close_confirmation() && !self.account_busy(),egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -952,7 +974,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!self.remote.busy(),egui::Button::new(tr("Discard edits and close"))).clicked() {
+                if ui.add_enabled(!self.remote.busy() && !self.account_busy(),egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.allow_exit = true;
                     self.save();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1096,7 +1118,8 @@ impl eframe::App for Tessel {
                 || !self.sessions.is_empty()
                 || self.chats.iter().any(crate::chat::Chat::busy)
                 || self.share.hosting()
-                || self.remote.needs_close_confirmation())
+                || self.remote.needs_close_confirmation()
+                || self.account_busy())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
@@ -1116,6 +1139,8 @@ impl eframe::App for Tessel {
                 ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
                 #[cfg(windows)]
                 ui.selectable_value(&mut self.view, View::Vault, tr("Passwords"));
+                #[cfg(windows)]
+                ui.selectable_value(&mut self.view, View::Account, tr("Account"));
                 ui.separator();
                 if ui.button(tr("+ Terminal")).clicked() {
                     self.new_session(Launch::Shell);
@@ -1186,6 +1211,8 @@ impl eframe::App for Tessel {
                 .show(ui, self.state.active().map(|p| p.path.as_path())),
             #[cfg(windows)]
             View::Vault => self.vault.show(ui, &mut self.browser),
+            #[cfg(windows)]
+            View::Account => self.account.show(ui),
             #[cfg(windows)]
             View::Browser => {
                 if !self.pending_exit && self.pending_close.is_none() {
