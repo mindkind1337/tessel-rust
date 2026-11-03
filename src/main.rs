@@ -22,6 +22,7 @@ mod files;
 pub mod finder_model;
 mod finder_panel;
 mod git;
+mod git_result;
 pub mod help_panel;
 mod i18n;
 pub mod icons;

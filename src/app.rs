@@ -127,8 +127,7 @@ pub struct Tessel {
     allow_exit: bool,
     #[cfg(feature = "visual-test")]
     visual_frames: usize,
-    git_output: String,
-    git_pending: Option<Receiver<Result<String, String>>>,
+    git_result: crate::git_result::GitResult,
     git_path: String,
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
@@ -209,8 +208,7 @@ impl Tessel {
             allow_exit: false,
             #[cfg(feature = "visual-test")]
             visual_frames: 0,
-            git_output: String::new(),
-            git_pending: None,
+            git_result: Default::default(),
             git_path: String::new(),
             commit_message: String::new(),
             chats: Vec::new(),
@@ -468,6 +466,7 @@ impl Tessel {
     }
     fn refresh_project(&mut self) {
         self.finder.close();
+        self.sync_git_project();
         self.explorer_tree
             .set_root(self.state.active().map(|p| p.path.as_path()));
     }
@@ -508,6 +507,8 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        self.sync_git_project();
+        self.git_result.poll();
         self.explorer_tree.poll();
         self.remote.poll();
         self.finder.poll();
@@ -1995,7 +1996,7 @@ impl Tessel {
             && !self.claude_chats.iter().any(|chat| chat.busy())
             && !self.remote.needs_close_confirmation()
             && !self.documents.iter().any(Document::dirty)
-            && self.git_pending.is_none()
+            && !self.git_result.busy()
             && !self.account_busy()
     }
     fn restore_settings(
@@ -2619,8 +2620,18 @@ impl Tessel {
             });
         }
     }
+    fn sync_git_project(&mut self) {
+        let owner = self.state.active().map(|project| crate::git_result::Owner {
+            project: project.id,
+            root: project.path.clone(),
+        });
+        if self.git_result.select(owner) {
+            self.git_path.clear();
+            self.commit_message.clear();
+        }
+    }
     fn git_start(&mut self, args: Vec<String>, input: Option<Vec<u8>>) {
-        if self.git_pending.is_some() {
+        if self.git_result.busy() {
             return;
         }
         let Some(root) = self.state.active().map(|p| p.path.clone()) else {
@@ -2628,23 +2639,28 @@ impl Tessel {
             return;
         };
         let (sender, receiver) = mpsc::channel();
-        self.git_pending = Some(receiver);
+        let owner = crate::git_result::Owner {
+            project: self.state.active_project.expect("active project checked"),
+            root: root.clone(),
+        };
+        if !self.git_result.start(owner, receiver) {
+            return;
+        }
         thread::spawn(move || {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = sender.send(crate::git::run(&root, &args, input.as_deref()));
         });
     }
     fn git_view(&mut self, ui: &mut egui::Ui) {
-        if let Some(rx) = &self.git_pending
-            && let Ok(result) = rx.try_recv()
-        {
-            self.git_pending = None;
-            self.git_output = result.unwrap_or_else(|e| format!("Error: {e}"));
-        }
-        ui.heading(tr("Source control"));
-        ui.label(tr("On-demand Git operations. Output is capped at 2 MiB; operations time out after 20 seconds."));
-        ui.add_enabled_ui(self.git_pending.is_none(), |ui| {
-            ui.horizontal(|ui| {
+        self.sync_git_project();
+        ui.label(
+            egui::RichText::new(tr("Source control"))
+                .strong()
+                .size(13.0),
+        );
+        ui.small(tr("On-demand Git operations. Output is capped at 2 MiB; operations time out after 20 seconds."));
+        ui.add_enabled_ui(!self.git_result.busy(), |ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (label, args) in [
                     (
                         "Status",
@@ -2662,9 +2678,13 @@ impl Tessel {
                     }
                 }
             });
-            ui.horizontal(|ui| {
+            ui.vertical(|ui| {
                 ui.label(tr("Relative file path"));
-                ui.text_edit_singleline(&mut self.git_path);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.git_path)
+                        .desired_width(ui.available_width())
+                        .char_limit(4096),
+                );
                 if ui.button(tr("Stage file")).clicked() && !self.git_path.trim().is_empty() {
                     self.git_start(
                         vec![
@@ -2677,9 +2697,14 @@ impl Tessel {
                     );
                 }
             });
-            ui.horizontal(|ui| {
+            ui.vertical(|ui| {
                 ui.label(tr("Commit message"));
-                ui.text_edit_singleline(&mut self.commit_message);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.commit_message)
+                        .desired_width(ui.available_width())
+                        .desired_rows(3)
+                        .char_limit(16384),
+                );
                 if ui.button(tr("Commit staged changes")).clicked()
                     && !self.commit_message.trim().is_empty()
                 {
@@ -2690,12 +2715,23 @@ impl Tessel {
                 }
             });
         });
-        if self.git_pending.is_some() {
-            ui.spinner();
+        if let Some(owner) = self.git_result.pending_owner() {
+            ui.horizontal_wrapped(|ui| {
+                ui.spinner();
+                let name = self
+                    .state
+                    .projects
+                    .iter()
+                    .find(|project| project.id == owner.project)
+                    .map(|project| project.name.as_str())
+                    .unwrap_or_else(|| tr("Project"));
+                ui.small(format!("{}: {name}", tr("Git in progress")))
+                    .on_hover_text(owner.root.display().to_string());
+            });
         }
         egui::ScrollArea::both().show(ui, |ui| {
             ui.add(
-                egui::TextEdit::multiline(&mut self.git_output)
+                egui::TextEdit::multiline(&mut self.git_result.output)
                     .font(egui::TextStyle::Monospace)
                     .desired_width(f32::INFINITY)
                     .interactive(false),
