@@ -2,7 +2,7 @@
 
 Working parity specification between:
 - **Reference Electron/Vue app (`C:\Tessel`, read-only):** commit `2bb41843`
-- **Native Rust rewrite (`C:\Tessel-rust`):** commit `2cfa7e7` (`b43`, `CARGO_PKG_VERSION = 0.1.0`)
+- **Native Rust rewrite (`C:\Tessel-rust`):** commit `d5f4cee` (`b45`, `CARGO_PKG_VERSION = 0.1.0`)
 
 ## Non-Negotiable Parity Rules
 
@@ -295,3 +295,7 @@ Terminal base colors (`themes.js:39-64`, `themePalettes.js:10,16,22,28,34`):
 - `src/icons.rs` — Pure-Rust vector icon painter (`Icon::{Search, Plus, ChevronDown, Close, Help, Settings, Share, Layout, Terminal, PanelLeftOpen, PanelLeftClosed, PanelRightOpen, PanelRightClosed}`, `paint(painter, rect, icon, color)`, `paint_brand(painter, rect, development)`) with zero runtime I/O, zero external crate dependencies, and zero glyph approximations: exact inline SVG coordinates/arcs/Béziers from `App.vue` (`14734..15058`: 6-tile brand mark in release/dev palettes, `16×16` toolbar icons, `24×24` 8-tooth `Settings` gear) and `lucide-vue-next` (`v0.577.0`: `Close`, `Help`, `Terminal`), preserving 1:1 aspect ratio and scaled stroke widths across arbitrary `egui::Rect` sizes.
 - `THIRD_PARTY_NOTICES.md` — Verbatim ISC License + Cole Bemis Feather MIT License attribution from `lucide-vue-next` (`v0.577.0`).
 - `tests/ui_icons.rs` — Standalone `egui` vector shape test suite verifying bounding rects at `10`, `13`, `16`, `24`, and non-square rects, degenerate rect safety, theme color propagation, open/closed sidebar toggle fills, 8-tooth gear tessellation, and 6-tile release/dev brand mark palettes with zero warnings under `-D warnings`.
+
+### Franklin — Batch 8 (Native `egui` `LauncherPanel` Composed with `finder_model` & `icons::Terminal`)
+- `src/launcher_panel.rs` — Native `egui` terminal/agent launcher menu (`LauncherPanel::default()`, `reset()`, `show(ui, LauncherInput) -> Option<LaunchMenuAction>`, `paint_placement_icon`) matching `LaunchMenu.vue` (`62..120`, `224..384`) and `style.css` (`2550..2767`) with zero process spawning and zero filesystem/env I/O: segmented `Auto` / `Left` / `Right` / `Below` placement bar with exact `16×16` shaded-split vector geometry + localized EN/FR `where_text`, catalog grouping into `Terminals` / `Native chats` / `AI agents` (plus injected `Browser`) using `icons::Icon::Terminal` and vector chat/globe icons, `↑`/`↓`/`Enter`/`Esc` keyboard navigation + pointer activation strictly skipping unavailable (`available == false`) entries and clamping selection across dynamic catalog mutations, and strict omission of unimplemented worktree/accounts/host/tools controls (`in_worktree: false`).
+- `tests/ui_launcher_panel.rs` — Standalone `egui` integration test suite driving `LauncherPanel` across keyboard navigation, disabled-row skipping & click refusal, `egui::Modal` placement radio clicks, dynamic catalog shrinking/disabling, EN/FR localization, omission of unimplemented controls, and `paint_placement_icon` shaded-split vector bounds with zero warnings under `-D warnings`.
