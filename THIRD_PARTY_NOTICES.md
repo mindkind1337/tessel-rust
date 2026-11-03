@@ -32,6 +32,9 @@ The successful-list cache in `src/agent_model_cache.rs` adapts Tessel's
 `main/agentModelList.js`, derived from Orca's `agent-model-catalog-store.ts`.
 The Antigravity variant grouping in `src/agent_model_antigravity.rs` adapts
 Tessel's `shared/antigravityModels.js`.
+The program/shim resolver in `src/agent_program.rs` adapts Tessel's
+`main/agentHeadless.js` and `main/agentTools.js`, including `shimTarget`,
+derived from Orca's local-process and commit-message agent launch rules.
 
 - Project: https://github.com/stablyai/orca
 - Reference revision: `433986fa3be37911a0f13f7ffd454b831b87a64c` (package version `1.4.214`)

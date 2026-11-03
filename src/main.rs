@@ -23,6 +23,7 @@ pub mod agent_model_process;
 pub mod agent_names;
 mod agent_paths;
 pub mod agent_preferences;
+pub mod agent_program;
 mod agent_tools;
 mod agents_panel;
 mod app;
