@@ -35,6 +35,11 @@ Tessel's `shared/antigravityModels.js`.
 The program/shim resolver in `src/agent_program.rs` adapts Tessel's
 `main/agentHeadless.js` and `main/agentTools.js`, including `shimTarget`,
 derived from Orca's local-process and commit-message agent launch rules.
+The native model selector in `src/agent_model_defaults_ui.rs` adapts Tessel's
+`AgentModelDefaults.vue`, `ThemedSelect.vue`, `sessionOptionLabels.js` and
+`cursorModels.js`, including Orca's session-option catalog and label conventions.
+The background discovery controller in `src/agent_model_discovery.rs` follows
+the success-only cache and per-agent request deduplication of `agentModelList.js`.
 
 - Project: https://github.com/stablyai/orca
 - Reference revision: `433986fa3be37911a0f13f7ffd454b831b87a64c` (package version `1.4.214`)

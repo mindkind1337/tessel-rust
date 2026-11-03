@@ -122,6 +122,7 @@ fn agent_command(preset: &crate::agent_catalog::Preset) -> CommandBuilder {
     }
 }
 
+#[cfg(any(test, feature = "visual-test"))]
 pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
     command_with_preferences(launch, cwd, None)
 }

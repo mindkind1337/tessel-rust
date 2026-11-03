@@ -47,6 +47,7 @@ pub fn spec(agent: &str) -> Option<Spec> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Failure {
+    NotFound,
     Unsupported,
     ProtocolRequired,
     Process(agent_model_process::Error),

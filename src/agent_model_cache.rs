@@ -32,6 +32,7 @@ pub struct Entry {
     pub fetched_at: f64,
 }
 
+#[derive(Clone)]
 pub struct Cache {
     path: PathBuf,
     entries: BTreeMap<String, Entry>,
@@ -52,6 +53,16 @@ impl Cache {
     /// A storage failure keeps the new success in memory; the caller can report
     /// the error. The next successful discovery retries the entire snapshot.
     pub fn keep(&mut self, agent: &str, models: &Value, fetched_at: f64) -> Result<(), String> {
+        self.keep_in_memory(agent, models, fetched_at)?;
+        self.persist()
+    }
+
+    pub fn keep_in_memory(
+        &mut self,
+        agent: &str,
+        models: &Value,
+        fetched_at: f64,
+    ) -> Result<(), String> {
         if !AGENTS.contains(&agent) {
             return Err("unsupported".into());
         }
@@ -66,6 +77,10 @@ impl Cache {
         };
         self.entries
             .insert(agent.into(), Entry { models, fetched_at });
+        Ok(())
+    }
+
+    pub fn persist(&self) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(&self.entries).map_err(|e| e.to_string())?;
         let parent = self.path.parent().ok_or("No cache directory")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

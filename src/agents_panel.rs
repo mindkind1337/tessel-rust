@@ -33,6 +33,7 @@ pub enum Action {
 
 #[derive(Default)]
 pub struct AgentsPanel {
+    model_ui: crate::agent_model_defaults_ui::AgentModelDefaultsUi,
     open: Option<String>,
     missing_open: bool,
     last_installed: Option<usize>,
@@ -44,10 +45,18 @@ pub struct AgentsPanel {
 }
 
 impl AgentsPanel {
+    #[cfg(feature = "visual-test")]
+    pub fn model_picker_fixture() -> Self {
+        Self {
+            open: Some("codex".into()),
+            ..Self::default()
+        }
+    }
     pub fn take_save(&mut self) -> Option<(String, crate::agent_preferences::Preferences)> {
         self.pending_save.take()
     }
     pub fn save_open_draft(&mut self) {
+        self.model_ui.close_popup();
         if let Some(id) = &self.open
             && let Some(draft) = self.drafts.get(id)
         {
@@ -56,6 +65,9 @@ impl AgentsPanel {
     }
     /// Called before the settings navigation, so Escape folds details first.
     pub fn handle_escape(&mut self, ctx: &egui::Context) -> bool {
+        if self.model_ui.handle_escape(ctx) {
+            return true;
+        }
         let down = ctx.input(|i| i.key_down(egui::Key::Escape));
         if !down {
             self.escape_held = false;
@@ -203,8 +215,12 @@ impl AgentsPanel {
                                 .inner_margin(10)
                                 .corner_radius(6)
                                 .show(ui, |ui| {
-                                    let (model_change, model_focus) =
-                                        model_defaults_ui(ui, row, input.french);
+                                    let (model_change, model_focus) = model_defaults_ui(
+                                        &mut self.model_ui,
+                                        ui,
+                                        row,
+                                        input.french,
+                                    );
                                     if let Some(defaults) = model_change {
                                         action = Some(Action::SetModelDefaults(
                                             preset.id.into(),
@@ -393,130 +409,27 @@ impl AgentsPanel {
 }
 
 fn model_defaults_ui(
+    picker: &mut crate::agent_model_defaults_ui::AgentModelDefaultsUi,
     ui: &mut Ui,
     row: &Row,
     french: bool,
 ) -> (Option<crate::agent_model_defaults::Defaults>, Vec<egui::Id>) {
-    let Some(catalog) = crate::agent_model_catalog::find(row.preset.id) else {
-        return (None, Vec::new());
-    };
-    let own = if french {
-        "Choix par défaut de l’agent"
-    } else {
-        "Agent's own default"
-    };
-    ui.strong(if french {
-        "Modèle par défaut"
-    } else {
-        "Default model"
-    });
-    let mut defaults = row.model_defaults.clone();
-    let selected = defaults
-        .model
-        .as_deref()
-        .map(|id| {
-            catalog
-                .models
-                .iter()
-                .find(|m| m["id"] == id)
-                .and_then(|m| m["label"].as_str())
-                .unwrap_or(id)
-        })
-        .unwrap_or(own)
-        .to_owned();
-    let combo = egui::ComboBox::from_id_salt("default-model")
-        .selected_text(selected)
-        .width(ui.available_width().min(320.0))
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut defaults.model, None, own);
-            for model in &catalog.models {
-                if let (Some(id), Some(label)) = (model["id"].as_str(), model["label"].as_str()) {
-                    ui.selectable_value(&mut defaults.model, Some(id.to_owned()), label);
-                }
-            }
-            if let Some(saved) = &row.model_defaults.model
-                && !catalog.models.iter().any(|m| m["id"] == *saved)
-            {
-                ui.selectable_value(&mut defaults.model, Some(saved.clone()), saved);
-            }
-        });
-    let mut focus = vec![combo.response.id];
-    if let Some(model) = defaults.model.clone() {
-        for option in crate::agent_model_catalog::model_options(catalog, None, &model) {
-            let Some(id) = option["id"].as_str() else {
-                continue;
-            };
-            // Claude Fast is a live-session action, never a launch flag.
-            if id != "effort" && option["apply"]["composedIntoModel"] != true {
-                continue;
-            }
-            ui.label(option["label"].as_str().unwrap_or(id));
-            let mut value = defaults
-                .values_by_model
-                .get(&model)
-                .and_then(|v| v.get(id))
-                .cloned();
-            let before = value.clone();
-            let label = value.as_ref().map_or_else(
-                || own.to_owned(),
-                |v| {
-                    option["kind"]["choices"]
-                        .as_array()
-                        .and_then(|choices| choices.iter().find(|c| c["value"] == *v))
-                        .and_then(|c| c["label"].as_str())
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| {
-                            v.as_str().map(str::to_owned).unwrap_or_else(|| {
-                                if *v == true {
-                                    if french { "Activé" } else { "On" }
-                                } else if french {
-                                    "Désactivé"
-                                } else {
-                                    "Off"
-                                }
-                                .into()
-                            })
-                        })
-                },
-            );
-            let combo = egui::ComboBox::from_id_salt(("default-option", id))
-                .selected_text(label)
-                .width(ui.available_width().min(320.0))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut value, None, own);
-                    if option["kind"]["type"] == "boolean" {
-                        ui.selectable_value(
-                            &mut value,
-                            Some(true.into()),
-                            if french { "Activé" } else { "On" },
-                        );
-                        ui.selectable_value(
-                            &mut value,
-                            Some(false.into()),
-                            if french { "Désactivé" } else { "Off" },
-                        );
-                    } else if let Some(choices) = option["kind"]["choices"].as_array() {
-                        for choice in choices {
-                            ui.selectable_value(
-                                &mut value,
-                                Some(choice["value"].clone()),
-                                choice["label"].as_str().unwrap_or(""),
-                            );
-                        }
-                    }
-                });
-            focus.push(combo.response.id);
-            if value != before {
-                defaults.set_option(id, value);
-            }
-        }
-    }
-    ui.weak(if french {
-        "Liste de modèles intégrée."
-    } else {
-        "Built-in model list."
-    });
-    ((defaults != row.model_defaults).then_some(defaults), focus)
+    use crate::agent_model_defaults_ui::{Capabilities, Input, ProbeState};
+    let result = picker.show(
+        ui,
+        Input {
+            agent_id: row.preset.id,
+            agent_name: row.preset.name,
+            defaults: &row.model_defaults,
+            discovered_models: None,
+            listed_meta: None,
+            probe: ProbeState::Idle,
+            capabilities: Capabilities::default(),
+            french,
+            show_section_header: true,
+        },
+    );
+    (result.changed, result.focus_ids)
 }
 
 struct RowControls {
@@ -853,6 +766,34 @@ mod tests {
         }
         assert!(meshes > 0, "brand painter must be connected to the row");
         assert_eq!(labels, 1);
+    }
+
+    #[test]
+    fn model_popup_escape_precedes_detail_folding_and_held_repeats() {
+        let ctx = egui::Context::default();
+        let mut panel = AgentsPanel::default();
+        frame(&ctx, &mut panel, vec![], true, true, 620.0);
+        click(&ctx, &mut panel, "Codex CLI", true, true);
+        click(&ctx, &mut panel, "Agent's own default", true, true);
+        for _ in 0..3 {
+            frame(&ctx, &mut panel, vec![], true, true, 620.0);
+            assert!(panel.model_ui.is_popup_open());
+        }
+        let key = |pressed, repeat| egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut panel, vec![key(true, false)], true, true, 620.0);
+        assert!(!panel.model_ui.is_popup_open());
+        assert_eq!(panel.open.as_deref(), Some("codex"));
+        frame(&ctx, &mut panel, vec![key(true, true)], true, true, 620.0);
+        assert_eq!(panel.open.as_deref(), Some("codex"));
+        frame(&ctx, &mut panel, vec![key(false, false)], true, true, 620.0);
+        frame(&ctx, &mut panel, vec![key(true, false)], true, true, 620.0);
+        assert!(panel.open.is_none());
     }
 
     #[test]

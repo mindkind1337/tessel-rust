@@ -366,7 +366,30 @@ impl Tessel {
                 app.open_launcher();
             }
         }
-        app.detect_agents();
+        #[cfg(feature = "visual-test")]
+        let models_fixture = std::env::args().any(|arg| arg == "--models-fixture");
+        #[cfg(not(feature = "visual-test"))]
+        let models_fixture = false;
+        if !models_fixture {
+            app.detect_agents();
+        }
+        #[cfg(feature = "visual-test")]
+        if models_fixture {
+            app.agents = crate::agent_detection::Detection::model_picker_fixture();
+            app.agents_panel = crate::agents_panel::AgentsPanel::model_picker_fixture();
+            app.overlay = Some(Overlay::Settings);
+            app.settings_section = SettingsSection::Agents;
+            app.state.language = crate::i18n::Language::French;
+            crate::i18n::set_language(app.state.language);
+            let mut defaults = crate::agent_model_defaults::Defaults {
+                model: Some("gpt-5.6-sol".into()),
+                ..Default::default()
+            };
+            defaults.set_option("effort", Some("high".into()));
+            app.state
+                .agent_model_defaults
+                .insert("codex".into(), defaults);
+        }
         app.refresh_project();
         #[cfg(feature = "visual-test")]
         if std::env::args().any(|a| a == "--finder-fixture") {
