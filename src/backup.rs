@@ -16,10 +16,14 @@ struct Backup {
 }
 pub fn export(path: &Path, state: &Workspace) -> Result<()> {
     state.validate()?;
+    let mut portable = state.clone();
+    for prefs in portable.agent_prefs.values_mut() {
+        prefs.env.clear();
+    }
     let bytes = serde_json::to_vec_pretty(&Backup {
         format: "tessel-rust-settings".into(),
         version: 1,
-        workspace: state.clone(),
+        workspace: portable,
     })
     .map_err(|_| "Cannot encode settings")?;
     if bytes.len() > LIMIT {
@@ -44,10 +48,15 @@ pub fn import(path: &Path) -> Result<Workspace> {
     if bytes.len() > LIMIT {
         return Err("Settings backup exceeds 4 MiB".into());
     }
-    let backup: Backup =
+    let mut backup: Backup =
         serde_json::from_slice(&bytes).map_err(|_| "Invalid Rust settings backup")?;
     if backup.format != "tessel-rust-settings" || backup.version != 1 {
         return Err("Unsupported settings backup version".into());
+    }
+    // A portable file must never introduce launch commands or environment
+    // secrets. Visibility is inert and remains portable.
+    for prefs in backup.workspace.agent_prefs.values_mut() {
+        prefs.reset();
     }
     backup.workspace.validate()?;
     Ok(backup.workspace)
@@ -55,6 +64,38 @@ pub fn import(path: &Path) -> Result<Workspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_omits_environment_and_import_cannot_introduce_launch_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portable.json");
+        let mut state = Workspace::default();
+        state.agent_prefs.insert(
+            "codex".into(),
+            crate::agent_preferences::Preferences {
+                enabled: false,
+                command: "synthetic-cli".into(),
+                args: "--synthetic".into(),
+                env: "SYNTHETIC_TOKEN=fixture-only-secret".into(),
+            },
+        );
+        export(&path, &state).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("fixture-only-secret"));
+        assert!(!text.contains("SYNTHETIC_TOKEN"));
+        assert!(
+            state.agent_prefs["codex"]
+                .env
+                .contains("fixture-only-secret")
+        );
+        let mut malicious: serde_json::Value = serde_json::from_str(&text).unwrap();
+        malicious["workspace"]["agent_prefs"]["codex"]["env"] = "INJECTED=fixture".into();
+        std::fs::write(&path, serde_json::to_vec(&malicious).unwrap()).unwrap();
+        let imported = import(&path).unwrap();
+        let pref = &imported.agent_prefs["codex"];
+        assert!(!pref.enabled);
+        assert!(!pref.customized());
+    }
+
     #[test]
     fn restore_keeps_previous_settings_and_never_starts_sessions() {
         let dir = tempfile::tempdir().unwrap();
@@ -92,7 +133,10 @@ mod tests {
         state.add_project(dir.path()).unwrap();
         state.agent_prefs.insert(
             "codex".into(),
-            crate::agent_preferences::Preferences { enabled: false },
+            crate::agent_preferences::Preferences {
+                enabled: false,
+                ..Default::default()
+            },
         );
         state.sessions.push(crate::workspace::SavedSession {
             pane_name: Some("Custom agent".into()),

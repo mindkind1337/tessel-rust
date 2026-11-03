@@ -6,27 +6,58 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
     pub enabled: bool,
+    pub command: String,
+    pub args: String,
+    pub env: String,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            command: String::new(),
+            args: String::new(),
+            env: String::new(),
+        }
     }
 }
 
-pub fn enabled(state: &Workspace, id: &str) -> bool {
+impl Preferences {
+    pub fn customized(&self) -> bool {
+        [&self.command, &self.args, &self.env]
+            .iter()
+            .any(|s| !crate::agent_env::trim(s).is_empty())
+    }
+    pub fn reset(&mut self) {
+        let enabled = self.enabled;
+        *self = Self {
+            enabled,
+            ..Self::default()
+        };
+    }
+}
+
+/// Preserve the legacy Cursor preference until a canonical entry is saved.
+pub fn get<'a>(state: &'a Workspace, id: &str) -> Option<&'a Preferences> {
     let canonical = crate::agent_catalog::find(id).map_or(id, |preset| preset.id);
-    state
-        .agent_prefs
-        .get(canonical)
-        .or_else(|| {
-            if canonical == "cursor" {
-                state.agent_prefs.get("cursor-agent")
-            } else {
-                None
-            }
-        })
-        .is_none_or(|prefs| prefs.enabled)
+    state.agent_prefs.get(canonical).or_else(|| {
+        (canonical == "cursor")
+            .then(|| state.agent_prefs.get("cursor-agent"))
+            .flatten()
+    })
+}
+
+pub fn save(state: &mut Workspace, store: &Store, id: &str, value: Preferences) -> Result<()> {
+    let id = crate::agent_catalog::find(id).ok_or("Unknown agent.")?.id;
+    let mut next = state.clone();
+    next.agent_prefs.insert(id.into(), value);
+    store.save(&next)?;
+    state.agent_prefs = next.agent_prefs;
+    Ok(())
+}
+
+pub fn enabled(state: &Workspace, id: &str) -> bool {
+    get(state, id).is_none_or(|prefs| prefs.enabled)
 }
 
 pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) -> Result<()> {
@@ -34,11 +65,9 @@ pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) 
     if enabled(state, id) == value {
         return Ok(());
     }
-    let mut next = state.clone();
-    next.agent_prefs.entry(id.into()).or_default().enabled = value;
-    store.save(&next)?;
-    state.agent_prefs = next.agent_prefs;
-    Ok(())
+    let mut prefs = get(state, id).cloned().unwrap_or_default();
+    prefs.enabled = value;
+    save(state, store, id, prefs)
 }
 
 #[cfg(test)]
@@ -46,12 +75,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn launch_settings_persist_reset_and_visibility_does_not_erase_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let prefs = Preferences {
+            enabled: false,
+            command: "custom-cli".into(),
+            args: "--model test".into(),
+            env: "SYNTHETIC=test".into(),
+        };
+        save(&mut state, &store, "codex", prefs.clone()).unwrap();
+        set_enabled(&mut state, &store, "codex", true).unwrap();
+        assert_eq!(get(&state, "codex").unwrap().env, prefs.env);
+        drop(store);
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let mut loaded = get(&state, "codex").unwrap().clone();
+        assert!(loaded.customized());
+        loaded.enabled = false;
+        loaded.reset();
+        assert!(!loaded.enabled);
+        assert!(!loaded.customized());
+        save(&mut state, &store, "codex", loaded.clone()).unwrap();
+        assert_eq!(get(&state, "codex"), Some(&loaded));
+        let blank = Preferences {
+            command: "\u{feff}".into(),
+            ..Default::default()
+        };
+        assert!(!blank.customized());
+    }
+
+    #[test]
+    fn failed_save_keeps_all_previous_launch_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let before = Preferences {
+            command: "first".into(),
+            ..Default::default()
+        };
+        state.agent_prefs.insert("codex".into(), before.clone());
+        std::fs::create_dir(dir.path().join("workspace.json")).unwrap();
+        assert!(save(&mut state, &store, "codex", Preferences::default()).is_err());
+        assert_eq!(get(&state, "codex"), Some(&before));
+    }
+
+    #[test]
     fn legacy_cursor_visibility_uses_canonical_id_without_losing_the_choice() {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
-        state
-            .agent_prefs
-            .insert("cursor-agent".into(), Preferences { enabled: false });
+        state.agent_prefs.insert(
+            "cursor-agent".into(),
+            Preferences {
+                enabled: false,
+                ..Default::default()
+            },
+        );
         state.validate().unwrap();
         assert!(!enabled(&state, "cursor"));
         assert!(!enabled(&state, "cursor-agent"));
