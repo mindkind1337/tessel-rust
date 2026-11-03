@@ -212,6 +212,10 @@ impl Tessel {
             if std::env::args().any(|a| a == "--account-fixture") {
                 app.view = View::Account;
             }
+            if std::env::args().any(|a| a == "--remote-fixture") {
+                app.view = View::Remote;
+                app.remote = crate::remote_panel::RemotePanel::fixture();
+            }
             if std::env::args().any(|a| a == "--settings-fixture") {
                 app.view = View::Settings;
             }

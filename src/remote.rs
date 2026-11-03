@@ -20,6 +20,14 @@ pub struct Entry {
     pub size: u64,
 }
 pub enum Action {
+    Delete {
+        path: String,
+        directory: bool,
+    },
+    Rename {
+        path: String,
+        name: String,
+    },
     Create {
         parent: String,
         name: String,
@@ -34,6 +42,15 @@ pub enum Action {
     },
 }
 pub enum Reply {
+    Deleted {
+        path: String,
+        parent: String,
+    },
+    Renamed {
+        old: String,
+        new: String,
+        parent: String,
+    },
     Listing {
         root: String,
         path: String,
@@ -231,6 +248,59 @@ async fn operate(
     posix_rename: bool,
 ) -> Result<Reply, String> {
     match action {
+        Action::Delete { path, directory } => {
+            let resolved = scoped(session, root, &path).await?;
+            if resolved != path || resolved == root {
+                return Err("Cannot delete the remote root or a changed target".into());
+            }
+            let attrs = session.lstat(&path).await.map_err(remote_error)?.attrs;
+            let expected = if directory {
+                russh_sftp::protocol::FileType::Dir
+            } else {
+                russh_sftp::protocol::FileType::File
+            };
+            if attrs.file_type() != expected {
+                return Err("Remote item type changed; deletion refused".into());
+            }
+            if directory {
+                session.rmdir(&path).await.map_err(remote_error)?;
+            } else {
+                session.remove(&path).await.map_err(remote_error)?;
+            }
+            let parent = path.rsplit_once('/').ok_or("Invalid remote path")?.0;
+            Ok(Reply::Deleted {
+                path: path.clone(),
+                parent: if parent.is_empty() {
+                    "/".into()
+                } else {
+                    parent.into()
+                },
+            })
+        }
+        Action::Rename { path, name } => {
+            if !child_name(&name) {
+                return Err("Enter one file or folder name, without path separators".into());
+            }
+            let resolved = scoped(session, root, &path).await?;
+            if resolved != path || resolved == root {
+                return Err("Cannot rename the remote root or a changed target".into());
+            }
+            let parent = path.rsplit_once('/').ok_or("Invalid remote path")?.0;
+            let parent = if parent.is_empty() { "/" } else { parent };
+            let new = format!("{}/{name}", parent.trim_end_matches('/'));
+            // SFTP v3 RENAME refuses an existing destination; never use posix-rename here.
+            match session.lstat(&new).await {
+                Err(Error::Status(s)) if s.status_code == StatusCode::NoSuchFile => {}
+                Ok(_) => return Err("Destination already exists; rename refused".into()),
+                Err(e) => return Err(remote_error(e)),
+            }
+            session.rename(&path, &new).await.map_err(remote_error)?;
+            Ok(Reply::Renamed {
+                old: path.clone(),
+                new,
+                parent: parent.into(),
+            })
+        }
         Action::Create {
             parent,
             name,

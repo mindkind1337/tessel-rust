@@ -176,5 +176,12 @@
   "Wait for the account request to finish before closing.": "Attendez la fin de la requête du compte avant de fermer.",
   "New name": "Nouveau nom",
   "Create file": "Créer un fichier",
-  "Create folder": "Créer un dossier"
+  "Create folder": "Créer un dossier",
+  "Rename…": "Renommer…",
+  "Rename": "Renommer",
+  "Rename remote item": "Renommer cet élément distant",
+  "Delete…": "Supprimer…",
+  "Delete remote item permanently?": "Supprimer définitivement cet élément distant?",
+  "This does not use a recycle bin. Only empty folders can be deleted.": "Cette action ne passe pas par une corbeille. Seuls les dossiers vides peuvent être supprimés.",
+  "Delete permanently": "Supprimer définitivement"
 }

@@ -8,10 +8,32 @@ use std::{
     io::Write,
     sync::mpsc::{self, Receiver},
 };
+type PreparedReply = Result<(Reply, Option<Result<Box<crate::files::Document>, String>>), String>;
+fn prepare_preview(
+    path: &str,
+    bytes: &[u8],
+) -> Option<Result<Box<crate::files::Document>, String>> {
+    let extension = path.rsplit('.').next()?.to_ascii_lowercase();
+    if !matches!(
+        extension.as_str(),
+        "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    ) {
+        return None;
+    }
+    Some((|| {
+        let dir = tempfile::tempdir().map_err(|_| "Cannot create private preview buffer")?;
+        let path = dir.path().join(format!("preview.{extension}"));
+        std::fs::write(&path, bytes).map_err(|_| "Cannot write private preview buffer")?;
+        // Media constructors fully load bounded bytes. The temporary file is removed here.
+        crate::files::Document::open(dir.path(), &path).map(Box::new)
+    })())
+}
 struct RemoteDocument {
     path: String,
     original: Vec<u8>,
     text: Option<String>,
+    preview: Option<Box<crate::files::Document>>,
+    preview_error: String,
 }
 impl RemoteDocument {
     fn dirty(&self) -> bool {
@@ -24,16 +46,52 @@ impl RemoteDocument {
 pub struct RemotePanel {
     selected: usize,
     new_name: String,
+    rename: Option<(String, String)>,
+    delete: Option<Entry>,
     host: Option<Host>,
     root: String,
     path: String,
     entries: Vec<Entry>,
-    pending: Option<Receiver<Result<Reply, String>>>,
+    pending: Option<Receiver<PreparedReply>>,
     submitted: Option<Vec<u8>>,
     document: Option<RemoteDocument>,
     error: String,
 }
 impl RemotePanel {
+    #[cfg(feature = "visual-test")]
+    pub fn fixture() -> Self {
+        let image = image::RgbaImage::from_fn(320, 160, |x, y| {
+            image::Rgba([(x % 256) as u8, (y + 70) as u8, 140, 255])
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .expect("fixture PNG");
+        let original = bytes.into_inner();
+        Self {
+            host: Some(Host {
+                alias: "fixture-host".into(),
+                folder: "/demo".into(),
+            }),
+            root: "/demo".into(),
+            path: "/demo".into(),
+            entries: vec![Entry {
+                name: "preview.png".into(),
+                path: "/demo/preview.png".into(),
+                directory: false,
+                size: original.len() as u64,
+            }],
+            document: Some(RemoteDocument {
+                path: "/demo/preview.png".into(),
+                preview: prepare_preview("preview.png", &original).unwrap().ok(),
+                original,
+                text: None,
+                preview_error: String::new(),
+            }),
+            ..Default::default()
+        }
+    }
+
     pub fn needs_close_confirmation(&self) -> bool {
         self.pending.is_some() || self.document.as_ref().is_some_and(RemoteDocument::dirty)
     }
@@ -51,7 +109,14 @@ impl RemotePanel {
         self.pending = Some(rx);
         self.error.clear();
         std::thread::spawn(move || {
-            let _ = tx.send(remote::execute(host, action));
+            let result = remote::execute(host, action).map(|reply| {
+                let preview = match &reply {
+                    Reply::File { path, bytes, .. } => prepare_preview(path, bytes),
+                    _ => None,
+                };
+                (reply, preview)
+            });
+            let _ = tx.send(result);
         });
     }
     pub fn poll(&mut self) {
@@ -59,6 +124,10 @@ impl RemotePanel {
             && let Ok(result) = rx.try_recv()
         {
             self.pending = None;
+            let (result, preview) = match result {
+                Ok((reply, preview)) => (Ok(reply), preview),
+                Err(e) => (Err(e), None),
+            };
             match result {
                 Ok(Reply::Listing {
                     root,
@@ -76,11 +145,34 @@ impl RemotePanel {
                     } else {
                         None
                     };
+                    let (preview, preview_error) = match preview {
+                        Some(Ok(doc)) => (Some(doc), String::new()),
+                        Some(Err(e)) => (None, e),
+                        None => (None, String::new()),
+                    };
                     self.document = Some(RemoteDocument {
                         path,
                         original: bytes,
-                        text,
+                        text: if preview.is_some() { None } else { text },
+                        preview,
+                        preview_error,
                     });
+                }
+                Ok(Reply::Deleted { path, parent }) => {
+                    if self.document.as_ref().is_some_and(|doc| doc.path == path) {
+                        self.document = None;
+                    }
+                    self.request(Action::List(parent));
+                }
+                Ok(Reply::Renamed { old, new, parent }) => {
+                    if let Some(doc) = &mut self.document {
+                        if doc.path == old {
+                            doc.path = new;
+                        } else if let Some(suffix) = doc.path.strip_prefix(&(old + "/")) {
+                            doc.path = format!("{new}/{suffix}");
+                        }
+                    }
+                    self.request(Action::List(parent));
                 }
                 Ok(Reply::Created { parent }) => {
                     self.new_name.clear();
@@ -115,31 +207,34 @@ impl RemotePanel {
         let busy = self.pending.is_some();
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         if !hosts.is_empty() {
-            ui.add_enabled_ui(!busy && !dirty, |ui| {
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("remote-host")
-                        .selected_text(&hosts[self.selected].alias)
-                        .show_ui(ui, |ui| {
-                            for (index, host) in hosts.iter().enumerate() {
-                                ui.selectable_value(&mut self.selected, index, &host.alias);
-                            }
-                        });
-                    if ui.button(tr("Connect / change host")).clicked() {
-                        self.host = Some(hosts[self.selected].clone());
-                        self.root.clear();
-                        self.path.clear();
-                        self.entries.clear();
-                        self.document = None;
-                        self.request(Action::List(String::new()));
-                    }
-                    if self.host.is_some() && ui.button(tr("Disconnect")).clicked() {
-                        self.host = None;
-                        self.root.clear();
-                        self.entries.clear();
-                        self.document = None;
-                    }
-                });
-            });
+            ui.add_enabled_ui(
+                !busy && !dirty && self.rename.is_none() && self.delete.is_none(),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("remote-host")
+                            .selected_text(&hosts[self.selected].alias)
+                            .show_ui(ui, |ui| {
+                                for (index, host) in hosts.iter().enumerate() {
+                                    ui.selectable_value(&mut self.selected, index, &host.alias);
+                                }
+                            });
+                        if ui.button(tr("Connect / change host")).clicked() {
+                            self.host = Some(hosts[self.selected].clone());
+                            self.root.clear();
+                            self.path.clear();
+                            self.entries.clear();
+                            self.document = None;
+                            self.request(Action::List(String::new()));
+                        }
+                        if self.host.is_some() && ui.button(tr("Disconnect")).clicked() {
+                            self.host = None;
+                            self.root.clear();
+                            self.entries.clear();
+                            self.document = None;
+                        }
+                    });
+                },
+            );
         }
         if let Some(host) = &self.host {
             ui.strong(format!("{}:{}", host.alias, self.path));
@@ -157,50 +252,56 @@ impl RemotePanel {
             ));
         }
         let mut action = None;
-        ui.add_enabled_ui(!busy && !dirty, |ui| {
-            ui.horizontal(|ui| {
-                if self.host.is_some() && ui.button(tr("Refresh")).clicked() {
-                    action = Some(Action::List(self.path.clone()));
-                }
-                if self.path != self.root
-                    && !self.path.is_empty()
-                    && ui.button(tr("Parent folder")).clicked()
-                {
-                    let parent = self.path.rsplit_once('/').map(|p| p.0).unwrap_or("");
-                    action = Some(Action::List(if parent.is_empty() {
-                        "/".into()
-                    } else {
-                        parent.into()
-                    }));
-                }
-            });
-            if self.host.is_some() && !self.path.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(tr("New name"));
-                    ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(190.0));
-                    for (caption, directory) in [("Create file", false), ("Create folder", true)] {
-                        if ui
-                            .add_enabled(!self.new_name.is_empty(), egui::Button::new(tr(caption)))
-                            .clicked()
-                        {
-                            action = Some(Action::Create {
-                                parent: self.path.clone(),
-                                name: self.new_name.clone(),
-                                directory,
-                            });
-                        }
+        ui.add_enabled_ui(
+            !busy && !dirty && self.rename.is_none() && self.delete.is_none(),
+            |ui| {
+                ui.horizontal(|ui| {
+                    if self.host.is_some() && ui.button(tr("Refresh")).clicked() {
+                        action = Some(Action::List(self.path.clone()));
+                    }
+                    if self.path != self.root
+                        && !self.path.is_empty()
+                        && ui.button(tr("Parent folder")).clicked()
+                    {
+                        let parent = self.path.rsplit_once('/').map(|p| p.0).unwrap_or("");
+                        action = Some(Action::List(if parent.is_empty() {
+                            "/".into()
+                        } else {
+                            parent.into()
+                        }));
                     }
                 });
-            }
-            egui::ScrollArea::vertical().max_height(180.0).show_rows(
-                ui,
-                22.0,
-                self.entries.len(),
-                |ui, rows| {
-                    for i in rows {
-                        let entry = &self.entries[i];
-                        if ui
-                            .button(format!(
+                if self.host.is_some() && !self.path.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(tr("New name"));
+                        ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(190.0));
+                        for (caption, directory) in
+                            [("Create file", false), ("Create folder", true)]
+                        {
+                            if ui
+                                .add_enabled(
+                                    !self.new_name.is_empty(),
+                                    egui::Button::new(tr(caption)),
+                                )
+                                .clicked()
+                            {
+                                action = Some(Action::Create {
+                                    parent: self.path.clone(),
+                                    name: self.new_name.clone(),
+                                    directory,
+                                });
+                            }
+                        }
+                    });
+                }
+                egui::ScrollArea::vertical().max_height(180.0).show_rows(
+                    ui,
+                    22.0,
+                    self.entries.len(),
+                    |ui, rows| {
+                        for i in rows {
+                            let entry = &self.entries[i];
+                            let response = ui.button(format!(
                                 "{} {}{}",
                                 if entry.directory { ">" } else { "·" },
                                 entry.name,
@@ -209,19 +310,83 @@ impl RemotePanel {
                                 } else {
                                     format!(" · {} B", entry.size)
                                 }
-                            ))
-                            .clicked()
-                        {
-                            action = Some(if entry.directory {
-                                Action::List(entry.path.clone())
-                            } else {
-                                Action::Read(entry.path.clone())
+                            ));
+                            response.context_menu(|ui| {
+                                if ui.button(tr("Delete…")).clicked() {
+                                    self.delete = Some(entry.clone());
+                                    ui.close();
+                                }
+
+                                if ui.button(tr("Rename…")).clicked() {
+                                    self.rename = Some((entry.path.clone(), entry.name.clone()));
+                                    ui.close();
+                                }
                             });
+                            if response.clicked() {
+                                action = Some(if entry.directory {
+                                    Action::List(entry.path.clone())
+                                } else {
+                                    Action::Read(entry.path.clone())
+                                });
+                            }
                         }
-                    }
-                },
-            );
-        });
+                    },
+                );
+            },
+        );
+        if let Some(entry) = &self.delete {
+            let mut close = false;
+            egui::Modal::new(egui::Id::new("remote-delete")).show(ui.ctx(), |ui| {
+                ui.heading(tr("Delete remote item permanently?"));
+                if let Some(host) = &self.host {
+                    ui.label(&host.alias);
+                }
+                ui.label(&entry.path);
+                ui.label(tr(
+                    "This does not use a recycle bin. Only empty folders can be deleted.",
+                ));
+                if ui
+                    .add_enabled(!busy, egui::Button::new(tr("Delete permanently")))
+                    .clicked()
+                {
+                    action = Some(Action::Delete {
+                        path: entry.path.clone(),
+                        directory: entry.directory,
+                    });
+                    close = true;
+                }
+                if ui.button(tr("Cancel")).clicked() {
+                    close = true;
+                }
+            });
+            if close {
+                self.delete = None;
+            }
+        }
+        if let Some((path, name)) = &mut self.rename {
+            let mut close = false;
+            egui::Modal::new(egui::Id::new("remote-rename")).show(ui.ctx(), |ui| {
+                ui.heading(tr("Rename remote item"));
+                ui.label(path.as_str());
+                ui.text_edit_singleline(name);
+                if ui
+                    .add_enabled(!busy && !name.is_empty(), egui::Button::new(tr("Rename")))
+                    .clicked()
+                {
+                    action = Some(Action::Rename {
+                        path: path.clone(),
+                        name: name.clone(),
+                    });
+                    close = true;
+                }
+                if ui.button(tr("Cancel")).clicked() {
+                    close = true;
+                }
+            });
+            if close {
+                self.rename = None;
+            }
+        }
         if let Some(doc) = &mut self.document {
             ui.separator();
             ui.strong(&doc.path);
@@ -278,7 +443,35 @@ impl RemotePanel {
                     }
                 }
             });
-            if let Some(text) = &mut doc.text {
+            if !doc.preview_error.is_empty() {
+                ui.colored_label(egui::Color32::LIGHT_RED, &doc.preview_error);
+            }
+            if let Some(preview) = &mut doc.preview {
+                if let Some(pdf) = &mut preview.pdf {
+                    pdf.show(ui);
+                } else {
+                    if preview.texture.is_none()
+                        && let Some(image) = preview.image.take()
+                    {
+                        preview.texture = Some(ui.ctx().load_texture(
+                            &doc.path,
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    if let Some(texture) = &preview.texture {
+                        egui::ScrollArea::both()
+                            .id_salt("remote-image")
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Image::new(texture)
+                                        .max_width(ui.available_width())
+                                        .maintain_aspect_ratio(true),
+                                );
+                            });
+                    }
+                }
+            } else if let Some(text) = &mut doc.text {
                 ui.add_enabled_ui(!busy, |ui| {
                     egui::ScrollArea::both().show(ui, |ui| {
                         ui.add(
@@ -302,5 +495,31 @@ impl RemotePanel {
         if let Some(action) = action {
             self.request(action);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn remote_media_keeps_bytes_and_removes_temporary_files() {
+        let pdf = crate::pdf::fixture();
+        let view = prepare_preview("/server/document.pdf", &pdf)
+            .unwrap()
+            .unwrap();
+        assert!(view.pdf.is_some());
+        assert!(!view.path.exists());
+        let mut data = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 3)
+            .write_to(&mut data, image::ImageFormat::Png)
+            .unwrap();
+        let original = data.into_inner();
+        let view = prepare_preview("/server/image.PNG", &original)
+            .unwrap()
+            .unwrap();
+        assert_eq!(view.image.unwrap().size, [2, 3]);
+        assert!(!view.path.exists());
+        assert!(prepare_preview("broken.png", b"invalid").unwrap().is_err());
+        assert!(prepare_preview("script.html", b"<script>bad</script>").is_none());
     }
 }

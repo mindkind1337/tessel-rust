@@ -72,6 +72,39 @@ impl Handler for Fixture {
         ));
         Ok(Name { id, files: names })
     }
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        let mut files = self.files.lock().unwrap();
+        if files.keys().any(|p| p.starts_with(&(path.clone() + "/"))) {
+            return Err(StatusCode::Failure);
+        }
+        files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
+        Ok(status(id))
+    }
+    async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        let files = self.files.lock().unwrap();
+        Ok(Attrs {
+            id,
+            attrs: files
+                .get(&path)
+                .ok_or(StatusCode::NoSuchFile)?
+                .attrs
+                .clone(),
+        })
+    }
+    async fn rename(
+        &mut self,
+        id: u32,
+        oldpath: String,
+        newpath: String,
+    ) -> Result<Status, Self::Error> {
+        let mut files = self.files.lock().unwrap();
+        if files.contains_key(&newpath) {
+            return Err(StatusCode::Failure);
+        }
+        let file = files.remove(&oldpath).ok_or(StatusCode::NoSuchFile)?;
+        files.insert(newpath, file);
+        Ok(status(id))
+    }
     async fn mkdir(
         &mut self,
         id: u32,
@@ -309,6 +342,113 @@ fn real_sftp_frames_preserve_originals_and_refuse_conflicts() {
                 );
             }
             assert_eq!(files.lock().unwrap()["/root/file.txt"].bytes, b"updated");
+            assert!(
+                operate(
+                    &session,
+                    &root,
+                    Action::Rename {
+                        path: "/root/file.txt".into(),
+                        name: "new.txt".into()
+                    },
+                    true
+                )
+                .await
+                .is_err()
+            );
+            for (path, name) in [
+                ("/root", "moved"),
+                ("/root/escape", "moved"),
+                ("/root/file.txt", "../outside"),
+            ] {
+                assert!(
+                    operate(
+                        &session,
+                        &root,
+                        Action::Rename {
+                            path: path.into(),
+                            name: name.into()
+                        },
+                        true
+                    )
+                    .await
+                    .is_err()
+                );
+            }
+            operate(
+                &session,
+                &root,
+                Action::Rename {
+                    path: "/root/file.txt".into(),
+                    name: "renamed.txt".into(),
+                },
+                true,
+            )
+            .await
+            .unwrap();
+            assert_eq!(files.lock().unwrap()["/root/renamed.txt"].bytes, b"updated");
+            assert!(!files.lock().unwrap().contains_key("/root/file.txt"));
+            for (path, directory) in [
+                ("/root", true),
+                ("/root/escape", false),
+                ("/root/renamed.txt", true),
+            ] {
+                assert!(
+                    operate(
+                        &session,
+                        &root,
+                        Action::Delete {
+                            path: path.into(),
+                            directory
+                        },
+                        true
+                    )
+                    .await
+                    .is_err()
+                );
+            }
+            operate(
+                &session,
+                &root,
+                Action::Create {
+                    parent: "/root/new-folder".into(),
+                    name: "child".into(),
+                    directory: false,
+                },
+                true,
+            )
+            .await
+            .unwrap();
+            assert!(
+                operate(
+                    &session,
+                    &root,
+                    Action::Delete {
+                        path: "/root/new-folder".into(),
+                        directory: true
+                    },
+                    true
+                )
+                .await
+                .is_err()
+            );
+            for (path, directory) in [
+                ("/root/new-folder/child", false),
+                ("/root/new-folder", true),
+                ("/root/renamed.txt", false),
+            ] {
+                operate(
+                    &session,
+                    &root,
+                    Action::Delete {
+                        path: path.into(),
+                        directory,
+                    },
+                    true,
+                )
+                .await
+                .unwrap();
+                assert!(!files.lock().unwrap().contains_key(path));
+            }
             session.close_session().unwrap();
             server.abort();
         });
