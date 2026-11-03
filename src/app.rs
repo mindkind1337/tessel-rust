@@ -132,6 +132,8 @@ pub struct Tessel {
     #[cfg(feature = "visual-test")]
     visual_frames: usize,
     git_result: crate::git_result::GitResult,
+    scm_state: crate::scm_state::ScmState,
+    scm_panel: crate::scm_changes_panel::ScmChangesPanel,
     git_path: String,
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
@@ -226,6 +228,8 @@ impl Tessel {
             #[cfg(feature = "visual-test")]
             visual_frames: 0,
             git_result: Default::default(),
+            scm_state: Default::default(),
+            scm_panel: Default::default(),
             git_path: String::new(),
             commit_message: String::new(),
             chats: Vec::new(),
@@ -530,6 +534,7 @@ impl Tessel {
     fn poll(&mut self) {
         self.sync_git_project();
         self.git_result.poll();
+        self.scm_state.poll();
         self.explorer_tree.poll();
         self.remote.poll();
         self.finder.poll();
@@ -1345,11 +1350,7 @@ impl Tessel {
                 ui.separator();
                 match self.state.panels.right_tab {
                     RightTab::Files => self.explorer(ui),
-                    RightTab::Changes => {
-                        egui::ScrollArea::both()
-                            .id_salt("side-git")
-                            .show(ui, |ui| self.git_view(ui));
-                    }
+                    RightTab::Changes => self.git_view(ui),
                     RightTab::Tasks => self.tasks(ui),
                 }
             });
@@ -1994,6 +1995,7 @@ impl Tessel {
             && !self.remote.needs_close_confirmation()
             && !self.documents.iter().any(Document::dirty)
             && !self.git_result.busy()
+            && !self.scm_state.busy()
             && !self.account_busy()
     }
     fn restore_settings(
@@ -2611,13 +2613,16 @@ impl Tessel {
             project: project.id,
             root: project.path.clone(),
         });
+        if self.scm_state.select(owner.clone()) {
+            self.scm_panel.reset();
+        }
         if self.git_result.select(owner) {
             self.git_path.clear();
             self.commit_message.clear();
         }
     }
     fn git_start(&mut self, args: Vec<String>, input: Option<Vec<u8>>) {
-        if self.git_result.busy() {
+        if self.git_result.busy() || self.scm_state.busy() {
             return;
         }
         let Some(root) = self.state.active().map(|p| p.path.clone()) else {
@@ -2632,6 +2637,7 @@ impl Tessel {
         if !self.git_result.start(owner, receiver) {
             return;
         }
+        self.scm_state.result = None;
         thread::spawn(move || {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = sender.send(crate::git::run(&root, &args, input.as_deref()));
@@ -2639,13 +2645,62 @@ impl Tessel {
     }
     fn git_view(&mut self, ui: &mut egui::Ui) {
         self.sync_git_project();
+        ui.collapsing(tr("Git commands"), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("legacy-git-commands")
+                .max_height(240.0)
+                .show(ui, |ui| self.git_commands(ui));
+        });
+        use crate::scm_changes_panel::{
+            ScmCapabilities, ScmChangesAction, ScmChangesInput, ScmStatusSnapshot,
+        };
+        let status = self
+            .scm_state
+            .result
+            .as_ref()
+            .and_then(|result| result.as_ref().ok());
+        let error = self
+            .scm_state
+            .result
+            .as_ref()
+            .and_then(|result| result.as_ref().err());
+        let action = self.scm_panel.show(
+            ui,
+            ScmChangesInput {
+                project_selected: self.state.active().is_some(),
+                loaded: self.scm_state.result.is_some(),
+                busy: self.scm_state.busy() || self.git_result.busy(),
+                read_only: false,
+                french: self.state.language == crate::i18n::Language::French,
+                error: error.map(String::as_str),
+                status: status.map(|parsed| ScmStatusSnapshot::from_parsed(true, parsed)),
+                active_entry: None,
+                capabilities: ScmCapabilities {
+                    can_refresh: true,
+                    can_open_file: true,
+                    ..Default::default()
+                },
+            },
+        );
+        match action {
+            Some(ScmChangesAction::Refresh) if !self.git_result.busy() => self.scm_state.refresh(),
+            Some(ScmChangesAction::OpenFile(path)) => {
+                if let Some(path) = self.scm_state.file_path(&path) {
+                    self.open_document(path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn git_commands(&mut self, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new(tr("Source control"))
                 .strong()
                 .size(13.0),
         );
         ui.small(tr("On-demand Git operations. Output is capped at 2 MiB; operations time out after 20 seconds."));
-        ui.add_enabled_ui(!self.git_result.busy(), |ui| {
+        ui.add_enabled_ui(!self.git_result.busy() && !self.scm_state.busy(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (label, args) in [
                     (

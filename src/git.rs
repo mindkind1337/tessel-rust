@@ -13,6 +13,71 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
     run_bytes(root, args, input).map(|output| output.text())
 }
 
+pub struct ScopedStatus {
+    pub project_prefix: String,
+    pub output: Capture,
+}
+
+/// Git porcelain paths are repository-relative even from a nested project.
+/// Keep that prefix explicit; the consumer must map paths before opening files.
+pub fn scoped_status(root: &Path) -> Result<ScopedStatus> {
+    let prefix = run_bytes(root, &["rev-parse", "--show-prefix"], None)?;
+    if prefix.truncated {
+        return Err("Git project prefix exceeded the output limit.".into());
+    }
+    let project_prefix =
+        String::from_utf8(prefix.bytes).map_err(|_| "Git project prefix is not valid UTF-8.")?;
+    let project_prefix = project_prefix
+        .strip_suffix('\n')
+        .ok_or("Git project prefix is incomplete.")?
+        .to_string();
+    let output = run_bytes(
+        root,
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ],
+        None,
+    )?;
+    Ok(ScopedStatus {
+        project_prefix,
+        output,
+    })
+}
+
+/// Preserve literal names, rejecting traversal and paths outside the project.
+pub fn project_relative_path<'a>(prefix: &str, repository_path: &'a str) -> Option<&'a str> {
+    let relative = repository_path.strip_prefix(prefix)?;
+    if relative.is_empty() || relative.as_bytes().contains(&0) {
+        return None;
+    }
+    #[cfg(windows)]
+    if relative.contains(['\\', ':']) {
+        // Porcelain uses forward slashes on Windows. Reject alternate separators
+        // and NTFS stream syntax rather than reinterpret a repository path.
+        return None;
+    }
+    if !Path::new(relative)
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    // Path::components normalizes internal dots; reject them explicitly too.
+    if relative
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return None;
+    }
+    Some(relative)
+}
+
 /// Preserve NUL-delimited paths and expose truncation separately from stdout.
 /// Structured callers must disable bulk actions when `truncated` is true.
 pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
@@ -195,5 +260,64 @@ mod tests {
         assert!(!staged.truncated);
         assert!(staged.bytes.starts_with(b"1 A. "));
         assert!(staged.bytes.ends_with(format!(" {name}\0").as_bytes()));
+    }
+
+    #[test]
+    fn nested_project_status_excludes_siblings_and_maps_literal_names() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        let nested = dir.path().join("inside");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("é space.txt"), "inside").unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "outside").unwrap();
+        let status = scoped_status(&nested).unwrap();
+        assert_eq!(status.project_prefix, "inside/");
+        assert!(!status.output.truncated);
+        assert!(
+            status
+                .output
+                .bytes
+                .split(|b| *b == 0)
+                .any(|r| r == "? inside/é space.txt".as_bytes())
+        );
+        assert!(
+            !status
+                .output
+                .bytes
+                .windows(b"outside.txt".len())
+                .any(|r| r == b"outside.txt")
+        );
+        assert_eq!(
+            project_relative_path(&status.project_prefix, "inside/é space.txt"),
+            Some("é space.txt")
+        );
+        for invalid in [
+            "outside.txt",
+            "inside-other/a",
+            "inside/../outside.txt",
+            "inside/./a",
+            "inside//a",
+            "inside/",
+        ] {
+            assert!(project_relative_path(&status.project_prefix, invalid).is_none());
+        }
+        assert!(project_relative_path("", "/absolute").is_none());
+        assert_eq!(
+            project_relative_path("", "..notes.txt"),
+            Some("..notes.txt")
+        );
+        assert_eq!(project_relative_path("", "...config"), Some("...config"));
+        #[cfg(windows)]
+        for invalid in [
+            "C:/outside.txt",
+            "../outside",
+            "..\\outside",
+            "\\\\server\\share\\file",
+            "file.txt:stream",
+            "folder\\.\\file.txt",
+        ] {
+            assert!(project_relative_path("", invalid).is_none());
+        }
+        assert_eq!(scoped_status(dir.path()).unwrap().project_prefix, "");
     }
 }

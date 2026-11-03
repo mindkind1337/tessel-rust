@@ -39,6 +39,8 @@ mod preview;
 pub mod project_panel;
 mod remote;
 mod remote_panel;
+pub mod scm_changes_panel;
+mod scm_state;
 pub mod settings_model;
 pub mod settings_nav;
 mod settings_surface;

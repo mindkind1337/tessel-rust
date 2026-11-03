@@ -1,0 +1,176 @@
+//! On-demand status work, scoped to the selected project and its repository prefix.
+use crate::{
+    git,
+    git_result::Owner,
+    scm_changes_panel::{self, ParsedGitStatus},
+};
+use std::{
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
+};
+
+type StatusResult = Result<ParsedGitStatus, String>;
+
+#[derive(Default)]
+pub struct ScmState {
+    owner: Option<Owner>,
+    pending: Option<(Owner, Receiver<StatusResult>)>,
+    pub result: Option<StatusResult>,
+}
+
+fn load(owner: &Owner) -> StatusResult {
+    let capture = git::scoped_status(&owner.root)?;
+    let mut parsed = scm_changes_panel::parse_porcelain_v2_status(
+        &capture.output.bytes,
+        scm_changes_panel::STATUS_ENTRIES_MAX,
+    );
+    if capture.output.truncated {
+        parsed.mark_input_truncated();
+    }
+    for entry in &mut parsed.entries {
+        entry.path = git::project_relative_path(&capture.project_prefix, &entry.path)
+            .ok_or(
+                "Git returned a path outside this project. Open the repository root to inspect it.",
+            )?
+            .to_owned();
+        if let Some(old_path) = &mut entry.old_path {
+            *old_path = git::project_relative_path(&capture.project_prefix, old_path)
+                .ok_or("A rename crosses this project's boundary. Open the repository root to inspect it.")?
+                .to_owned();
+        }
+    }
+    Ok(parsed)
+}
+
+impl ScmState {
+    pub fn select(&mut self, owner: Option<Owner>) -> bool {
+        if self.owner == owner {
+            return false;
+        }
+        self.owner = owner;
+        self.result = None;
+        true
+    }
+
+    pub fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub fn refresh(&mut self) {
+        if self.busy() {
+            return;
+        }
+        let Some(owner) = self.owner.clone() else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending = Some((owner.clone(), receiver));
+        thread::spawn(move || {
+            let _ = sender.send(load(&owner));
+        });
+    }
+
+    pub fn poll(&mut self) {
+        let Some((owner, receiver)) = &self.pending else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                Err("Git status worker stopped without a result.".into())
+            }
+        };
+        if self.owner.as_ref() == Some(owner) {
+            self.result = Some(result);
+        }
+        self.pending = None;
+    }
+
+    pub fn file_path(&self, relative: &str) -> Option<std::path::PathBuf> {
+        let owner = self.owner.as_ref()?;
+        let status = self.result.as_ref()?.as_ref().ok()?;
+        if !status.entries.iter().any(|entry| entry.path == relative) {
+            return None;
+        }
+        let relative = git::project_relative_path("", relative)?;
+        // Document::open revalidates canonical confinement, including symlinks.
+        Some(owner.root.join(relative))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_status_is_project_relative_and_open_actions_require_current_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        git::run(dir.path(), &["init", "-q"], None).unwrap();
+        let root = dir.path().join("nested space é");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file é.txt"), "fixture").unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "fixture").unwrap();
+        let owner = Owner {
+            project: 1,
+            root: root.clone(),
+        };
+        let status = load(&owner).unwrap();
+        assert_eq!(status.entries.len(), 1);
+        assert_eq!(status.entries[0].path, "file é.txt");
+        let mut state = ScmState {
+            owner: Some(owner),
+            result: Some(Ok(status)),
+            ..Default::default()
+        };
+        assert_eq!(state.file_path("file é.txt"), Some(root.join("file é.txt")));
+        assert!(state.file_path("../outside.txt").is_none());
+        assert!(state.file_path("absent.txt").is_none());
+        state.select(None);
+        assert!(state.file_path("file é.txt").is_none());
+    }
+
+    #[test]
+    fn old_project_results_and_disconnected_workers_do_not_stick() {
+        let first = Owner {
+            project: 1,
+            root: "first".into(),
+        };
+        let second = Owner {
+            project: 2,
+            root: "second".into(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        let mut state = ScmState {
+            owner: Some(first.clone()),
+            pending: Some((first, receiver)),
+            ..Default::default()
+        };
+        state.select(Some(second.clone()));
+        sender.send(Err("old project error".into())).unwrap();
+        state.poll();
+        assert!(!state.busy());
+        assert!(state.result.is_none());
+        let (sender, receiver) = mpsc::channel();
+        state.pending = Some((second, receiver));
+        drop(sender);
+        state.poll();
+        assert!(!state.busy());
+        assert!(state.result.as_ref().unwrap().is_err());
+        let same_id_new_path = Owner {
+            project: 2,
+            root: "replacement".into(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        state.pending = Some((state.owner.clone().unwrap(), receiver));
+        state.select(Some(same_id_new_path));
+        state.refresh(); // A previous worker still owns the only slot.
+        sender.send(Ok(ParsedGitStatus::default())).unwrap();
+        state.poll();
+        assert!(state.result.is_none());
+        assert!(!state.busy());
+        state.select(None);
+        state.refresh();
+        assert!(!state.busy());
+    }
+}
