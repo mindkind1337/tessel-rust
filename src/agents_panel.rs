@@ -34,6 +34,8 @@ pub struct AgentsPanel {
     missing_open: bool,
     last_installed: Option<usize>,
     escape_held: bool,
+    open_row: Option<egui::Id>,
+    detail_focus: Vec<egui::Id>,
 }
 
 impl AgentsPanel {
@@ -46,12 +48,30 @@ impl AgentsPanel {
         if !ctx.input(|i| i.focused) || egui::Popup::is_any_open(ctx) {
             return false;
         }
-        if self.open.is_none() && !self.escape_held {
+        if !self.escape_held
+            && (self.open.is_none()
+                || !ctx.memory(|memory| {
+                    match memory.focused() {
+                        Some(id) => self.detail_focus.contains(&id),
+                        // egui clears focus on Escape before this handler. A newly
+                        // focused widget cannot install its event filter until
+                        // the following frame, so retain that first-key boundary.
+                        None if down => self
+                            .detail_focus
+                            .iter()
+                            .any(|id| memory.had_focus_last_frame(*id)),
+                        None => false,
+                    }
+                }))
+        {
             return false;
         }
         let consumed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if consumed {
             self.open = None;
+            if let Some(id) = self.open_row {
+                ctx.memory_mut(|memory| memory.request_focus(id));
+            }
             self.escape_held = down;
         }
         consumed
@@ -121,6 +141,7 @@ impl AgentsPanel {
             ));
         }
         ui.add_space(8.0);
+        self.detail_focus.clear();
         for row in input
             .rows
             .iter()
@@ -130,38 +151,35 @@ impl AgentsPanel {
             let preset = row.preset;
             ui.push_id(preset.id, |ui| {
                 egui::Frame::NONE
-                    .inner_margin(8)
+                    .inner_margin(egui::Margin {
+                        left: 8,
+                        right: 8,
+                        top: 0,
+                        bottom: 0,
+                    })
                     .corner_radius(6)
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let mut enabled = row.enabled;
-                            if ui
-                                .checkbox(&mut enabled, "")
-                                .on_hover_text(tr("Offer in menus", "Afficher dans les menus"))
-                                .changed()
-                            {
-                                action = Some(Action::SetEnabled(preset.id.into(), enabled));
-                            }
-                            let expanded = self.open.as_deref() == Some(preset.id);
-                            let label = RichText::new(preset.name).strong().color(if row.enabled {
-                                ui.visuals().text_color()
+                        let expanded = self.open.as_deref() == Some(preset.id);
+                        let controls = agent_row(ui, row, expanded, input.french);
+                        if controls.toggle.clicked() {
+                            action = Some(Action::SetEnabled(preset.id.into(), !row.enabled));
+                        }
+                        if controls.main.clicked() || controls.chevron.clicked() {
+                            controls.main.request_focus();
+                            self.open_row = Some(controls.main.id);
+                            self.open = if expanded {
+                                None
                             } else {
-                                ui.visuals().weak_text_color()
-                            });
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 32.0],
-                                    egui::Button::new(label).selected(expanded).frame(expanded),
-                                )
-                                .clicked()
-                            {
-                                self.open = if expanded {
-                                    None
-                                } else {
-                                    Some(preset.id.into())
-                                };
-                            }
-                        });
+                                Some(preset.id.into())
+                            };
+                        }
+                        if self.open.as_deref() == Some(preset.id) {
+                            self.detail_focus.extend([
+                                controls.main.id,
+                                controls.toggle.id,
+                                controls.chevron.id,
+                            ]);
+                        }
                         if self.open.as_deref() == Some(preset.id) {
                             egui::Frame::NONE
                                 .fill(ui.visuals().faint_bg_color)
@@ -178,17 +196,16 @@ impl AgentsPanel {
                                             .wrap(),
                                     );
                                     ui.horizontal_wrapped(|ui| {
-                                        if ui
-                                            .button(tr(
-                                                "Open in terminal",
-                                                "Ouvrir dans un terminal",
-                                            ))
-                                            .clicked()
-                                        {
+                                        let terminal = ui.button(tr(
+                                            "Open in terminal",
+                                            "Ouvrir dans un terminal",
+                                        ));
+                                        self.detail_focus.push(terminal.id);
+                                        if terminal.clicked() {
                                             action = Some(Action::Terminal(preset.id.into()));
                                         }
-                                        if matches!(preset.id, "codex" | "claude")
-                                            && ui
+                                        if matches!(preset.id, "codex" | "claude") {
+                                            let native = ui
                                                 .add_enabled(
                                                     input.has_project,
                                                     egui::Button::new(tr(
@@ -199,15 +216,18 @@ impl AgentsPanel {
                                                 .on_disabled_hover_text(tr(
                                                     "Select a project for native chat.",
                                                     "Sélectionnez un projet pour le chat natif.",
-                                                ))
-                                                .clicked()
-                                        {
-                                            action = Some(Action::NativeChat(preset.id.into()));
+                                                ));
+                                            self.detail_focus.push(native.id);
+                                            if native.clicked() {
+                                                action = Some(Action::NativeChat(preset.id.into()));
+                                            }
                                         }
-                                        if preset.docs.is_some()
-                                            && ui.button(tr("Docs", "Documentation")).clicked()
-                                        {
-                                            action = Some(Action::Docs(preset.id.into()));
+                                        if preset.docs.is_some() {
+                                            let docs = ui.button(tr("Docs", "Documentation"));
+                                            self.detail_focus.push(docs.id);
+                                            if docs.clicked() {
+                                                action = Some(Action::Docs(preset.id.into()));
+                                            }
                                         }
                                     });
                                 });
@@ -266,8 +286,185 @@ impl AgentsPanel {
                 }
             }
         }
+        if let Some(id) = ui.memory(|memory| memory.focused())
+            && self.detail_focus.contains(&id)
+        {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter {
+                        escape: true,
+                        ..Default::default()
+                    },
+                )
+            });
+        }
         action
     }
+}
+
+struct RowControls {
+    main: egui::Response,
+    toggle: egui::Response,
+    chevron: egui::Response,
+}
+fn agent_row(ui: &mut Ui, row: &Row, expanded: bool, french: bool) -> RowControls {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::hover());
+    let main_rect = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2((rect.right() - 60.0).max(rect.left()), rect.bottom()),
+    );
+    let toggle_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 35.0, rect.center().y),
+        egui::vec2(30.0, 18.0),
+    );
+    let chevron_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 7.0, rect.center().y),
+        egui::vec2(14.0, 24.0),
+    );
+    let main = ui.interact(
+        main_rect,
+        ui.make_persistent_id("agent-row"),
+        egui::Sense::click(),
+    );
+    let toggle = ui.interact(
+        toggle_rect,
+        ui.make_persistent_id("agent-visible"),
+        egui::Sense::click(),
+    );
+    let chevron = ui.interact(
+        chevron_rect,
+        ui.make_persistent_id("agent-expand"),
+        egui::Sense::click(),
+    );
+    main.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            expanded,
+            row.preset.name,
+        )
+    });
+    let label = if french {
+        format!("Afficher {} dans les menus", row.preset.name)
+    } else {
+        format!("Offer {} in menus", row.preset.name)
+    };
+    toggle.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            row.enabled,
+            &label,
+        )
+    });
+    chevron.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), row.preset.name)
+    });
+    if expanded || main.hovered() {
+        ui.painter()
+            .rect_filled(rect, 6, ui.visuals().faint_bg_color);
+    }
+    if main.has_focus() {
+        ui.painter().rect_stroke(
+            main_rect,
+            4,
+            ui.visuals().selection.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    let text_color = if row.enabled {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().text_color().gamma_multiply(0.55)
+    };
+    let title_rect = egui::Rect::from_min_max(
+        main_rect.min + egui::vec2(2.0, 4.0),
+        egui::pos2(main_rect.right() - 4.0, main_rect.top() + 23.0),
+    );
+    paint_line(
+        ui,
+        title_rect,
+        row.preset.name,
+        egui::FontId::proportional(12.5),
+        text_color,
+    );
+    let desc = egui::Rect::from_min_max(
+        egui::pos2(title_rect.left(), main_rect.top() + 24.0),
+        egui::pos2(title_rect.right(), main_rect.bottom() - 3.0),
+    );
+    paint_line(
+        ui,
+        desc,
+        row.preset.command,
+        egui::FontId::monospace(11.0),
+        ui.visuals().weak_text_color(),
+    );
+    let fill = if row.enabled {
+        ui.visuals().selection.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    ui.painter().rect_filled(toggle_rect, 9, fill);
+    ui.painter().circle_filled(
+        egui::pos2(
+            if row.enabled {
+                toggle_rect.right() - 9.0
+            } else {
+                toggle_rect.left() + 9.0
+            },
+            toggle_rect.center().y,
+        ),
+        6.0,
+        ui.visuals().text_color(),
+    );
+    if toggle.has_focus() {
+        ui.painter().rect_stroke(
+            toggle_rect.expand(2.0),
+            10,
+            ui.visuals().selection.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    let c = chevron_rect.center();
+    let points = if expanded {
+        [
+            c + egui::vec2(-4.0, -2.0),
+            c + egui::vec2(0.0, 2.5),
+            c + egui::vec2(4.0, -2.0),
+        ]
+    } else {
+        [
+            c + egui::vec2(-2.0, -4.0),
+            c + egui::vec2(2.5, 0.0),
+            c + egui::vec2(-2.0, 4.0),
+        ]
+    };
+    ui.painter().add(egui::Shape::line(
+        points.to_vec(),
+        egui::Stroke::new(1.5_f32, ui.visuals().weak_text_color()),
+    ));
+    RowControls {
+        main: main.on_hover_text(row.preset.name),
+        toggle: toggle.on_hover_text(label),
+        chevron,
+    }
+}
+fn paint_line(ui: &Ui, rect: egui::Rect, text: &str, font: egui::FontId, color: egui::Color32) {
+    if rect.width() <= 1.0 {
+        return;
+    }
+    let mut job = egui::text::LayoutJob::simple(text.into(), font, color, rect.width());
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.painter().layout_job(job);
+    ui.painter().with_clip_rect(rect).galley(
+        egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
 }
 
 #[cfg(test)]
@@ -424,13 +621,55 @@ mod tests {
     }
 
     #[test]
+    fn escape_leaves_external_focus_alone_and_space_operates_the_visibility_switch() {
+        let ctx = egui::Context::default();
+        let mut panel = AgentsPanel::default();
+        frame(&ctx, &mut panel, vec![], true, true, 620.0);
+        click(&ctx, &mut panel, "Codex CLI", true, true);
+        let toggle_id = panel.detail_focus[1];
+        ctx.memory_mut(|memory| memory.request_focus(toggle_id));
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (_, action, _) = frame(
+            &ctx,
+            &mut panel,
+            vec![key(egui::Key::Space)],
+            true,
+            true,
+            620.0,
+        );
+        assert_eq!(action, Some(Action::SetEnabled("codex".into(), false)));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("external-settings-search")));
+        frame(
+            &ctx,
+            &mut panel,
+            vec![key(egui::Key::Escape)],
+            true,
+            true,
+            620.0,
+        );
+        assert_eq!(panel.open.as_deref(), Some("codex"));
+        assert!(ctx.input(|input| input.key_pressed(egui::Key::Escape)));
+    }
+
+    #[test]
     fn escape_folds_details_and_repeat_does_not_escape_to_parent() {
         let ctx = egui::Context::default();
-        let mut panel = AgentsPanel {
-            open: Some("codex".into()),
-            ..Default::default()
-        };
-        frame(&ctx, &mut panel, vec![], true, true, 300.0);
+        let mut panel = AgentsPanel::default();
+        frame(&ctx, &mut panel, vec![], true, true, 620.0);
+        click(&ctx, &mut panel, "Codex CLI", true, true);
+        let row_id = panel.open_row.unwrap();
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(row_id),
+            "pointer should focus row"
+        );
+        assert!(panel.detail_focus.contains(&row_id));
         let key = |repeat| egui::Event::Key {
             key: egui::Key::Escape,
             physical_key: None,
@@ -440,6 +679,7 @@ mod tests {
         };
         let (_, action, right) = frame(&ctx, &mut panel, vec![key(false)], true, true, 300.0);
         assert!(panel.open.is_none());
+        assert!(ctx.memory(|memory| memory.has_focus(row_id)));
         assert!(action.is_none());
         assert!(right <= 300.0);
         frame(&ctx, &mut panel, vec![key(true)], true, true, 300.0);
