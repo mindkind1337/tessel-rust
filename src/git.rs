@@ -34,18 +34,6 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
     });
     let stdout = child.stdout.take().ok_or("Missing Git output pipe")?;
     let stderr = child.stderr.take().ok_or("Missing Git error pipe")?;
-    fn drain(mut reader: impl Read) -> Vec<u8> {
-        let mut kept = Vec::new();
-        let mut buffer = [0; 8192];
-        while let Ok(n) = reader.read(&mut buffer) {
-            if n == 0 {
-                break;
-            }
-            let room = (2 * 1024 * 1024usize).saturating_sub(kept.len());
-            kept.extend_from_slice(&buffer[..n.min(room)]);
-        }
-        kept
-    }
     let (out_tx, out) = mpsc::channel();
     let (err_tx, err) = mpsc::channel();
     thread::spawn(move || {
@@ -71,19 +59,82 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
     let status = status?;
     let output = out
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| "Git output timed out (a child may still hold the pipe)")?;
+        .map_err(|_| "Git output timed out (a child may still hold the pipe)")?
+        .map_err(|error| format!("Git output could not be read: {error}"))?;
     let errors = err
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| "Git error output timed out")?;
+        .map_err(|_| "Git error output timed out")?
+        .map_err(|error| format!("Git error output could not be read: {error}"))?;
     if !status.success() {
-        return Err(String::from_utf8_lossy(&errors).into_owned());
+        return Err(errors.text());
     }
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    Ok(output.text())
+}
+
+const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
+struct Capture {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+impl Capture {
+    fn text(&self) -> String {
+        let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            text.push_str("\n[Git output truncated at 2 MiB.]\n");
+        }
+        text
+    }
+}
+fn drain(mut reader: impl Read) -> std::io::Result<Capture> {
+    let mut capture = Capture {
+        bytes: Vec::new(),
+        truncated: false,
+    };
+    let mut buffer = [0; 8192];
+    loop {
+        let n = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if n == 0 {
+            return Ok(capture);
+        }
+        let room = OUTPUT_LIMIT.saturating_sub(capture.bytes.len());
+        capture.truncated |= n > room;
+        capture.bytes.extend_from_slice(&buffer[..n.min(room)]);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_output_is_drained_but_never_presented_as_complete() {
+        let data = vec![b'x'; OUTPUT_LIMIT + 37];
+        let mut reader = std::io::Cursor::new(data);
+        let capture = drain(&mut reader).unwrap();
+        assert_eq!(capture.bytes.len(), OUTPUT_LIMIT);
+        assert_eq!(reader.position(), (OUTPUT_LIMIT + 37) as u64);
+        assert!(capture.truncated);
+        assert!(
+            capture
+                .text()
+                .ends_with("[Git output truncated at 2 MiB.]\n")
+        );
+        let exact = drain(std::io::Cursor::new(vec![b'x'; OUTPUT_LIMIT])).unwrap();
+        assert!(!exact.truncated);
+        assert_eq!(exact.text().len(), OUTPUT_LIMIT);
+    }
+    #[test]
+    fn pipe_read_failure_is_not_silently_converted_to_success() {
+        struct Failed;
+        impl Read for Failed {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic pipe failure"))
+            }
+        }
+        assert!(drain(Failed).is_err());
+    }
     #[test]
     fn real_repo_status_and_diff() {
         let dir = tempfile::tempdir().unwrap();
