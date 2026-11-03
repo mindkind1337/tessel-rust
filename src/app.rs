@@ -1548,6 +1548,7 @@ impl eframe::App for Tessel {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.small(tr("Rust native · development"));
+                ui.small(env!("TESSEL_BUILD"));
                 if self.store.is_none() {
                     ui.colored_label(egui::Color32::YELLOW, "Persistence unavailable");
                 }

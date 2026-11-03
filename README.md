@@ -6,6 +6,7 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 
 ### Projects and workspace
 
+- The status bar and `--version` show the compiled Git build and commit, so portable copies can be identified without consulting the source checkout. Builds without Git metadata are labeled as source archives.
 - Persistent local projects; newly added projects become selected automatically.
 - Saved theme, font size, one/two/three-column terminal layout, SSH hosts and per-project task boards.
 - English/French interface selection in Settings, applied immediately and retained across restarts. Main navigation, settings, task columns, file actions, browser/download controls, PDF controls, sharing, vault and approval captions are translated. User content, tool protocol values and external/technical error messages retain their original text. Settings remain scrollable on smaller windows.

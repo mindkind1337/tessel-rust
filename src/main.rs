@@ -31,6 +31,14 @@ mod vault;
 mod vault_panel;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--version") {
+        println!(
+            "Tessel Rust {} {}",
+            env!("CARGO_PKG_VERSION"),
+            env!("TESSEL_BUILD")
+        );
+        return Ok(());
+    }
     #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some("--account-callback") {
         let raw = std::env::args().nth(2).unwrap_or_default();

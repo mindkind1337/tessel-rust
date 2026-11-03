@@ -12,7 +12,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read build number.' }
     cargo build --release --locked -j 2
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+    if ((git rev-parse HEAD).Trim() -ne $commit -or (git status --porcelain)) { throw 'Checkout changed during packaging; no archive was produced.' }
     $exe = Join-Path $repoRoot 'target\release\tessel-rust.exe'
+    $identity = (& $exe --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $identity.EndsWith("b$build ($($commit.Substring(0,7)))")) { throw 'Compiled build identity does not match the checkout.' }
     $check = Start-Process -FilePath $exe -ArgumentList '--self-test-pdf' -WindowStyle Hidden -Wait -PassThru
     if ($check.ExitCode -ne 0) { throw 'Release PDF worker acceptance failed.' }
     $officeCheck = Start-Process -FilePath $exe -ArgumentList '--self-test-office' -WindowStyle Hidden -Wait -PassThru
