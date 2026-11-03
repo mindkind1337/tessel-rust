@@ -5,6 +5,7 @@ mod account;
 mod account_panel;
 #[cfg(windows)]
 mod agent_browser;
+mod agent_detection;
 pub mod agent_names;
 mod agent_tools;
 mod app;

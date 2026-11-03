@@ -142,7 +142,7 @@ pub struct Tessel {
     explorer_tree: crate::explorer_tree::ExplorerTree,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
-    agents: Vec<(String, bool)>,
+    agents: crate::agent_detection::Detection,
     host_panel: crate::ssh_hosts_panel::SshHostsPanel,
     host_notice: Option<(String, bool)>,
     host_import: Option<Receiver<crate::ssh_config::Discovery>>,
@@ -241,7 +241,7 @@ impl Tessel {
             explorer_tree: Default::default(),
             sender,
             receiver,
-            agents: vec![],
+            agents: Default::default(),
             host_panel: Default::default(),
             host_notice: None,
             host_import: None,
@@ -507,10 +507,12 @@ impl Tessel {
         }
     }
     fn detect_agents(&mut self) {
-        self.agents = launch::AGENTS
-            .iter()
-            .map(|n| (n.to_string(), launch::installed(n)))
-            .collect();
+        self.agents.start(|| {
+            Ok(launch::AGENTS
+                .iter()
+                .map(|n| (n.to_string(), launch::installed(n)))
+                .collect())
+        });
     }
     fn choose_project(&self) {
         let sender = self.sender.clone();
@@ -569,6 +571,7 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        self.agents.poll();
         self.poll_host_import();
         self.sync_git_project();
         let git_owner = self.git_result.pending_owner().cloned();
@@ -1402,7 +1405,7 @@ impl Tessel {
         if ids.is_empty() {
             use crate::empty_state_panel::Entry;
             let mut entries = Vec::new();
-            for (name, installed) in &self.agents {
+            for (name, installed) in self.agents.entries() {
                 if *installed {
                     entries.push(Entry {
                         id: format!("agent:{name}"),
@@ -1472,6 +1475,7 @@ impl Tessel {
                     if let Some(name) = id.strip_prefix("agent:")
                         && self
                             .agents
+                            .entries()
                             .iter()
                             .any(|(known, installed)| *installed && known == name)
                     {
@@ -2371,10 +2375,28 @@ impl Tessel {
 
     fn agent_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Agent CLIs"));
-        if ui.button(tr("Refresh detection")).clicked() {
+        if ui
+            .add_enabled(
+                !self.agents.detecting(),
+                egui::Button::new(tr("Refresh detection")),
+            )
+            .clicked()
+        {
             self.detect_agents();
         }
-        for (name, installed) in &self.agents {
+        if self.agents.detecting() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(tr("Detecting agents…"));
+            });
+        }
+        if let Some(error) = self.agents.error() {
+            ui.colored_label(ui.visuals().error_fg_color, tr(error));
+        }
+        if !self.agents.loaded() {
+            return;
+        }
+        for (name, installed) in self.agents.entries() {
             ui.label(format!(
                 "{name}: {}",
                 if *installed {
@@ -2426,14 +2448,19 @@ impl Tessel {
                 reason: (!available).then(|| tr("Select a project for native chat.").into()),
             });
         }
-        entries.extend(self.agents.iter().map(|(name, available)| LauncherEntry {
-            item: LaunchMenuItem::Agent {
-                id: name.clone(),
-                name: name.clone(),
-            },
-            available: *available,
-            reason: (!available).then(|| tr("not on PATH").into()),
-        }));
+        entries.extend(
+            self.agents
+                .entries()
+                .iter()
+                .map(|(name, available)| LauncherEntry {
+                    item: LaunchMenuItem::Agent {
+                        id: name.clone(),
+                        name: name.clone(),
+                    },
+                    available: *available,
+                    reason: (!available).then(|| tr("not on PATH").into()),
+                }),
+        );
         let placements = if target_id.is_some() {
             vec![
                 LaunchPlacement::Auto,
