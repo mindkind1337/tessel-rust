@@ -1719,13 +1719,23 @@ fn build_status_text(p: StatusParams<'_>) -> String {
             if let Some(meta) = p.listed_meta {
                 if p.french {
                     format!(
-                        "{} modèles listés par {} le {}.",
-                        meta.count, p.agent_name, meta.date_label
+                        "{} {} par {} le {}.",
+                        meta.count,
+                        if meta.count <= 1 {
+                            "modèle listé"
+                        } else {
+                            "modèles listés"
+                        },
+                        p.agent_name,
+                        meta.date_label
                     )
                 } else {
                     format!(
-                        "{} models listed by {} on {}.",
-                        meta.count, p.agent_name, meta.date_label
+                        "{} {} listed by {} on {}.",
+                        meta.count,
+                        if meta.count == 1 { "model" } else { "models" },
+                        p.agent_name,
+                        meta.date_label
                     )
                 }
             } else if p.catalog_probed && p.capabilities.can_refresh_models {

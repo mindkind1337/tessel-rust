@@ -138,6 +138,7 @@ fn key_event(key: Key, pressed: bool, repeat: bool) -> Event {
     }
 }
 
+#[derive(Clone)]
 struct HarnessParams<'a> {
     agent_id: &'a str,
     agent_name: &'a str,
@@ -718,6 +719,28 @@ fn capability_gates_hide_unwired_restart_and_live_fast_notes_and_enable_cleanly(
             .any(|(t, _, _)| t.contains("4 modèles listés par Claude Code le 3 nov. 2026, 17:50."))
     );
 
+    for (count, french, expected) in [
+        (1, true, "1 modèle listé par Claude Code le"),
+        (1, false, "1 model listed by Claude Code on"),
+        (0, true, "0 modèle listé par Claude Code le"),
+        (0, false, "0 models listed by Claude Code on"),
+    ] {
+        let single_params = HarnessParams {
+            listed_meta: Some(ListedMeta {
+                count,
+                date_label: "3 nov. 2026, 17:50",
+            }),
+            french,
+            ..listed_params.clone()
+        };
+        let (full_single, _, _) =
+            run_frame(&ctx, &mut ui_state, &mut defaults, &single_params, vec![]);
+        assert!(
+            painted_texts(&full_single)
+                .iter()
+                .any(|(t, _, _)| t.contains(expected))
+        );
+    }
     let err_params = HarnessParams {
         listed_meta: None,
         probe: ProbeState::Error(ProbeError::Timeout),
