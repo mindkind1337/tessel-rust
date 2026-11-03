@@ -533,7 +533,16 @@ impl Tessel {
     }
     fn poll(&mut self) {
         self.sync_git_project();
+        let git_owner = self.git_result.pending_owner().cloned();
         self.git_result.poll();
+        if !self.git_result.busy()
+            && let Some(owner) = git_owner
+        {
+            self.scm_state.refresh_for(&owner);
+            if self.git_result.output.starts_with("Error:") {
+                self.error = self.git_result.output.clone();
+            }
+        }
         self.scm_state.poll();
         self.explorer_tree.poll();
         self.remote.poll();
@@ -2686,12 +2695,21 @@ impl Tessel {
                 capabilities: ScmCapabilities {
                     can_refresh: true,
                     can_open_file: true,
+                    can_stage: true,
                     ..Default::default()
                 },
             },
         );
         match action {
             Some(ScmChangesAction::Refresh) if !self.git_result.busy() => self.scm_state.refresh(),
+            Some(ScmChangesAction::Stage(paths)) if !self.git_result.busy() => {
+                match self.scm_state.stage_paths(&paths) {
+                    Ok(paths) => {
+                        self.git_start_work(move |root| crate::git::stage_files(&root, &paths))
+                    }
+                    Err(error) => self.error = error,
+                }
+            }
             Some(ScmChangesAction::OpenFile(path)) => {
                 if let Some(path) = self.scm_state.file_path(&path) {
                     self.open_document(path);

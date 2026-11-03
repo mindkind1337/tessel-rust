@@ -16,6 +16,36 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
 /// Stage exactly one project-relative file, including an already tracked deletion.
 /// Literal pathspecs prevent names such as `*.txt` from selecting other files.
 pub fn stage_file(root: &Path, relative: &str) -> Result<String> {
+    stage_files(root, &[relative.to_owned()])
+}
+
+pub fn stage_files(root: &Path, paths: &[String]) -> Result<String> {
+    if paths.is_empty() || paths.len() > 5000 {
+        return Err("Select between one and 5,000 files.".into());
+    }
+    let mut input = Vec::new();
+    for path in paths {
+        validate_stage_file(root, path)?;
+        if input.len() + path.len() + 1 > OUTPUT_LIMIT {
+            return Err("Selected Git paths exceed the input limit.".into());
+        }
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    run(
+        root,
+        &[
+            "--literal-pathspecs",
+            "add",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        Some(&input),
+    )?;
+    Ok(format!("Staged {} selected file(s).", paths.len()))
+}
+
+fn validate_stage_file(root: &Path, relative: &str) -> Result<()> {
     let relative =
         project_relative_path("", relative).ok_or("Choose a file inside this project.")?;
     let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
@@ -39,7 +69,7 @@ pub fn stage_file(root: &Path, relative: &str) -> Result<String> {
     if root.join(relative).is_dir() {
         return Err("Choose one file, not a directory.".into());
     }
-    run(root, &["--literal-pathspecs", "add", "--", relative], None)
+    Ok(())
 }
 
 pub struct ScopedStatus {
@@ -129,8 +159,9 @@ pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Cap
         .map_err(|e| e.to_string())?;
     let mut stdin = child.stdin.take().ok_or("Missing Git input pipe")?;
     let input = input.unwrap_or_default().to_vec();
+    let (input_tx, input_result) = mpsc::channel();
     thread::spawn(move || {
-        let _ = stdin.write_all(&input);
+        let _ = input_tx.send(stdin.write_all(&input));
     });
     let stdout = child.stdout.take().ok_or("Missing Git output pipe")?;
     let stderr = child.stderr.take().ok_or("Missing Git error pipe")?;
@@ -168,6 +199,10 @@ pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Cap
     if !status.success() {
         return Err(errors.text());
     }
+    input_result
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| "Git input timed out")?
+        .map_err(|error| format!("Git input could not be written: {error}"))?;
     Ok(output)
 }
 
@@ -414,5 +449,25 @@ mod tests {
         let staged = run(dir.path(), &["diff", "--cached", "--name-status"], None).unwrap();
         assert_eq!(staged.trim(), "D\tproject/..notes.txt");
         assert!(!staged.contains("outside.txt"));
+    }
+    #[test]
+    fn multi_file_stage_validates_every_path_before_mutating_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        std::fs::write(dir.path().join("[one].txt"), "one").unwrap();
+        std::fs::write(dir.path().join("two space.txt"), "two").unwrap();
+        std::fs::write(dir.path().join("o.txt"), "other").unwrap();
+        assert!(stage_files(dir.path(), &["[one].txt".into(), "../outside".into()]).is_err());
+        assert!(
+            run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .is_empty()
+        );
+        stage_files(dir.path(), &["[one].txt".into(), "two space.txt".into()]).unwrap();
+        let staged = run(dir.path(), &["diff", "--cached", "--name-only"], None).unwrap();
+        assert_eq!(
+            staged.lines().collect::<Vec<_>>(),
+            vec!["[one].txt", "two space.txt"]
+        );
     }
 }

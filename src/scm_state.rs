@@ -87,6 +87,43 @@ impl ScmState {
         self.pending = None;
     }
 
+    pub fn refresh_for(&mut self, owner: &Owner) {
+        if self.owner.as_ref() == Some(owner) {
+            self.refresh();
+        }
+    }
+
+    pub fn stage_paths(&self, paths: &[String]) -> Result<Vec<String>, String> {
+        let status = self
+            .result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .ok_or("Refresh Git status first.")?;
+        if self.busy()
+            || self.owner.is_none()
+            || status.blocks_bulk_actions()
+            || paths.is_empty()
+            || paths.len() > 5000
+        {
+            return Err("Refresh a complete Git status before staging selected files.".into());
+        }
+        let mut selected = std::collections::BTreeSet::new();
+        for path in paths {
+            let entry = status
+                .entries
+                .iter()
+                .find(|entry| entry.path == *path && entry.can_stage())
+                .ok_or("Selected Git file is no longer stageable; refresh status.")?;
+            selected.insert(entry.path.clone());
+            if entry.status == scm_changes_panel::ScmFileStatus::Renamed
+                && let Some(old) = &entry.old_path
+            {
+                selected.insert(old.clone());
+            }
+        }
+        Ok(selected.into_iter().collect())
+    }
+
     pub fn file_path(&self, relative: &str) -> Option<std::path::PathBuf> {
         let owner = self.owner.as_ref()?;
         let status = self.result.as_ref()?.as_ref().ok()?;
@@ -126,6 +163,20 @@ mod tests {
         assert_eq!(state.file_path("file é.txt"), Some(root.join("file é.txt")));
         assert!(state.file_path("../outside.txt").is_none());
         assert!(state.file_path("absent.txt").is_none());
+        assert_eq!(
+            state.stage_paths(&["file \u{e9}.txt".into()]).unwrap(),
+            vec!["file \u{e9}.txt"]
+        );
+        assert!(state.stage_paths(&["../outside.txt".into()]).is_err());
+        assert!(state.stage_paths(&[]).is_err());
+        state
+            .result
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .mark_input_truncated();
+        assert!(state.stage_paths(&["file \u{e9}.txt".into()]).is_err());
         state.select(None);
         assert!(state.file_path("file é.txt").is_none());
     }
