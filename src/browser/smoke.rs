@@ -79,7 +79,7 @@ fn run_mode(agent: bool) -> Result<(), Box<dyn std::error::Error>> {
                     && l.contains("fixture_session=synthetic-only")
             });
             let (status, extra, body) = if path == "/controls" {
-                ("200 OK","Content-Type: text/html".to_string()+"\r\n", br#"<!doctype html><title>Agent controls fixture</title><input id='query'><input id='secret' type='password'><button id='apply' onclick="document.getElementById('result').textContent=document.getElementById('query').value">Apply</button><p id='result'>untouched</p>"#.to_vec())
+                ("200 OK","Content-Type: text/html".to_string()+"\r\n", br#"<!doctype html><title>Agent controls fixture</title><input id='query'><input id='secret' type='password'><button id='apply' onclick="document.getElementById('result').textContent=document.getElementById('query').value">Apply</button><p id='result'>untouched</p><select id='language' onchange="choices()"><option value='en'>English</option><option value='fr'>French</option><option disabled value='disabled'>Disabled</option></select><input type='checkbox' id='enabled' onchange="choices()"><p id='choices'>choices:en:false</p><div style='height:2000px'></div><button id='bottom'>Bottom</button><script>function choices(){document.getElementById('choices').textContent='choices:'+document.getElementById('language').value+':'+document.getElementById('enabled').checked;}</script>"#.to_vec())
             } else if matches!(path, "/" | "/case-auth" | "/case-blob") {
                 let script = match path {
                     "/" => "save('/direct','direct.pdf');",
@@ -298,7 +298,19 @@ impl Probe {
             {
                 return Some(Err("DOM fill/click did not update fixture".into()));
             }
-            if self.phase == 6 || self.phase == 7 {
+            if self.phase == 11
+                && !result.as_ref().is_ok_and(|v| {
+                    v["text"]
+                        .as_str()
+                        .is_some_and(|t| t.contains("choices:fr:true"))
+                        && v["scroll"]["y"].as_f64().is_some_and(|y| y > 0.0)
+                })
+            {
+                return Some(Err(
+                    "Select/check/scroll did not update native fixture".into()
+                ));
+            }
+            if matches!(self.phase, 6 | 7 | 12 | 13 | 14) {
                 if result.is_ok() {
                     return Some(Err(
                         "Origin/password guard accepted an invalid action".into()
@@ -340,6 +352,15 @@ impl Probe {
             6 => {
                 json!({"operation":"fill","origin":origin,"selector":"#secret","text":"must-not-fill"})
             }
+            7 => json!({"operation":"select","origin":origin,"selector":"#language","value":"fr"}),
+            8 => json!({"operation":"check","origin":origin,"selector":"#enabled","checked":true}),
+            9 => json!({"operation":"scroll","origin":origin,"selector":"#bottom"}),
+            10 => json!({"operation":"snapshot"}),
+            11 => {
+                json!({"operation":"select","origin":origin,"selector":"#language","value":"disabled"})
+            }
+            12 => json!({"operation":"check","origin":origin,"selector":"#query","checked":true}),
+            13 => json!({"operation":"check","origin":origin,"selector":"#secret","checked":true}),
             _ => {
                 let result = (|| -> Result<(), String> {
                     let cookies = b

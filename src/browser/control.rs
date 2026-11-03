@@ -27,7 +27,10 @@ fn folder_in(root: &Path, relative: &str) -> Result<PathBuf, String> {
 }
 fn script(args: &Value) -> Result<String, String> {
     let op = args["operation"].as_str().ok_or("Missing operation")?;
-    if !matches!(op, "snapshot" | "click" | "fill") {
+    if !matches!(
+        op,
+        "snapshot" | "click" | "fill" | "select" | "check" | "scroll"
+    ) {
         return Err("Unsupported DOM operation".into());
     }
     if op != "snapshot" {
@@ -47,14 +50,21 @@ fn script(args: &Value) -> Result<String, String> {
             return Err("Fill text is limited to 16 KiB".into());
         }
     }
+    if op == "select" && args["value"].as_str().is_none_or(|v| v.len() > 4096) {
+        return Err("Select value is limited to 4096 bytes".into());
+    }
+    if op == "check" && !args["checked"].is_boolean() {
+        return Err("Checked must be a boolean".into());
+    }
     let payload = serde_json::to_string(args).map_err(|_| "Invalid arguments")?;
     Ok(format!(
         r#"(() => {{ try {{
 const a={payload};
 const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
 if(a.operation==='snapshot') {{
+ let remainingOptions=64;const options=e=>{{const values=[...e.options].slice(0,Math.min(20,remainingOptions));remainingOptions-=values.length;return values.map(o=>({{value:o.value.slice(0,4096),label:o.label.slice(0,256),disabled:o.disabled||!!o.closest('optgroup')?.disabled}}));}};
  const selector=e=>{{ if(e.id && document.querySelectorAll('#'+CSS.escape(e.id)).length===1) return '#'+CSS.escape(e.id); let parts=[]; for(let n=e;n&&n.nodeType===1;n=n.parentElement) {{ let s=n.tagName.toLowerCase(), i=1;for(let p=n.previousElementSibling;p;p=p.previousElementSibling)if(p.tagName===n.tagName)i++;parts.unshift(s+':nth-of-type('+i+')');if(n===document.documentElement)break; }} return parts.join(' > '); }};
- return {{url:location.href,origin:location.origin,title:document.title.slice(0,512),text:(document.body?.innerText||'').slice(0,48000),elements:[...document.querySelectorAll('a,button,input,textarea,select,[role=button]')].filter(visible).slice(0,150).map(e=>({{selector:selector(e),tag:e.tagName.toLowerCase(),type:e.type||'',label:(e.getAttribute('aria-label')||e.innerText||e.placeholder||'').slice(0,256),disabled:!!e.disabled}})),untrusted_page_content:true}};
+ return {{url:location.href,origin:location.origin,title:document.title.slice(0,512),text:(document.body?.innerText||'').slice(0,48000),elements:[...document.querySelectorAll('a,button,input,textarea,select,[role=button]')].filter(visible).slice(0,150).map(e=>({{selector:selector(e),tag:e.tagName.toLowerCase(),type:e.type||'',label:(e.getAttribute('aria-label')||e.innerText||e.placeholder||'').slice(0,256),disabled:!!e.disabled,checked:['checkbox','radio'].includes(e.type)?e.checked:undefined,options:e.tagName==='SELECT'?options(e):undefined}})),scroll:{{x:scrollX,y:scrollY,width:innerWidth,height:innerHeight}},untrusted_page_content:true}};
 }}
 if(location.origin!==a.origin) return {{error:'Page origin changed; take a new snapshot'}};
 const nodes=document.querySelectorAll(a.selector);
@@ -62,6 +72,18 @@ if(nodes.length!==1) return {{error:'Selector must match exactly one element'}};
 const e=nodes[0];
 if(!visible(e)||e.disabled) return {{error:'Element is hidden or disabled'}};
 if(e.tagName==='INPUT'&&['file','password'].includes(e.type)) return {{error:'File and password fields require the owner'}};
+if(a.operation==='scroll') {{ e.scrollIntoView({{block:'center',inline:'nearest',behavior:'instant'}});return {{performed:true}}; }}
+if(a.operation==='select') {{
+ if(e.tagName!=='SELECT'||e.multiple)return {{error:'Select requires one single-choice dropdown'}};
+ const opts=[...e.options].filter(o=>o.value===a.value);
+ if(opts.length!==1||opts[0].disabled||opts[0].closest('optgroup')?.disabled)return {{error:'Option is missing, ambiguous or disabled'}};
+ Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(e,a.value);
+ e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));return {{performed:true}};
+}}
+if(a.operation==='check') {{
+ if(e.tagName!=='INPUT'||!['checkbox','radio'].includes(e.type)||e.type==='radio'&&!a.checked)return {{error:'Check requires a checkbox or selecting a radio button'}};
+ if(e.checked!==a.checked)e.click();return {{performed:e.checked===a.checked}};
+}}
 if(a.operation==='click') {{ e.click();return {{performed:true}}; }}
 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.readOnly) return {{error:'Element is not an editable text field'}};
 if(e.tagName==='INPUT'&&!['text','email','search','tel','url','number'].includes(e.type)) return {{error:'Unsupported input type'}};
@@ -99,7 +121,9 @@ impl Browser {
         let keys: &[&str] = match operation {
             "snapshot" | "downloads" => &["operation"],
             "navigate" => &["operation", "url"],
-            "click" => &["operation", "origin", "selector"],
+            "click" | "scroll" => &["operation", "origin", "selector"],
+            "select" => &["operation", "origin", "selector", "value"],
+            "check" => &["operation", "origin", "selector", "checked"],
             "fill" => &["operation", "origin", "selector", "text"],
             "prepare_download" => &["operation", "folder", "filename"],
             _ => return Err("Unknown browser operation".into()),
@@ -188,6 +212,19 @@ mod tests {
     use super::*;
     #[test]
     fn download_folder_is_scoped_and_dom_requires_origin() {
+        assert!(script(&json!({"operation":"check","origin":"https://example.org","selector":"#checkbox","checked":"true"})).is_err());
+        assert!(
+            script(
+                &json!({"operation":"select","origin":"https://example.org","selector":"#dropdown"})
+            )
+            .is_err()
+        );
+        assert!(
+            script(
+                &json!({"operation":"scroll","origin":"https://example.org","selector":"#target"})
+            )
+            .is_ok()
+        );
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         assert!(folder_in(&root, ".").is_ok());
