@@ -5,8 +5,20 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Launch {
     Shell,
+    CodexChat,
+    ClaudeChat,
     Agent(String),
     Ssh(Host),
+}
+
+impl Launch {
+    pub fn native_chat(&self) -> Option<&'static str> {
+        match self {
+            Self::CodexChat => Some("Codex"),
+            Self::ClaudeChat => Some("Claude"),
+            _ => None,
+        }
+    }
 }
 
 pub const AGENTS: &[&str] = &[
@@ -45,6 +57,9 @@ pub fn posix_quote(text: &str) -> String {
 
 pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
     let mut command = match launch {
+        Launch::CodexChat | Launch::ClaudeChat => {
+            return Err("Native chats do not launch a terminal.".into());
+        }
         Launch::Shell => {
             let mut c = CommandBuilder::new(if cfg!(windows) {
                 "powershell.exe"
@@ -119,6 +134,16 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_chats_never_launch_shells() {
+        for launch in [Launch::CodexChat, Launch::ClaudeChat] {
+            assert!(launch.native_chat().is_some());
+            assert!(command(&launch, Path::new(".")).is_err());
+            let encoded = serde_json::to_string(&launch).unwrap();
+            let restored: Launch = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(launch.native_chat(), restored.native_chat());
+        }
+    }
     #[test]
     fn remote_path_is_single_quoted() {
         assert_eq!(posix_quote("a'b;$(bad)"), "'a'\\''b;$(bad)'");

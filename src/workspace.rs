@@ -166,6 +166,7 @@ impl Workspace {
             return Err("Invalid saved Claude chat metadata".into());
         }
         let mut session_ids = std::collections::HashSet::new();
+        let mut native_chats = std::collections::HashSet::new();
         for session in &self.sessions {
             if !session_ids.insert(session.id)
                 || session.id == u64::MAX
@@ -173,6 +174,16 @@ impl Workspace {
                 || session.title.len() > 512
             {
                 return Err("Invalid session metadata.".into());
+            }
+            if let Some(provider) = session.launch.native_chat() {
+                let project = session
+                    .project
+                    .and_then(|id| self.projects.iter().find(|p| p.id == id));
+                if project.is_none_or(|p| p.path != session.cwd)
+                    || !native_chats.insert((session.project, provider))
+                {
+                    return Err("Invalid or duplicate native chat pane.".into());
+                }
             }
             match &session.launch {
                 crate::launch::Launch::Agent(name)
@@ -432,6 +443,41 @@ mod tests {
         assert!(
             serde_json::from_str::<Workspace>(r#"{"panels":{"right_tab":"unknown"}}"#).is_err()
         );
+    }
+    #[test]
+    fn native_chat_metadata_is_project_scoped_unique_and_persistent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state.active().unwrap().path.clone();
+        for (id, launch) in [
+            (1, crate::launch::Launch::CodexChat),
+            (2, crate::launch::Launch::ClaudeChat),
+        ] {
+            state.sessions.push(SavedSession {
+                id,
+                project: Some(project),
+                title: launch.native_chat().unwrap().into(),
+                launch,
+                cwd: cwd.clone(),
+            });
+        }
+        state.sync_terminal_layouts([1000.0, 700.0]);
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(loaded.sessions.len(), 2);
+        assert_eq!(loaded.sessions[0].launch.native_chat(), Some("Codex"));
+        assert_eq!(loaded.terminal_layouts, state.terminal_layouts);
+        let mut invalid = loaded.clone();
+        invalid.sessions[1].launch = crate::launch::Launch::CodexChat;
+        assert!(invalid.validate().is_err());
+        invalid = loaded.clone();
+        invalid.sessions[0].project = None;
+        assert!(invalid.validate().is_err());
+        invalid = loaded;
+        invalid.sessions[0].cwd = cwd.join("unrelated");
+        assert!(invalid.validate().is_err());
     }
     #[test]
     fn terminal_split_geometry_survives_storage_without_starting_saved_sessions() {

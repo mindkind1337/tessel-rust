@@ -25,7 +25,8 @@ struct Session {
 }
 impl Session {
     fn start(&mut self) {
-        if self.terminal.is_some() || self.loading.is_some() {
+        if self.launch.native_chat().is_some() || self.terminal.is_some() || self.loading.is_some()
+        {
             return;
         }
         let launch = self.launch.clone();
@@ -64,7 +65,6 @@ enum Message {
 enum View {
     Work,
     Files,
-    Chat,
     Remote,
     #[cfg(windows)]
     Browser,
@@ -129,7 +129,6 @@ pub struct Tessel {
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
     claude_chats: Vec<crate::claude::Chat>,
-    show_claude: bool,
     share: crate::share_panel::SharePanel,
     remote: crate::remote_panel::RemotePanel,
     #[cfg(windows)]
@@ -209,7 +208,6 @@ impl Tessel {
             commit_message: String::new(),
             chats: Vec::new(),
             claude_chats: Vec::new(),
-            show_claude: false,
             share: crate::share_panel::SharePanel::default(),
             remote: crate::remote_panel::RemotePanel::default(),
             #[cfg(windows)]
@@ -258,8 +256,7 @@ impl Tessel {
                     project.id,
                     project.path.clone(),
                 ));
-                app.show_claude = true;
-                app.view = View::Chat;
+                app.new_session(Launch::ClaudeChat);
             }
             if std::env::args().any(|a| a == "--french-fixture") {
                 app.state.language = crate::i18n::Language::French;
@@ -290,7 +287,7 @@ impl Tessel {
                 let project = app.state.add_project(&root).expect("fixture project");
                 app.chats
                     .push(crate::chat::Chat::questions_fixture(project, root));
-                app.view = View::Chat;
+                app.new_session(Launch::CodexChat);
             }
             if std::env::args().any(|a| a == "--restore-fixture") {
                 app.overlay = Some(Overlay::Settings);
@@ -313,13 +310,15 @@ impl Tessel {
         }
 
         #[cfg(feature = "visual-test")]
-        if let Some(path) = std::env::args()
+        for path in std::env::args()
             .collect::<Vec<_>>()
             .windows(2)
-            .find(|a| a[0] == "--preview-file")
+            .filter(|a| a[0] == "--preview-file")
             .map(|a| PathBuf::from(&a[1]))
-            && let Some(root) = path.parent()
         {
+            let Some(root) = path.parent() else {
+                continue;
+            };
             match Document::open(root, &path) {
                 Ok(mut document) => {
                     if let Some(office) = &mut document.office
@@ -618,6 +617,30 @@ impl Tessel {
         launch: Launch,
         split: Option<(u64, crate::pane_grid::SplitDir)>,
     ) {
+        if let Some(provider) = launch.native_chat() {
+            let Some(project) = self.state.active_project else {
+                self.error = tr("Select a project for native chat.").into();
+                return;
+            };
+            if let Some(session) = self
+                .sessions
+                .iter()
+                .find(|s| s.project == Some(project) && s.launch.native_chat() == Some(provider))
+            {
+                self.active_session = Some(session.id);
+                self.view = View::Work;
+                if let Some(layout) = self
+                    .state
+                    .terminal_layouts
+                    .get_mut(&crate::terminal_layout::project_key(Some(project)))
+                    && layout.maximized.is_some()
+                {
+                    layout.maximized = Some(session.id);
+                    self.grid_dirty = true;
+                }
+                return;
+            }
+        }
         if self.sessions.len() >= 100 {
             self.error = "Session limit: 100".into();
             return;
@@ -628,6 +651,8 @@ impl Tessel {
             .map(|p| p.path.clone())
             .unwrap_or_else(launch::default_directory);
         let title = match &launch {
+            Launch::CodexChat => "Codex".into(),
+            Launch::ClaudeChat => "Claude".into(),
             Launch::Shell => "Terminal".into(),
             Launch::Agent(n) => n.clone(),
             Launch::Ssh(h) => format!("SSH · {}", h.alias),
@@ -709,43 +734,82 @@ impl Tessel {
             }
         }
     }
+    fn remove_document(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        self.documents.remove(index);
+        self.active_document =
+            active_after_close(self.active_document, index, self.documents.len());
+        if self.documents.is_empty() && self.view == View::Files {
+            self.view = View::Work;
+        }
+    }
+    fn request_document_close(&mut self, index: usize) {
+        if let Some(document) = self.documents.get(index) {
+            if document.dirty() {
+                self.pending_close = Some(index);
+            } else {
+                self.remove_document(index);
+            }
+        }
+    }
     fn center_tabs(&mut self, ui: &mut egui::Ui) {
+        use crate::view_tabs_browser_model::{OpenTabLabelInput, base_tab_label};
+        let paths: Vec<_> = self
+            .documents
+            .iter()
+            .map(|d| d.path.to_string_lossy().into_owned())
+            .collect();
+        let inputs: Vec<_> = paths
+            .iter()
+            .map(|path| OpenTabLabelInput {
+                tab_path: path,
+                diff: None,
+            })
+            .collect();
+        let mut close = None;
         egui::ScrollArea::horizontal()
             .id_salt("center-tabs")
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.view, View::Work, tr("Terminal"));
-                    if !self.chats.is_empty()
-                        || !self.claude_chats.is_empty()
-                        || self.view == View::Chat
-                    {
-                        ui.selectable_value(&mut self.view, View::Chat, tr("Native chat"));
-                    }
                     #[cfg(windows)]
                     ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
                     for (i, document) in self.documents.iter().enumerate() {
-                        if ui
+                        let response = ui
                             .selectable_label(
                                 self.view == View::Files && self.active_document == i,
                                 format!(
                                     "{}{}",
-                                    document
-                                        .path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy(),
+                                    base_tab_label(&inputs[i], &inputs),
                                     if document.dirty() { " *" } else { "" }
                                 ),
                             )
-                            .on_hover_text(document.path.display().to_string())
-                            .clicked()
-                        {
+                            .on_hover_text(&paths[i]);
+                        if response.clicked() {
                             self.view = View::Files;
                             self.active_document = i;
                         }
+                        if response.clicked_by(egui::PointerButton::Middle) {
+                            close = Some(i);
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button(tr("Close")).clicked() {
+                                close = Some(i);
+                                ui.close();
+                            }
+                            if ui.button(tr("Copy path")).clicked() {
+                                ui.ctx().copy_text(paths[i].clone());
+                                ui.close();
+                            }
+                        });
                     }
                 });
             });
+        if let Some(index) = close {
+            self.request_document_close(index);
+        }
         ui.separator();
     }
     fn show_command_palette(&mut self, ctx: &egui::Context) {
@@ -756,7 +820,8 @@ impl Tessel {
         use crate::palette::{PaletteCommand, filter_palette_commands};
         let commands: Vec<_> = [
             ("terminal", "Open terminal"),
-            ("chat", "Native chat"),
+            ("chat", "Native Codex chat"),
+            ("claude-chat", "Native Claude chat"),
             ("files", "Files"),
             ("finder", "Find a file"),
             ("changes", "Changes"),
@@ -819,7 +884,8 @@ impl Tessel {
             self.command_palette.close();
             match id.as_str() {
                 "terminal" => self.new_session(Launch::Shell),
-                "chat" => self.view = View::Chat,
+                "chat" => self.new_session(Launch::CodexChat),
+                "claude-chat" => self.new_session(Launch::ClaudeChat),
                 "finder" => self.open_finder(),
                 "files" | "changes" | "tasks" => {
                     self.state.panels.right_open = true;
@@ -1159,6 +1225,33 @@ impl Tessel {
                 egui::vec2(px.width as f32, px.height as f32),
             )
         };
+        // Construct dormant native chats only; connecting remains an explicit action.
+        if let Some(project) = self.state.active() {
+            if self
+                .sessions
+                .iter()
+                .any(|s| s.project == Some(project.id) && matches!(s.launch, Launch::CodexChat))
+                && !self.chats.iter().any(|c| c.project == project.id)
+            {
+                let mut chat = crate::chat::Chat::new(project.id, project.path.clone());
+                if let Some(id) = self.state.chat_threads.get(&project.id) {
+                    chat.set_resume(id.clone());
+                }
+                self.chats.push(chat);
+            }
+            if self
+                .sessions
+                .iter()
+                .any(|s| s.project == Some(project.id) && matches!(s.launch, Launch::ClaudeChat))
+                && !self.claude_chats.iter().any(|c| c.project == project.id)
+            {
+                self.claude_chats.push(crate::claude::Chat::new(
+                    project.id,
+                    project.path.clone(),
+                    self.state.claude_threads.get(&project.id).cloned(),
+                ));
+            }
+        }
         let mut close = None;
         let mut split = None;
         let mut maximize = None;
@@ -1217,7 +1310,9 @@ impl Tessel {
                                         split = Some((id, SplitDir::Col));
                                         ui.close();
                                     }
-                                    if ui.button(tr("Sleep")).clicked() {
+                                    if session.launch.native_chat().is_none()
+                                        && ui.button(tr("Sleep")).clicked()
+                                    {
                                         session.terminal = None;
                                         session.loading = None;
                                         ui.close();
@@ -1237,7 +1332,35 @@ impl Tessel {
                             if !session.error.is_empty() {
                                 ui.colored_label(egui::Color32::LIGHT_RED, &session.error);
                             }
-                            if let Some(terminal) = &mut session.terminal {
+                            if session.launch.native_chat().is_some() {
+                                let height = ui.available_height();
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("native-chat", id))
+                                    .show(ui, |ui| {
+                                        ui.set_max_height(height);
+                                        match session.launch {
+                                            Launch::CodexChat => {
+                                                if let Some(chat) = self
+                                                    .chats
+                                                    .iter_mut()
+                                                    .find(|c| Some(c.project) == session.project)
+                                                {
+                                                    chat.show(ui);
+                                                }
+                                            }
+                                            Launch::ClaudeChat => {
+                                                if let Some(chat) = self
+                                                    .claude_chats
+                                                    .iter_mut()
+                                                    .find(|c| Some(c.project) == session.project)
+                                                {
+                                                    chat.show(ui);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    });
+                            } else if let Some(terminal) = &mut session.terminal {
                                 terminal.show(ui, self.state.font_size);
                             } else if session.loading.is_some() {
                                 ui.spinner();
@@ -1338,6 +1461,15 @@ impl Tessel {
             self.grid_dirty = true;
         }
         if let Some(id) = close {
+            if let Some(session) = self.sessions.iter().find(|s| s.id == id) {
+                match session.launch {
+                    Launch::CodexChat => self.chats.retain(|c| Some(c.project) != session.project),
+                    Launch::ClaudeChat => self
+                        .claude_chats
+                        .retain(|c| Some(c.project) != session.project),
+                    _ => {}
+                }
+            }
             self.sessions.retain(|s| s.id != id);
             self.grid_dirty = true;
         }
@@ -1471,14 +1603,7 @@ impl Tessel {
             }
         }
         if let Some(i) = close {
-            if self.documents[i].dirty() {
-                self.pending_close = Some(i);
-            } else {
-                self.documents.remove(i);
-                self.active_document = self
-                    .active_document
-                    .min(self.documents.len().saturating_sub(1));
-            }
+            self.request_document_close(i);
         }
     }
     fn tasks(&mut self, ui: &mut egui::Ui) {
@@ -1853,6 +1978,7 @@ impl Tessel {
         if let Some(index) = self.pending_close {
             egui::Modal::new(egui::Id::new("unsaved-file")).show(ctx, |ui| {
                 ui.label(tr("Save changes before closing this file?"));
+                ui.label(self.documents[index].path.display().to_string());
                 ui.horizontal(|ui| {
                     if ui.button(tr("Cancel")).clicked() {
                         self.pending_close = None;
@@ -1860,17 +1986,15 @@ impl Tessel {
                     if ui.button(tr("Save and close")).clicked() {
                         match self.documents[index].save() {
                             Ok(()) => {
-                                self.documents.remove(index);
+                                self.remove_document(index);
                                 self.pending_close = None;
-                                self.active_document = 0;
                             }
                             Err(e) => self.error = e,
                         }
                     }
                     if ui.button(tr("Discard changes")).clicked() {
-                        self.documents.remove(index);
+                        self.remove_document(index);
                         self.pending_close = None;
-                        self.active_document = 0;
                     }
                 });
             });
@@ -1922,60 +2046,6 @@ impl Tessel {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = sender.send(crate::git::run(&root, &args, input.as_deref()));
         });
-    }
-    fn chat_view(&mut self, ui: &mut egui::Ui) {
-        let Some(project) = self.state.active().cloned() else {
-            ui.label(tr("Select a project for native chat."));
-            return;
-        };
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.show_claude, false, "Codex");
-            ui.selectable_value(&mut self.show_claude, true, "Claude");
-        });
-        if self.show_claude {
-            if let Some(chat) = self
-                .claude_chats
-                .iter_mut()
-                .find(|c| c.project == project.id)
-            {
-                let height = ui.available_height();
-                egui::ScrollArea::vertical()
-                    .id_salt("claude-panel-scroll")
-                    .show(ui, |ui| {
-                        ui.set_max_height(height);
-                        chat.show(ui);
-                    });
-            } else {
-                ui.heading(tr("Native Claude chat"));
-                if ui.button(tr("Create chat")).clicked() {
-                    self.claude_chats.push(crate::claude::Chat::new(
-                        project.id,
-                        project.path,
-                        self.state.claude_threads.get(&project.id).cloned(),
-                    ));
-                }
-            }
-            return;
-        }
-        if let Some(chat) = self.chats.iter_mut().find(|c| c.project == project.id) {
-            let height = ui.available_height();
-            egui::ScrollArea::vertical()
-                .id_salt("codex-panel-scroll")
-                .show(ui, |ui| {
-                    ui.set_max_height(height);
-                    chat.show(ui);
-                });
-        } else {
-            ui.heading(tr("Native Codex chat"));
-            ui.label(tr("Connect your installed Codex CLI with its existing sign-in. No API key is copied into Tessel Rust."));
-            if ui.button(tr("Create chat")).clicked() {
-                let mut chat = crate::chat::Chat::new(project.id, project.path);
-                if let Some(id) = self.state.chat_threads.get(&project.id) {
-                    chat.set_resume(id.clone());
-                }
-                self.chats.push(chat);
-            }
-        }
     }
     fn git_view(&mut self, ui: &mut egui::Ui) {
         if let Some(rx) = &self.git_pending
@@ -2203,8 +2273,12 @@ impl eframe::App for Tessel {
                             self.new_session(Launch::Shell);
                             ui.close();
                         }
-                        if ui.button(tr("Native chat")).clicked() {
-                            self.view = View::Chat;
+                        if ui.button(tr("Native Codex chat")).clicked() {
+                            self.new_session(Launch::CodexChat);
+                            ui.close();
+                        }
+                        if ui.button(tr("Native Claude chat")).clicked() {
+                            self.new_session(Launch::ClaudeChat);
                             ui.close();
                         }
                         for (name, available) in &self.agents {
@@ -2293,7 +2367,6 @@ impl eframe::App for Tessel {
             match self.view {
                 View::Work => self.work(ui),
                 View::Files => self.editor(ui),
-                View::Chat => self.chat_view(ui),
                 View::Remote => self.remote.show(ui, &self.state.hosts),
                 #[cfg(windows)]
                 View::Browser => {
@@ -2348,5 +2421,47 @@ impl eframe::App for Tessel {
         } else {
             33
         }));
+    }
+}
+
+fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
+    let next = if removed < active {
+        active.saturating_sub(1)
+    } else {
+        active
+    };
+    next.min(remaining.saturating_sub(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_tabs_preserves_the_selected_document_or_its_nearest_neighbor() {
+        assert_eq!(active_after_close(2, 0, 3), 1);
+        assert_eq!(active_after_close(0, 2, 3), 0);
+        assert_eq!(active_after_close(1, 1, 3), 1);
+        assert_eq!(active_after_close(3, 3, 3), 2);
+        assert_eq!(active_after_close(0, 0, 0), 0);
+    }
+    #[test]
+    fn native_panes_cannot_start_pty_workers() {
+        for launch in [Launch::CodexChat, Launch::ClaudeChat] {
+            let mut session = Session {
+                id: 1,
+                project: Some(1),
+                title: "Native".into(),
+                launch,
+                cwd: PathBuf::from("unused"),
+                terminal: None,
+                loading: None,
+                error: String::new(),
+            };
+            session.start();
+            assert!(session.loading.is_none());
+            assert!(session.terminal.is_none());
+            assert!(session.error.is_empty());
+        }
     }
 }

@@ -24,6 +24,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Terminals, agents and SSH
 
 - Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `+` menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
+- Native Codex and Claude chats share the project split grid with terminals. Open either provider from the launcher or command palette; each project has one pane per provider. Restoring its layout creates no agent process or connection. Closing its pane stops its transport; saved thread identifiers remain available for explicit resume.
 - PowerShell without user profiles on Windows; `/bin/sh` on Unix.
 - ANSI colors, underlines, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys. Wide glyphs render above both cell backgrounds; painting is clipped to each pane. Installed Windows emoji/symbol fonts are used as fallbacks.
 - Ctrl+A–Z, Ctrl+Space, Shift+Tab, Insert/Delete, Page Up/Down, F1–F12 and modified navigation/function keys. The input cursor is hidden while viewing scrollback.
@@ -55,6 +56,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Document previews
 
 - Native readable HTML and Markdown views, with source/preview switching and copy-as-plain-text. Scripts, CSS and external resources are never executed or fetched by this view; it is not a full webpage renderer.
+- Document tabs distinguish matching filenames with their parent folder. Middle-click or the context menu closes a tab with the existing unsaved-change confirmation; closing a neighbor preserves the selected document. The context menu can also copy its full path.
 - Local links open another editor tab while preserving the source; HTTP(S) links open the private browser. Native URL schemes, network-share links and paths outside the source project are refused.
 - Read-only PNG, JPEG, WebP, GIF-first-frame and BMP previews, with background decoding, compressed-size/dimension/allocation limits and fit-to-width display.
 - Original PDF page rendering in Rust with previous/next page, zoom and fit-width controls. Rendering runs in a disposable worker with a 20-second deadline; Windows additionally enforces a 512 MiB process-memory limit. Closing the document cancels its worker.
@@ -64,7 +66,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Native Claude chat
 
-- Separate Claude provider in the native chat panel, using the installed Claude Code CLI and its existing sign-in. Tessel does not copy the CLI's tokens.
+- Claude provider in a native project grid pane, using the installed Claude Code CLI and its existing sign-in. Tessel does not copy the CLI's tokens.
 - Streamed text, explicit connection and resume, model selection, persisted session IDs, interruption and process-tree shutdown on Windows. Workspace restore never starts Claude automatically.
 - Tool permission requests show their original arguments with Allow once / Deny. Interrupted, cancelled, duplicate or mismatched-session requests cannot gain approval. Project customizations, hooks and external MCP servers are disabled for this connection; the CLI's default permission mode remains active.
 - Inline Claude questions support single or multiple choices and free text, with no preselected answer. Skipping denies the question request; cancelled, completed or interrupted turns clear pending questions. Answers preserve the original question text and do not grant unrelated command permissions.

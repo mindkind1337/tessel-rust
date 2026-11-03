@@ -11,76 +11,6 @@ pub struct TerminalLayout {
     next_split: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_resize_close_and_restore_preserve_session_identity() {
-        let mut layout = TerminalLayout::default();
-        assert!(layout.sync(&[1, 2], [1200.0, 700.0]));
-        assert!(layout.split(2, 3, SplitDir::Col));
-        let geometry = pane_grid::grid_layout(layout.tree.as_ref());
-        assert_eq!(geometry.tiles.len(), 3);
-        let divider = &geometry.dividers[0];
-        assert!(layout.resize(&divider.split_id, divider.index, 1200.0, 70.0, None));
-        let before = layout.clone();
-        assert!(!layout.sync(&[1, 2, 3], [1200.0, 700.0]));
-        assert_eq!(layout, before);
-        let json = serde_json::to_string(&layout).unwrap();
-        let mut restored: TerminalLayout = serde_json::from_str(&json).unwrap();
-        restored.validate(&HashSet::from([1, 2, 3])).unwrap();
-        assert_eq!(restored, layout);
-        restored.maximized = Some(2);
-        assert!(restored.sync(&[1, 3], [1200.0, 700.0]));
-        assert_eq!(restored.maximized, None);
-        restored.validate(&HashSet::from([1, 3])).unwrap();
-        assert_eq!(
-            pane_grid::grid_layout(restored.tree.as_ref()).tiles.len(),
-            2
-        );
-        assert!(restored.sync(&[], [800.0, 600.0]));
-        assert!(restored.tree.is_none());
-    }
-
-    #[test]
-    fn imported_layouts_reject_foreign_sessions_duplicate_ids_and_invalid_sizes() {
-        let mut layout = TerminalLayout::default();
-        layout.sync(&[1, 2], [1200.0, 700.0]);
-        assert!(layout.validate(&HashSet::from([1])).is_err());
-        let mut bad = layout.clone();
-        if let Some(PaneNode::Split { sizes, .. }) = &mut bad.tree {
-            sizes[0] = f64::NAN;
-        }
-        assert!(bad.validate(&HashSet::from([1, 2])).is_err());
-        if let Some(PaneNode::Split { children, .. }) = &mut layout.tree {
-            children[1] = children[0].clone();
-        }
-        assert!(layout.validate(&HashSet::from([1, 2])).is_err());
-    }
-
-    #[test]
-    fn repeated_splits_are_bounded_and_auto_tile_preserves_all_sessions() {
-        let mut layout = TerminalLayout::default();
-        layout.sync(&[1], [1200.0, 700.0]);
-        let mut ids = vec![1];
-        for id in 2..100 {
-            if !layout.split(1, id, SplitDir::Row) {
-                break;
-            }
-            ids.push(id);
-        }
-        assert!(ids.len() <= 33);
-        layout.validate(&ids.iter().copied().collect()).unwrap();
-        layout.tile([1200.0, 700.0], None);
-        layout.validate(&ids.iter().copied().collect()).unwrap();
-        assert_eq!(
-            pane_grid::grid_layout(layout.tree.as_ref()).tiles.len(),
-            ids.len()
-        );
-    }
-}
-
 impl Default for TerminalLayout {
     fn default() -> Self {
         Self {
@@ -311,5 +241,75 @@ impl TerminalLayout {
         self.tree
             .as_mut()
             .is_some_and(|tree| apply(tree, split, index, pixels, delta, key))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_resize_close_and_restore_preserve_session_identity() {
+        let mut layout = TerminalLayout::default();
+        assert!(layout.sync(&[1, 2], [1200.0, 700.0]));
+        assert!(layout.split(2, 3, SplitDir::Col));
+        let geometry = pane_grid::grid_layout(layout.tree.as_ref());
+        assert_eq!(geometry.tiles.len(), 3);
+        let divider = &geometry.dividers[0];
+        assert!(layout.resize(&divider.split_id, divider.index, 1200.0, 70.0, None));
+        let before = layout.clone();
+        assert!(!layout.sync(&[1, 2, 3], [1200.0, 700.0]));
+        assert_eq!(layout, before);
+        let json = serde_json::to_string(&layout).unwrap();
+        let mut restored: TerminalLayout = serde_json::from_str(&json).unwrap();
+        restored.validate(&HashSet::from([1, 2, 3])).unwrap();
+        assert_eq!(restored, layout);
+        restored.maximized = Some(2);
+        assert!(restored.sync(&[1, 3], [1200.0, 700.0]));
+        assert_eq!(restored.maximized, None);
+        restored.validate(&HashSet::from([1, 3])).unwrap();
+        assert_eq!(
+            pane_grid::grid_layout(restored.tree.as_ref()).tiles.len(),
+            2
+        );
+        assert!(restored.sync(&[], [800.0, 600.0]));
+        assert!(restored.tree.is_none());
+    }
+
+    #[test]
+    fn imported_layouts_reject_foreign_sessions_duplicate_ids_and_invalid_sizes() {
+        let mut layout = TerminalLayout::default();
+        layout.sync(&[1, 2], [1200.0, 700.0]);
+        assert!(layout.validate(&HashSet::from([1])).is_err());
+        let mut bad = layout.clone();
+        if let Some(PaneNode::Split { sizes, .. }) = &mut bad.tree {
+            sizes[0] = f64::NAN;
+        }
+        assert!(bad.validate(&HashSet::from([1, 2])).is_err());
+        if let Some(PaneNode::Split { children, .. }) = &mut layout.tree {
+            children[1] = children[0].clone();
+        }
+        assert!(layout.validate(&HashSet::from([1, 2])).is_err());
+    }
+
+    #[test]
+    fn repeated_splits_are_bounded_and_auto_tile_preserves_all_sessions() {
+        let mut layout = TerminalLayout::default();
+        layout.sync(&[1], [1200.0, 700.0]);
+        let mut ids = vec![1];
+        for id in 2..100 {
+            if !layout.split(1, id, SplitDir::Row) {
+                break;
+            }
+            ids.push(id);
+        }
+        assert!(ids.len() <= 33);
+        layout.validate(&ids.iter().copied().collect()).unwrap();
+        layout.tile([1200.0, 700.0], None);
+        layout.validate(&ids.iter().copied().collect()).unwrap();
+        assert_eq!(
+            pane_grid::grid_layout(layout.tree.as_ref()).tiles.len(),
+            ids.len()
+        );
     }
 }

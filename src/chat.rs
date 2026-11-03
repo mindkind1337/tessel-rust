@@ -731,15 +731,15 @@ impl Chat {
         ui.heading(tr("Codex · native chat"));
         ui.small(self.cwd.display().to_string());
         if let Some(id) = &self.thread_id {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.small(format!("{}: {id}", tr("Thread")));
                 if ui.small_button(tr("Copy ID")).clicked() {
                     ui.ctx().copy_text(id.clone());
                 }
             });
         }
-        ui.horizontal(|ui| {
-            ui.label(&self.status);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr(&self.status));
             if self.rpc.is_none() {
                 if ui.button(tr("Connect")).clicked() {
                     self.start();
@@ -758,7 +758,7 @@ impl Chat {
             }
         });
         if self.rpc.is_none() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(tr("Resume thread ID (optional)"));
                 ui.text_edit_singleline(&mut self.resume);
             });
@@ -784,7 +784,7 @@ impl Chat {
                     .show(ui, |ui| {
                         ui.monospace(serde_json::to_string_pretty(&details).unwrap_or_default());
                     });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     for (label, decision) in [("Deny", "decline"), ("Allow once", "accept")] {
                         if ui.add_enabled(decision=="decline" || can_accept,egui::Button::new(tr(label))).clicked()
                             && let Some(rpc) = &self.rpc
@@ -833,7 +833,7 @@ impl Chat {
                     ui.separator();
                 }
             });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(tr("Model (empty = configured)"));
             ui.text_edit_singleline(&mut self.model);
             egui::ComboBox::from_id_salt("effort")
