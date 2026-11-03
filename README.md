@@ -9,6 +9,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Projects and workspace
 
 - Projects and their terminal sessions occupy the left sidebar; Files, Changes and Tasks occupy a resizable right panel. Open documents remain accessible through the center tab strip, including a direct return to Terminal. Both sidebars can be hidden from the Layout menu.
+- Center tabs use compact vector icons, a selected top border and an unsaved-change dot. Document close buttons and middle-click use the existing save confirmation; long titles are truncated with full paths on hover. Terminal and the native browser remain accessible from the same strip.
 - Files, Changes and Tasks use the source panel's compact vector tabs, selected underline and tooltips showing their keyboard shortcuts.
 - The project sidebar groups sessions in expandable cards with paths, counts, sleeping indicators and full-width selection. Its search button opens the command palette; the folder button opens a project. Keyboard navigation stays within the focused sidebar. Terminals started without a project remain accessible in their own section after opening a project.
 - F1, the toolbar help button and the command palette open searchable keyboard help for implemented shortcuts. Escape clears its search first, then closes the overlay; the current workspace stays in place.

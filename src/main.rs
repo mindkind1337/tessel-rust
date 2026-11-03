@@ -49,6 +49,7 @@ pub mod theme_palettes;
 mod vault;
 #[cfg(windows)]
 mod vault_panel;
+mod view_tabs;
 pub mod view_tabs_browser_model;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {

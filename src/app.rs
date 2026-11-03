@@ -821,27 +821,57 @@ impl Tessel {
             .id_salt("center-tabs")
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.view, View::Work, tr("Terminal"));
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let terminal = crate::view_tabs::show(
+                        ui,
+                        crate::view_tabs::Tab {
+                            title: tr("Terminal"),
+                            hint: tr("Terminal"),
+                            kind: crate::view_tabs::Kind::Terminal,
+                            selected: self.view == View::Work,
+                            dirty: false,
+                            closable: false,
+                        },
+                    );
+                    if terminal.body.clicked() {
+                        self.view = View::Work;
+                    }
                     #[cfg(windows)]
-                    ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
+                    {
+                        let browser = crate::view_tabs::show(
+                            ui,
+                            crate::view_tabs::Tab {
+                                title: tr("Browser"),
+                                hint: tr("Browser"),
+                                kind: crate::view_tabs::Kind::Browser,
+                                selected: self.view == View::Browser,
+                                dirty: false,
+                                closable: false,
+                            },
+                        );
+                        if browser.body.clicked() {
+                            self.view = View::Browser;
+                        }
+                    }
                     for (i, document) in self.documents.iter().enumerate() {
-                        let response = ui
-                            .selectable_label(
-                                self.view == View::Files && self.active_document == i,
-                                format!(
-                                    "{}{}",
-                                    base_tab_label(&inputs[i], &inputs),
-                                    if document.dirty() { " *" } else { "" }
-                                ),
-                            )
-                            .on_hover_text(&paths[i]);
-                        if response.clicked() {
+                        let tab = crate::view_tabs::show(
+                            ui,
+                            crate::view_tabs::Tab {
+                                title: &base_tab_label(&inputs[i], &inputs),
+                                hint: &paths[i],
+                                kind: crate::view_tabs::Kind::Editor,
+                                selected: self.view == View::Files && self.active_document == i,
+                                dirty: document.dirty(),
+                                closable: true,
+                            },
+                        );
+                        if tab.close {
+                            close = Some(i);
+                        } else if tab.body.clicked() {
                             self.view = View::Files;
                             self.active_document = i;
                         }
-                        if response.clicked_by(egui::PointerButton::Middle) {
-                            close = Some(i);
-                        }
+                        let response = tab.body;
                         response.context_menu(|ui| {
                             if ui.button(tr("Close")).clicked() {
                                 close = Some(i);
