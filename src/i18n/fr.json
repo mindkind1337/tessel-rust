@@ -71,6 +71,7 @@
   "Agent command lookup output exceeded its limit.": "Les résultats de recherche des agents dépassent la limite autorisée.",
   "Agent command lookup failed.": "La recherche des commandes des agents a échoué.",
   "Copy install command": "Copier la commande d’installation",
+  "Install command copied.": "Commande d’installation copiée.",
   "Refresh detection": "Actualiser la détection",
   "available": "disponible",
   "not on PATH": "absent du PATH",

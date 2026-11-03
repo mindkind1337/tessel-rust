@@ -143,6 +143,8 @@ pub struct Tessel {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     agents: crate::agent_detection::Detection,
+    agents_panel: crate::agents_panel::AgentsPanel,
+    agents_notice: Option<String>,
     host_panel: crate::ssh_hosts_panel::SshHostsPanel,
     host_notice: Option<(String, bool)>,
     host_import: Option<Receiver<crate::ssh_config::Discovery>>,
@@ -242,6 +244,8 @@ impl Tessel {
             sender,
             receiver,
             agents: Default::default(),
+            agents_panel: Default::default(),
+            agents_notice: None,
             host_panel: Default::default(),
             host_notice: None,
             host_import: None,
@@ -2382,57 +2386,82 @@ impl Tessel {
     }
 
     fn agent_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr("Agent CLIs"));
-        if ui
-            .add_enabled(
-                !self.agents.detecting(),
-                egui::Button::new(tr("Refresh detection")),
-            )
-            .clicked()
-        {
-            self.detect_agents();
-        }
-        if self.agents.detecting() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(tr("Detecting agents…"));
-            });
-        }
-        if let Some(error) = self.agents.error() {
-            ui.colored_label(ui.visuals().error_fg_color, tr(error));
-        }
-        if !self.agents.loaded() {
-            return;
-        }
-        let mut visibility_change = None;
-        for (name, installed) in self.agents.entries() {
-            let preset = crate::agent_catalog::find(name);
-            let label = preset.map_or(name.as_str(), |p| p.name);
-            let mut enabled = crate::agent_preferences::enabled(&self.state, name);
-            if ui
-                .checkbox(&mut enabled, format!("{} {label}", tr("Offer in menus:")))
-                .changed()
-            {
-                visibility_change = Some((name.clone(), enabled));
+        use crate::agents_panel::{Action, Input, Row};
+        let rows: Vec<_> = self
+            .agents
+            .entries()
+            .iter()
+            .filter_map(|(id, available)| {
+                Some(Row {
+                    preset: crate::agent_catalog::find(id)?,
+                    available: *available,
+                    enabled: crate::agent_preferences::enabled(&self.state, id),
+                })
+            })
+            .collect();
+        let action = self.agents_panel.show(
+            ui,
+            Input {
+                rows: &rows,
+                loaded: self.agents.loaded(),
+                detecting: self.agents.detecting(),
+                error: self.agents.error(),
+                notice: self.agents_notice.as_deref(),
+                has_project: self.state.active_project.is_some(),
+                french: self.state.language == crate::i18n::Language::French,
+                search: self.settings_nav.query(),
+            },
+        );
+        match action {
+            Some(Action::Detect) => {
+                self.agents_notice = None;
+                self.detect_agents();
             }
-            ui.label(format!(
-                "{label}: {}",
-                if *installed {
-                    tr("available")
-                } else {
-                    tr("not on PATH")
+            Some(Action::SetEnabled(id, enabled)) => self.change_agent_visibility(&id, enabled),
+            Some(Action::Terminal(id)) => {
+                self.new_session(Launch::Agent(id));
+                self.overlay = None;
+            }
+            Some(Action::NativeChat(id)) if self.state.active_project.is_some() => {
+                match id.as_str() {
+                    "codex" => {
+                        self.new_session(Launch::CodexChat);
+                        self.overlay = None;
+                    }
+                    "claude" => {
+                        self.new_session(Launch::ClaudeChat);
+                        self.overlay = None;
+                    }
+                    _ => {}
                 }
-            ));
-            if !*installed
-                && let Some(install) = crate::agent_installs::find(name)
-                && let Some(command) = install.copy_text()
-                && ui.button(tr("Copy install command")).clicked()
-            {
-                ui.ctx().copy_text(command);
             }
-        }
-        if let Some((id, enabled)) = visibility_change {
-            self.change_agent_visibility(&id, enabled);
+            Some(Action::Docs(id)) => {
+                let available = rows.iter().any(|row| row.preset.id == id && row.available);
+                let url = if available {
+                    crate::agent_catalog::find(&id).and_then(|entry| entry.docs)
+                } else {
+                    crate::agent_installs::find(&id)
+                        .and_then(|entry| {
+                            entry
+                                .docs_url
+                                .as_deref()
+                                .or(entry.install_source.as_deref())
+                        })
+                        .or_else(|| crate::agent_catalog::find(&id).and_then(|entry| entry.docs))
+                };
+                if let Some(url) = url {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                }
+            }
+            Some(Action::CopyInstall(id)) => {
+                if let Some(text) =
+                    crate::agent_installs::find(&id).and_then(|entry| entry.copy_text())
+                {
+                    ui.ctx().copy_text(text);
+                    self.agents_notice = Some(tr("Install command copied.").into());
+                }
+            }
+            _ => {}
         }
     }
     fn change_agent_visibility(&mut self, id: &str, enabled: bool) {
@@ -2443,9 +2472,7 @@ impl Tessel {
             .and_then(|store| {
                 crate::agent_preferences::set_enabled(&mut self.state, store, id, enabled)
             });
-        if let Err(error) = result {
-            self.error = error;
-        }
+        self.agents_notice = result.err().map(|error| tr(&error).to_owned());
     }
     fn open_help(&mut self) {
         self.help.reset();
@@ -2771,10 +2798,10 @@ impl Tessel {
             (
                 SettingsSection::Agents,
                 "agents",
-                "Agent CLIs",
+                "Agents",
                 Group::Ai,
                 Icon::Agent,
-                "agent codex claude",
+                "agent codex claude install detection visibility command",
             ),
             (
                 SettingsSection::Appearance,
@@ -2836,6 +2863,9 @@ impl Tessel {
             .unwrap_or("appearance");
         let host_dialog_open = self.settings_section == SettingsSection::Hosts
             && (self.host_panel.is_form_open() || self.host_panel.is_confirm_remove_open());
+        let agents_escape_consumed = self.settings_section == SettingsSection::Agents
+            && self.restore_preview.is_none()
+            && self.agents_panel.handle_escape(ctx);
         let mut close = false;
         let response = crate::settings_surface::show(ctx, |ui, nav_width| {
             let height = ui.available_height();
@@ -2899,7 +2929,10 @@ impl Tessel {
                 );
             });
         });
-        if self.restore_preview.is_none() && !host_dialog_open && (close || response.should_close())
+        if self.restore_preview.is_none()
+            && !host_dialog_open
+            && !agents_escape_consumed
+            && (close || response.should_close())
         {
             self.overlay = None;
             self.settings_nav.reset();

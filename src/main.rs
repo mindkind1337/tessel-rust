@@ -12,6 +12,7 @@ pub mod agent_names;
 mod agent_paths;
 mod agent_preferences;
 mod agent_tools;
+mod agents_panel;
 mod app;
 pub mod appearance_panel;
 mod backup;
