@@ -1255,6 +1255,7 @@ impl Tessel {
         let mut close = None;
         let mut split = None;
         let mut maximize = None;
+        let mut arrange = false;
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
                 continue;
@@ -1300,15 +1301,26 @@ impl Tessel {
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             ui.horizontal(|ui| {
-                                ui.label(&session.title);
-                                ui.menu_button("+", |ui| {
-                                    if ui.button(tr("Split right")).clicked() {
-                                        split = Some((id, SplitDir::Row));
-                                        ui.close();
-                                    }
-                                    if ui.button(tr("Split down")).clicked() {
-                                        split = Some((id, SplitDir::Col));
-                                        ui.close();
+                                let menu = crate::pane_header::MenuState {
+                                    title: &session.title,
+                                    maximized: maximized.is_some(),
+                                    multiple_panes: ids.len() > 1,
+                                    terminal_output: session.terminal.is_some(),
+                                    language: if self.state.language
+                                        == crate::i18n::Language::French
+                                    {
+                                        crate::pane_menu_model::PaneMenuLang::Fr
+                                    } else {
+                                        crate::pane_menu_model::PaneMenuLang::En
+                                    },
+                                };
+                                let mut action = None;
+                                ui.label(&session.title).context_menu(|ui| {
+                                    action = crate::pane_header::show(ui, &menu);
+                                });
+                                ui.menu_button("⋯", |ui| {
+                                    if let Some(selected) = crate::pane_header::show(ui, &menu) {
+                                        action = Some(selected);
                                     }
                                     if session.launch.native_chat().is_none()
                                         && ui.button(tr("Sleep")).clicked()
@@ -1318,6 +1330,26 @@ impl Tessel {
                                         ui.close();
                                     }
                                 });
+                                if let Some(action) = action {
+                                    use crate::pane_menu_model::PaneMenuAction;
+                                    match action {
+                                        PaneMenuAction::CopyOutput => {
+                                            if let Some(terminal) = &session.terminal {
+                                                ui.ctx().copy_text(terminal.output());
+                                            }
+                                        }
+                                        PaneMenuAction::ToggleMaximize => maximize = Some(id),
+                                        PaneMenuAction::ArrangeGrid => arrange = true,
+                                        PaneMenuAction::SplitRight => {
+                                            split = Some((id, SplitDir::Row))
+                                        }
+                                        PaneMenuAction::SplitDown => {
+                                            split = Some((id, SplitDir::Col))
+                                        }
+                                        PaneMenuAction::ClosePane => close = Some(id),
+                                        _ => {}
+                                    }
+                                }
                                 if ui
                                     .small_button(if maximized.is_some() { "▣" } else { "□" })
                                     .on_hover_text(tr("Maximize / restore pane"))
@@ -1447,6 +1479,12 @@ impl Tessel {
                         .resize(&divider.split_id, divider.index, pixels, delta, direction);
                 }
             }
+        }
+        if arrange {
+            if let Some(layout) = self.state.terminal_layouts.get_mut(&key) {
+                layout.tile(self.grid_room, None);
+            }
+            self.grid_dirty = true;
         }
         if let Some(id) = maximize {
             self.state
@@ -2412,6 +2450,25 @@ impl eframe::App for Tessel {
         }
         self.show_overlay(ctx);
         self.show_command_palette(ctx);
+        #[cfg(feature = "visual-test")]
+        if std::env::args().any(|a| a == "--pane-menu-fixture") {
+            egui::Window::new("Pane menu fixture").show(ctx, |ui| {
+                let _ = crate::pane_header::show(
+                    ui,
+                    &crate::pane_header::MenuState {
+                        title: "Terminal",
+                        maximized: false,
+                        multiple_panes: true,
+                        terminal_output: true,
+                        language: if self.state.language == crate::i18n::Language::French {
+                            crate::pane_menu_model::PaneMenuLang::Fr
+                        } else {
+                            crate::pane_menu_model::PaneMenuLang::En
+                        },
+                    },
+                );
+            });
+        }
         self.confirmations(ctx);
         if previous_panels != self.state.panels {
             self.save();

@@ -68,8 +68,8 @@ impl Default for Browser {
 }
 
 fn allowed(address: &str) -> bool {
-    url::Url::parse(address)
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "blob") || address == "about:blank")
+    address.len() <= 8192
+        && crate::view_tabs_browser_model::allowed_browser_url(address, true).is_some()
 }
 fn safe_name(name: &str) -> String {
     let name: String = name
@@ -249,16 +249,21 @@ impl Browser {
         Ok(())
     }
     fn navigate(&mut self) {
-        let address = if self.address.contains(":") {
-            self.address.clone()
-        } else {
-            format!("https://{}", self.address)
+        use crate::view_tabs_browser_model::{
+            SearchEngine, allowed_browser_url, normalize_browser_input,
         };
-        if !allowed(&address) {
-            self.error =
-                "Only HTTP(S), same-session blob URLs and about:blank are supported.".into();
+        let address = (self.address.len() <= 8192)
+            .then(|| {
+                allowed_browser_url(&self.address, true)
+                    .or_else(|| normalize_browser_input(&self.address, true, SearchEngine::Google))
+            })
+            .flatten();
+        let Some(address) = address.filter(|address| allowed(address)) else {
+            self.error = "Unsupported or oversized browser address.".into();
             return;
-        }
+        };
+        self.address = address.clone();
+        self.error.clear();
         if let Some(view) = &self.view {
             self.error = view
                 .load_url(&address)
@@ -411,6 +416,43 @@ impl Browser {
 mod tests {
     use super::*;
     #[test]
+    fn address_bar_normalizes_without_opening_a_browser_or_leaking_credentials() {
+        for (input, expected) in [
+            ("localhost:5173/test", "http://localhost:5173/test"),
+            ("example.org", "https://example.org/"),
+            ("", "about:blank"),
+            (
+                "rust native ui",
+                "https://www.google.com/search?q=rust%20native%20ui",
+            ),
+            ("blob:https://example.org/id", "blob:https://example.org/id"),
+        ] {
+            let mut browser = Browser {
+                address: input.into(),
+                ..Default::default()
+            };
+            browser.navigate();
+            assert_eq!(browser.address, expected);
+            assert!(browser.error.is_empty());
+            assert!(browser.view.is_none());
+        }
+        for input in [
+            "https://user:secret@example.org",
+            "javascript:alert(1)",
+            "file:///C:/private",
+            "data:text/plain,secret",
+        ] {
+            let mut browser = Browser {
+                address: input.into(),
+                ..Default::default()
+            };
+            browser.navigate();
+            assert!(!browser.error.is_empty());
+            assert!(!browser.error.contains("secret"));
+            assert!(browser.view.is_none());
+        }
+    }
+    #[test]
     fn downloads_do_not_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let first = download_target(dir.path(), std::path::Path::new("report.pdf")).unwrap();
@@ -421,7 +463,13 @@ mod tests {
     }
     #[test]
     fn denies_native_schemes() {
-        for address in ["file:///C:/secret", "javascript:alert(1)", "tessel://tool"] {
+        for address in [
+            "file:///C:/secret",
+            "javascript:alert(1)",
+            "tessel://tool",
+            "https://user:secret@example.org",
+            "https://user@example.org",
+        ] {
             assert!(!allowed(address));
         }
         assert!(allowed("https://example.org"));

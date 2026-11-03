@@ -23,7 +23,8 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Terminals, agents and SSH
 
-- Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `+` menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
+- Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `⋯` menu or its title's context menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
+- Pane header menus expose available native actions: copy terminal output, maximize/restore, arrange, split and close. Native chat panes do not offer terminal clipboard actions.
 - Native Codex and Claude chats share the project split grid with terminals. Open either provider from the launcher or command palette; each project has one pane per provider. Restoring its layout creates no agent process or connection. Closing its pane stops its transport; saved thread identifiers remain available for explicit resume.
 - PowerShell without user profiles on Windows; `/bin/sh` on Unix.
 - ANSI colors, underlines, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys. Wide glyphs render above both cell backgrounds; painting is clipped to each pane. Installed Windows emoji/symbol fonts are used as fallbacks.
@@ -85,6 +86,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Windows browser
 
 - Embedded WebView2, back/forward/reload, address bar, separate persistent Rust-app profile and no website-to-native IPC bridge.
+- The address bar accepts bare domains, local development addresses such as `localhost:5173`, and Google search terms. Navigation rejects URLs containing usernames/passwords and native schemes; agent navigation still requires an explicit URL.
 - Original HTTP(S), authenticated and blob downloads remain inside the browser session. A fresh directory per download prevents duplicate names overwriting existing files.
 - User-selected download folder, received/total bytes, separate completed/cancelled/failed states, native cancellation and copyable saved paths. At most eight transfers run at once; the last 100 transfers stay in memory. Transfers with no data progress for 120 seconds are stopped and reported as failed. Download URLs, cookies and tokens are not logged.
 - New-window requests can be opened explicitly in the existing tab. Native/file URL schemes from websites are refused.

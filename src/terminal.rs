@@ -27,6 +27,9 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    pub fn output(&self) -> String {
+        self.parser.screen().contents()
+    }
     pub fn request_focus(&self, ctx: &egui::Context) {
         if let Some(id) = self.widget_id {
             ctx.memory_mut(|m| m.request_focus(id));

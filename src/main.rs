@@ -22,6 +22,8 @@ mod launch;
 mod office;
 pub mod palette;
 pub mod pane_grid;
+mod pane_header;
+pub mod pane_menu_model;
 mod pdf;
 mod preview;
 mod remote;
