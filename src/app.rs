@@ -2696,12 +2696,21 @@ impl Tessel {
                     can_refresh: true,
                     can_open_file: true,
                     can_stage: true,
+                    can_unstage: true,
                     ..Default::default()
                 },
             },
         );
         match action {
             Some(ScmChangesAction::Refresh) if !self.git_result.busy() => self.scm_state.refresh(),
+            Some(ScmChangesAction::Unstage(paths)) if !self.git_result.busy() => {
+                match self.scm_state.unstage_paths(&paths) {
+                    Ok(paths) => {
+                        self.git_start_work(move |root| crate::git::unstage_files(&root, &paths))
+                    }
+                    Err(error) => self.error = error,
+                }
+            }
             Some(ScmChangesAction::Stage(paths)) if !self.git_result.busy() => {
                 match self.scm_state.stage_paths(&paths) {
                     Ok(paths) => {

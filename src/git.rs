@@ -20,6 +20,38 @@ pub fn stage_file(root: &Path, relative: &str) -> Result<String> {
 }
 
 pub fn stage_files(root: &Path, paths: &[String]) -> Result<String> {
+    let input = selected_path_input(root, paths)?;
+    run(
+        root,
+        &[
+            "--literal-pathspecs",
+            "add",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        Some(&input),
+    )?;
+    Ok(format!("Staged {} selected file(s).", paths.len()))
+}
+
+pub fn unstage_files(root: &Path, paths: &[String]) -> Result<String> {
+    let input = selected_path_input(root, paths)?;
+    // Mixed reset changes only the index, including an unborn branch on supported Git.
+    run(
+        root,
+        &[
+            "--literal-pathspecs",
+            "reset",
+            "-q",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        Some(&input),
+    )?;
+    Ok(format!("Unstaged {} selected file(s).", paths.len()))
+}
+
+fn selected_path_input(root: &Path, paths: &[String]) -> Result<Vec<u8>> {
     if paths.is_empty() || paths.len() > 5000 {
         return Err("Select between one and 5,000 files.".into());
     }
@@ -32,17 +64,7 @@ pub fn stage_files(root: &Path, paths: &[String]) -> Result<String> {
         input.extend_from_slice(path.as_bytes());
         input.push(0);
     }
-    run(
-        root,
-        &[
-            "--literal-pathspecs",
-            "add",
-            "--pathspec-from-file=-",
-            "--pathspec-file-nul",
-        ],
-        Some(&input),
-    )?;
-    Ok(format!("Staged {} selected file(s).", paths.len()))
+    Ok(input)
 }
 
 fn validate_stage_file(root: &Path, relative: &str) -> Result<()> {
@@ -468,6 +490,61 @@ mod tests {
         assert_eq!(
             staged.lines().collect::<Vec<_>>(),
             vec!["[one].txt", "two space.txt"]
+        );
+    }
+    #[test]
+    fn unstage_preserves_working_bytes_before_and_after_the_first_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        std::fs::write(dir.path().join("[one].txt"), "one").unwrap();
+        std::fs::write(dir.path().join("two.txt"), "base").unwrap();
+        stage_files(dir.path(), &["[one].txt".into(), "two.txt".into()]).unwrap();
+        unstage_files(dir.path(), &["[one].txt".into()]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("[one].txt")).unwrap(),
+            "one"
+        );
+        assert_eq!(
+            run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .trim(),
+            "two.txt"
+        );
+        run(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "base",
+            ],
+            None,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("two.txt"), "edited").unwrap();
+        stage_files(dir.path(), &["[one].txt".into(), "two.txt".into()]).unwrap();
+        assert!(unstage_files(dir.path(), &["two.txt".into(), "../outside.txt".into()]).is_err());
+        assert!(
+            !run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .is_empty()
+        );
+        unstage_files(dir.path(), &["[one].txt".into(), "two.txt".into()]).unwrap();
+        assert!(
+            run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("two.txt")).unwrap(),
+            "edited"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("[one].txt")).unwrap(),
+            "one"
         );
     }
 }

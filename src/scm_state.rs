@@ -94,6 +94,14 @@ impl ScmState {
     }
 
     pub fn stage_paths(&self, paths: &[String]) -> Result<Vec<String>, String> {
+        self.selected_paths(paths, false)
+    }
+
+    pub fn unstage_paths(&self, paths: &[String]) -> Result<Vec<String>, String> {
+        self.selected_paths(paths, true)
+    }
+
+    fn selected_paths(&self, paths: &[String], staged: bool) -> Result<Vec<String>, String> {
         let status = self
             .result
             .as_ref()
@@ -105,15 +113,22 @@ impl ScmState {
             || paths.is_empty()
             || paths.len() > 5000
         {
-            return Err("Refresh a complete Git status before staging selected files.".into());
+            return Err("Refresh a complete Git status before changing selected files.".into());
         }
         let mut selected = std::collections::BTreeSet::new();
         for path in paths {
             let entry = status
                 .entries
                 .iter()
-                .find(|entry| entry.path == *path && entry.can_stage())
-                .ok_or("Selected Git file is no longer stageable; refresh status.")?;
+                .find(|entry| {
+                    entry.path == *path
+                        && if staged {
+                            entry.can_unstage()
+                        } else {
+                            entry.can_stage()
+                        }
+                })
+                .ok_or("Selected Git file changed; refresh status.")?;
             selected.insert(entry.path.clone());
             if entry.status == scm_changes_panel::ScmFileStatus::Renamed
                 && let Some(old) = &entry.old_path
@@ -223,5 +238,51 @@ mod tests {
         state.select(None);
         state.refresh();
         assert!(!state.busy());
+    }
+    #[test]
+    fn unstage_rename_includes_both_paths_and_keeps_the_worktree_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        git::run(dir.path(), &["init", "-q"], None).unwrap();
+        std::fs::write(dir.path().join("old.txt"), "same content").unwrap();
+        git::stage_file(dir.path(), "old.txt").unwrap();
+        git::run(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "base",
+            ],
+            None,
+        )
+        .unwrap();
+        std::fs::rename(dir.path().join("old.txt"), dir.path().join("new.txt")).unwrap();
+        git::stage_files(dir.path(), &["old.txt".into(), "new.txt".into()]).unwrap();
+        let owner = Owner {
+            project: 1,
+            root: dir.path().into(),
+        };
+        let state = ScmState {
+            result: Some(Ok(load(&owner).unwrap())),
+            owner: Some(owner),
+            ..Default::default()
+        };
+        let paths = state.unstage_paths(&["new.txt".into()]).unwrap();
+        assert_eq!(paths, vec!["new.txt", "old.txt"]);
+        assert!(state.stage_paths(&["new.txt".into()]).is_err());
+        git::unstage_files(dir.path(), &paths).unwrap();
+        assert!(
+            git::run(dir.path(), &["diff", "--cached", "--name-only"], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!dir.path().join("old.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new.txt")).unwrap(),
+            "same content"
+        );
     }
 }
