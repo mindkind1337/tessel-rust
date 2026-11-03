@@ -11,6 +11,7 @@ pub mod agent_catalog;
 mod agent_detection;
 pub mod agent_env;
 pub mod agent_installs;
+pub mod agent_model_antigravity;
 pub mod agent_model_cache;
 pub mod agent_model_catalog;
 pub mod agent_model_defaults;

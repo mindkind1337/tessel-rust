@@ -29,6 +29,8 @@ The model-list parser in `src/agent_model_probe_parse.rs` also adapts Tessel's
 `commit-message-model-parsers.ts`, `grok-model-list-probe.ts` and `model-id-label.ts`.
 The successful-list cache in `src/agent_model_cache.rs` adapts Tessel's
 `main/agentModelList.js`, derived from Orca's `agent-model-catalog-store.ts`.
+The Antigravity variant grouping in `src/agent_model_antigravity.rs` adapts
+Tessel's `shared/antigravityModels.js`.
 
 - Project: https://github.com/stablyai/orca
 - Reference revision: `433986fa3be37911a0f13f7ffd454b831b87a64c` (package version `1.4.214`)
