@@ -10,6 +10,12 @@ use std::{
 };
 
 pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
+    run_bytes(root, args, input).map(|output| output.text())
+}
+
+/// Preserve NUL-delimited paths and expose truncation separately from stdout.
+/// Structured callers must disable bulk actions when `truncated` is true.
+pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
     let mut command = Command::new("git");
     command
         .current_dir(root)
@@ -68,13 +74,13 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
     if !status.success() {
         return Err(errors.text());
     }
-    Ok(output.text())
+    Ok(output)
 }
 
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
-struct Capture {
-    bytes: Vec<u8>,
-    truncated: bool,
+pub struct Capture {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
 }
 impl Capture {
     fn text(&self) -> String {
@@ -155,5 +161,39 @@ mod tests {
         )
         .unwrap();
         assert!(diff.contains("+hello"));
+    }
+
+    #[test]
+    fn porcelain_output_preserves_nul_delimiters_and_literal_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        let name = "untracked file é.txt";
+        std::fs::write(dir.path().join(name), "synthetic\n").unwrap();
+        let status = run_bytes(
+            dir.path(),
+            &[
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                "--untracked-files=normal",
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(!status.truncated);
+        let expected = format!("? {name}");
+        assert!(
+            status
+                .bytes
+                .split(|b| *b == 0)
+                .any(|record| record == expected.as_bytes())
+        );
+        assert_eq!(status.bytes.last(), Some(&0));
+        run(dir.path(), &["add", "--", name], None).unwrap();
+        let staged = run_bytes(dir.path(), &["status", "--porcelain=v2", "-z"], None).unwrap();
+        assert!(!staged.truncated);
+        assert!(staged.bytes.starts_with(b"1 A. "));
+        assert!(staged.bytes.ends_with(format!(" {name}\0").as_bytes()));
     }
 }
