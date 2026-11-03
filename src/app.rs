@@ -194,6 +194,7 @@ impl Tessel {
         crate::terminal::configure_fonts(&cc.egui_ctx);
         crate::i18n::set_language(state.language);
         crate::theme::apply(&cc.egui_ctx, state.dark, state.theme);
+        let next_session = state.next_pane_id();
         let mut app = Self {
             #[cfg(windows)]
             window_frame,
@@ -201,7 +202,7 @@ impl Tessel {
             store,
             error,
             sessions: vec![],
-            next_session: 1,
+            next_session,
             active_session: None,
             documents: vec![],
             document_pending: Default::default(),
@@ -294,6 +295,7 @@ impl Tessel {
                     project.path.clone(),
                 ));
                 app.new_session(Launch::ClaudeChat);
+                app.claude_chats.last_mut().unwrap().pane = app.active_session.unwrap();
             }
             if std::env::args().any(|a| a == "--french-fixture") {
                 app.state.language = crate::i18n::Language::French;
@@ -325,6 +327,7 @@ impl Tessel {
                 app.chats
                     .push(crate::chat::Chat::questions_fixture(project, root));
                 app.new_session(Launch::CodexChat);
+                app.chats.last_mut().unwrap().pane = app.active_session.unwrap();
             }
             if std::env::args().any(|a| a == "--restore-fixture") {
                 app.overlay = Some(Overlay::Settings);
@@ -462,6 +465,7 @@ impl Tessel {
         app
     }
     fn save(&mut self) {
+        self.state.next_pane = self.next_session;
         self.state.sessions = self
             .sessions
             .iter()
@@ -587,22 +591,26 @@ impl Tessel {
                 });
                 chat.tool_result(call.id, result);
             }
-            if let Some(id) = &chat.thread_id
-                && self.state.chat_threads.get(&chat.project) != Some(id)
-            {
-                self.state.chat_threads.insert(chat.project, id.clone());
-                chat_metadata_changed = true;
+            if let Some(id) = &chat.thread_id {
+                match self
+                    .state
+                    .remember_native_thread(chat.pane, chat.project, "Codex", Some(id))
+                {
+                    Ok(changed) => chat_metadata_changed |= changed,
+                    Err(error) => self.error = error,
+                }
             }
         }
         for chat in &mut self.claude_chats {
             chat.poll();
-            if self.state.claude_threads.get(&chat.project) != chat.saved_session.as_ref() {
-                if let Some(id) = &chat.saved_session {
-                    self.state.claude_threads.insert(chat.project, id.clone());
-                } else {
-                    self.state.claude_threads.remove(&chat.project);
-                }
-                chat_metadata_changed = true;
+            match self.state.remember_native_thread(
+                chat.pane,
+                chat.project,
+                "Claude",
+                chat.saved_session.as_deref(),
+            ) {
+                Ok(changed) => chat_metadata_changed |= changed,
+                Err(error) => self.error = error,
             }
         }
         if chat_metadata_changed {
@@ -687,29 +695,9 @@ impl Tessel {
         split: Option<(u64, crate::pane_grid::SplitDir)>,
         before: bool,
     ) {
-        if let Some(provider) = launch.native_chat() {
-            let Some(project) = self.state.active_project else {
-                self.error = tr("Select a project for native chat.").into();
-                return;
-            };
-            if let Some(session) = self
-                .sessions
-                .iter()
-                .find(|s| s.project == Some(project) && s.launch.native_chat() == Some(provider))
-            {
-                self.active_session = Some(session.id);
-                self.view = View::Work;
-                if let Some(layout) = self
-                    .state
-                    .terminal_layouts
-                    .get_mut(&crate::terminal_layout::project_key(Some(project)))
-                    && layout.maximized.is_some()
-                {
-                    layout.maximized = Some(session.id);
-                    self.grid_dirty = true;
-                }
-                return;
-            }
+        if launch.native_chat().is_some() && self.state.active_project.is_none() {
+            self.error = tr("Select a project for native chat.").into();
+            return;
         }
         if self.sessions.len() >= 100 {
             self.error = "Session limit: 100".into();
@@ -768,11 +756,11 @@ impl Tessel {
             return;
         };
         let session = self.sessions.remove(index);
+        #[cfg(windows)]
+        self.agent_browsers.cancel_pane(id);
         match session.launch {
-            Launch::CodexChat => self.chats.retain(|c| Some(c.project) != session.project),
-            Launch::ClaudeChat => self
-                .claude_chats
-                .retain(|c| Some(c.project) != session.project),
+            Launch::CodexChat => self.chats.retain(|c| c.pane != id),
+            Launch::ClaudeChat => self.claude_chats.retain(|c| c.pane != id),
             _ => {}
         }
         if self.active_session == Some(id) {
@@ -1137,14 +1125,11 @@ impl Tessel {
             },
             sleeping: if let Some(provider) = session.launch.native_chat() {
                 match provider {
-                    "Codex" => !self
-                        .chats
-                        .iter()
-                        .any(|c| Some(c.project) == session.project && c.busy()),
+                    "Codex" => !self.chats.iter().any(|c| c.pane == session.id && c.busy()),
                     "Claude" => !self
                         .claude_chats
                         .iter()
-                        .any(|c| Some(c.project) == session.project && c.busy()),
+                        .any(|c| c.pane == session.id && c.busy()),
                     _ => true,
                 }
             } else {
@@ -1536,31 +1521,39 @@ impl Tessel {
                 egui::vec2(px.width as f32, px.height as f32),
             )
         };
-        // Construct dormant native chats only; connecting remains an explicit action.
+        // Each native pane owns its provider process and resume ID. No connection on restore.
         if let Some(project) = self.state.active() {
-            if self
+            for session in self
                 .sessions
                 .iter()
-                .any(|s| s.project == Some(project.id) && matches!(s.launch, Launch::CodexChat))
-                && !self.chats.iter().any(|c| c.project == project.id)
+                .filter(|s| s.project == Some(project.id))
             {
-                let mut chat = crate::chat::Chat::new(project.id, project.path.clone());
-                if let Some(id) = self.state.chat_threads.get(&project.id) {
-                    chat.set_resume(id.clone());
+                match session.launch {
+                    Launch::CodexChat if !self.chats.iter().any(|c| c.pane == session.id) => {
+                        let mut chat = crate::chat::Chat::new(project.id, project.path.clone());
+                        chat.pane = session.id;
+                        if let Some(thread) =
+                            self.state.native_resume(session.id, project.id, "Codex")
+                        {
+                            chat.set_resume(thread.into());
+                        }
+                        self.chats.push(chat);
+                    }
+                    Launch::ClaudeChat
+                        if !self.claude_chats.iter().any(|c| c.pane == session.id) =>
+                    {
+                        let mut chat = crate::claude::Chat::new(
+                            project.id,
+                            project.path.clone(),
+                            self.state
+                                .native_resume(session.id, project.id, "Claude")
+                                .map(str::to_owned),
+                        );
+                        chat.pane = session.id;
+                        self.claude_chats.push(chat);
+                    }
+                    _ => {}
                 }
-                self.chats.push(chat);
-            }
-            if self
-                .sessions
-                .iter()
-                .any(|s| s.project == Some(project.id) && matches!(s.launch, Launch::ClaudeChat))
-                && !self.claude_chats.iter().any(|c| c.project == project.id)
-            {
-                self.claude_chats.push(crate::claude::Chat::new(
-                    project.id,
-                    project.path.clone(),
-                    self.state.claude_threads.get(&project.id).cloned(),
-                ));
             }
         }
         let mut close = None;
@@ -1712,10 +1705,8 @@ impl Tessel {
                                         ui.set_max_height(height);
                                         match session.launch {
                                             Launch::CodexChat => {
-                                                if let Some(chat) = self
-                                                    .chats
-                                                    .iter_mut()
-                                                    .find(|c| Some(c.project) == session.project)
+                                                if let Some(chat) =
+                                                    self.chats.iter_mut().find(|c| c.pane == id)
                                                 {
                                                     chat.show(ui);
                                                 }
@@ -1724,7 +1715,7 @@ impl Tessel {
                                                 if let Some(chat) = self
                                                     .claude_chats
                                                     .iter_mut()
-                                                    .find(|c| Some(c.project) == session.project)
+                                                    .find(|c| c.pane == id)
                                                 {
                                                     chat.show(ui);
                                                 }
@@ -2030,6 +2021,7 @@ impl Tessel {
             );
         }
         state.active_project = None;
+        state.migrate_native_threads();
         self.save();
         let backup = self
             .store
@@ -2055,7 +2047,7 @@ impl Tessel {
         self.sender = sender;
         self.receiver = receiver;
         self.state = state;
-        self.next_session = 1;
+        self.next_session = self.state.next_pane_id();
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {

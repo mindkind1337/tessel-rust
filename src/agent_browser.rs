@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 struct Pending {
+    pane: u64,
     id: Value,
     scope: (String, String),
     receiver: Receiver<Result<Value, String>>,
@@ -42,6 +43,7 @@ impl AgentBrowsers {
             self.pending.insert(
                 chat.project,
                 Pending {
+                    pane: chat.pane,
                     id: call.id.clone(),
                     scope,
                     receiver,
@@ -61,6 +63,9 @@ impl AgentBrowsers {
         let Some(p) = self.pending.get(&chat.project) else {
             return;
         };
+        if p.pane != chat.pane {
+            return;
+        }
         if chat.tool_scope().as_ref() != Some(&p.scope) {
             self.pending.remove(&chat.project);
             return;
@@ -79,6 +84,9 @@ impl AgentBrowsers {
             let p = self.pending.remove(&chat.project).unwrap();
             chat.tool_result(p.id, result);
         }
+    }
+    pub fn cancel_pane(&mut self, pane: u64) {
+        self.pending.retain(|_, pending| pending.pane != pane);
     }
     pub fn hide_all(&self) {
         for b in self.browsers.values() {
@@ -121,5 +129,36 @@ impl AgentBrowsers {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn another_chat_in_the_same_project_cannot_consume_or_cancel_a_browser_reply() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut browsers = AgentBrowsers::default();
+        browsers.pending.insert(
+            1,
+            Pending {
+                pane: 10,
+                id: json!(7),
+                scope: ("thread".into(), "turn".into()),
+                receiver,
+                started: Instant::now(),
+            },
+        );
+        let mut other = Chat::new(1, ".".into());
+        other.pane = 11;
+        sender.send(Ok(json!({"fixture":true}))).unwrap();
+        browsers.poll(&mut other);
+        assert_eq!(browsers.pending.len(), 1);
+        browsers.cancel_pane(11);
+        assert_eq!(browsers.pending.len(), 1);
+        let pending = browsers.pending.get(&1).unwrap();
+        assert!(pending.receiver.try_recv().unwrap().is_ok());
+        browsers.cancel_pane(10);
+        assert!(browsers.pending.is_empty());
     }
 }

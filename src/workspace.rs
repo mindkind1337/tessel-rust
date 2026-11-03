@@ -64,6 +64,14 @@ pub struct Task {
     pub column: usize,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativeThread {
+    pub project: u64,
+    pub provider: String,
+    pub thread: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     pub id: u64,
@@ -81,6 +89,8 @@ pub struct Workspace {
     pub hosts: Vec<Host>,
     pub tasks: Vec<Task>,
     pub sessions: Vec<SavedSession>,
+    pub next_pane: u64,
+    pub native_threads: std::collections::HashMap<u64, NativeThread>,
     pub chat_threads: std::collections::HashMap<u64, String>,
     pub claude_threads: std::collections::HashMap<u64, String>,
     pub active_project: Option<u64>,
@@ -102,6 +112,8 @@ impl Default for Workspace {
             hosts: vec![],
             tasks: vec![],
             sessions: vec![],
+            next_pane: 1,
+            native_threads: Default::default(),
             chat_threads: std::collections::HashMap::new(),
             claude_threads: Default::default(),
             active_project: None,
@@ -166,7 +178,20 @@ impl Workspace {
             return Err("Invalid saved Claude chat metadata".into());
         }
         let mut session_ids = std::collections::HashSet::new();
-        let mut native_chats = std::collections::HashSet::new();
+        if self.next_pane == u64::MAX || self.native_threads.len() > 1000 {
+            return Err("Native chat metadata limit exceeded.".into());
+        }
+        for (pane, thread) in &self.native_threads {
+            if *pane == u64::MAX || !valid_native_thread(&thread.provider, &thread.thread) {
+                return Err("Invalid saved native chat thread.".into());
+            }
+            if let Some(session) = self.sessions.iter().find(|s| s.id == *pane)
+                && (session.project != Some(thread.project)
+                    || session.launch.native_chat() != Some(thread.provider.as_str()))
+            {
+                return Err("Native chat thread belongs to a different pane.".into());
+            }
+        }
         for session in &self.sessions {
             if !session_ids.insert(session.id)
                 || session.id == u64::MAX
@@ -175,14 +200,12 @@ impl Workspace {
             {
                 return Err("Invalid session metadata.".into());
             }
-            if let Some(provider) = session.launch.native_chat() {
+            if session.launch.native_chat().is_some() {
                 let project = session
                     .project
                     .and_then(|id| self.projects.iter().find(|p| p.id == id));
-                if project.is_none_or(|p| p.path != session.cwd)
-                    || !native_chats.insert((session.project, provider))
-                {
-                    return Err("Invalid or duplicate native chat pane.".into());
+                if project.is_none_or(|p| p.path != session.cwd) {
+                    return Err("Invalid native chat pane.".into());
                 }
             }
             match &session.launch {
@@ -237,6 +260,84 @@ impl Workspace {
         }
         Ok(())
     }
+    pub fn next_pane_id(&self) -> u64 {
+        self.sessions
+            .iter()
+            .map(|s| s.id)
+            .chain(self.native_threads.keys().copied())
+            .fold(self.next_pane.max(1), |next, id| {
+                next.max(id.saturating_add(1))
+            })
+    }
+
+    pub fn migrate_native_threads(&mut self) {
+        for session in &self.sessions {
+            let Some(project) = session.project else {
+                continue;
+            };
+            let Some(provider) = session.launch.native_chat() else {
+                continue;
+            };
+            let legacy = if provider == "Codex" {
+                self.chat_threads.remove(&project)
+            } else {
+                self.claude_threads.remove(&project)
+            };
+            if let Some(thread) = legacy {
+                self.native_threads
+                    .entry(session.id)
+                    .or_insert_with(|| NativeThread {
+                        project,
+                        provider: provider.into(),
+                        thread,
+                    });
+            }
+        }
+        self.next_pane = self.next_pane_id();
+    }
+
+    pub fn native_resume(&self, pane: u64, project: u64, provider: &str) -> Option<&str> {
+        self.native_threads
+            .get(&pane)
+            .filter(|saved| saved.project == project && saved.provider == provider)
+            .map(|saved| saved.thread.as_str())
+    }
+
+    pub fn remember_native_thread(
+        &mut self,
+        pane: u64,
+        project: u64,
+        provider: &str,
+        thread: Option<&str>,
+    ) -> Result<bool> {
+        if !self.sessions.iter().any(|s| {
+            s.id == pane && s.project == Some(project) && s.launch.native_chat() == Some(provider)
+        }) {
+            return Err("Native chat pane no longer exists in this project.".into());
+        }
+        let Some(thread) = thread else {
+            return Ok(self.native_threads.remove(&pane).is_some());
+        };
+        if !valid_native_thread(provider, thread) {
+            return Err("Invalid native thread ID.".into());
+        }
+        if self.native_resume(pane, project, provider) == Some(thread) {
+            return Ok(false);
+        }
+        if !self.native_threads.contains_key(&pane) && self.native_threads.len() >= 1000 {
+            return Err("Native thread history is full.".into());
+        }
+        self.native_threads.insert(
+            pane,
+            NativeThread {
+                project,
+                provider: provider.into(),
+                thread: thread.into(),
+            },
+        );
+        Ok(true)
+    }
+
     pub fn id(&mut self) -> Result<u64> {
         let id = self.next_id;
         self.next_id = id
@@ -268,6 +369,20 @@ impl Workspace {
         self.projects
             .iter()
             .find(|p| Some(p.id) == self.active_project)
+    }
+}
+
+fn valid_native_thread(provider: &str, thread: &str) -> bool {
+    match provider {
+        "Codex" => {
+            !thread.is_empty()
+                && thread.len() <= 100
+                && thread
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }
+        "Claude" => crate::claude::valid_uuid(thread),
+        _ => false,
     }
 }
 
@@ -313,8 +428,10 @@ impl Store {
                 if bytes.len() > 4 * 1024 * 1024 {
                     return Err("Workspace is too large; original retained.".into());
                 }
-                let state: Workspace = serde_json::from_slice(&bytes)
+                let mut state: Workspace = serde_json::from_slice(&bytes)
                     .map_err(|e| format!("Cannot read workspace; original retained: {e}"))?;
+                state.validate()?;
+                state.migrate_native_threads();
                 state.validate()?;
                 state
             }
@@ -471,7 +588,7 @@ mod tests {
         assert_eq!(loaded.terminal_layouts, state.terminal_layouts);
         let mut invalid = loaded.clone();
         invalid.sessions[1].launch = crate::launch::Launch::CodexChat;
-        assert!(invalid.validate().is_err());
+        assert!(invalid.validate().is_ok());
         invalid = loaded.clone();
         invalid.sessions[0].project = None;
         assert!(invalid.validate().is_err());
@@ -526,5 +643,87 @@ mod tests {
         let (_, loaded) = Store::open(dir.path()).unwrap();
         assert_eq!(loaded.sessions.len(), 1);
         assert_eq!(loaded.sessions[0].title, "Sleeping");
+    }
+    #[test]
+    fn multiple_native_panes_have_independent_resume_ids_and_legacy_migration_is_one_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state.active().unwrap().path.clone();
+        for id in [10, 11] {
+            state.sessions.push(SavedSession {
+                id,
+                project: Some(project),
+                title: format!("Codex {id}"),
+                launch: crate::launch::Launch::CodexChat,
+                cwd: cwd.clone(),
+            });
+        }
+        state.sessions.push(SavedSession {
+            id: 12,
+            project: Some(project),
+            title: "Claude".into(),
+            launch: crate::launch::Launch::ClaudeChat,
+            cwd: cwd.clone(),
+        });
+        let claude_id = "550e8400-e29b-41d4-a716-446655440000";
+        state.claude_threads.insert(project, claude_id.into());
+        state.chat_threads.insert(project, "legacy-thread".into());
+        store.save(&state).unwrap();
+        drop(store);
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            state.native_resume(10, project, "Codex"),
+            Some("legacy-thread")
+        );
+        assert_eq!(state.native_resume(11, project, "Codex"), None);
+        assert!(state.chat_threads.is_empty());
+        assert_eq!(state.native_resume(12, project, "Claude"), Some(claude_id));
+        assert_eq!(state.native_resume(12, project, "Codex"), None);
+        assert!(state.claude_threads.is_empty());
+
+        assert!(
+            state
+                .remember_native_thread(11, project, "Codex", Some("second-thread"))
+                .unwrap()
+        );
+        assert!(
+            state
+                .remember_native_thread(11, project + 1, "Codex", Some("wrong-project"))
+                .is_err()
+        );
+        assert!(
+            state
+                .remember_native_thread(10, project, "Claude", Some("wrong-provider"))
+                .is_err()
+        );
+        state.migrate_native_threads();
+        assert_eq!(
+            state.native_resume(10, project, "Codex"),
+            Some("legacy-thread")
+        );
+        assert_eq!(
+            state.native_resume(11, project, "Codex"),
+            Some("second-thread")
+        );
+        state.sessions.clear();
+        assert!(state.next_pane_id() > 11);
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, state) = Store::open(dir.path()).unwrap();
+        assert!(state.next_pane_id() > 11);
+        assert_eq!(
+            state.native_resume(11, project, "Codex"),
+            Some("second-thread")
+        );
+        let mut bad = state.clone();
+        bad.sessions.push(SavedSession {
+            id: 11,
+            project: Some(project),
+            title: "Shell".into(),
+            launch: crate::launch::Launch::Shell,
+            cwd,
+        });
+        assert!(bad.validate().is_err());
     }
 }

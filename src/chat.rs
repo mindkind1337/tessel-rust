@@ -132,6 +132,7 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 pub struct Chat {
+    pub pane: u64,
     pub project: u64,
     pub cwd: PathBuf,
     pub thread_id: Option<String>,
@@ -198,6 +199,7 @@ impl Chat {
 
     pub fn new(project: u64, cwd: PathBuf) -> Self {
         Self {
+            pane: 0,
             project,
             cwd,
             thread_id: None,

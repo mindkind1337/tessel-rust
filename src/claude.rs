@@ -17,6 +17,7 @@ struct Approval {
     input: Value,
 }
 pub struct Chat {
+    pub pane: u64,
     pub project: u64,
     pub saved_session: Option<String>,
     cwd: PathBuf,
@@ -105,6 +106,7 @@ impl Chat {
     }
     pub fn new(project: u64, cwd: PathBuf, saved: Option<String>) -> Self {
         Self {
+            pane: 0,
             project,
             cwd,
             resume: saved.clone().unwrap_or_default(),
