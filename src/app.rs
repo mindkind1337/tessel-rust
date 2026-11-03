@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Session {
+    pane_name: Option<String>,
     id: u64,
     project: Option<u64>,
     title: String,
@@ -24,6 +25,9 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn label(&self) -> &str {
+        self.pane_name.as_deref().unwrap_or(&self.title)
+    }
     fn start(&mut self) {
         if self.launch.native_chat().is_some() || self.terminal.is_some() || self.loading.is_some()
         {
@@ -86,6 +90,7 @@ enum Overlay {
     Share,
     Help,
     Launcher,
+    RenameAgent,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
@@ -98,6 +103,14 @@ enum SettingsSection {
     #[cfg(windows)]
     Account,
 }
+struct RenameAgent {
+    pane: u64,
+    expected: String,
+    draft: String,
+    error: String,
+    focused: bool,
+}
+
 pub struct Tessel {
     #[cfg(windows)]
     window_frame: Option<crate::window_frame::WindowFrame>,
@@ -112,6 +125,7 @@ pub struct Tessel {
     active_document: usize,
     view: View,
     overlay: Option<Overlay>,
+    rename_agent: Option<RenameAgent>,
     help: crate::help_panel::HelpPanel,
     launcher: crate::launcher_panel::LauncherPanel,
     project_panel: crate::project_panel::ProjectPanel,
@@ -129,8 +143,9 @@ pub struct Tessel {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     agents: Vec<(String, bool)>,
-    host_alias: String,
-    host_folder: String,
+    host_panel: crate::ssh_hosts_panel::SshHostsPanel,
+    host_notice: Option<(String, bool)>,
+    host_import: Option<Receiver<crate::ssh_config::Discovery>>,
     tasks_board: crate::tasks_board_panel::TasksBoard,
     tasks_board_project: Option<u64>,
     pending_close: Option<usize>,
@@ -209,6 +224,7 @@ impl Tessel {
             active_document: 0,
             view: View::Work,
             overlay: None,
+            rename_agent: None,
             help: Default::default(),
             launcher: Default::default(),
             project_panel: Default::default(),
@@ -226,8 +242,9 @@ impl Tessel {
             sender,
             receiver,
             agents: vec![],
-            host_alias: String::new(),
-            host_folder: String::new(),
+            host_panel: Default::default(),
+            host_notice: None,
+            host_import: None,
             tasks_board: Default::default(),
             tasks_board_project: None,
             pending_close: None,
@@ -262,6 +279,7 @@ impl Tessel {
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
+                pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,
                 title: saved.title.clone(),
@@ -390,6 +408,7 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        pane_name: None,
                         id,
                         project: app.state.active_project,
                         title: "Terminal rendering fixture".into(),
@@ -411,6 +430,7 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    pane_name: None,
                     id,
                     project: app.state.active_project,
                     title: format!("Terminal {id}"),
@@ -465,11 +485,13 @@ impl Tessel {
         app
     }
     fn save(&mut self) {
+        normalize_session_names(&mut self.sessions);
         self.state.next_pane = self.next_session;
         self.state.sessions = self
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                pane_name: s.pane_name.clone(),
                 id: s.id,
                 project: s.project,
                 title: s.title.clone(),
@@ -547,6 +569,7 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        self.poll_host_import();
         self.sync_git_project();
         let git_owner = self.git_result.pending_owner().cloned();
         self.git_result.poll();
@@ -722,6 +745,7 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            pane_name: None,
             id,
             project: self.state.active_project,
             title,
@@ -993,7 +1017,7 @@ impl Tessel {
             PaletteCommand::new(
                 format!("session:{}", session.id),
                 tr("Sessions"),
-                &session.title,
+                session.label(),
             )
             .with_hint(hint)
         }));
@@ -1117,7 +1141,7 @@ impl Tessel {
         }
         let entry = |session: &Session| SessionEntry {
             id: session.id,
-            title: session.title.clone(),
+            title: session.label().into(),
             kind: match session.launch {
                 Launch::Shell | Launch::Ssh(_) => SessionKind::Shell,
                 Launch::Agent(_) => SessionKind::Agent,
@@ -1556,6 +1580,7 @@ impl Tessel {
                 }
             }
         }
+        let mut rename = None;
         let mut close = None;
         let mut split = None;
         let mut maximize = None;
@@ -1606,10 +1631,11 @@ impl Tessel {
                             ui.set_min_size(ui.available_size());
                             ui.horizontal(|ui| {
                                 let menu = crate::pane_header::MenuState {
-                                    title: &session.title,
+                                    title: session.pane_name.as_deref().unwrap_or(&session.title),
                                     maximized: maximized.is_some(),
                                     multiple_panes: ids.len() > 1,
                                     terminal_output: session.terminal.is_some(),
+                                    can_rename: session.pane_name.is_some(),
                                     language: if self.state.language
                                         == crate::i18n::Language::French
                                     {
@@ -1626,11 +1652,11 @@ impl Tessel {
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         ui.set_min_width(title_width);
-                                        ui.add(egui::Label::new(&session.title).truncate())
+                                        ui.add(egui::Label::new(session.label()).truncate())
                                     },
                                 )
                                 .inner
-                                .on_hover_text(&session.title)
+                                .on_hover_text(session.label())
                                 .context_menu(|ui| {
                                     action = crate::pane_header::show(ui, &menu);
                                 });
@@ -1668,6 +1694,9 @@ impl Tessel {
                                             split = Some((id, SplitDir::Col))
                                         }
                                         PaneMenuAction::ClosePane => close = Some(id),
+                                        PaneMenuAction::Rename if session.pane_name.is_some() => {
+                                            rename = Some((id, session.label().to_owned()))
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -1828,6 +1857,16 @@ impl Tessel {
                 Some(id)
             };
             self.grid_dirty = true;
+        }
+        if let Some((pane, name)) = rename {
+            self.rename_agent = Some(RenameAgent {
+                pane,
+                expected: name.clone(),
+                draft: name,
+                error: String::new(),
+                focused: false,
+            });
+            self.overlay = Some(Overlay::RenameAgent);
         }
         if let Some(id) = close {
             self.close_session(id);
@@ -1995,7 +2034,8 @@ impl Tessel {
         }
     }
     fn can_restore(&self) -> bool {
-        self.store.is_some()
+        self.host_import.is_none()
+            && self.store.is_some()
             && !self.file_action_pending
             && !self
                 .sessions
@@ -2047,10 +2087,14 @@ impl Tessel {
         self.sender = sender;
         self.receiver = receiver;
         self.state = state;
+        self.host_panel.reset();
+        self.host_notice = None;
+        self.rename_agent = None;
         self.next_session = self.state.next_pane_id();
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,
                 title: saved.title.clone(),
@@ -2167,44 +2211,164 @@ impl Tessel {
         }
     }
     fn host_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr("SSH hosts"));
-        ui.label(tr("Uses OpenSSH and your SSH config. Authentication and host verification remain with OpenSSH."));
-        ui.horizontal(|ui| {
-            ui.label(tr("Alias / user@host"));
-            ui.text_edit_singleline(&mut self.host_alias);
-        });
-        ui.horizontal(|ui| {
-            ui.label(tr("Remote folder (optional)"));
-            ui.text_edit_singleline(&mut self.host_folder);
-        });
-        if ui.button(tr("Save host")).clicked() {
-            match workspace::validate_host(&self.host_alias) {
-                Ok(()) => {
-                    self.state.hosts.push(Host {
-                        alias: self.host_alias.clone(),
-                        folder: self.host_folder.clone(),
+        use crate::ssh_hosts_panel::{
+            SshHostRow, SshHostSpec, SshHostsAction, SshHostsCapabilities, SshHostsInput,
+            SshHostsNotice, SshHostsNoticeTone,
+        };
+        let rows: Vec<_> = self
+            .state
+            .hosts
+            .iter()
+            .map(|host| SshHostRow {
+                host: SshHostSpec {
+                    alias: host.alias.clone(),
+                    folder: host.folder.clone(),
+                },
+                // A running SSH process alone does not prove authenticated connectivity.
+                status: None,
+                error: None,
+                busy: false,
+            })
+            .collect();
+        let mut capabilities = SshHostsCapabilities::native_openssh();
+        capabilities.can_import_config = self.store.is_some() && self.host_import.is_none();
+        if self.store.is_none() {
+            capabilities.can_add = false;
+            capabilities.can_edit = false;
+            capabilities.can_remove = false;
+        }
+        let action = self.host_panel.show(
+            ui,
+            SshHostsInput {
+                hosts: &rows,
+                loaded: true,
+                loading: self.host_import.is_some(),
+                load_error: None,
+                notice: self.host_notice.as_ref().map(|(text, bad)| SshHostsNotice {
+                    text,
+                    tone: if *bad {
+                        SshHostsNoticeTone::Bad
+                    } else {
+                        SshHostsNoticeTone::Ok
+                    },
+                }),
+                french: self.state.language == crate::i18n::Language::French,
+                capabilities,
+            },
+        );
+        let to_host = |host: SshHostSpec| Host {
+            alias: host.alias,
+            folder: host.folder,
+        };
+        match action {
+            Some(SshHostsAction::ImportConfig) if self.host_import.is_none() => {
+                if let Some(base) = directories::BaseDirs::new() {
+                    let home = base.home_dir().to_owned();
+                    let (sender, receiver) = mpsc::channel();
+                    self.host_import = Some(receiver);
+                    self.host_notice = None;
+                    thread::spawn(move || {
+                        let _ = sender.send(crate::ssh_config::discover(&home));
                     });
-                    self.host_alias.clear();
-                    self.host_folder.clear();
-                    self.save();
+                } else {
+                    self.host_notice = Some((tr("User home directory unavailable").into(), true));
                 }
-                Err(e) => self.error = e,
             }
-        }
-        let mut connect = None;
-        for host in &self.state.hosts {
-            if ui
-                .button(format!("{} {}", tr("Connect"), host.alias))
-                .clicked()
-            {
-                connect = Some(host.clone());
+            Some(SshHostsAction::Save {
+                original,
+                replacement,
+            }) => {
+                let original = original.map(|(index, host)| (index, to_host(host)));
+                let result = self.change_hosts(|hosts| {
+                    crate::host_actions::save(
+                        hosts,
+                        original.as_ref().map(|(i, h)| (*i, h)),
+                        to_host(replacement),
+                    )
+                });
+                match result {
+                    Ok(_) => {
+                        self.host_panel.cancel_dialogs();
+                        self.host_notice = Some((tr("SSH target saved").into(), false));
+                    }
+                    Err(error) => {
+                        let error = tr(&error).to_owned();
+                        self.host_panel.set_form_error(error.clone());
+                        self.host_notice = Some((error, true));
+                    }
+                }
             }
-        }
-        if let Some(h) = connect {
-            self.new_session(Launch::Ssh(h));
-            self.overlay = None;
+            Some(SshHostsAction::Remove { index, expected }) => {
+                match self.change_hosts(|hosts| {
+                    crate::host_actions::remove(hosts, index, &to_host(expected)).map(|()| true)
+                }) {
+                    Ok(_) => self.host_notice = Some((tr("SSH target removed").into(), false)),
+                    Err(error) => self.host_notice = Some((tr(&error).into(), true)),
+                }
+            }
+            Some(SshHostsAction::Connect { index, host }) => {
+                let host = to_host(host);
+                if self.state.hosts.get(index) == Some(&host) {
+                    self.new_session(Launch::Ssh(host));
+                    self.overlay = None;
+                } else {
+                    self.host_notice =
+                        Some((tr("SSH target changed; reopen its settings.").into(), true));
+                }
+            }
+            _ => {}
         }
     }
+
+    fn poll_host_import(&mut self) {
+        let result = self
+            .host_import
+            .as_ref()
+            .and_then(|receiver| match receiver.try_recv() {
+                Ok(discovery) => Some(Ok(discovery)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("SSH configuration import stopped without a result."))
+                }
+            });
+        let Some(result) = result else {
+            return;
+        };
+        self.host_import = None;
+        match result {
+            Ok(discovery) => {
+                let mut added = 0;
+                let saved = self.change_hosts(|hosts| {
+                    added = crate::host_actions::import_aliases(hosts, &discovery.aliases)?;
+                    Ok(added != 0)
+                });
+                match saved {
+                    Ok(_) => {
+                        let incomplete = discovery.truncated || discovery.skipped_files != 0;
+                        let mut message = format!("{} {added}", tr("SSH targets imported:"));
+                        if incomplete {
+                            message.push(' ');
+                            message.push_str(tr(
+                                "Some SSH configuration files were skipped or exceeded limits.",
+                            ));
+                        }
+                        self.host_notice = Some((message, incomplete));
+                    }
+                    Err(error) => self.host_notice = Some((tr(&error).into(), true)),
+                }
+            }
+            Err(error) => self.host_notice = Some((tr(error).into(), true)),
+        }
+    }
+
+    fn change_hosts(
+        &mut self,
+        change: impl FnOnce(&mut Vec<Host>) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let store = self.store.as_ref().ok_or("Settings store unavailable")?;
+        crate::host_actions::persist(&mut self.state, store, change)
+    }
+
     fn agent_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Agent CLIs"));
         if ui.button(tr("Refresh detection")).clicked() {
@@ -2239,7 +2403,7 @@ impl Tessel {
             .iter()
             .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project);
         let target_id = target.map(|s| s.id);
-        let target_title = target.map(|s| s.title.clone());
+        let target_title = target.map(|s| s.label().to_owned());
         let mut entries = vec![LauncherEntry {
             item: LaunchMenuItem::Shell {
                 id: "default".into(),
@@ -2326,10 +2490,113 @@ impl Tessel {
             _ => false,
         }
     }
+    fn rename_agent_dialog(&mut self, ctx: &egui::Context) {
+        let Some(draft) = &mut self.rename_agent else {
+            self.overlay = None;
+            return;
+        };
+        let mut submit = false;
+        let mut cancel = false;
+        let response = egui::Modal::new(egui::Id::new("rename-agent")).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 48.0).clamp(220.0, 420.0));
+            ui.heading(tr("Rename agent"));
+            let field = ui.add(egui::TextEdit::singleline(&mut draft.draft).char_limit(60).desired_width(ui.available_width()));
+            if !draft.focused { field.request_focus(); draft.focused = true; }
+            if field.changed() { draft.error.clear(); }
+            if !draft.error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &draft.error); }
+            ui.horizontal(|ui| {
+                if ui.button(tr("Cancel")).clicked() { cancel = true; }
+                if ui.button(tr("Save")).clicked() { submit = true; }
+            });
+            let fresh_enter = ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. } if *modifiers == egui::Modifiers::NONE)));
+            if (field.has_focus() || field.lost_focus()) && fresh_enter {
+                ui.input_mut(|input| { input.consume_key(egui::Modifiers::NONE, egui::Key::Enter); });
+                submit = true;
+            }
+        });
+        if cancel || response.should_close() {
+            self.rename_agent = None;
+            self.overlay = None;
+            return;
+        }
+        if submit {
+            let pane = draft.pane;
+            let expected = draft.expected.clone();
+            let name = draft.draft.clone();
+            match self.rename_agent_saved(pane, &expected, &name) {
+                Ok(()) => {
+                    self.rename_agent = None;
+                    self.overlay = None;
+                }
+                Err(error) => {
+                    if let Some(draft) = &mut self.rename_agent {
+                        draft.error = tr(&error).into();
+                    }
+                }
+            }
+        }
+    }
+
+    fn rename_agent_saved(&mut self, pane: u64, expected: &str, name: &str) -> Result<(), String> {
+        if !self
+            .sessions
+            .iter()
+            .any(|s| s.id == pane && s.pane_name.as_deref() == Some(expected))
+        {
+            return Err(tr("Agent changed; reopen its menu.").into());
+        }
+        let mut names: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|s| crate::agent_names::NamedPane {
+                id: s.id,
+                number: s.id,
+                named: s.pane_name.is_some(),
+                name: s.pane_name.clone(),
+            })
+            .collect();
+        crate::agent_names::rename_agent_name(&mut names, pane, name).map_err(|error| {
+            match error {
+                crate::agent_names::RenameError::Invalid => {
+                    tr("Choose a valid agent name (1–60 characters).")
+                }
+                crate::agent_names::RenameError::Taken => {
+                    tr("Another agent already uses this name.")
+                }
+            }
+            .to_owned()
+        })?;
+        let name = names
+            .into_iter()
+            .find(|p| p.id == pane)
+            .and_then(|p| p.name)
+            .ok_or("Agent no longer exists")?;
+        let mut next = self.state.clone();
+        let saved = next
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == pane)
+            .ok_or("Agent no longer exists")?;
+        saved.pane_name = Some(name.clone());
+        self.store
+            .as_ref()
+            .ok_or("Settings store unavailable")?
+            .save(&next)?;
+        self.state.sessions = next.sessions;
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane) {
+            session.pane_name = Some(name);
+        }
+        Ok(())
+    }
+
     fn show_overlay(&mut self, ctx: &egui::Context) {
         let Some(overlay) = self.overlay else {
             return;
         };
+        if overlay == Overlay::RenameAgent {
+            self.rename_agent_dialog(ctx);
+            return;
+        }
         if overlay == Overlay::Launcher {
             let mut open = true;
             let bounds = ctx.content_rect();
@@ -2366,6 +2633,7 @@ impl Tessel {
                     Overlay::Share => "Share",
                     Overlay::Help => "Keyboard shortcuts",
                     Overlay::Launcher => "Open a terminal or agent",
+                    Overlay::RenameAgent => "Rename agent",
                 }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::chrome::icon_button(
@@ -2493,6 +2761,8 @@ impl Tessel {
             .find(|(section, ..)| *section == self.settings_section)
             .map(|(_, id, ..)| *id)
             .unwrap_or("appearance");
+        let host_dialog_open = self.settings_section == SettingsSection::Hosts
+            && (self.host_panel.is_form_open() || self.host_panel.is_confirm_remove_open());
         let mut close = false;
         let response = crate::settings_surface::show(ctx, |ui, nav_width| {
             let height = ui.available_height();
@@ -2510,7 +2780,7 @@ impl Tessel {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.set_width(nav_width - 24.0);
                             ui.set_min_height((height - 32.0).max(0.0));
-                            if self.restore_preview.is_some() {
+                            if self.restore_preview.is_some() || host_dialog_open {
                                 ui.disable();
                             }
                             let lang = if self.state.language == crate::i18n::Language::French {
@@ -2556,7 +2826,8 @@ impl Tessel {
                 );
             });
         });
-        if self.restore_preview.is_none() && (close || response.should_close()) {
+        if self.restore_preview.is_none() && !host_dialog_open && (close || response.should_close())
+        {
             self.overlay = None;
             self.settings_nav.reset();
         }
@@ -3117,7 +3388,7 @@ impl eframe::App for Tessel {
                                 Some(s.id) == self.active_session
                                     && s.project == self.state.active_project
                             })
-                            .map_or("", |s| s.title.as_str())
+                            .map_or("", Session::label)
                     } else {
                         ""
                     };
@@ -3257,6 +3528,7 @@ impl eframe::App for Tessel {
                         maximized: false,
                         multiple_panes: true,
                         terminal_output: true,
+                        can_rename: false,
                         language: if self.state.language == crate::i18n::Language::French {
                             crate::pane_menu_model::PaneMenuLang::Fr
                         } else {
@@ -3275,6 +3547,25 @@ impl eframe::App for Tessel {
         } else {
             33
         }));
+    }
+}
+
+fn normalize_session_names(sessions: &mut [Session]) {
+    let mut panes: Vec<_> = sessions
+        .iter()
+        .map(|session| crate::agent_names::NamedPane {
+            id: session.id,
+            number: session.id,
+            named: matches!(
+                session.launch,
+                Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+            ),
+            name: session.pane_name.clone(),
+        })
+        .collect();
+    crate::agent_names::ensure_agent_names(&mut panes);
+    for (session, pane) in sessions.iter_mut().zip(panes) {
+        session.pane_name = pane.name;
     }
 }
 
@@ -3452,6 +3743,7 @@ mod tests {
     fn native_panes_cannot_start_pty_workers() {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
+                pane_name: None,
                 id: 1,
                 project: Some(1),
                 title: "Native".into(),
@@ -3471,6 +3763,7 @@ mod tests {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            pane_name: None,
             id: 1,
             project: Some(1),
             title: "Fixture".into(),
@@ -3494,5 +3787,34 @@ mod tests {
         assert!(session.loading.is_none());
         assert_eq!(session.error, "explicit startup error");
         assert!(session.terminal.is_none());
+    }
+    #[test]
+    fn names_are_stable_distinct_and_keep_provider_titles_separate() {
+        let make = |id, launch| Session {
+            pane_name: None,
+            id,
+            project: Some(1),
+            title: "Provider".into(),
+            launch,
+            cwd: ".".into(),
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        let mut sessions = vec![
+            make(1, Launch::CodexChat),
+            make(2, Launch::CodexChat),
+            make(3, Launch::Shell),
+        ];
+        normalize_session_names(&mut sessions);
+        assert_eq!(sessions[0].label(), "Ada");
+        assert_eq!(sessions[1].label(), "Bohr");
+        assert_eq!(sessions[2].label(), "Provider");
+        assert_eq!(sessions[0].title, "Provider");
+        sessions.remove(0);
+        sessions.push(make(4, Launch::ClaudeChat));
+        normalize_session_names(&mut sessions);
+        assert_eq!(sessions[0].label(), "Bohr");
+        assert_eq!(sessions[2].label(), "Ada");
     }
 }

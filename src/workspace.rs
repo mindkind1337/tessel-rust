@@ -74,6 +74,8 @@ pub struct NativeThread {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
+    #[serde(default)]
+    pub pane_name: Option<String>,
     pub id: u64,
     pub project: Option<u64>,
     pub title: String,
@@ -271,6 +273,26 @@ impl Workspace {
     }
 
     pub fn migrate_native_threads(&mut self) {
+        let mut names: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|session| crate::agent_names::NamedPane {
+                id: session.id,
+                number: session.id,
+                named: matches!(
+                    session.launch,
+                    crate::launch::Launch::Agent(_)
+                        | crate::launch::Launch::CodexChat
+                        | crate::launch::Launch::ClaudeChat
+                ),
+                name: session.pane_name.clone(),
+            })
+            .collect();
+        crate::agent_names::ensure_agent_names(&mut names);
+        for (session, name) in self.sessions.iter_mut().zip(names) {
+            session.pane_name = name.name;
+        }
+
         for session in &self.sessions {
             let Some(project) = session.project else {
                 continue;
@@ -572,6 +594,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                pane_name: None,
                 id,
                 project: Some(project),
                 title: launch.native_chat().unwrap().into(),
@@ -602,6 +625,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                pane_name: None,
                 id,
                 project: None,
                 title: format!("Sleeping {id}"),
@@ -632,6 +656,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            pane_name: None,
             id: 1,
             project: None,
             title: "Sleeping".into(),
@@ -652,6 +677,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                pane_name: None,
                 id,
                 project: Some(project),
                 title: format!("Codex {id}"),
@@ -660,6 +686,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            pane_name: None,
             id: 12,
             project: Some(project),
             title: "Claude".into(),
@@ -718,6 +745,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            pane_name: None,
             id: 11,
             project: Some(project),
             title: "Shell".into(),
@@ -725,5 +753,53 @@ mod tests {
             cwd,
         });
         assert!(bad.validate().is_err());
+    }
+    #[test]
+    fn agent_names_migrate_once_and_survive_saved_workspace_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        for (id, name, launch) in [
+            (
+                1,
+                Some("My agent"),
+                crate::launch::Launch::Agent("codex".into()),
+            ),
+            (
+                2,
+                Some("my AGENT"),
+                crate::launch::Launch::Agent("claude".into()),
+            ),
+            (3, None, crate::launch::Launch::Agent("gemini".into())),
+            (4, Some("Old shell label"), crate::launch::Launch::Shell),
+        ] {
+            state.sessions.push(SavedSession {
+                id,
+                pane_name: name.map(str::to_owned),
+                project: None,
+                title: format!("Program {id}"),
+                launch,
+                cwd: dir.path().to_owned(),
+            });
+        }
+        store.save(&state).unwrap();
+        drop(store);
+        let (store, mut loaded) = Store::open(dir.path()).unwrap();
+        let names: Vec<_> = loaded
+            .sessions
+            .iter()
+            .map(|s| s.pane_name.as_deref())
+            .collect();
+        assert_eq!(names, [Some("My agent"), Some("Ada"), Some("Bohr"), None]);
+        assert_eq!(loaded.sessions[0].title, "Program 1");
+        loaded.sessions[1].pane_name = Some("Renamed agent".into());
+        store.save(&loaded).unwrap();
+        drop(store);
+        let (_, reopened) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.sessions[1].pane_name.as_deref(),
+            Some("Renamed agent")
+        );
+        assert_eq!(reopened.sessions[2].pane_name.as_deref(), Some("Bohr"));
+        assert_eq!(reopened.sessions[1].title, "Program 2");
     }
 }

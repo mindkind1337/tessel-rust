@@ -1,0 +1,219 @@
+{
+  "source": "src/shared/agentNames.js",
+  "sha256": "73e7b8047f120b8535402882f7bb3cbefd470853a5a94c5d72ed89153e15249e",
+  "names": [
+    "Ada",
+    "Bohr",
+    "Curie",
+    "Darwin",
+    "Euler",
+    "Fermi",
+    "Gauss",
+    "Hopper",
+    "Kepler",
+    "Lovelace",
+    "Noether",
+    "Turing",
+    "Archimedes",
+    "Babbage",
+    "Bell",
+    "Bose",
+    "Boyle",
+    "Brahe",
+    "Carson",
+    "Cavendish",
+    "Chadwick",
+    "Clarke",
+    "Copernicus",
+    "Crick",
+    "Dalton",
+    "Dirac",
+    "Edison",
+    "Einstein",
+    "Euclid",
+    "Faraday",
+    "Feynman",
+    "Fibonacci",
+    "Fleming",
+    "Franklin",
+    "Galileo",
+    "Goodall",
+    "Halley",
+    "Hamilton",
+    "Hardy",
+    "Hawking",
+    "Herschel",
+    "Hilbert",
+    "Hubble",
+    "Hypatia",
+    "Joule",
+    "Katherine",
+    "Lagrange",
+    "Lamarck",
+    "Laplace",
+    "Leibniz",
+    "Lise",
+    "Lorentz",
+    "Maxwell",
+    "Mendel",
+    "Newton",
+    "Nobel",
+    "Ohm",
+    "Pascal",
+    "Pasteur",
+    "Planck",
+    "Poincare",
+    "Ramanujan",
+    "Rosalind",
+    "Rutherford",
+    "Sagan",
+    "Shannon",
+    "Tesla",
+    "Vera",
+    "Volta",
+    "Watt",
+    "Wu"
+  ],
+  "cases": [
+    {
+      "value": "",
+      "valid": false,
+      "key": ""
+    },
+    {
+      "value": "  ",
+      "valid": false,
+      "key": ""
+    },
+    {
+      "value": "Ada",
+      "valid": true,
+      "key": "ada"
+    },
+    {
+      "value": " ADA ",
+      "valid": true,
+      "key": "ada"
+    },
+    {
+      "value": "team",
+      "valid": false,
+      "key": "team"
+    },
+    {
+      "value": "ALL",
+      "valid": false,
+      "key": "all"
+    },
+    {
+      "value": "Tessel",
+      "valid": false,
+      "key": "tessel"
+    },
+    {
+      "value": "#1",
+      "valid": false,
+      "key": "#1"
+    },
+    {
+      "value": "@Ada",
+      "valid": false,
+      "key": "@ada"
+    },
+    {
+      "value": "123",
+      "valid": false,
+      "key": "123"
+    },
+    {
+      "value": "Agent 2",
+      "valid": true,
+      "key": "agent 2"
+    },
+    {
+      "value": "one/two",
+      "valid": false,
+      "key": "one/two"
+    },
+    {
+      "value": "one\\two",
+      "valid": false,
+      "key": "one\\two"
+    },
+    {
+      "value": "<Ada>",
+      "valid": false,
+      "key": "<ada>"
+    },
+    {
+      "value": "bad\nline",
+      "valid": false,
+      "key": "bad\nline"
+    },
+    {
+      "value": "bad‮name",
+      "valid": false,
+      "key": "bad‮name"
+    },
+    {
+      "value": "bad⁦name",
+      "valid": false,
+      "key": "bad⁦name"
+    },
+    {
+      "value": "﻿ Ada ﻿",
+      "valid": true,
+      "key": "ada"
+    },
+    {
+      "value": "Ada",
+      "valid": true,
+      "key": "ada"
+    },
+    {
+      "value": "İ",
+      "valid": true,
+      "key": "i̇"
+    },
+    {
+      "value": "ΟΣ",
+      "valid": true,
+      "key": "ος"
+    },
+    {
+      "value": "ΟΣΑ",
+      "valid": true,
+      "key": "οσα"
+    },
+    {
+      "value": "ẞ",
+      "valid": true,
+      "key": "ß"
+    },
+    {
+      "value": "Élodie",
+      "valid": true,
+      "key": "élodie"
+    },
+    {
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": true,
+      "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": false,
+      "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "value": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+      "valid": true,
+      "key": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"
+    },
+    {
+      "value": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+      "valid": false,
+      "key": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"
+    }
+  ]
+}

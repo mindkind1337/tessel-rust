@@ -64,6 +64,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            pane_name: None,
             id: 4,
             project: None,
             title: "sleeping".into(),
@@ -89,9 +90,24 @@ mod tests {
         let path = dir.path().join("settings.json");
         let mut state = Workspace::default();
         state.add_project(dir.path()).unwrap();
+        state.sessions.push(crate::workspace::SavedSession {
+            pane_name: Some("Custom agent".into()),
+            id: 1,
+            project: state.active_project,
+            title: "codex".into(),
+            launch: crate::launch::Launch::Agent("codex".into()),
+            cwd: dir.path().to_owned(),
+        });
         export(&path, &state).unwrap();
         assert!(export(&path, &Workspace::default()).is_err());
-        assert_eq!(import(&path).unwrap().projects, state.projects);
+        let mut imported = import(&path).unwrap();
+        imported.migrate_native_threads();
+        assert_eq!(imported.projects, state.projects);
+        assert_eq!(
+            imported.sessions[0].pane_name.as_deref(),
+            Some("Custom agent")
+        );
+        assert_eq!(imported.sessions[0].title, "codex");
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         value["workspace"]["sessions"] = serde_json::json!([{"id":1,"project":null,"title":"bad","launch":{"Agent":"arbitrary-command"},"cwd":dir.path()}]);

@@ -39,6 +39,7 @@ pub struct MenuState<'a> {
     pub maximized: bool,
     pub multiple_panes: bool,
     pub terminal_output: bool,
+    pub can_rename: bool,
     pub language: PaneMenuLang,
 }
 
@@ -57,6 +58,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
     .filter(|entry| match entry {
         PaneMenuEntry::Item { action, .. } => match action {
             PaneMenuAction::CopyOutput => state.terminal_output,
+            PaneMenuAction::Rename => state.can_rename,
             PaneMenuAction::ToggleMaximize
             | PaneMenuAction::ArrangeGrid
             | PaneMenuAction::SplitRight
@@ -109,6 +111,7 @@ mod tests {
             maximized: false,
             multiple_panes: false,
             terminal_output: false,
+            can_rename: false,
             language: PaneMenuLang::Fr,
         };
         let actions = |state: &MenuState<'_>| {
@@ -129,6 +132,8 @@ mod tests {
                 PaneMenuAction::ClosePane
             ]
         );
+        state.can_rename = true;
+        assert!(actions(&state).contains(&PaneMenuAction::Rename));
         state.multiple_panes = true;
         state.terminal_output = true;
         let menu = actions(&state);

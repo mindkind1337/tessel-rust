@@ -8,7 +8,10 @@ copyright and permission notices are reproduced in full.
 The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
 `RemoteHostForm.vue`, `remoteHosts.js`, and `remoteHosts.css`, which are ported from Orca
-by Lovecast Inc.
+by Lovecast Inc. The bounded alias discovery in `src/ssh_config.rs` also adapts
+Include/token, key-exclusion and budget behavior from Tessel’s `sshConfig.js`,
+ported from Orca’s `ssh-config-parser.ts`, `ssh-config-include-expander.ts` and
+`ssh-config-path-expansion.ts`.
 
 - Project: https://github.com/stablyai/orca
 - Reference revision: `433986fa3be37911a0f13f7ffd454b831b87a64c` (package version `1.4.214`)
