@@ -2590,21 +2590,78 @@ impl eframe::App for Tessel {
                     self.open_help();
                 }
             });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.small(tr("Rust native · development"));
-                ui.small(env!("TESSEL_BUILD"));
-                if self.store.is_none() {
-                    ui.colored_label(egui::Color32::YELLOW, "Persistence unavailable");
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(24.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::chrome(ctx))
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show(ctx, |ui| {
+                let room = ui.available_rect_before_wrap();
+                ui.painter()
+                    .hline(room.x_range(), room.top(), ui.visuals().window_stroke);
+                if self.store.is_some() && self.error.is_empty() {
+                    let target = if self.view == View::Work {
+                        self.sessions
+                            .iter()
+                            .find(|s| {
+                                Some(s.id) == self.active_session
+                                    && s.project == self.state.active_project
+                            })
+                            .map_or("", |s| s.title.as_str())
+                    } else {
+                        ""
+                    };
+                    let count = self
+                        .sessions
+                        .iter()
+                        .filter(|s| s.project == self.state.active_project)
+                        .count();
+                    let path = self
+                        .state
+                        .active()
+                        .map(|p| p.path.display().to_string())
+                        .unwrap_or_default();
+                    let build = egui::Rect::from_min_max(
+                        egui::pos2((room.right() - 120.0).max(room.left()), room.top()),
+                        room.max,
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(build), |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.small(env!("TESSEL_BUILD"))
+                                .on_hover_text(tr("Rust native · development"));
+                        });
+                    });
+                    let left = egui::Rect::from_min_max(
+                        room.min,
+                        egui::pos2((build.left() - 12.0).max(room.left()), room.bottom()),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
+                        crate::status_strip::show(
+                            ui,
+                            target,
+                            count,
+                            &path,
+                            self.state.language == crate::i18n::Language::French,
+                        );
+                    });
+                    return;
                 }
-                if !self.error.is_empty() {
-                    ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
-                    if ui.small_button(tr("Dismiss")).clicked() {
-                        self.error.clear();
+                ui.horizontal(|ui| {
+                    ui.small(tr("Rust native · development"));
+                    ui.small(env!("TESSEL_BUILD"));
+                    if self.store.is_none() {
+                        ui.colored_label(egui::Color32::YELLOW, "Persistence unavailable");
                     }
-                }
+                    if !self.error.is_empty() {
+                        ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+                        if ui.small_button(tr("Dismiss")).clicked() {
+                            self.error.clear();
+                        }
+                    }
+                });
             });
-        });
         self.sidebar(ctx);
         self.right_panel(ctx);
         #[cfg(windows)]

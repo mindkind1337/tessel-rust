@@ -37,6 +37,8 @@ mod remote_panel;
 mod share;
 mod share_panel;
 pub mod shortcuts;
+pub mod sidebar_model;
+mod status_strip;
 mod terminal;
 mod terminal_layout;
 mod theme;
