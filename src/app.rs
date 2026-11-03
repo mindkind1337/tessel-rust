@@ -508,9 +508,15 @@ impl Tessel {
     }
     fn detect_agents(&mut self) {
         self.agents.start(|| {
+            let search = crate::agent_paths::SearchPath::current()?;
             Ok(crate::agent_catalog::ALL
                 .iter()
-                .map(|preset| (preset.id.to_string(), launch::installed(preset.id)))
+                .map(|preset| {
+                    (
+                        preset.id.to_string(),
+                        launch::installed_on(preset.id, &search),
+                    )
+                })
                 .collect())
         });
     }

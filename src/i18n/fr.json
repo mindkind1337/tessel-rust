@@ -60,6 +60,7 @@
   "Agent detection stopped unexpectedly.": "La détection des agents s’est arrêtée de façon inattendue.",
   "Offer in menus:": "Afficher dans les menus :",
   "Unknown saved agent preference.": "Préférence enregistrée pour un agent inconnu.",
+  "Cannot compose the agent search path.": "Impossible de composer le chemin de recherche des agents.",
   "Refresh detection": "Actualiser la détection",
   "available": "disponible",
   "not on PATH": "absent du PATH",

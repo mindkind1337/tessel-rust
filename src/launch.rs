@@ -21,15 +21,12 @@ impl Launch {
     }
 }
 
-pub fn installed(program: &str) -> bool {
+pub fn installed_on(program: &str, search: &crate::agent_paths::SearchPath) -> bool {
     let Some(preset) = crate::agent_catalog::find(program) else {
         return false;
     };
     let program = preset.executable;
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| {
+    search.directories.iter().any(|dir| {
         if cfg!(windows) {
             ["exe", "cmd", "bat", "ps1"]
                 .iter()
@@ -71,6 +68,10 @@ fn agent_command(preset: &crate::agent_catalog::Preset) -> CommandBuilder {
 }
 
 pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
+    if launch.native_chat().is_some() {
+        return Err("Native chats do not launch a terminal.".into());
+    }
+    let search = crate::agent_paths::SearchPath::current()?;
     let mut command = match launch {
         Launch::CodexChat | Launch::ClaudeChat => {
             return Err("Native chats do not launch a terminal.".into());
@@ -88,7 +89,7 @@ pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
         }
         Launch::Agent(program) => {
             let preset = crate::agent_catalog::find(program).ok_or("Unknown agent.")?;
-            if !installed(program) {
+            if !installed_on(program, &search) {
                 return Err(format!(
                     "{program} is not installed or not on PATH. Install its CLI, then refresh detection."
                 ));
@@ -123,6 +124,7 @@ pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
     };
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
+    command.env("PATH", &search.value);
     Ok(command)
 }
 
@@ -135,6 +137,20 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detection_finds_catalog_executable_in_appended_installer_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(if cfg!(windows) { "cn.cmd" } else { "cn" });
+        std::fs::write(file, "synthetic fixture, never executed").unwrap();
+        let search = crate::agent_paths::SearchPath::with_extras(
+            std::ffi::OsStr::new(""),
+            &[dir.path().into()],
+        )
+        .unwrap();
+        assert!(installed_on("continue", &search));
+        assert!(!installed_on("codex", &search));
+        assert!(!installed_on("cn", &search));
+    }
     #[test]
     fn native_chats_never_launch_shells() {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
