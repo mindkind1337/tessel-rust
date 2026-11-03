@@ -3,12 +3,14 @@
 mod account;
 #[cfg(windows)]
 mod account_panel;
+pub mod agent_arg_options;
 #[cfg(windows)]
 mod agent_browser;
 pub mod agent_catalog;
 mod agent_detection;
 pub mod agent_env;
 pub mod agent_installs;
+pub mod agent_model_catalog;
 pub mod agent_names;
 mod agent_paths;
 pub mod agent_preferences;

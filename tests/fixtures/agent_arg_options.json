@@ -1,0 +1,1883 @@
+{
+  "source": "src/shared/agentSessionOptions.js",
+  "sha256": "e37811fc43ebd0c85b43484217c5cf647837f4486d3604d83623b793a212ebe6",
+  "cases": [
+    {
+      "name": "0/0",
+      "tokens": [],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "0/1",
+      "tokens": [],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "0/2",
+      "tokens": [],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "1/0",
+      "tokens": [
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "1/1",
+      "tokens": [
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "1/2",
+      "tokens": [
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "2/0",
+      "tokens": [
+        "--model=x"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model=x"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model=x"
+        ]
+      }
+    },
+    {
+      "name": "2/1",
+      "tokens": [
+        "--model=x"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model=x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model=x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model=x"
+        ]
+      }
+    },
+    {
+      "name": "2/2",
+      "tokens": [
+        "--model=x"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model=x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model=x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model=x"
+        ]
+      }
+    },
+    {
+      "name": "3/0",
+      "tokens": [
+        "--model-extra",
+        "x"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model-extra",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model-extra",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model-extra",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "3/1",
+      "tokens": [
+        "--model-extra",
+        "x"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model-extra",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model-extra",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model-extra",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "3/2",
+      "tokens": [
+        "--model-extra",
+        "x"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model-extra",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model-extra",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model-extra",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "4/0",
+      "tokens": [
+        "-mx"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-mx"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-mx"
+        ]
+      }
+    },
+    {
+      "name": "4/1",
+      "tokens": [
+        "-mx"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-mx"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-mx"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-mx"
+        ]
+      }
+    },
+    {
+      "name": "4/2",
+      "tokens": [
+        "-mx"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-mx"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-mx"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-mx"
+        ]
+      }
+    },
+    {
+      "name": "5/0",
+      "tokens": [
+        "-m=x"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m=x"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m=x"
+        ]
+      }
+    },
+    {
+      "name": "5/1",
+      "tokens": [
+        "-m=x"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m=x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m=x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m=x"
+        ]
+      }
+    },
+    {
+      "name": "5/2",
+      "tokens": [
+        "-m=x"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m=x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m=x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m=x"
+        ]
+      }
+    },
+    {
+      "name": "6/0",
+      "tokens": [
+        "-m",
+        ""
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          ""
+        ],
+        "hasFlag": true,
+        "removed": [
+          ""
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          ""
+        ]
+      }
+    },
+    {
+      "name": "6/1",
+      "tokens": [
+        "-m",
+        ""
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          ""
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          ""
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          ""
+        ]
+      }
+    },
+    {
+      "name": "6/2",
+      "tokens": [
+        "-m",
+        ""
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          ""
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          ""
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          ""
+        ]
+      }
+    },
+    {
+      "name": "7/0",
+      "tokens": [
+        "-m",
+        "--next"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "--next"
+        ],
+        "hasFlag": true,
+        "removed": [
+          "--next"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "--next"
+        ]
+      }
+    },
+    {
+      "name": "7/1",
+      "tokens": [
+        "-m",
+        "--next"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "--next"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          "--next"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "--next"
+        ]
+      }
+    },
+    {
+      "name": "7/2",
+      "tokens": [
+        "-m",
+        "--next"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "--next"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          "--next"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "--next"
+        ]
+      }
+    },
+    {
+      "name": "8/0",
+      "tokens": [
+        "--",
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "--model",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "8/1",
+      "tokens": [
+        "--",
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "--model",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "8/2",
+      "tokens": [
+        "--",
+        "--model",
+        "x"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "--model",
+          "x"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "--model",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "9/0",
+      "tokens": [
+        "--model",
+        "x",
+        "--",
+        "-m",
+        "y"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": true,
+        "removed": [
+          "--",
+          "-m",
+          "y"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x",
+          "--",
+          "-m",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "9/1",
+      "tokens": [
+        "--model",
+        "x",
+        "--",
+        "-m",
+        "y"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "x",
+          "--",
+          "-m",
+          "y"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x",
+          "--",
+          "-m",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "9/2",
+      "tokens": [
+        "--model",
+        "x",
+        "--",
+        "-m",
+        "y"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "x"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "x",
+          "--",
+          "-m",
+          "y"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "x",
+          "--",
+          "-m",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "10/0",
+      "tokens": [
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "10/1",
+      "tokens": [
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "10/2",
+      "tokens": [
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "11/0",
+      "tokens": [
+        "--config",
+        "model_reasoning_effort=low"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "model_reasoning_effort=low"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config",
+          "model_reasoning_effort=low"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "11/1",
+      "tokens": [
+        "--config",
+        "model_reasoning_effort=low"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "model_reasoning_effort=low"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config",
+          "model_reasoning_effort=low"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "11/2",
+      "tokens": [
+        "--config",
+        "model_reasoning_effort=low"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "model_reasoning_effort=low"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "12/0",
+      "tokens": [
+        "-cmodel_reasoning_effort=xhigh"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-cmodel_reasoning_effort=xhigh"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-cmodel_reasoning_effort=xhigh"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "12/1",
+      "tokens": [
+        "-cmodel_reasoning_effort=xhigh"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-cmodel_reasoning_effort=xhigh"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-cmodel_reasoning_effort=xhigh"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "12/2",
+      "tokens": [
+        "-cmodel_reasoning_effort=xhigh"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-cmodel_reasoning_effort=xhigh"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "13/0",
+      "tokens": [
+        "-c=model_reasoning_effort=max"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c=model_reasoning_effort=max"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c=model_reasoning_effort=max"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "13/1",
+      "tokens": [
+        "-c=model_reasoning_effort=max"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c=model_reasoning_effort=max"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c=model_reasoning_effort=max"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "13/2",
+      "tokens": [
+        "-c=model_reasoning_effort=max"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c=model_reasoning_effort=max"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "14/0",
+      "tokens": [
+        "--config=model_reasoning_effort=ultra"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config=model_reasoning_effort=ultra"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config=model_reasoning_effort=ultra"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "14/1",
+      "tokens": [
+        "--config=model_reasoning_effort=ultra"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config=model_reasoning_effort=ultra"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config=model_reasoning_effort=ultra"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "14/2",
+      "tokens": [
+        "--config=model_reasoning_effort=ultra"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config=model_reasoning_effort=ultra"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "15/0",
+      "tokens": [
+        "--reasoning-effort",
+        "high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort",
+          "high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort",
+          "high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "15/1",
+      "tokens": [
+        "--reasoning-effort",
+        "high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort",
+          "high"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "15/2",
+      "tokens": [
+        "--reasoning-effort",
+        "high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort",
+          "high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort",
+          "high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "16/0",
+      "tokens": [
+        "--reasoning-effort=high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "16/1",
+      "tokens": [
+        "--reasoning-effort=high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort=high"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "16/2",
+      "tokens": [
+        "--reasoning-effort=high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": []
+      }
+    },
+    {
+      "name": "17/0",
+      "tokens": [
+        "--reasoning-effort-extra",
+        "high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--reasoning-effort-extra",
+          "high"
+        ]
+      }
+    },
+    {
+      "name": "17/1",
+      "tokens": [
+        "--reasoning-effort-extra",
+        "high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--reasoning-effort-extra",
+          "high"
+        ]
+      }
+    },
+    {
+      "name": "17/2",
+      "tokens": [
+        "--reasoning-effort-extra",
+        "high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--reasoning-effort-extra",
+          "high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--reasoning-effort-extra",
+          "high"
+        ]
+      }
+    },
+    {
+      "name": "18/0",
+      "tokens": [
+        "-c",
+        "other=x",
+        "-c",
+        "model_reasoning_effort=medium"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "other=x",
+          "-c",
+          "model_reasoning_effort=medium"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c",
+          "other=x",
+          "-c",
+          "model_reasoning_effort=medium"
+        ],
+        "codexEffort": true,
+        "withoutEffort": [
+          "-c",
+          "other=x"
+        ]
+      }
+    },
+    {
+      "name": "18/1",
+      "tokens": [
+        "-c",
+        "other=x",
+        "-c",
+        "model_reasoning_effort=medium"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "other=x",
+          "-c",
+          "model_reasoning_effort=medium"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-c",
+          "other=x",
+          "-c",
+          "model_reasoning_effort=medium"
+        ],
+        "codexEffort": true,
+        "withoutEffort": [
+          "-c",
+          "other=x"
+        ]
+      }
+    },
+    {
+      "name": "18/2",
+      "tokens": [
+        "-c",
+        "other=x",
+        "-c",
+        "model_reasoning_effort=medium"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-c",
+          "other=x",
+          "-c",
+          "model_reasoning_effort=medium"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": true,
+        "withoutEffort": [
+          "-c",
+          "other=x"
+        ]
+      }
+    },
+    {
+      "name": "19/0",
+      "tokens": [
+        "--",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ]
+      }
+    },
+    {
+      "name": "19/1",
+      "tokens": [
+        "--",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ]
+      }
+    },
+    {
+      "name": "19/2",
+      "tokens": [
+        "--",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [],
+        "hasFlag": false,
+        "removed": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--",
+          "-c",
+          "model_reasoning_effort=high"
+        ]
+      }
+    },
+    {
+      "name": "20/0",
+      "tokens": [
+        "--model",
+        "-other",
+        "tail"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "-other",
+          "tail"
+        ],
+        "hasFlag": true,
+        "removed": [
+          "-other",
+          "tail"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "-other",
+          "tail"
+        ]
+      }
+    },
+    {
+      "name": "20/1",
+      "tokens": [
+        "--model",
+        "-other",
+        "tail"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "-other",
+          "tail"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "-other",
+          "tail"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "-other",
+          "tail"
+        ]
+      }
+    },
+    {
+      "name": "20/2",
+      "tokens": [
+        "--model",
+        "-other",
+        "tail"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--model",
+          "-other",
+          "tail"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--model",
+          "-other",
+          "tail"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "--model",
+          "-other",
+          "tail"
+        ]
+      }
+    },
+    {
+      "name": "21/0",
+      "tokens": [
+        "-m",
+        "one",
+        "-m",
+        "two"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ],
+        "hasFlag": true,
+        "removed": [],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ]
+      }
+    },
+    {
+      "name": "21/1",
+      "tokens": [
+        "-m",
+        "one",
+        "-m",
+        "two"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ]
+      }
+    },
+    {
+      "name": "21/2",
+      "tokens": [
+        "-m",
+        "one",
+        "-m",
+        "two"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ],
+        "codexEffort": false,
+        "withoutEffort": [
+          "-m",
+          "one",
+          "-m",
+          "two"
+        ]
+      }
+    },
+    {
+      "name": "22/0",
+      "tokens": [
+        "--config",
+        "",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-m",
+        "--model"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config",
+          "",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": [
+          "--config",
+          ""
+        ]
+      }
+    },
+    {
+      "name": "22/1",
+      "tokens": [
+        "--config",
+        "",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "--reasoning-effort"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": false,
+        "removed": [
+          "--config",
+          "",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "codexEffort": true,
+        "withoutEffort": [
+          "--config",
+          ""
+        ]
+      }
+    },
+    {
+      "name": "22/2",
+      "tokens": [
+        "--config",
+        "",
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "aliases": [
+        "-c",
+        "--config"
+      ],
+      "expected": {
+        "optionTokens": [
+          "--config",
+          "",
+          "-c",
+          "model_reasoning_effort=high"
+        ],
+        "hasFlag": true,
+        "removed": [
+          ""
+        ],
+        "codexEffort": true,
+        "withoutEffort": [
+          "--config",
+          ""
+        ]
+      }
+    }
+  ],
+  "tokenization": [
+    {
+      "input": "",
+      "expected": []
+    },
+    {
+      "input": "plain words",
+      "expected": [
+        "plain",
+        "words"
+      ]
+    },
+    {
+      "input": "\"two words\" --model=one",
+      "expected": [
+        "two words",
+        "--model=one"
+      ]
+    },
+    {
+      "input": "--model 'two words'",
+      "expected": [
+        "--model",
+        "two words"
+      ]
+    },
+    {
+      "input": "'' \"\"",
+      "expected": [
+        "",
+        ""
+      ]
+    },
+    {
+      "input": "a' b'c",
+      "expected": [
+        "a bc"
+      ]
+    },
+    {
+      "input": "'unclosed tail",
+      "expected": [
+        "unclosed tail"
+      ]
+    },
+    {
+      "input": "a\\ b",
+      "expected": [
+        "a\\",
+        "b"
+      ]
+    },
+    {
+      "input": "﻿--model x",
+      "expected": [
+        "--model",
+        "x"
+      ]
+    },
+    {
+      "input": "--model x",
+      "expected": [
+        "--model",
+        "x"
+      ]
+    },
+    {
+      "input": "-- --model y",
+      "expected": [
+        "--",
+        "--model",
+        "y"
+      ]
+    },
+    {
+      "input": "\"x\\\"y\"",
+      "expected": [
+        "x\\y"
+      ]
+    },
+    {
+      "input": "line\r\nnext",
+      "expected": [
+        "line",
+        "next"
+      ]
+    },
+    {
+      "input": "a b",
+      "expected": [
+        "a",
+        "b"
+      ]
+    }
+  ],
+  "values": [
+    {
+      "input": "",
+      "expected": false
+    },
+    {
+      "input": "gpt-5.6-sol",
+      "expected": true
+    },
+    {
+      "input": "--yolo",
+      "expected": false
+    },
+    {
+      "input": "-y",
+      "expected": false
+    },
+    {
+      "input": "provider/model:tag@v[1]=a+b",
+      "expected": true
+    },
+    {
+      "input": "a b",
+      "expected": false
+    },
+    {
+      "input": "a;b",
+      "expected": false
+    },
+    {
+      "input": "a$",
+      "expected": false
+    },
+    {
+      "input": "é",
+      "expected": false
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": true
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": false
+    },
+    {
+      "input": "A\n",
+      "expected": false
+    },
+    {
+      "input": "0",
+      "expected": true
+    },
+    {
+      "input": "a\\b",
+      "expected": false
+    }
+  ]
+}
