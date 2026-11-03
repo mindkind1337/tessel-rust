@@ -5,20 +5,26 @@ mod sidebar_model;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use finder_model::{
-    ALL_HISTORY_AGENTS, AgentCandidate, DROP_RETRIES, DROP_RETRY_WINDOW_MS, FILE_FINDER_LIMIT,
-    FileFinderAction, FileFinderState, HostAgentProbe, LAUNCH_MENU_VIEWPORT_MARGIN,
-    LaunchMenuAction, LaunchMenuItem, LaunchMenuState, LaunchPlacement, LauncherChoice,
-    LauncherItem, LauncherLang, MAX_LISTED_FILES, ProjectLauncherAction, ProjectLauncherState,
-    ProjectOpenSetting, REMOTE_AGENT_IDS, RemoteAgentStatus, RemoteDropCheck, SKIP_DIRS,
-    SSH_DROPPED_EXIT_CODE, SessionFilterOpts, SessionRecord, SessionScope, SessionSort,
-    ShellCandidate, agent_display_name, allow_drop_retry, available_placements,
-    clamp_launch_menu_pos, dir_of, dropped_remote_pane, emptied_workspace_choice, filter_sessions,
-    folder_key, folder_label, fuzzy_filter, fuzzy_score, in_folder, launcher_agents,
-    launcher_shells, name_of, project_open_choice, recent_project_sessions, remembered_value,
-    remote_agent_found, valid_project_open, walk_project_files, where_text,
+    ALL_HISTORY_AGENTS, AgentCandidate, DEFAULT_MAX_ENTRIES_PER_DIR, DEFAULT_MAX_SINGLE_PATH_BYTES,
+    DEFAULT_MAX_TOTAL_PATH_BYTES, DEFAULT_MAX_VISITED_ENTRIES, DEFAULT_MAX_WALK_DEPTH,
+    DEFAULT_MAX_WALKED_DIRS, DEFAULT_WALK_TIMEOUT, DROP_RETRIES, DROP_RETRY_WINDOW_MS,
+    FILE_FINDER_LIMIT, FileFinderAction, FileFinderState, FinderScanCoordinator, HostAgentProbe,
+    LAUNCH_MENU_VIEWPORT_MARGIN, LaunchMenuAction, LaunchMenuItem, LaunchMenuState,
+    LaunchPlacement, LauncherChoice, LauncherItem, LauncherLang, MAX_FINDER_QUERY_CHARS,
+    MAX_LISTED_FILES, ProjectLauncherAction, ProjectLauncherState, ProjectOpenSetting,
+    REMOTE_AGENT_IDS, RemoteAgentStatus, RemoteDropCheck, SKIP_DIRS, SSH_DROPPED_EXIT_CODE,
+    SessionFilterOpts, SessionRecord, SessionScope, SessionSort, ShellCandidate,
+    WIN_FILE_ATTRIBUTE_REPARSE_POINT, WalkLimits, WalkStopReason, agent_display_name,
+    allow_drop_retry, available_placements, clamp_finder_query, clamp_launch_menu_pos, dir_of,
+    dropped_remote_pane, emptied_workspace_choice, filter_sessions, folder_key, folder_label,
+    fuzzy_filter, fuzzy_score, has_reparse_point_attr, in_folder, is_within_canonical_scope,
+    launcher_agents, launcher_shells, name_of, project_open_choice, recent_project_sessions,
+    remembered_value, remote_agent_found, valid_project_open, walk_project_files,
+    walk_project_files_with_limits, where_text,
 };
 use sidebar_model::{
     APP_HISTORY_KEY, AgentDotState, AgentSummaryInput, AppResourceEntry, CardSortBy,
@@ -618,7 +624,17 @@ fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
 
     let mut finder = FileFinderState::new(paths, false, true);
     assert!(!finder.truncated);
+    assert_eq!(finder.files().len(), 3);
+    assert_eq!(finder.results().len(), 3);
+    assert_eq!(finder.recompute_count(), 1);
+    assert_eq!(MAX_FINDER_QUERY_CHARS, 256);
+    assert_eq!(clamp_finder_query(&"x".repeat(400)).chars().count(), 256);
     finder.set_query("app");
+    assert_eq!(finder.query(), "app");
+    assert_eq!(finder.recompute_count(), 2);
+    // Setting identical query does NOT recompute cached results.
+    finder.set_query("app");
+    assert_eq!(finder.recompute_count(), 2);
     assert_eq!(
         finder.handle_key("Enter", false),
         FileFinderAction::OpenSelected("src/app.rs".to_string())
@@ -632,6 +648,23 @@ fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
         FileFinderAction::MoveSelection(1)
     );
     assert_eq!(finder.handle_key("Escape", false), FileFinderAction::Close);
+
+    // Single-worker scan coordinator with cooperative cancellation (no unbounded spawns).
+    let mut scan_coord = FinderScanCoordinator::new();
+    assert!(!scan_coord.is_active());
+    let (scan1, tok1) = scan_coord.request_scan().unwrap();
+    assert!(scan_coord.is_active());
+    assert!(!tok1.load(std::sync::atomic::Ordering::Relaxed));
+    // Rapid second & third requests cancel `tok1` and coalesce into ONE follow-up scan.
+    assert!(scan_coord.request_scan().is_none());
+    assert!(scan_coord.request_scan().is_none());
+    assert!(tok1.load(std::sync::atomic::Ordering::Relaxed));
+    let (was_valid, next_scan) = scan_coord.finish_scan(scan1);
+    assert!(!was_valid);
+    let (scan2, _tok2) = next_scan.unwrap();
+    scan_coord.cancel_active();
+    let (was_valid2, none_after) = scan_coord.finish_scan(scan2);
+    assert!(!was_valid2 && none_after.is_none());
 
     // Pure-Rust bounded directory walk in an isolated temp folder (zero subprocesses).
     let nanos = SystemTime::now()
@@ -648,8 +681,12 @@ fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
     fs::write(root.join("target").join("debug").join("ignored.bin"), "x").unwrap();
     fs::write(root.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
 
-    let full = walk_project_files(&root, 10).unwrap();
+    let full = walk_project_files(&root, 99_999).unwrap();
     assert!(!full.truncated);
+    assert_eq!(full.stop_reason, None);
+    assert!(full.total_path_bytes > 0);
+    finder.set_files(full.clone());
+    assert_eq!(finder.files().len(), 3);
     assert_eq!(
         full.files,
         vec![
@@ -661,8 +698,147 @@ fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
 
     let capped = walk_project_files(&root, 2).unwrap();
     assert!(capped.truncated);
+    assert_eq!(capped.stop_reason, Some(WalkStopReason::MaxFiles));
     assert_eq!(capped.files.len(), 2);
 
+    // Verify default budgets & Windows junction/reparse + canonical scope helpers.
+    assert_eq!(DEFAULT_MAX_VISITED_ENTRIES, 100_000);
+    assert_eq!(DEFAULT_MAX_WALKED_DIRS, 10_000);
+    assert_eq!(DEFAULT_MAX_ENTRIES_PER_DIR, 25_000);
+    assert_eq!(DEFAULT_MAX_WALK_DEPTH, 32);
+    assert_eq!(DEFAULT_MAX_TOTAL_PATH_BYTES, 8 * 1024 * 1024);
+    assert_eq!(DEFAULT_MAX_SINGLE_PATH_BYTES, 1_024);
+    assert_eq!(DEFAULT_WALK_TIMEOUT, Duration::from_secs(5));
+    assert_eq!(WIN_FILE_ATTRIBUTE_REPARSE_POINT, 0x0400);
+    assert!(has_reparse_point_attr(0x0410)); // FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+    assert!(!has_reparse_point_attr(0x0010));
+
+    let outside = std::env::temp_dir().join(format!("tessel_rust_outside_test_{nanos}"));
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), "top-secret\n").unwrap();
+    let canon_root = fs::canonicalize(&root).unwrap();
+    let canon_outside = fs::canonicalize(&outside).unwrap();
+    assert!(is_within_canonical_scope(
+        &canon_root,
+        &canon_root.join("src")
+    ));
+    assert!(!is_within_canonical_scope(&canon_root, &canon_outside));
+
+    #[cfg(windows)]
+    {
+        // If directory symlink privilege is available (Developer Mode), verify real FS escape is skipped.
+        let link_path = root.join("linked_outside");
+        if std::os::windows::fs::symlink_dir(&outside, &link_path).is_ok() {
+            let walked = walk_project_files(&root, 50).unwrap();
+            assert!(!walked.files.iter().any(|f| f.contains("secret.txt")));
+            let _ = fs::remove_dir(&link_path);
+        }
+    }
+
+    // Empty-directory flood budget (`max_dirs`), depth budget, entry budgets, timeout & cancellation.
+    for idx in 0..8 {
+        fs::create_dir_all(root.join(format!("empty_tree/d{idx}/nested"))).unwrap();
+    }
+    let by_dirs = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_dirs: 3,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_dirs.truncated);
+    assert_eq!(by_dirs.stop_reason, Some(WalkStopReason::MaxDirs));
+
+    let by_depth = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_depth: 0,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_depth.truncated);
+    assert_eq!(by_depth.stop_reason, Some(WalkStopReason::MaxDepth));
+
+    let by_visited = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_visited_entries: 2,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_visited.truncated);
+    assert_eq!(
+        by_visited.stop_reason,
+        Some(WalkStopReason::MaxVisitedEntries)
+    );
+
+    let by_per_dir = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_dir_entries: 1,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_per_dir.truncated);
+    assert_eq!(by_per_dir.stop_reason, Some(WalkStopReason::MaxDirEntries));
+
+    let by_timeout = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            timeout: Duration::ZERO,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_timeout.truncated);
+    assert_eq!(by_timeout.stop_reason, Some(WalkStopReason::Timeout));
+
+    let cancel = AtomicBool::new(true);
+    let by_cancel =
+        walk_project_files_with_limits(&root, &WalkLimits::default(), Some(&cancel)).unwrap();
+    assert!(by_cancel.truncated);
+    assert_eq!(by_cancel.stop_reason, Some(WalkStopReason::Cancelled));
+
+    let by_total_bytes = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_total_path_bytes: 12,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_total_bytes.truncated);
+    assert_eq!(
+        by_total_bytes.stop_reason,
+        Some(WalkStopReason::MaxTotalPathBytes)
+    );
+
+    let by_single_bytes = walk_project_files_with_limits(
+        &root,
+        &WalkLimits {
+            max_single_path_bytes: 5,
+            ..WalkLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(by_single_bytes.truncated);
+    assert_eq!(
+        by_single_bytes.stop_reason,
+        Some(WalkStopReason::MaxSinglePathBytes)
+    );
+
+    let _ = fs::remove_dir_all(&outside);
     let _ = fs::remove_dir_all(&root);
     assert!(walk_project_files(&root, 10).is_err());
 }
