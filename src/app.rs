@@ -73,6 +73,7 @@ use crate::workspace::SideTab as RightTab;
 enum Overlay {
     Settings,
     Share,
+    Help,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
@@ -97,6 +98,7 @@ pub struct Tessel {
     active_document: usize,
     view: View,
     overlay: Option<Overlay>,
+    help: crate::help_panel::HelpPanel,
     settings_section: SettingsSection,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
@@ -173,6 +175,7 @@ impl Tessel {
             active_document: 0,
             view: View::Work,
             overlay: None,
+            help: Default::default(),
             settings_section: SettingsSection::Appearance,
             command_palette: Default::default(),
             command_palette_focused: false,
@@ -289,6 +292,9 @@ impl Tessel {
             }
             if std::env::args().any(|a| a == "--settings-fixture") {
                 app.overlay = Some(Overlay::Settings);
+            }
+            if std::env::args().any(|a| a == "--help-fixture") {
+                app.open_help();
             }
         }
         app.detect_agents();
@@ -822,6 +828,7 @@ impl Tessel {
             ("changes", "Changes"),
             ("tasks", "Tasks"),
             ("settings", "Settings"),
+            ("help", "Keyboard shortcuts"),
             ("remote", "Remote files"),
             ("share", "Share"),
             #[cfg(windows)]
@@ -891,6 +898,7 @@ impl Tessel {
                     };
                 }
                 "settings" => self.overlay = Some(Overlay::Settings),
+                "help" => self.open_help(),
                 "remote" => self.view = View::Remote,
                 "share" => self.overlay = Some(Overlay::Share),
                 #[cfg(windows)]
@@ -1542,22 +1550,9 @@ impl Tessel {
             .to_string_lossy()
             .to_lowercase();
         let readable = matches!(extension.as_str(), "html" | "htm" | "md" | "markdown");
-        ui.horizontal(|ui| {
-            if !d.media
-                && (ui.button(tr("Save (Ctrl+S)")).clicked()
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
-            {
-                d.error = d.save().err().unwrap_or_default();
-            }
-            if readable {
-                ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
-                ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
-            }
-            if ui.button(tr("Close")).clicked() {
-                close = Some(self.active_document);
-            }
-            ui.small(d.path.display().to_string());
-        });
+        if document_toolbar(ui, d, readable) {
+            close = Some(self.active_document);
+        }
         if !d.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
         }
@@ -1944,6 +1939,10 @@ impl Tessel {
             ));
         }
     }
+    fn open_help(&mut self) {
+        self.help.reset();
+        self.overlay = Some(Overlay::Help);
+    }
     fn show_overlay(&mut self, ctx: &egui::Context) {
         let Some(overlay) = self.overlay else {
             return;
@@ -1952,10 +1951,10 @@ impl Tessel {
         let response = egui::Modal::new(egui::Id::new("workspace-overlay")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 50.0).clamp(260.0, 880.0));
             ui.horizontal(|ui| {
-                ui.heading(tr(if overlay == Overlay::Settings {
-                    "Settings"
-                } else {
-                    "Share"
+                ui.heading(tr(match overlay {
+                    Overlay::Settings => "Settings",
+                    Overlay::Share => "Share",
+                    Overlay::Help => "Keyboard shortcuts",
                 }));
                 if ui.button("×").on_hover_text(tr("Close")).clicked() {
                     close = true;
@@ -1963,7 +1962,28 @@ impl Tessel {
             });
             ui.separator();
             let height = (ctx.content_rect().height() * 0.86 - 65.0).clamp(150.0, 615.0);
-            if overlay == Overlay::Settings {
+            if overlay == Overlay::Help {
+                close |= self.help.show(
+                    ui,
+                    self.state.language == crate::i18n::Language::French,
+                    &[
+                        "Ctrl+Shift+T",
+                        "Ctrl+Shift+P",
+                        "Ctrl+Shift+J",
+                        "Ctrl+Shift+E",
+                        "Ctrl+Shift+O",
+                        "Alt+Arrows",
+                        "Esc",
+                        "Ctrl+S",
+                        "Ctrl+W",
+                        "Ctrl+Shift+K",
+                        "Ctrl+Shift+X",
+                        "Ctrl+Shift+G",
+                        "Ctrl+,",
+                        "F1",
+                    ],
+                );
+            } else if overlay == Overlay::Settings {
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(150.0);
@@ -2210,6 +2230,17 @@ impl eframe::App for Tessel {
         let keyboard_free = !ctx.wants_keyboard_input() || terminal_focused;
         if !confirmation_open
             && !self.command_palette.open
+            && matches!(self.overlay, None | Some(Overlay::Help))
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
+        {
+            if self.overlay == Some(Overlay::Help) {
+                self.overlay = None;
+            } else {
+                self.open_help();
+            }
+        }
+        if !confirmation_open
+            && !self.command_palette.open
             && keyboard_free
             && matches!(self.overlay, None | Some(Overlay::Settings))
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma))
@@ -2364,6 +2395,13 @@ impl eframe::App for Tessel {
                     if ui.button("⚙").on_hover_text(tr("Settings")).clicked() {
                         self.overlay = Some(Overlay::Settings);
                     }
+                    if ui
+                        .button("?")
+                        .on_hover_text(tr("Keyboard shortcuts"))
+                        .clicked()
+                    {
+                        self.open_help();
+                    }
                 });
             });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
@@ -2486,6 +2524,30 @@ impl eframe::App for Tessel {
     }
 }
 
+fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool {
+    ui.horizontal(|ui| {
+        if !d.media {
+            let save_clicked = ui.button(tr("Save (Ctrl+S)")).clicked();
+            if ui.is_enabled()
+                && (save_clicked
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
+            {
+                d.error = d.save().err().unwrap_or_default();
+            }
+        }
+        if readable {
+            ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
+            ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
+        }
+        let close = ui.button(tr("Close")).clicked()
+            || (ui.is_enabled()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::W)));
+        ui.small(d.path.display().to_string());
+        close
+    })
+    .inner
+}
+
 fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
     let next = if removed < active {
         active.saturating_sub(1)
@@ -2498,6 +2560,43 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_shortcuts_cannot_save_or_close_behind_a_modal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut document = Document::open(dir.path(), &path).unwrap();
+        document.text = "edited".into();
+        let ctx = egui::Context::default();
+        let mut frame = |key, enabled| {
+            let mut close = false;
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        close = document_toolbar(ui, &mut document, false);
+                    });
+                });
+            });
+            close
+        };
+        assert!(!frame(egui::Key::S, false));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        assert!(!frame(egui::Key::W, false));
+        assert!(frame(egui::Key::W, true));
+        assert!(!frame(egui::Key::S, true));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
+    }
 
     #[test]
     fn closing_tabs_preserves_the_selected_document_or_its_nearest_neighbor() {

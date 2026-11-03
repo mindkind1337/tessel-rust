@@ -25,7 +25,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |
 | Connectors/account/sync | Match existing service contracts; token isolation and consent | Native account PKCE, callback, DPAPI and HTTP fixture tests pass; backend activation, real sign-in, connectors and sync pending |
 | Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending |
-| Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; external/technical diagnostics and screen-reader acceptance pending |
+| Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; searchable native shortcut help visually checked, modal Escape/focus and document shortcut isolation tests pass; external/technical diagnostics and screen-reader acceptance pending |
 
 The Rust application can invoke external shells and agent CLIs. An embedded browser requires an external browser engine. Those are dependencies, not a JavaScript implementation of Tessel. Existing service credentials and production endpoints are not exercised automatically.
 
