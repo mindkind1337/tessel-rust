@@ -35,6 +35,7 @@ mod preview;
 pub mod project_panel;
 mod remote;
 mod remote_panel;
+mod settings_surface;
 mod share;
 mod share_panel;
 pub mod shortcuts;

@@ -242,5 +242,10 @@
   "Split right": "Diviser à droite",
   "Split down": "Diviser en bas",
   "Maximize / restore pane": "Agrandir / restaurer le panneau",
-  "Arrange panes automatically": "Disposer les panneaux automatiquement"
+  "Arrange panes automatically": "Disposer les panneaux automatiquement",
+  "Back to app": "Retour à l’application",
+  "Search settings": "Rechercher dans les paramètres",
+  "No matching settings": "Aucun paramètre correspondant",
+  "Workspace": "Espace de travail",
+  "AI": "IA"
 }

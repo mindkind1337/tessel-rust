@@ -103,6 +103,7 @@ pub struct Tessel {
     launcher: crate::launcher_panel::LauncherPanel,
     project_panel: crate::project_panel::ProjectPanel,
     settings_section: SettingsSection,
+    settings_query: String,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     toolbar_menu_open: bool,
@@ -183,6 +184,7 @@ impl Tessel {
             launcher: Default::default(),
             project_panel: Default::default(),
             settings_section: SettingsSection::Appearance,
+            settings_query: String::new(),
             command_palette: Default::default(),
             command_palette_focused: false,
             toolbar_menu_open: false,
@@ -2180,6 +2182,10 @@ impl Tessel {
             }
             return;
         }
+        if overlay == Overlay::Settings {
+            self.show_settings(ctx);
+            return;
+        }
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("workspace-overlay")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 50.0).clamp(260.0, 880.0));
@@ -2231,46 +2237,6 @@ impl Tessel {
                         "F1",
                     ],
                 );
-            } else if overlay == Overlay::Settings {
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(150.0);
-                        for (section, title) in [
-                            (SettingsSection::Agents, "Agent CLIs"),
-                            (SettingsSection::Appearance, "Appearance"),
-                            (SettingsSection::Hosts, "SSH hosts"),
-                            #[cfg(windows)]
-                            (SettingsSection::Passwords, "Passwords"),
-                            #[cfg(windows)]
-                            (SettingsSection::Account, "Account"),
-                            (SettingsSection::Backup, "Settings backup"),
-                        ] {
-                            ui.selectable_value(&mut self.settings_section, section, tr(title));
-                        }
-                    });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("settings-content")
-                        .max_height(height)
-                        .show(ui, |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                                ui.set_max_width(ui.available_width());
-                                ui.set_min_width(ui.available_width().min(320.0));
-                                match self.settings_section {
-                                    SettingsSection::Appearance => self.appearance_settings(ui),
-                                    SettingsSection::Hosts => self.host_settings(ui),
-                                    SettingsSection::Agents => self.agent_settings(ui),
-                                    SettingsSection::Backup => self.backup_controls(ui),
-                                    #[cfg(windows)]
-                                    SettingsSection::Passwords => {
-                                        self.vault.show(ui, &mut self.browser)
-                                    }
-                                    #[cfg(windows)]
-                                    SettingsSection::Account => self.account.show(ui),
-                                }
-                            });
-                        });
-                });
             } else {
                 egui::ScrollArea::vertical()
                     .id_salt("sharing-content")
@@ -2283,6 +2249,150 @@ impl Tessel {
         });
         if self.restore_preview.is_none() && (close || response.should_close()) {
             self.overlay = None;
+        }
+    }
+    fn show_settings(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let response = crate::settings_surface::show(ctx, |ui, nav_width| {
+            let height = ui.available_height();
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal_top(|ui| {
+                egui::Frame::NONE
+                    .fill(crate::theme::chrome(ctx))
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 14,
+                        bottom: 18,
+                    })
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            if self.restore_preview.is_some() {
+                                ui.disable();
+                            }
+                            ui.set_width(nav_width - 24.0);
+                            ui.set_min_height((height - 32.0).max(0.0));
+                            egui::ScrollArea::vertical()
+                                .id_salt("settings-navigation")
+                                .show(ui, |ui| {
+                                    if ui.button(tr("Back to app")).clicked() {
+                                        close = true;
+                                    }
+                                    ui.add_space(12.0);
+                                    let search = ui.add(
+                                        egui::TextEdit::singleline(&mut self.settings_query)
+                                            .hint_text(tr("Search settings"))
+                                            .char_limit(256)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                    let (focus_search, close_page) =
+                                        crate::settings_surface::shortcuts(
+                                            ui,
+                                            &mut self.settings_query,
+                                        );
+                                    if focus_search {
+                                        search.request_focus();
+                                    }
+                                    close |= close_page;
+                                    ui.add_space(12.0);
+                                    let query = self.settings_query.to_lowercase();
+                                    let mut any = false;
+                                    let mut last_group = "";
+                                    for (section, title, group, keywords) in [
+                                        (
+                                            SettingsSection::Agents,
+                                            "Agent CLIs",
+                                            "AI",
+                                            "agent codex claude",
+                                        ),
+                                        (
+                                            SettingsSection::Appearance,
+                                            "Appearance",
+                                            "Workspace",
+                                            "theme language langue police font",
+                                        ),
+                                        #[cfg(windows)]
+                                        (
+                                            SettingsSection::Passwords,
+                                            "Passwords",
+                                            "Workspace",
+                                            "vault coffre csv import",
+                                        ),
+                                        #[cfg(windows)]
+                                        (
+                                            SettingsSection::Account,
+                                            "Account",
+                                            "Workspace",
+                                            "login connexion tessel",
+                                        ),
+                                        (
+                                            SettingsSection::Hosts,
+                                            "SSH hosts",
+                                            "Workflows",
+                                            "ssh remote distant server serveur",
+                                        ),
+                                        (
+                                            SettingsSection::Backup,
+                                            "Settings backup",
+                                            "Workflows",
+                                            "export import sauvegarde restore restaurer",
+                                        ),
+                                    ] {
+                                        let searchable =
+                                            format!("{} {} {}", title, tr(title), keywords)
+                                                .to_lowercase();
+                                        if !query
+                                            .split_whitespace()
+                                            .all(|word| searchable.contains(word))
+                                        {
+                                            continue;
+                                        }
+                                        any = true;
+                                        if group != last_group {
+                                            ui.add_space(10.0);
+                                            ui.weak(tr(group));
+                                            last_group = group;
+                                        }
+                                        let selected = section == self.settings_section;
+                                        if ui
+                                            .add_sized(
+                                                [ui.available_width(), 28.0],
+                                                egui::Button::selectable(selected, tr(title))
+                                                    .truncate(),
+                                            )
+                                            .on_hover_text(tr(title))
+                                            .clicked()
+                                        {
+                                            self.settings_section = section;
+                                        }
+                                    }
+                                    if !any {
+                                        ui.weak(tr("No matching settings"));
+                                    }
+                                });
+                        });
+                    });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        crate::settings_surface::body(ui, |ui| match self.settings_section {
+                            SettingsSection::Appearance => self.appearance_settings(ui),
+                            SettingsSection::Hosts => self.host_settings(ui),
+                            SettingsSection::Agents => self.agent_settings(ui),
+                            SettingsSection::Backup => self.backup_controls(ui),
+                            #[cfg(windows)]
+                            SettingsSection::Passwords => self.vault.show(ui, &mut self.browser),
+                            #[cfg(windows)]
+                            SettingsSection::Account => self.account.show(ui),
+                        })
+                    },
+                );
+            });
+        });
+        if self.restore_preview.is_none() && (close || response.should_close()) {
+            self.overlay = None;
+            self.settings_query.clear();
         }
     }
     fn confirmations(&mut self, ctx: &egui::Context) {
