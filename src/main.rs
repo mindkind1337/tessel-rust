@@ -54,6 +54,7 @@ mod ssh_config;
 pub mod ssh_hosts_panel;
 mod status_strip;
 mod system_fonts;
+mod system_identity;
 mod task_actions;
 pub mod tasks_board_panel;
 mod terminal;

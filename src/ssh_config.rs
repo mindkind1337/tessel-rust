@@ -17,6 +17,7 @@ pub struct Discovery {
 
 struct Scan<'a> {
     home: &'a Path,
+    identity: crate::system_identity::Identity,
     root: PathBuf,
     result: Discovery,
     cache: HashMap<PathBuf, Option<String>>,
@@ -32,8 +33,13 @@ struct Scan<'a> {
 }
 
 pub fn discover(home: &Path) -> Discovery {
+    discover_with_identity(home, crate::system_identity::Identity::detect())
+}
+
+fn discover_with_identity(home: &Path, identity: crate::system_identity::Identity) -> Discovery {
     let mut scan = Scan {
         home,
+        identity,
         root: home.join(".ssh"),
         result: Default::default(),
         cache: Default::default(),
@@ -270,20 +276,18 @@ impl Scan<'_> {
             |token| match token {
                 '%' => Some("%".into()),
                 'd' => self.home.to_str().map(str::to_owned),
-                'u' => std::env::var("USERNAME")
-                    .or_else(|_| std::env::var("USER"))
-                    .ok(),
-                'l' | 'L' => {
-                    let hostname = std::env::var("COMPUTERNAME")
-                        .or_else(|_| std::env::var("HOSTNAME"))
-                        .ok()?;
-                    Some(if token == 'L' {
-                        hostname.split('.').next()?.into()
-                    } else {
-                        hostname
-                    })
-                }
-                'h' | 'n' | 'p' | 'r' | 'j' | 'k' | 'C' | 'i' => None,
+                'u' => Some(self.identity.username.clone()),
+                'l' => Some(self.identity.hostname.clone()),
+                'L' => Some(
+                    self.identity
+                        .hostname
+                        .split('.')
+                        .next()
+                        .unwrap_or_default()
+                        .into(),
+                ),
+                'i' => self.identity.uid.clone(),
+                'h' | 'n' | 'p' | 'r' | 'j' | 'k' | 'C' => None,
                 other => Some(format!("%{other}")),
             },
         );
@@ -652,5 +656,28 @@ mod tests {
             expand_include("literal${}and${unfinished", |_| None, |_| None).unwrap(),
             "literal${}and${unfinished"
         );
+    }
+    #[test]
+    fn system_identity_tokens_use_the_discovery_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join(".ssh");
+        fs::create_dir_all(&ssh).unwrap();
+        fs::write(ssh.join("config"), "Include %u-%l-%L-%i.conf\n").unwrap();
+        fs::write(
+            ssh.join("fixture-machine.example-machine-42.conf"),
+            "Host from_identity\n",
+        )
+        .unwrap();
+        let identity = crate::system_identity::Identity {
+            username: "fixture".into(),
+            hostname: "machine.example".into(),
+            uid: Some("42".into()),
+        };
+        let result = discover_with_identity(dir.path(), identity);
+        assert_eq!(result.aliases, ["from_identity"]);
+        assert!(!result.truncated);
+        let unavailable = discover_with_identity(dir.path(), Default::default());
+        assert!(unavailable.aliases.is_empty());
+        assert_eq!(unavailable.skipped_files, 1);
     }
 }

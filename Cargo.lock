@@ -5214,6 +5214,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hayro",
  "image",
+ "libc",
  "portable-pty",
  "pulldown-cmark",
  "quick-xml 0.42.0",
