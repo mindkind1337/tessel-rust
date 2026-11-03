@@ -6,7 +6,7 @@ pub const MAX_TEXT: usize = 16 * 1024;
 
 // ECMAScript WhiteSpace + LineTerminator, deliberately not Rust's broader
 // Unicode White_Space (which includes U+0085 but excludes U+FEFF).
-fn js_space(c: char) -> bool {
+pub(crate) fn js_space(c: char) -> bool {
     matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
         '\u{205f}' | '\u{3000}' | '\u{feff}')
