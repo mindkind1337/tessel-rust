@@ -123,6 +123,47 @@ fn agent_command(preset: &crate::agent_catalog::Preset) -> CommandBuilder {
 }
 
 pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
+    command_with_preferences(launch, cwd, None)
+}
+
+fn configured_agent_command(
+    preset: &crate::agent_catalog::Preset,
+    prefs: &crate::agent_preferences::Preferences,
+) -> Result<CommandBuilder> {
+    let own = crate::agent_env::trim(&prefs.command);
+    let args = crate::agent_env::trim(&prefs.args);
+    if own.contains('\0') || args.contains('\0') {
+        return Err("Agent command contains an invalid character.".into());
+    }
+    if own.is_empty() && args.is_empty() {
+        return Ok(agent_command(preset));
+    }
+    let command = if own.is_empty() { preset.command } else { own };
+    let text = if args.is_empty() {
+        command.to_owned()
+    } else {
+        format!("{command} {args}")
+    };
+    // These are locally authored shell command/argument fields, as in Vue.
+    // Imported settings cannot supply executable overrides (backup::import).
+    let mut c = CommandBuilder::new(if cfg!(windows) {
+        "powershell.exe"
+    } else {
+        "/bin/sh"
+    });
+    if cfg!(windows) {
+        c.args(["-NoLogo", "-NoProfile", "-Command", &text]);
+    } else {
+        c.args(["-c", &text]);
+    }
+    Ok(c)
+}
+
+pub fn command_with_preferences(
+    launch: &Launch,
+    cwd: &Path,
+    prefs: Option<&crate::agent_preferences::Preferences>,
+) -> Result<CommandBuilder> {
     if launch.native_chat().is_some() {
         return Err("Native chats do not launch a terminal.".into());
     }
@@ -150,12 +191,17 @@ pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
                 .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
             #[cfg(not(windows))]
             let available = installed_on(program, &search);
-            if !available {
+            let custom_command =
+                prefs.is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
+            if !available && !custom_command {
                 return Err(format!(
                     "{program} is not installed or not on PATH. Install its CLI, then refresh detection."
                 ));
             }
-            agent_command(preset)
+            match prefs {
+                Some(prefs) => configured_agent_command(preset, prefs)?,
+                None => agent_command(preset),
+            }
         }
         Launch::Ssh(host) => {
             validate_host(&host.alias)?;
@@ -186,6 +232,20 @@ pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("PATH", &search.value);
+    if matches!(launch, Launch::Agent(_))
+        && let Some(prefs) = prefs
+    {
+        // Source ignores the entire invalid block; the settings editor shows
+        // its diagnostic. Never pass a partially parsed environment.
+        if let Ok(env) = crate::agent_env::parse(&prefs.env) {
+            if env.values().any(|value| value.contains('\0')) {
+                return Err("Agent environment contains an invalid character.".into());
+            }
+            for (name, value) in env {
+                command.env(name, value);
+            }
+        }
+    }
     Ok(command)
 }
 
@@ -198,6 +258,28 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overrides_are_agent_only_and_invalid_environment_is_all_or_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = crate::agent_preferences::Preferences {
+            command: "echo synthetic".into(),
+            env: "RUST_ONLY_FIXTURE=synthetic\nTESSEL_FORBIDDEN=synthetic".into(),
+            ..Default::default()
+        };
+        let configured =
+            command_with_preferences(&Launch::Agent("codex".into()), dir.path(), Some(&prefs))
+                .unwrap();
+        assert!(configured.get_env("RUST_ONLY_FIXTURE").is_none());
+        prefs.env = "RUST_ONLY_FIXTURE=synthetic".into();
+        let shell = command_with_preferences(&Launch::Shell, dir.path(), Some(&prefs)).unwrap();
+        assert!(shell.get_env("RUST_ONLY_FIXTURE").is_none());
+        prefs.command = "bad\0command".into();
+        assert!(
+            command_with_preferences(&Launch::Agent("codex".into()), dir.path(), Some(&prefs))
+                .is_err()
+        );
+    }
+
     #[test]
     fn kimi_exclusions_match_the_vue_regex_fixture() {
         let fixture: serde_json::Value =

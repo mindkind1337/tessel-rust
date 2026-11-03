@@ -28,7 +28,7 @@ impl Session {
     fn label(&self) -> &str {
         self.pane_name.as_deref().unwrap_or(&self.title)
     }
-    fn start(&mut self) {
+    fn start(&mut self, prefs: Option<crate::agent_preferences::Preferences>) {
         if self.launch.native_chat().is_some() || self.terminal.is_some() || self.loading.is_some()
         {
             return;
@@ -39,7 +39,7 @@ impl Session {
         self.loading = Some(receiver);
         self.error.clear();
         thread::spawn(move || {
-            let result = launch::command(&launch, &cwd)
+            let result = launch::command_with_preferences(&launch, &cwd, prefs.as_ref())
                 .and_then(|c| Terminal::spawn_command(c).map_err(|e| e.to_string()));
             let _ = sender.send(result);
         });
@@ -760,7 +760,11 @@ impl Tessel {
             loading: None,
             error: String::new(),
         };
-        s.start();
+        let prefs = match &s.launch {
+            Launch::Agent(id) => crate::agent_preferences::get(&self.state, id).cloned(),
+            _ => None,
+        };
+        s.start(prefs);
         self.sessions.push(s);
         if let Some((target, dir)) = split {
             let layout = self
@@ -1774,7 +1778,13 @@ impl Tessel {
                                 ui.spinner();
                                 ui.label(tr("Starting…"));
                             } else if ui.button(tr("Wake / reconnect")).clicked() {
-                                session.start();
+                                let prefs = match &session.launch {
+                                    Launch::Agent(id) => {
+                                        crate::agent_preferences::get(&self.state, id).cloned()
+                                    }
+                                    _ => None,
+                                };
+                                session.start(prefs);
                             }
                         });
                 },
@@ -2103,6 +2113,8 @@ impl Tessel {
         self.sender = sender;
         self.receiver = receiver;
         self.state = state;
+        self.agents_panel = Default::default();
+        self.agents_notice = None;
         self.host_panel.reset();
         self.host_notice = None;
         self.rename_agent = None;
@@ -2396,6 +2408,9 @@ impl Tessel {
                     preset: crate::agent_catalog::find(id)?,
                     available: *available,
                     enabled: crate::agent_preferences::enabled(&self.state, id),
+                    prefs: crate::agent_preferences::get(&self.state, id)
+                        .cloned()
+                        .unwrap_or_default(),
                 })
             })
             .collect();
@@ -2412,6 +2427,9 @@ impl Tessel {
                 search: self.settings_nav.query(),
             },
         );
+        if !self.save_agent_draft() {
+            return;
+        }
         match action {
             Some(Action::Detect) => {
                 self.agents_notice = None;
@@ -2463,6 +2481,27 @@ impl Tessel {
             }
             _ => {}
         }
+    }
+    fn save_agent_draft(&mut self) -> bool {
+        if let Some((id, prefs)) = self.agents_panel.take_save() {
+            if crate::agent_preferences::get(&self.state, &id)
+                .cloned()
+                .unwrap_or_default()
+                == prefs
+            {
+                return true;
+            }
+            self.agents_notice = self
+                .store
+                .as_ref()
+                .ok_or_else(|| "Settings store unavailable".to_owned())
+                .and_then(|store| {
+                    crate::agent_preferences::save(&mut self.state, store, &id, prefs)
+                })
+                .err();
+            return self.agents_notice.is_none();
+        }
+        true
     }
     fn change_agent_visibility(&mut self, id: &str, enabled: bool) {
         let result = self
@@ -2904,7 +2943,12 @@ impl Tessel {
                                     if let Some((section, ..)) =
                                         sections.iter().find(|(_, known, ..)| *known == id)
                                     {
-                                        self.settings_section = *section;
+                                        if self.settings_section == SettingsSection::Agents {
+                                            self.agents_panel.save_open_draft();
+                                        }
+                                        if self.save_agent_draft() {
+                                            self.settings_section = *section;
+                                        }
                                     }
                                 }
                                 None => {}
@@ -2934,8 +2978,13 @@ impl Tessel {
             && !agents_escape_consumed
             && (close || response.should_close())
         {
-            self.overlay = None;
-            self.settings_nav.reset();
+            if self.settings_section == SettingsSection::Agents {
+                self.agents_panel.save_open_draft();
+            }
+            if self.save_agent_draft() {
+                self.overlay = None;
+                self.settings_nav.reset();
+            }
         }
     }
 
@@ -3859,7 +3908,7 @@ mod tests {
                 loading: None,
                 error: String::new(),
             };
-            session.start();
+            session.start(None);
             assert!(session.loading.is_none());
             assert!(session.terminal.is_none());
             assert!(session.error.is_empty());

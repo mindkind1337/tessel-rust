@@ -5,6 +5,7 @@ pub struct Row {
     pub preset: &'static crate::agent_catalog::Preset,
     pub available: bool,
     pub enabled: bool,
+    pub prefs: crate::agent_preferences::Preferences,
 }
 
 pub struct Input<'a> {
@@ -36,9 +37,21 @@ pub struct AgentsPanel {
     escape_held: bool,
     open_row: Option<egui::Id>,
     detail_focus: Vec<egui::Id>,
+    drafts: std::collections::BTreeMap<String, crate::agent_preferences::Preferences>,
+    pending_save: Option<(String, crate::agent_preferences::Preferences)>,
 }
 
 impl AgentsPanel {
+    pub fn take_save(&mut self) -> Option<(String, crate::agent_preferences::Preferences)> {
+        self.pending_save.take()
+    }
+    pub fn save_open_draft(&mut self) {
+        if let Some(id) = &self.open
+            && let Some(draft) = self.drafts.get(id)
+        {
+            self.pending_save = Some((id.clone(), draft.clone()));
+        }
+    }
     /// Called before the settings navigation, so Escape folds details first.
     pub fn handle_escape(&mut self, ctx: &egui::Context) -> bool {
         let down = ctx.input(|i| i.key_down(egui::Key::Escape));
@@ -68,6 +81,7 @@ impl AgentsPanel {
         }
         let consumed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if consumed {
+            self.save_open_draft();
             self.open = None;
             if let Some(id) = self.open_row {
                 ctx.memory_mut(|memory| memory.request_focus(id));
@@ -165,6 +179,7 @@ impl AgentsPanel {
                             action = Some(Action::SetEnabled(preset.id.into(), !row.enabled));
                         }
                         if controls.main.clicked() || controls.chevron.clicked() {
+                            self.save_open_draft();
                             controls.main.request_focus();
                             self.open_row = Some(controls.main.id);
                             self.open = if expanded {
@@ -191,10 +206,65 @@ impl AgentsPanel {
                                             .small()
                                             .strong(),
                                     );
-                                    ui.add(
-                                        egui::Label::new(RichText::new(preset.command).monospace())
-                                            .wrap(),
+                                    let draft = self
+                                        .drafts
+                                        .entry(preset.id.into())
+                                        .or_insert_with(|| row.prefs.clone());
+                                    draft.enabled = row.enabled;
+                                    let reset = ui.add_enabled(
+                                        draft.customized(),
+                                        egui::Button::new(tr("Reset", "Réinitialiser")),
                                     );
+                                    self.detail_focus.push(reset.id);
+                                    if reset.clicked() {
+                                        draft.reset();
+                                        self.pending_save = Some((preset.id.into(), draft.clone()));
+                                    }
+                                    let mut commit = false;
+                                    for (label, value, hint, multiline) in [
+                                        (
+                                            tr("Command", "Commande"),
+                                            &mut draft.command,
+                                            preset.command,
+                                            false,
+                                        ),
+                                        (tr("Arguments", "Arguments"), &mut draft.args, "", false),
+                                        (
+                                            tr(
+                                                "Variables, one NAME=value per line",
+                                                "Variables, un NOM=valeur par ligne",
+                                            ),
+                                            &mut draft.env,
+                                            "",
+                                            true,
+                                        ),
+                                    ] {
+                                        let label = ui.label(label);
+                                        let field = if multiline {
+                                            egui::TextEdit::multiline(value).desired_rows(2)
+                                        } else {
+                                            egui::TextEdit::singleline(value)
+                                        }
+                                        .hint_text(hint)
+                                        .desired_width(f32::INFINITY);
+                                        let response = ui.add(field).labelled_by(label.id);
+                                        self.detail_focus.push(response.id);
+                                        commit |= response.lost_focus();
+                                    }
+                                    if let Err(error) = crate::agent_env::parse(&draft.env) {
+                                        ui.colored_label(ui.visuals().error_fg_color, error);
+                                        ui.label(tr(
+                                            "Not used until fixed.",
+                                            "Non utilisées tant que l’erreur n’est pas corrigée.",
+                                        ));
+                                    }
+                                    ui.weak(tr(
+                                        "Applies to panes you start from now on",
+                                        "S’applique aux volets démarrés à partir de maintenant",
+                                    ));
+                                    if commit && *draft != row.prefs {
+                                        self.pending_save = Some((preset.id.into(), draft.clone()));
+                                    }
                                     ui.horizontal_wrapped(|ui| {
                                         let terminal = ui.button(tr(
                                             "Open in terminal",
@@ -397,7 +467,11 @@ fn agent_row(ui: &mut Ui, row: &Row, expanded: bool, french: bool) -> RowControl
     paint_line(
         ui,
         desc,
-        row.preset.command,
+        if crate::agent_env::trim(&row.prefs.command).is_empty() {
+            row.preset.command
+        } else {
+            &row.prefs.command
+        },
         egui::FontId::monospace(11.0),
         ui.visuals().weak_text_color(),
     );
@@ -483,11 +557,13 @@ mod tests {
                 preset: crate::agent_catalog::find("codex").unwrap(),
                 available: true,
                 enabled: true,
+                prefs: Default::default(),
             },
             Row {
                 preset: crate::agent_catalog::find("kiro").unwrap(),
                 available: false,
                 enabled: true,
+                prefs: Default::default(),
             },
         ];
         let mut rows = rows;
@@ -495,6 +571,7 @@ mod tests {
             preset: crate::agent_catalog::find("aider").unwrap(),
             available: false,
             enabled: true,
+            prefs: Default::default(),
         });
         let mut action = None;
         let mut right = 0.0;
@@ -575,6 +652,39 @@ mod tests {
         );
         frame(ctx, panel, vec![pointer(false)], project, enabled, 620.0).1
     }
+    #[test]
+    fn edited_command_is_committed_before_launch_and_reset_clears_it() {
+        let ctx = egui::Context::default();
+        let mut panel = AgentsPanel::default();
+        frame(&ctx, &mut panel, vec![], true, true, 620.0);
+        click(&ctx, &mut panel, "Codex CLI", true, true);
+        let command_id = panel.detail_focus[4];
+        ctx.memory_mut(|m| m.request_focus(command_id));
+        frame(
+            &ctx,
+            &mut panel,
+            vec![egui::Event::Text("echo synthetic".into())],
+            true,
+            true,
+            620.0,
+        );
+        assert!(
+            panel.take_save().is_none(),
+            "typing is not a commit before blur"
+        );
+        assert_eq!(
+            click(&ctx, &mut panel, "Open in terminal", true, true),
+            Some(Action::Terminal("codex".into()))
+        );
+        let (id, prefs) = panel
+            .take_save()
+            .expect("blur must commit before launch action is handled");
+        assert_eq!(id, "codex");
+        assert_eq!(prefs.command, "echo synthetic");
+        click(&ctx, &mut panel, "Reset", true, true);
+        assert!(!panel.take_save().unwrap().1.customized());
+    }
+
     #[test]
     fn pointer_actions_and_native_chat_project_gate_are_real() {
         let ctx = egui::Context::default();

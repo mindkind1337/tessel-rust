@@ -912,6 +912,60 @@ mod tests {
         );
     }
     #[test]
+    fn configured_agent_runs_local_command_with_arguments_and_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = crate::agent_preferences::Preferences {
+            command: if cfg!(windows) {
+                "Write-Output"
+            } else {
+                "printf '%s\\n'"
+            }
+            .into(),
+            args: if cfg!(windows) {
+                "'quoted value' ; Write-Output $env:RUST_AGENT_FIXTURE"
+            } else {
+                "'quoted value' \"$RUST_AGENT_FIXTURE\""
+            }
+            .into(),
+            env: "RUST_AGENT_FIXTURE=ENV_FROM_PREFERENCES".into(),
+            ..Default::default()
+        };
+        let command = crate::launch::command_with_preferences(
+            &crate::launch::Launch::Agent("codex".into()),
+            dir.path(),
+            Some(&prefs),
+        )
+        .unwrap();
+        let mut terminal = Terminal::spawn_command(command).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            match terminal
+                .output
+                .recv_timeout(std::time::Duration::from_millis(200))
+            {
+                Ok(bytes) => {
+                    terminal.process_output(&bytes);
+                    let text = terminal.parser.screen().contents();
+                    found = text.lines().any(|line| line.trim() == "quoted value")
+                        && text
+                            .lines()
+                            .any(|line| line.trim() == "ENV_FROM_PREFERENCES");
+                    if found {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            found,
+            "local shell did not receive configured arguments/environment"
+        );
+    }
+
+    #[test]
     fn shell_really_runs_in_a_pty() {
         let mut terminal = Terminal::spawn().expect("create PTY");
         terminal.send(b"echo TESSEL_PTY_OK\r".to_vec()).unwrap();
