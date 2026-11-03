@@ -24,6 +24,7 @@ pub mod help_panel;
 mod i18n;
 pub mod icons;
 mod launch;
+pub mod launcher_panel;
 mod office;
 pub mod palette;
 pub mod pane_grid;

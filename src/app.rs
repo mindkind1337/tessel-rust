@@ -74,6 +74,7 @@ enum Overlay {
     Settings,
     Share,
     Help,
+    Launcher,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
@@ -99,6 +100,7 @@ pub struct Tessel {
     view: View,
     overlay: Option<Overlay>,
     help: crate::help_panel::HelpPanel,
+    launcher: crate::launcher_panel::LauncherPanel,
     settings_section: SettingsSection,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
@@ -177,6 +179,7 @@ impl Tessel {
             view: View::Work,
             overlay: None,
             help: Default::default(),
+            launcher: Default::default(),
             settings_section: SettingsSection::Appearance,
             command_palette: Default::default(),
             command_palette_focused: false,
@@ -297,6 +300,9 @@ impl Tessel {
             }
             if std::env::args().any(|a| a == "--help-fixture") {
                 app.open_help();
+            }
+            if std::env::args().any(|a| a == "--launcher-fixture") {
+                app.open_launcher();
             }
         }
         app.detect_agents();
@@ -620,6 +626,14 @@ impl Tessel {
         launch: Launch,
         split: Option<(u64, crate::pane_grid::SplitDir)>,
     ) {
+        self.new_session_positioned(launch, split, false);
+    }
+    fn new_session_positioned(
+        &mut self,
+        launch: Launch,
+        split: Option<(u64, crate::pane_grid::SplitDir)>,
+        before: bool,
+    ) {
         if let Some(provider) = launch.native_chat() {
             let Some(project) = self.state.active_project else {
                 self.error = tr("Select a project for native chat.").into();
@@ -679,13 +693,18 @@ impl Tessel {
         s.start();
         self.sessions.push(s);
         if let Some((target, dir)) = split {
-            self.state
+            let layout = self
+                .state
                 .terminal_layouts
                 .entry(crate::terminal_layout::project_key(
                     self.state.active_project,
                 ))
-                .or_default()
-                .split(target, id, dir);
+                .or_default();
+            if before {
+                layout.split_with_order(target, id, dir, true);
+            } else {
+                layout.split(target, id, dir);
+            }
         }
         self.active_session = Some(id);
         self.view = View::Work;
@@ -823,6 +842,7 @@ impl Tessel {
         use crate::palette::{PaletteCommand, filter_palette_commands};
         let commands: Vec<_> = [
             ("terminal", "Open terminal"),
+            ("launcher", "Open a terminal or agent"),
             ("chat", "Native Codex chat"),
             ("claude-chat", "Native Claude chat"),
             ("files", "Files"),
@@ -888,6 +908,7 @@ impl Tessel {
             self.command_palette.close();
             match id.as_str() {
                 "terminal" => self.new_session(Launch::Shell),
+                "launcher" => self.open_launcher(),
                 "chat" => self.new_session(Launch::CodexChat),
                 "claude-chat" => self.new_session(Launch::ClaudeChat),
                 "finder" => self.open_finder(),
@@ -1945,10 +1966,134 @@ impl Tessel {
         self.help.reset();
         self.overlay = Some(Overlay::Help);
     }
+    fn open_launcher(&mut self) {
+        self.launcher.reset();
+        self.overlay = Some(Overlay::Launcher);
+    }
+    fn launcher_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        use crate::finder_model::{
+            LaunchMenuAction, LaunchMenuItem, LaunchPlacement, LauncherLang,
+        };
+        use crate::launcher_panel::{LauncherEntry, LauncherInput};
+        let target = self
+            .sessions
+            .iter()
+            .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project);
+        let target_id = target.map(|s| s.id);
+        let target_title = target.map(|s| s.title.clone());
+        let mut entries = vec![LauncherEntry {
+            item: LaunchMenuItem::Shell {
+                id: "default".into(),
+                name: if cfg!(windows) { "PowerShell" } else { "Shell" }.into(),
+            },
+            available: true,
+            reason: None,
+        }];
+        for (id, name) in [
+            ("codex", "Native Codex chat"),
+            ("claude", "Native Claude chat"),
+        ] {
+            let available = self.state.active_project.is_some();
+            entries.push(LauncherEntry {
+                item: LaunchMenuItem::ChatAgent {
+                    id: id.into(),
+                    name: tr(name).into(),
+                },
+                available,
+                reason: (!available).then(|| tr("Select a project for native chat.").into()),
+            });
+        }
+        entries.extend(self.agents.iter().map(|(name, available)| LauncherEntry {
+            item: LaunchMenuItem::Agent {
+                id: name.clone(),
+                name: name.clone(),
+            },
+            available: *available,
+            reason: (!available).then(|| tr("not on PATH").into()),
+        }));
+        let placements = if target_id.is_some() {
+            vec![
+                LaunchPlacement::Auto,
+                LaunchPlacement::Left,
+                LaunchPlacement::Right,
+                LaunchPlacement::Down,
+            ]
+        } else {
+            vec![]
+        };
+        let action = self.launcher.show(
+            ui,
+            LauncherInput {
+                entries: &entries,
+                placements: &placements,
+                target_title: target_title.as_deref(),
+                lang: if self.state.language == crate::i18n::Language::French {
+                    LauncherLang::Fr
+                } else {
+                    LauncherLang::En
+                },
+            },
+        );
+        match action {
+            Some(LaunchMenuAction::Close) => true,
+            Some(LaunchMenuAction::Launch {
+                item,
+                placement,
+                in_worktree: false,
+            }) => {
+                if !entries
+                    .iter()
+                    .any(|entry| entry.available && entry.item == item)
+                {
+                    return false;
+                }
+                let launch = match item {
+                    LaunchMenuItem::Shell { id, .. } if id == "default" => Launch::Shell,
+                    LaunchMenuItem::Agent { id, .. } => Launch::Agent(id),
+                    LaunchMenuItem::ChatAgent { id, .. } if id == "codex" => Launch::CodexChat,
+                    LaunchMenuItem::ChatAgent { id, .. } if id == "claude" => Launch::ClaudeChat,
+                    _ => return false,
+                };
+                let split = target_id.and_then(|id| match placement {
+                    LaunchPlacement::Auto => None,
+                    LaunchPlacement::Left | LaunchPlacement::Right => {
+                        Some((id, crate::pane_grid::SplitDir::Row))
+                    }
+                    LaunchPlacement::Down => Some((id, crate::pane_grid::SplitDir::Col)),
+                });
+                self.new_session_positioned(launch, split, placement == LaunchPlacement::Left);
+                true
+            }
+            _ => false,
+        }
+    }
     fn show_overlay(&mut self, ctx: &egui::Context) {
         let Some(overlay) = self.overlay else {
             return;
         };
+        if overlay == Overlay::Launcher {
+            let mut open = true;
+            let bounds = ctx.content_rect();
+            let position = egui::pos2(bounds.center().x - 170.0, bounds.top() + 80.0);
+            egui::Popup::new(
+                egui::Id::new("workspace-launcher"),
+                ctx.clone(),
+                position,
+                egui::LayerId::background(),
+            )
+            .open_bool(&mut open)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(340.0)
+            .show(|ui| {
+                if self.launcher_ui(ui) {
+                    ui.close();
+                }
+            });
+            if !open {
+                self.overlay = None;
+            }
+            return;
+        }
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("workspace-overlay")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 50.0).clamp(260.0, 880.0));
@@ -1957,6 +2102,7 @@ impl Tessel {
                     Overlay::Settings => "Settings",
                     Overlay::Share => "Share",
                     Overlay::Help => "Keyboard shortcuts",
+                    Overlay::Launcher => "Open a terminal or agent",
                 }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::chrome::icon_button(
@@ -1974,12 +2120,15 @@ impl Tessel {
             });
             ui.separator();
             let height = (ctx.content_rect().height() * 0.86 - 65.0).clamp(150.0, 615.0);
-            if overlay == Overlay::Help {
+            if overlay == Overlay::Launcher {
+                close |= self.launcher_ui(ui);
+            } else if overlay == Overlay::Help {
                 close |= self.help.show(
                     ui,
                     self.state.language == crate::i18n::Language::French,
                     &[
                         "Ctrl+Shift+T",
+                        "Ctrl+Shift+Space",
                         "Ctrl+Shift+P",
                         "Ctrl+Shift+J",
                         "Ctrl+Shift+E",
@@ -2274,6 +2423,14 @@ impl eframe::App for Tessel {
             }
             if keyboard_free && !self.command_palette.open {
                 if ctx.input_mut(|i| {
+                    i.consume_key(
+                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Key::Space,
+                    )
+                }) {
+                    self.open_launcher();
+                }
+                if ctx.input_mut(|i| {
                     i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::J)
                 }) {
                     self.open_finder();
@@ -2357,7 +2514,6 @@ impl eframe::App for Tessel {
                 {
                     self.new_session(Launch::Shell);
                 }
-                let mut agent = None;
                 let launcher = chrome::icon_button(
                     ui,
                     Icon::ChevronDown,
@@ -2365,34 +2521,17 @@ impl eframe::App for Tessel {
                     false,
                     true,
                 );
-                let popup = egui::Popup::menu(&launcher);
+                if launcher.clicked() {
+                    self.launcher.reset();
+                }
+                let popup = egui::Popup::menu(&launcher)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
                 let shown = popup.show(|ui| {
-                    if ui.button(tr("Open terminal")).clicked() {
-                        self.new_session(Launch::Shell);
+                    if self.launcher_ui(ui) {
                         ui.close();
-                    }
-                    if ui.button(tr("Native Codex chat")).clicked() {
-                        self.new_session(Launch::CodexChat);
-                        ui.close();
-                    }
-                    if ui.button(tr("Native Claude chat")).clicked() {
-                        self.new_session(Launch::ClaudeChat);
-                        ui.close();
-                    }
-                    for (name, available) in &self.agents {
-                        if ui
-                            .add_enabled(*available, egui::Button::new(name))
-                            .clicked()
-                        {
-                            agent = Some(name.clone());
-                            ui.close();
-                        }
                     }
                 });
                 self.toolbar_menu_open |= shown.is_some();
-                if let Some(agent) = agent {
-                    self.new_session(Launch::Agent(agent));
-                }
                 ui.separator();
                 if chrome::icon_button(ui, Icon::Share, tr("Share"), self.share.hosting(), false)
                     .clicked()

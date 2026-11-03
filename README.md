@@ -26,6 +26,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Terminals, agents and SSH
 
+- The toolbar launcher and Ctrl+Shift+Space open a compact terminal/agent menu with keyboard selection. Available CLIs and native chats are grouped separately; unavailable choices explain why they cannot launch. Choose automatic placement or split left, right or below the selected pane in the active project. Native chats already open in that project are focused instead of duplicated.
 - Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `⋯` menu or its title's context menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
 - Pane header menus expose available native actions: copy terminal output, maximize/restore, arrange, split and close. Native chat panes do not offer terminal clipboard actions.
 - Native Codex and Claude chats share the project split grid with terminals. Open either provider from the launcher or command palette; each project has one pane per provider. Restoring its layout creates no agent process or connection. Closing its pane stops its transport; saved thread identifiers remain available for explicit resume.

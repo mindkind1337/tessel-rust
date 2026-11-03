@@ -155,6 +155,10 @@ impl TerminalLayout {
     }
 
     pub fn split(&mut self, target: u64, new: u64, dir: SplitDir) -> bool {
+        self.split_with_order(target, new, dir, false)
+    }
+
+    pub fn split_with_order(&mut self, target: u64, new: u64, dir: SplitDir, before: bool) -> bool {
         if self.next_split >= u64::MAX - 1_000 {
             return false;
         }
@@ -165,13 +169,34 @@ impl TerminalLayout {
             return false;
         }
         // Keep persisted recursion bounded even after repeated splitting of one pane.
-        let candidate = pane_grid::split_leaf(
+        let mut candidate = pane_grid::split_leaf(
             tree,
             &target.to_string(),
             dir,
             PaneLeaf::new(new.to_string(), LeafKind::Shell),
             format!("split-{}", self.next_split),
         );
+        if before {
+            fn reverse_at(node: &mut PaneNode, split_id: &str) {
+                if let PaneNode::Split {
+                    id,
+                    children,
+                    sizes,
+                    ..
+                } = node
+                {
+                    if id == split_id {
+                        children.reverse();
+                        sizes.reverse();
+                    } else {
+                        for child in children {
+                            reverse_at(child, split_id);
+                        }
+                    }
+                }
+            }
+            reverse_at(&mut candidate, &format!("split-{}", self.next_split));
+        }
         let allowed = pane_grid::tree_leaves(Some(&candidate), |_| true)
             .into_iter()
             .filter_map(|leaf| leaf.id.parse().ok())
@@ -247,6 +272,42 @@ impl TerminalLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_before_places_only_the_new_pane_left_of_its_target() {
+        let mut layout = TerminalLayout::default();
+        layout.sync(&[1, 2], [1200.0, 700.0]);
+        let old = pane_grid::grid_layout(layout.tree.as_ref());
+        let first = old.tiles.iter().find(|t| t.leaf.id == "1").unwrap().rect;
+        assert!(layout.split_with_order(2, 3, SplitDir::Row, true));
+        let next = pane_grid::grid_layout(layout.tree.as_ref());
+        assert_eq!(
+            next.tiles.iter().find(|t| t.leaf.id == "1").unwrap().rect,
+            first
+        );
+        let target = next
+            .tiles
+            .iter()
+            .find(|t| t.leaf.id == "2")
+            .unwrap()
+            .rect
+            .to_px(1200.0, 700.0, 4.0);
+        let added = next
+            .tiles
+            .iter()
+            .find(|t| t.leaf.id == "3")
+            .unwrap()
+            .rect
+            .to_px(1200.0, 700.0, 4.0);
+        assert!(added.right() < target.left);
+        assert_eq!(added.top, target.top);
+        layout.validate(&HashSet::from([1, 2, 3])).unwrap();
+        let saved = layout.clone();
+        assert!(!layout.split_with_order(99, 4, SplitDir::Row, true));
+        assert_eq!(layout, saved);
+        assert!(!layout.split_with_order(2, 1, SplitDir::Row, true));
+        assert_eq!(layout, saved);
+    }
 
     #[test]
     fn split_resize_close_and_restore_preserve_session_identity() {
