@@ -27,6 +27,7 @@ mod share;
 mod share_panel;
 mod terminal;
 mod theme;
+pub mod theme_palettes;
 #[cfg(windows)]
 mod vault;
 #[cfg(windows)]

@@ -51,6 +51,7 @@ pub struct Workspace {
     pub claude_threads: std::collections::HashMap<u64, String>,
     pub active_project: Option<u64>,
     pub dark: bool,
+    pub theme: Option<crate::theme_palettes::ThemeId>,
     pub language: crate::i18n::Language,
     pub columns: usize,
     pub font_size: f32,
@@ -69,6 +70,7 @@ impl Default for Workspace {
             claude_threads: Default::default(),
             active_project: None,
             dark: true,
+            theme: None,
             language: Default::default(),
             columns: 1,
             font_size: 15.0,
@@ -312,6 +314,24 @@ mod tests {
         let (_, loaded) = Store::open(dir.path()).unwrap();
         assert_eq!(loaded.language, crate::i18n::Language::French);
         assert!(loaded.sessions.is_empty());
+    }
+    #[test]
+    fn named_themes_survive_restart_and_preserve_legacy_light_preference() {
+        let old: Workspace = serde_json::from_str(r#"{"dark":false}"#).unwrap();
+        assert!(!old.dark);
+        assert!(old.theme.is_none());
+        let dir = tempfile::tempdir().unwrap();
+        for theme in crate::theme_palettes::THEMES {
+            let (store, mut state) = Store::open(dir.path()).unwrap();
+            state.theme = Some(theme);
+            store.save(&state).unwrap();
+            drop(store);
+            let (store, loaded) = Store::open(dir.path()).unwrap();
+            assert_eq!(loaded.theme, Some(theme));
+            assert!(loaded.sessions.is_empty());
+            drop(store);
+        }
+        assert!(serde_json::from_str::<Workspace>(r#"{"theme":"unrecognized-theme"}"#).is_err());
     }
     #[test]
     fn corrupt_state_is_not_overwritten() {

@@ -158,7 +158,7 @@ impl Tessel {
         #[cfg(windows)]
         crate::terminal::configure_fonts(&cc.egui_ctx);
         crate::i18n::set_language(state.language);
-        crate::theme::apply(&cc.egui_ctx, state.dark);
+        crate::theme::apply(&cc.egui_ctx, state.dark, state.theme);
         let mut app = Self {
             state,
             store,
@@ -229,6 +229,15 @@ impl Tessel {
         }
         #[cfg(feature = "visual-test")]
         {
+            if let Some(id) = std::env::args()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .find(|a| a[0] == "--theme-fixture")
+                .and_then(|a| crate::theme_palettes::ThemeId::from_id(&a[1]))
+            {
+                app.state.theme = Some(id);
+                crate::theme::apply(&cc.egui_ctx, true, Some(id));
+            }
             if std::env::args().any(|a| a == "--palette-fixture") {
                 app.command_palette.open = true;
             }
@@ -1319,7 +1328,7 @@ impl Tessel {
             });
         }
         crate::i18n::set_language(self.state.language);
-        crate::theme::apply(ctx, self.state.dark);
+        crate::theme::apply(ctx, self.state.dark, self.state.theme);
         self.refresh_project();
         self.backup_status = format!(
             "{} {}",
@@ -1413,14 +1422,22 @@ impl Tessel {
             }
         });
         ui.heading(tr("Appearance"));
-        let mut changed = ui
-            .checkbox(&mut self.state.dark, tr("Dark theme"))
-            .changed();
+        let previous_theme = self.state.theme;
+        let french = self.state.language == crate::i18n::Language::French;
+        let selected = if self.state.theme.is_none() && !self.state.dark {
+            tr("Legacy light theme")
+        } else { self.state.theme.unwrap_or_default().label(french) };
+        egui::ComboBox::from_id_salt("appearance-theme").selected_text(selected).show_ui(ui, |ui| {
+            for theme in crate::theme_palettes::THEMES {
+                ui.selectable_value(&mut self.state.theme, Some(theme), theme.label(french)).on_hover_text(theme.description(french));
+            }
+        });
+        let mut changed = previous_theme != self.state.theme;
         changed |= ui
             .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text(tr("Font size")))
             .changed();
         if changed {
-            crate::theme::apply(ui.ctx(), self.state.dark);
+            crate::theme::apply(ui.ctx(), self.state.dark, self.state.theme);
             self.save();
         }
         ui.separator();
@@ -1728,7 +1745,7 @@ impl eframe::App for Tessel {
             .exact_height(40.0)
             .frame(
                 egui::Frame::default()
-                    .fill(crate::theme::CHROME)
+                    .fill(crate::theme::chrome(ctx))
                     .inner_margin(egui::Margin::symmetric(10, 6)),
             )
             .show(ctx, |ui| {

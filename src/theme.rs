@@ -2,50 +2,61 @@
 //! Matching the palette is only one part of UI parity; layout remains tracked separately.
 use eframe::egui::{self, Color32, FontId, Stroke, TextStyle};
 
-pub const CHROME: Color32 = Color32::from_rgb(0x10, 0x12, 0x16);
-pub const SURFACE: Color32 = Color32::from_rgb(0x18, 0x1b, 0x21);
-pub const RAISED: Color32 = Color32::from_rgb(0x1f, 0x23, 0x2b);
-pub const HOVER: Color32 = Color32::from_rgb(0x28, 0x2d, 0x37);
-pub const TERM: Color32 = Color32::from_rgb(0x15, 0x17, 0x1c);
-pub const BORDER: Color32 = Color32::from_rgb(0x25, 0x29, 0x32);
-pub const ACCENT: Color32 = Color32::from_rgb(0x6c, 0x9c, 0xff);
-pub const TEXT: Color32 = Color32::from_rgb(0xd6, 0xd9, 0xdf);
-pub const DIM: Color32 = Color32::from_rgb(0x8a, 0x92, 0xa0);
+use crate::theme_palettes::{TerminalPalette, ThemeId};
 
-pub fn apply(ctx: &egui::Context, dark: bool) {
+pub fn active(ctx: &egui::Context) -> ThemeId {
+    ctx.data(|data| data.get_temp::<ThemeId>(egui::Id::new("tessel-theme")))
+        .unwrap_or_default()
+}
+pub fn chrome(ctx: &egui::Context) -> Color32 {
+    if ctx.style().visuals.dark_mode {
+        active(ctx).spec().ui.chrome
+    } else {
+        ctx.style().visuals.panel_fill
+    }
+}
+pub fn terminal(ctx: &egui::Context) -> &'static TerminalPalette {
+    &active(ctx).spec().term
+}
+
+pub fn apply(ctx: &egui::Context, dark: bool, theme: Option<ThemeId>) {
+    let id = theme.unwrap_or_default();
+    let dark = dark || theme.is_some();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("tessel-theme"), id));
+    let palette = &id.spec().ui;
     let mut visuals = if dark {
         egui::Visuals::dark()
     } else {
         egui::Visuals::light()
     };
     if dark {
-        visuals.panel_fill = SURFACE;
-        visuals.window_fill = RAISED;
-        visuals.extreme_bg_color = CHROME;
-        visuals.faint_bg_color = TERM;
-        visuals.override_text_color = Some(TEXT);
-        visuals.hyperlink_color = ACCENT;
-        visuals.warn_fg_color = Color32::from_rgb(0xf5, 0xa5, 0x24);
-        visuals.error_fg_color = Color32::from_rgb(0xe5, 0x48, 0x4d);
-        visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
-        visuals.selection.bg_fill = HOVER;
-        visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
-        visuals.widgets.noninteractive.bg_fill = SURFACE;
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, DIM);
-        visuals.widgets.inactive.bg_fill = RAISED;
-        visuals.widgets.inactive.weak_bg_fill = RAISED;
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+        visuals.panel_fill = palette.surface;
+        visuals.window_fill = palette.surface_2;
+        visuals.extreme_bg_color = palette.chrome;
+        visuals.faint_bg_color = palette.term;
+        visuals.override_text_color = Some(palette.text);
+        visuals.hyperlink_color = palette.accent;
+        visuals.warn_fg_color = palette.warn;
+        visuals.error_fg_color = palette.danger;
+        visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
+        visuals.selection.bg_fill = palette.surface_3;
+        visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
+        visuals.widgets.noninteractive.bg_fill = palette.surface;
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text_dim);
+        visuals.widgets.inactive.bg_fill = palette.surface_2;
+        visuals.widgets.inactive.weak_bg_fill = palette.surface_2;
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text);
         for widget in [
             &mut visuals.widgets.hovered,
             &mut visuals.widgets.active,
             &mut visuals.widgets.open,
         ] {
-            widget.bg_fill = HOVER;
-            widget.weak_bg_fill = HOVER;
-            widget.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-            widget.fg_stroke = Stroke::new(1.0_f32, TEXT);
+            widget.bg_fill = palette.surface_3;
+            widget.weak_bg_fill = palette.surface_3;
+            widget.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+            widget.fg_stroke = Stroke::new(1.0_f32, palette.text);
         }
     }
     ctx.set_visuals(visuals);

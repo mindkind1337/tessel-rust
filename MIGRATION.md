@@ -7,7 +7,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
-| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Classic dark palette and base typography transcribed; projects moved left, Files/Changes/Tasks moved right, central document tabs and functional command palette integrated; remaining visual and interaction parity not accepted |
+| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Seven source palettes and terminal ANSI/default colors integrated with persisted theme IDs; base typography transcribed; projects moved left, Files/Changes/Tasks moved right, central document tabs and functional command palette integrated; remaining visual and interaction parity not accepted |
 | Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Implemented; filesystem tests pass |

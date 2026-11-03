@@ -301,8 +301,9 @@ impl Terminal {
             });
         }
         let screen = self.parser.screen();
+        let palette = crate::theme::terminal(ui.ctx());
         let painter = ui.painter().with_clip_rect(rect);
-        let default_bg = color(vt100::Color::Default, false);
+        let default_bg = color(vt100::Color::Default, false, palette);
         painter.rect_filled(rect, 0.0, default_bg);
         // Paint every background before any glyph. Otherwise the continuation cell
         // erases the right half of a wide character painted immediately before it.
@@ -313,9 +314,9 @@ impl Terminal {
                         continue;
                     }
                     let bg = if cell.inverse() {
-                        color(cell.fgcolor(), true)
+                        color(cell.fgcolor(), true, palette)
                     } else {
-                        color(cell.bgcolor(), false)
+                        color(cell.bgcolor(), false, palette)
                     };
                     if bg != default_bg {
                         let pos = rect.min
@@ -354,7 +355,7 @@ impl Terminal {
                             ),
                     ),
                     0.0,
-                    egui::Color32::from_rgb(45, 75, 115),
+                    palette.selection_background,
                 );
             }
         }
@@ -368,9 +369,9 @@ impl Terminal {
                     let pos =
                         rect.min + egui::vec2(col as f32 * cell_width, row as f32 * line_height);
                     let fg = if cell.inverse() {
-                        color(cell.bgcolor(), false)
+                        color(cell.bgcolor(), false, palette)
                     } else {
-                        color(cell.fgcolor(), true)
+                        color(cell.fgcolor(), true, palette)
                     };
                     if !text.is_empty() && text != " " {
                         painter.text(pos, egui::Align2::LEFT_TOP, text, font.clone(), fg);
@@ -402,7 +403,7 @@ impl Terminal {
                     );
                 painter.line_segment(
                     [pos, pos + egui::vec2(cell_width, 0.0)],
-                    (2.0, egui::Color32::WHITE),
+                    (2.0, palette.cursor),
                 );
             }
             let cursor = egui::Rect::from_min_size(
@@ -416,17 +417,14 @@ impl Terminal {
                 })
             });
             if !self.composition.is_empty() {
-                let text = painter.layout_no_wrap(
-                    self.composition.clone(),
-                    font.clone(),
-                    egui::Color32::WHITE,
-                );
+                let text =
+                    painter.layout_no_wrap(self.composition.clone(), font.clone(), palette.cursor);
                 painter.rect_filled(
                     egui::Rect::from_min_size(cursor.min, text.size()),
                     0.0,
                     default_bg,
                 );
-                painter.galley(cursor.min, text, egui::Color32::WHITE);
+                painter.galley(cursor.min, text, palette.cursor);
             }
             for event in ui.input(|i| i.events.clone()) {
                 let bytes = match event {
@@ -626,17 +624,26 @@ fn key_bytes(key: egui::Key, modifiers: egui::Modifiers) -> Vec<u8> {
     }
 }
 
-fn color(value: vt100::Color, foreground: bool) -> egui::Color32 {
+fn color(
+    value: vt100::Color,
+    foreground: bool,
+    palette: &crate::theme_palettes::TerminalPalette,
+) -> egui::Color32 {
     match value {
         vt100::Color::Default => {
             if foreground {
-                egui::Color32::from_rgb(220, 225, 235)
+                palette.foreground
             } else {
-                egui::Color32::from_rgb(20, 23, 29)
+                palette.background
             }
         }
         vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
         vt100::Color::Idx(index) => {
+            if index < 16
+                && let Some(ansi) = palette.ansi
+            {
+                return ansi.as_array()[index as usize];
+            }
             const BASE: [[u8; 3]; 16] = [
                 [0, 0, 0],
                 [205, 49, 49],
@@ -727,6 +734,42 @@ pub fn configure_fonts(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn theme_switches_defaults_and_ansi_without_rewriting_truecolor_or_extended_colors() {
+        use crate::theme_palettes::ThemeId;
+        let classic = &ThemeId::Classic.spec().term;
+        let warp = &ThemeId::Warp.spec().term;
+        let dracula = &ThemeId::Dracula.spec().term;
+        assert_ne!(
+            color(vt100::Color::Default, false, classic),
+            color(vt100::Color::Default, false, warp)
+        );
+        for index in 0..=255 {
+            assert_eq!(
+                color(vt100::Color::Idx(index), true, classic),
+                color(vt100::Color::Idx(index), true, warp)
+            );
+            if index >= 16 {
+                assert_eq!(
+                    color(vt100::Color::Idx(index), true, classic),
+                    color(vt100::Color::Idx(index), true, dracula)
+                );
+            }
+        }
+        assert_eq!(
+            color(vt100::Color::Idx(1), true, dracula),
+            dracula.ansi.unwrap().red
+        );
+        assert_eq!(
+            color(vt100::Color::Rgb(7, 11, 13), true, dracula),
+            egui::Color32::from_rgb(7, 11, 13)
+        );
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx, true, Some(ThemeId::Nord));
+        assert_eq!(crate::theme::terminal(&ctx), &ThemeId::Nord.spec().term);
+        crate::theme::apply(&ctx, true, Some(ThemeId::Gruvbox));
+        assert_eq!(crate::theme::terminal(&ctx), &ThemeId::Gruvbox.spec().term);
+    }
     #[test]
     fn disabled_terminal_cannot_receive_modal_typing_or_mouse_clicks() {
         let mut terminal = Terminal::spawn().unwrap();
