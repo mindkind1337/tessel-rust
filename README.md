@@ -9,6 +9,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Projects and workspace
 
 - Projects and their terminal sessions occupy the left sidebar; Files, Changes and Tasks occupy a resizable right panel. Open documents remain accessible through the center tab strip, including a direct return to Terminal. Both sidebars can be hidden from the Layout menu.
+- The project sidebar groups sessions under expandable project headers, with session counts and direct selection across projects. Terminals started without a project remain accessible in their own section after opening a project.
 - Sidebar visibility and the selected right-panel tab survive restarts and settings export/restore. Ctrl+Shift+X/G/K toggles Files/Changes/Tasks, Ctrl+Shift+T opens a terminal, Ctrl+Shift+P toggles commands and Ctrl+, opens/closes Settings. Text-entry fields retain their keys, and modal confirmations block workspace shortcuts.
 - A compact top toolbar opens a searchable command palette with keyboard selection for implemented actions. Opening the palette disables underlying terminal input and hides native browser surfaces. Full shell/layout parity remains in progress.
 - Settings and Live Share open as overlays without replacing the active terminal, document or browser tab. Settings groups appearance, agent detection, SSH hosts, passwords, account and backups; Escape or the close button returns to the workspace. Native browser surfaces and terminal input remain blocked while an overlay or confirmation is open.
@@ -57,6 +58,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 ### Document previews
 
 - Native readable HTML and Markdown views, with source/preview switching and copy-as-plain-text. Scripts, CSS and external resources are never executed or fetched by this view; it is not a full webpage renderer.
+- The Files panel is an expandable directory tree with on-demand background reads, cached rows and remembered expansions across refreshes and project switches. One worker handles enumeration; obsolete results are discarded. Limits bound directory entries, cached directories, depth and scan time between filesystem calls; an OS call itself cannot be interrupted. Existing file-operation confirmations and project confinement remain in force.
 - Document tabs distinguish matching filenames with their parent folder. Middle-click or the context menu closes a tab with the existing unsaved-change confirmation; closing a neighbor preserves the selected document. The context menu can also copy its full path.
 - Local links open another editor tab while preserving the source; HTTP(S) links open the private browser. Native URL schemes, network-share links and paths outside the source project are refused.
 - Read-only PNG, JPEG, WebP, GIF-first-frame and BMP previews, with background decoding, compressed-size/dimension/allocation limits and fit-to-width display.

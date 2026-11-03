@@ -1,6 +1,6 @@
 use crate::i18n::tr;
 use crate::{
-    files::{self, Document, Entry},
+    files::Document,
     launch::{self, Launch},
     terminal::Terminal,
     workspace::{self, Host, Store, Task, Workspace},
@@ -58,7 +58,6 @@ impl Session {
 enum Message {
     FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
-    Directory(u64, PathBuf, Result<Vec<Entry>, String>),
     Document(PathBuf, Result<Box<Document>, String>),
 }
 #[derive(PartialEq)]
@@ -104,10 +103,7 @@ pub struct Tessel {
     finder: crate::finder_panel::Finder,
     grid_room: [f64; 2],
     grid_dirty: bool,
-    directory: Option<PathBuf>,
-    entries: Vec<Entry>,
-    directory_loading: bool,
-    directory_generation: u64,
+    explorer_tree: crate::explorer_tree::ExplorerTree,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     agents: Vec<(String, bool)>,
@@ -183,10 +179,7 @@ impl Tessel {
             finder: Default::default(),
             grid_room: [800.0, 600.0],
             grid_dirty: false,
-            directory: None,
-            entries: vec![],
-            directory_loading: false,
-            directory_generation: 0,
+            explorer_tree: Default::default(),
             sender,
             receiver,
             agents: vec![],
@@ -378,6 +371,44 @@ impl Tessel {
             app.active_session = app.sessions.first().map(|s| s.id);
             app.view = View::Work;
         }
+        #[cfg(feature = "visual-test")]
+        if std::env::args().any(|a| a == "--explorer-fixture") {
+            let root = std::env::current_dir().expect("fixture cwd");
+            app.state.add_project(&root).expect("fixture project");
+            let root = app.state.active().expect("fixture project").path.clone();
+            let src = root.join("src");
+            let scripts = root.join("scripts");
+            let entry = |path: PathBuf, directory| crate::explorer_tree::TreeDirEntry {
+                name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                path,
+                directory,
+            };
+            app.explorer_tree = crate::explorer_tree::ExplorerTree::fixture(
+                root.clone(),
+                vec![
+                    (
+                        root.clone(),
+                        vec![
+                            entry(src.clone(), true),
+                            entry(scripts.clone(), true),
+                            entry(root.join("README.md"), false),
+                        ],
+                    ),
+                    (
+                        src.clone(),
+                        vec![
+                            entry(src.join("app.rs"), false),
+                            entry(src.join("terminal.rs"), false),
+                        ],
+                    ),
+                    (
+                        scripts.clone(),
+                        vec![entry(scripts.join("package-windows.ps1"), false)],
+                    ),
+                ],
+                vec![src, scripts],
+            );
+        }
         app
     }
     fn save(&mut self) {
@@ -415,29 +446,10 @@ impl Tessel {
             ));
         });
     }
-    fn list_directory(&mut self, path: PathBuf) {
-        let Some(root) = self.state.active().map(|p| p.path.clone()) else {
-            return;
-        };
-        self.directory_generation = self.directory_generation.wrapping_add(1);
-        let generation = self.directory_generation;
-        self.directory = Some(path.clone());
-        self.directory_loading = true;
-        self.entries.clear();
-        let sender = self.sender.clone();
-        thread::spawn(move || {
-            let result = files::list(&root, &path);
-            let _ = sender.send(Message::Directory(generation, path, result));
-        });
-    }
     fn refresh_project(&mut self) {
         self.finder.close();
-        if let Some(p) = self.state.active() {
-            self.list_directory(p.path.clone());
-        } else {
-            self.directory = None;
-            self.entries.clear();
-        }
+        self.explorer_tree
+            .set_root(self.state.active().map(|p| p.path.as_path()));
     }
     fn open_document(&mut self, path: PathBuf) {
         let Some(root) = self.state.active().map(|p| p.path.clone()) else {
@@ -476,6 +488,7 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        self.explorer_tree.poll();
         self.remote.poll();
         self.finder.poll();
         #[cfg(windows)]
@@ -549,11 +562,6 @@ impl Tessel {
                                             };
                                         }
                                     }
-                                    if let Some(dir) = &self.directory
-                                        && let Ok(suffix) = dir.strip_prefix(before)
-                                    {
-                                        self.directory = Some(after.join(suffix));
-                                    }
                                 } else {
                                     self.documents.retain(|doc| !doc.path.starts_with(before));
                                     self.active_document = self
@@ -562,9 +570,7 @@ impl Tessel {
                                     self.pending_close = None;
                                 }
                             }
-                            if let Some(dir) = self.directory.clone() {
-                                self.list_directory(dir);
-                            }
+                            self.explorer_tree.refresh();
                         }
                     }
                 }
@@ -577,17 +583,6 @@ impl Tessel {
                     Err(e) => self.error = e,
                 },
                 Message::Folder(None) => {}
-                Message::Directory(generation, path, result)
-                    if generation == self.directory_generation
-                        && self.directory.as_ref() == Some(&path) =>
-                {
-                    self.directory_loading = false;
-                    match result {
-                        Ok(entries) => self.entries = entries,
-                        Err(e) => self.error = e,
-                    }
-                }
-                Message::Directory(_, _, _) => {}
                 Message::Document(path, result) => {
                     self.document_pending.remove(&path);
                     match result {
@@ -941,46 +936,104 @@ impl Tessel {
                         self.choose_project();
                     }
                 });
-                let mut selected = None;
-                for p in &self.state.projects {
-                    if ui
-                        .selectable_label(Some(p.id) == self.state.active_project, &p.name)
-                        .on_hover_text(p.path.display().to_string())
-                        .clicked()
+                let mut selected_project = None;
+                let mut selected_session = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("project-session-cards")
+                    .show(ui, |ui| {
+                        for project in &self.state.projects {
+                            let active = Some(project.id) == self.state.active_project;
+                            let count = self
+                                .sessions
+                                .iter()
+                                .filter(|s| s.project == Some(project.id))
+                                .count();
+                            egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(),
+                                ui.id().with(("project-card", project.id)),
+                                active || count > 0,
+                            )
+                            .show_header(ui, |ui| {
+                                if ui
+                                    .selectable_label(active, &project.name)
+                                    .on_hover_text(project.path.display().to_string())
+                                    .clicked()
+                                {
+                                    selected_project = Some(Some(project.id));
+                                }
+                                if count > 0 {
+                                    ui.weak(count.to_string()).on_hover_text(tr("Sessions"));
+                                }
+                            })
+                            .body(|ui| {
+                                for session in self
+                                    .sessions
+                                    .iter()
+                                    .filter(|s| s.project == Some(project.id))
+                                {
+                                    if ui
+                                        .selectable_label(
+                                            active && self.active_session == Some(session.id),
+                                            &session.title,
+                                        )
+                                        .clicked()
+                                    {
+                                        selected_session = Some((session.project, session.id));
+                                    }
+                                }
+                            });
+                        }
+                        if self.sessions.iter().any(|s| s.project.is_none()) {
+                            ui.separator();
+                            egui::CollapsingHeader::new(tr("Sessions without a project"))
+                                .id_salt("global-sessions")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for session in
+                                        self.sessions.iter().filter(|s| s.project.is_none())
+                                    {
+                                        if ui
+                                            .selectable_label(
+                                                self.state.active_project.is_none()
+                                                    && self.active_session == Some(session.id),
+                                                &session.title,
+                                            )
+                                            .clicked()
+                                        {
+                                            selected_session = Some((None, session.id));
+                                        }
+                                    }
+                                });
+                        }
+                    });
+                if let Some((project, id)) = selected_session {
+                    selected_project = Some(project);
+                    self.active_session = Some(id);
+                    self.view = View::Work;
+                    if let Some(layout) = self
+                        .state
+                        .terminal_layouts
+                        .get_mut(&crate::terminal_layout::project_key(project))
+                        && layout.maximized.is_some()
                     {
-                        selected = Some(p.id);
+                        layout.maximized = Some(id);
+                        self.grid_dirty = true;
+                    }
+                    if let Some(terminal) = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.id == id)
+                        .and_then(|s| s.terminal.as_ref())
+                    {
+                        terminal.request_focus(ctx);
                     }
                 }
-                if let Some(id) = selected {
-                    self.state.active_project = Some(id);
+                if let Some(project) = selected_project {
+                    if self.state.active_project != project {
+                        self.state.active_project = project;
+                        self.refresh_project();
+                    }
                     self.save();
-                    self.refresh_project();
-                }
-                ui.separator();
-                for session in self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.project == self.state.active_project)
-                {
-                    if ui
-                        .selectable_label(Some(session.id) == self.active_session, &session.title)
-                        .clicked()
-                    {
-                        self.active_session = Some(session.id);
-                        self.view = View::Work;
-                        if let Some(layout) = self
-                            .state
-                            .terminal_layouts
-                            .get_mut(&crate::terminal_layout::project_key(session.project))
-                            && layout.maximized.is_some()
-                        {
-                            layout.maximized = Some(session.id);
-                            self.grid_dirty = true;
-                        }
-                        if let Some(terminal) = &session.terminal {
-                            terminal.request_focus(ctx);
-                        }
-                    }
                 }
             });
     }
@@ -1011,87 +1064,39 @@ impl Tessel {
                 }
             });
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.strong(tr("Files"));
-            if ui.small_button(tr("Refresh")).clicked()
-                && let Some(path) = self.directory.clone()
-            {
-                self.list_directory(path);
-            }
-        });
-        if self.directory_loading {
-            ui.spinner();
-        }
-        if let (Some(dir), Some(root)) = (
-            self.directory.clone(),
-            self.state.active().map(|p| p.path.clone()),
-        ) {
-            if dir != root
-                && let Some(parent) = dir.parent()
-                && ui.button(tr(".. Parent folder")).clicked()
-            {
-                self.list_directory(parent.to_owned());
-            }
-            ui.small(dir.file_name().unwrap_or_default().to_string_lossy());
-            ui.add_enabled_ui(self.file_actions_ready(), |ui| {
-                ui.menu_button(tr("New…"), |ui| {
-                    for (title, kind) in [
-                        ("Create file", crate::file_actions::Kind::File),
-                        ("Create folder", crate::file_actions::Kind::Folder),
-                    ] {
-                        if ui.button(tr(title)).clicked() {
-                            self.file_action = Some(crate::file_actions::Action {
-                                kind,
-                                root: root.clone(),
-                                path: dir.clone(),
-                                name: String::new(),
-                            });
-                            ui.close();
-                        }
-                    }
-                });
-            });
-        }
-        let mut open = None;
-        egui::ScrollArea::vertical()
-            .id_salt("files-list")
-            .show_rows(ui, 22.0, self.entries.len(), |ui, range| {
-                for i in range {
-                    let e = &self.entries[i];
-                    let response = ui.selectable_label(
-                        false,
-                        format!("{} {}", if e.directory { ">" } else { "·" }, e.name),
-                    );
-                    if self.file_actions_ready()
-                        && let Some(project) = self.state.active()
-                    {
-                        response.context_menu(|ui| {
-                            for (title, kind) in [
-                                ("Rename…", crate::file_actions::Kind::Rename),
-                                ("Delete…", crate::file_actions::Kind::Delete),
-                            ] {
-                                if ui.button(tr(title)).clicked() {
-                                    self.file_action = Some(crate::file_actions::Action {
-                                        kind,
-                                        root: project.path.clone(),
-                                        path: e.path.clone(),
-                                        name: e.name.clone(),
-                                    });
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
-                    if response.clicked() && !self.file_action_pending {
-                        open = Some((e.path.clone(), e.directory));
-                    }
+        let root = self.state.active().map(|p| p.path.clone());
+        let active = (self.view == View::Files)
+            .then(|| self.documents.get(self.active_document))
+            .flatten()
+            .map(|d| d.path.clone());
+        let actions_enabled = self.file_actions_ready();
+        if let Some(action) =
+            self.explorer_tree
+                .show(ui, root.as_deref(), active.as_deref(), actions_enabled)
+        {
+            use crate::explorer_tree::{TreeAction, TreeContextKind};
+            match action {
+                TreeAction::OpenFile(path) if !self.file_action_pending => self.open_document(path),
+                TreeAction::Context {
+                    kind,
+                    root: action_root,
+                    path,
+                    name,
+                } if actions_enabled && root.as_ref() == Some(&action_root) => {
+                    let kind = match kind {
+                        TreeContextKind::CreateFile => crate::file_actions::Kind::File,
+                        TreeContextKind::CreateFolder => crate::file_actions::Kind::Folder,
+                        TreeContextKind::Rename => crate::file_actions::Kind::Rename,
+                        TreeContextKind::Delete => crate::file_actions::Kind::Delete,
+                    };
+                    self.file_action = Some(crate::file_actions::Action {
+                        kind,
+                        root: action_root,
+                        path,
+                        name,
+                    });
                 }
-            });
-        if let Some((path, dir)) = open {
-            if dir {
-                self.list_directory(path);
-            } else {
-                self.open_document(path);
+                _ => {}
             }
         }
     }

@@ -12,6 +12,8 @@ mod backup;
 mod browser;
 mod chat;
 mod claude;
+pub mod explorer_scm_model;
+pub mod explorer_tree;
 mod file_actions;
 mod files;
 pub mod finder_model;
