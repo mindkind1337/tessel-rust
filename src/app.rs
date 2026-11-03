@@ -761,7 +761,7 @@ impl Tessel {
             error: String::new(),
         };
         let prefs = match &s.launch {
-            Launch::Agent(id) => crate::agent_preferences::get(&self.state, id).cloned(),
+            Launch::Agent(id) => Some(crate::agent_preferences::for_launch(&self.state, id)),
             _ => None,
         };
         s.start(prefs);
@@ -1780,7 +1780,7 @@ impl Tessel {
                             } else if ui.button(tr("Wake / reconnect")).clicked() {
                                 let prefs = match &session.launch {
                                     Launch::Agent(id) => {
-                                        crate::agent_preferences::get(&self.state, id).cloned()
+                                        Some(crate::agent_preferences::for_launch(&self.state, id))
                                     }
                                     _ => None,
                                 };
@@ -2411,6 +2411,12 @@ impl Tessel {
                     prefs: crate::agent_preferences::get(&self.state, id)
                         .cloned()
                         .unwrap_or_default(),
+                    model_defaults: self
+                        .state
+                        .agent_model_defaults
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default(),
                 })
             })
             .collect();
@@ -2436,6 +2442,16 @@ impl Tessel {
                 self.detect_agents();
             }
             Some(Action::SetEnabled(id, enabled)) => self.change_agent_visibility(&id, enabled),
+            Some(Action::SetModelDefaults(id, defaults)) => {
+                self.agents_notice = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "Settings store unavailable".to_owned())
+                    .and_then(|store| {
+                        crate::agent_model_defaults::save(&mut self.state, store, &id, defaults)
+                    })
+                    .err();
+            }
             Some(Action::Terminal(id)) => {
                 self.new_session(Launch::Agent(id));
                 self.overlay = None;

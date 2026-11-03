@@ -56,6 +56,22 @@ pub fn save(state: &mut Workspace, store: &Store, id: &str, value: Preferences) 
     Ok(())
 }
 
+/// Snapshot the effective local terminal launch without mutating saved arguments.
+pub fn for_launch(state: &Workspace, id: &str) -> Preferences {
+    let mut prefs = get(state, id).cloned().unwrap_or_default();
+    if let Some(values) = state
+        .agent_model_defaults
+        .get(id)
+        .and_then(crate::agent_model_defaults::Defaults::values)
+    {
+        let flags = crate::agent_model_launch::text(id, &values, &prefs.args, None);
+        if !flags.is_empty() {
+            prefs.args = format!("{flags} {}", prefs.args).trim_end().into();
+        }
+    }
+    prefs
+}
+
 pub fn enabled(state: &Workspace, id: &str) -> bool {
     get(state, id).is_none_or(|prefs| prefs.enabled)
 }
@@ -73,6 +89,40 @@ pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_flags_are_explicit_and_manual_arguments_win_without_mutating_settings() {
+        let mut state = Workspace::default();
+        assert!(for_launch(&state, "codex").args.is_empty());
+        let mut defaults = crate::agent_model_defaults::Defaults {
+            model: Some("gpt-5.6-sol".into()),
+            ..Default::default()
+        };
+        defaults.set_option("effort", Some("high".into()));
+        state.agent_model_defaults.insert("codex".into(), defaults);
+        assert_eq!(
+            for_launch(&state, "codex").args,
+            "-m gpt-5.6-sol -c model_reasoning_effort=high"
+        );
+        state.agent_prefs.insert(
+            "codex".into(),
+            Preferences {
+                args: "--model manual --effort low".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            for_launch(&state, "codex").args,
+            "--model manual --effort low"
+        );
+        assert_eq!(
+            get(&state, "codex").unwrap().args,
+            "--model manual --effort low"
+        );
+        state.agent_model_defaults.get_mut("codex").unwrap().model = None;
+        state.agent_prefs.clear();
+        assert!(for_launch(&state, "codex").args.is_empty());
+    }
 
     #[test]
     fn launch_settings_persist_reset_and_visibility_does_not_erase_them() {

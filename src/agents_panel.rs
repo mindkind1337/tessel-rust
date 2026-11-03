@@ -6,6 +6,7 @@ pub struct Row {
     pub available: bool,
     pub enabled: bool,
     pub prefs: crate::agent_preferences::Preferences,
+    pub model_defaults: crate::agent_model_defaults::Defaults,
 }
 
 pub struct Input<'a> {
@@ -23,6 +24,7 @@ pub struct Input<'a> {
 pub enum Action {
     Detect,
     SetEnabled(String, bool),
+    SetModelDefaults(String, crate::agent_model_defaults::Defaults),
     Terminal(String),
     NativeChat(String),
     Docs(String),
@@ -201,6 +203,14 @@ impl AgentsPanel {
                                 .inner_margin(10)
                                 .corner_radius(6)
                                 .show(ui, |ui| {
+                                    let (model_change, model_focus) =
+                                        model_defaults_ui(ui, row, input.french);
+                                    if let Some(defaults) = model_change {
+                                        action = Some(Action::SetModelDefaults(
+                                            preset.id.into(),
+                                            defaults,
+                                        ));
+                                    }
                                     ui.label(
                                         RichText::new(tr("How it starts", "Comment il démarre"))
                                             .small()
@@ -300,6 +310,7 @@ impl AgentsPanel {
                                             }
                                         }
                                     });
+                                    self.detail_focus.extend(model_focus);
                                 });
                         }
                     });
@@ -371,6 +382,133 @@ impl AgentsPanel {
         }
         action
     }
+}
+
+fn model_defaults_ui(
+    ui: &mut Ui,
+    row: &Row,
+    french: bool,
+) -> (Option<crate::agent_model_defaults::Defaults>, Vec<egui::Id>) {
+    let Some(catalog) = crate::agent_model_catalog::find(row.preset.id) else {
+        return (None, Vec::new());
+    };
+    let own = if french {
+        "Choix par défaut de l’agent"
+    } else {
+        "Agent's own default"
+    };
+    ui.strong(if french {
+        "Modèle par défaut"
+    } else {
+        "Default model"
+    });
+    let mut defaults = row.model_defaults.clone();
+    let selected = defaults
+        .model
+        .as_deref()
+        .map(|id| {
+            catalog
+                .models
+                .iter()
+                .find(|m| m["id"] == id)
+                .and_then(|m| m["label"].as_str())
+                .unwrap_or(id)
+        })
+        .unwrap_or(own)
+        .to_owned();
+    let combo = egui::ComboBox::from_id_salt("default-model")
+        .selected_text(selected)
+        .width(ui.available_width().min(320.0))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut defaults.model, None, own);
+            for model in &catalog.models {
+                if let (Some(id), Some(label)) = (model["id"].as_str(), model["label"].as_str()) {
+                    ui.selectable_value(&mut defaults.model, Some(id.to_owned()), label);
+                }
+            }
+            if let Some(saved) = &row.model_defaults.model
+                && !catalog.models.iter().any(|m| m["id"] == *saved)
+            {
+                ui.selectable_value(&mut defaults.model, Some(saved.clone()), saved);
+            }
+        });
+    let mut focus = vec![combo.response.id];
+    if let Some(model) = defaults.model.clone() {
+        for option in crate::agent_model_catalog::model_options(catalog, None, &model) {
+            let Some(id) = option["id"].as_str() else {
+                continue;
+            };
+            // Claude Fast is a live-session action, never a launch flag.
+            if id != "effort" && option["apply"]["composedIntoModel"] != true {
+                continue;
+            }
+            ui.label(option["label"].as_str().unwrap_or(id));
+            let mut value = defaults
+                .values_by_model
+                .get(&model)
+                .and_then(|v| v.get(id))
+                .cloned();
+            let before = value.clone();
+            let label = value.as_ref().map_or_else(
+                || own.to_owned(),
+                |v| {
+                    option["kind"]["choices"]
+                        .as_array()
+                        .and_then(|choices| choices.iter().find(|c| c["value"] == *v))
+                        .and_then(|c| c["label"].as_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            v.as_str().map(str::to_owned).unwrap_or_else(|| {
+                                if *v == true {
+                                    if french { "Activé" } else { "On" }
+                                } else if french {
+                                    "Désactivé"
+                                } else {
+                                    "Off"
+                                }
+                                .into()
+                            })
+                        })
+                },
+            );
+            let combo = egui::ComboBox::from_id_salt(("default-option", id))
+                .selected_text(label)
+                .width(ui.available_width().min(320.0))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut value, None, own);
+                    if option["kind"]["type"] == "boolean" {
+                        ui.selectable_value(
+                            &mut value,
+                            Some(true.into()),
+                            if french { "Activé" } else { "On" },
+                        );
+                        ui.selectable_value(
+                            &mut value,
+                            Some(false.into()),
+                            if french { "Désactivé" } else { "Off" },
+                        );
+                    } else if let Some(choices) = option["kind"]["choices"].as_array() {
+                        for choice in choices {
+                            ui.selectable_value(
+                                &mut value,
+                                Some(choice["value"].clone()),
+                                choice["label"].as_str().unwrap_or(""),
+                            );
+                        }
+                    }
+                });
+            focus.push(combo.response.id);
+            if value != before {
+                defaults.set_option(id, value);
+            }
+        }
+    }
+    ui.weak(if french {
+        "Liste de modèles intégrée."
+    } else {
+        "Built-in model list."
+    });
+    ((defaults != row.model_defaults).then_some(defaults), focus)
 }
 
 struct RowControls {
@@ -558,12 +696,14 @@ mod tests {
                 available: true,
                 enabled: true,
                 prefs: Default::default(),
+                model_defaults: Default::default(),
             },
             Row {
                 preset: crate::agent_catalog::find("kiro").unwrap(),
                 available: false,
                 enabled: true,
                 prefs: Default::default(),
+                model_defaults: Default::default(),
             },
         ];
         let mut rows = rows;
@@ -572,6 +712,7 @@ mod tests {
             available: false,
             enabled: true,
             prefs: Default::default(),
+            model_defaults: Default::default(),
         });
         let mut action = None;
         let mut right = 0.0;
@@ -652,6 +793,26 @@ mod tests {
         );
         frame(ctx, panel, vec![pointer(false)], project, enabled, 620.0).1
     }
+    #[test]
+    fn model_picker_emits_only_an_explicit_model_choice() {
+        let ctx = egui::Context::default();
+        let mut panel = AgentsPanel::default();
+        frame(&ctx, &mut panel, vec![], true, true, 620.0);
+        click(&ctx, &mut panel, "Codex CLI", true, true);
+        assert!(click(&ctx, &mut panel, "Agent's own default", true, true).is_none());
+        let action = click(&ctx, &mut panel, "GPT-5.6 Sol", true, true);
+        assert_eq!(
+            action,
+            Some(Action::SetModelDefaults(
+                "codex".into(),
+                crate::agent_model_defaults::Defaults {
+                    model: Some("gpt-5.6-sol".into()),
+                    ..Default::default()
+                }
+            ))
+        );
+    }
+
     #[test]
     fn edited_command_is_committed_before_launch_and_reset_clears_it() {
         let ctx = egui::Context::default();
