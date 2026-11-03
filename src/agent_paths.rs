@@ -6,6 +6,7 @@ use std::{
 };
 
 pub(crate) struct SearchPath {
+    #[cfg(any(not(windows), test))]
     pub directories: Vec<PathBuf>,
     pub value: OsString,
 }
@@ -51,7 +52,11 @@ impl SearchPath {
         }
         let value = std::env::join_paths(&directories)
             .map_err(|_| "Cannot compose the agent search path.".to_owned())?;
-        Ok(Self { directories, value })
+        Ok(Self {
+            #[cfg(any(not(windows), test))]
+            directories,
+            value,
+        })
     }
 }
 

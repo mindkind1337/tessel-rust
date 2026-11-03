@@ -1,0 +1,66 @@
+{
+  "source_sha256": "9701725a48a2f4d30f699afee730f771e9a4528c1918e17edc72e5ec34c48726",
+  "cases": [
+    {
+      "names": [
+        "codex",
+        "claude"
+      ],
+      "output": "C:\\first\\codex.cmd\r\nC:\\later\\codex.exe\r\nC:\\tools\\claude.exe\n",
+      "expected": {
+        "codex": "C:\\first\\codex.cmd",
+        "claude": "C:\\tools\\claude.exe"
+      }
+    },
+    {
+      "names": [
+        "grok",
+        "agent"
+      ],
+      "output": "C:/dir/grok-agent.exe\nC:/dir/agent.exe.bak\nC:/dir/grok\nC:/dir/agent.cmd",
+      "expected": {
+        "grok": "C:/dir/grok",
+        "agent": "C:/dir/agent.cmd"
+      }
+    },
+    {
+      "names": [
+        "KIMI",
+        "kimi",
+        "none"
+      ],
+      "output": "﻿C:/Python/Scripts/KIMI.EXE \r\nC:/new/kimi.exe",
+      "expected": {
+        "kimi": "C:/Python/Scripts/KIMI.EXE"
+      }
+    },
+    {
+      "names": [
+        "cn",
+        ""
+      ],
+      "output": "C:/dir/cn.\nC:/dir/cn.exe.config\n\n",
+      "expected": {
+        "cn": "C:/dir/cn."
+      }
+    },
+    {
+      "names": [
+        "codex"
+      ],
+      "output": "C:/codex/other.exe\n C:/space dir/codex.ps1 \nC:/second/codex.cmd",
+      "expected": {
+        "codex": "C:/space dir/codex.ps1"
+      }
+    },
+    {
+      "names": [
+        "cmd"
+      ],
+      "output": "unrelated\nC:/dir/cmd.com",
+      "expected": {
+        "cmd": "C:/dir/cmd.com"
+      }
+    }
+  ]
+}

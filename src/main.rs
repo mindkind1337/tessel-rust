@@ -19,6 +19,8 @@ mod browser;
 mod chat;
 mod chrome;
 mod claude;
+#[cfg(any(windows, test))]
+mod command_lookup;
 mod command_palette_panel;
 mod empty_state_panel;
 pub mod explorer_scm_model;

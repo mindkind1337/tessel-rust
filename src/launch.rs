@@ -21,6 +21,34 @@ impl Launch {
     }
 }
 
+pub fn discover(search: &crate::agent_paths::SearchPath) -> Result<Vec<(String, bool)>> {
+    #[cfg(windows)]
+    {
+        let names: Vec<_> = crate::agent_catalog::ALL
+            .iter()
+            .map(|preset| preset.executable)
+            .collect();
+        let found = crate::command_lookup::lookup(&names, &search.value)?;
+        Ok(crate::agent_catalog::ALL
+            .iter()
+            .map(|preset| {
+                let available = found
+                    .get(preset.executable)
+                    .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
+                (preset.id.to_owned(), available)
+            })
+            .collect())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(crate::agent_catalog::ALL
+            .iter()
+            .map(|preset| (preset.id.to_owned(), installed_on(preset.id, search)))
+            .collect())
+    }
+}
+
+#[cfg(any(not(windows), test))]
 pub fn installed_on(program: &str, search: &crate::agent_paths::SearchPath) -> bool {
     let Some(preset) = crate::agent_catalog::find(program) else {
         return false;
@@ -116,7 +144,13 @@ pub fn command(launch: &Launch, cwd: &Path) -> Result<CommandBuilder> {
         }
         Launch::Agent(program) => {
             let preset = crate::agent_catalog::find(program).ok_or("Unknown agent.")?;
-            if !installed_on(program, &search) {
+            #[cfg(windows)]
+            let available = crate::command_lookup::lookup(&[preset.executable], &search.value)?
+                .get(preset.executable)
+                .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
+            #[cfg(not(windows))]
+            let available = installed_on(program, &search);
+            if !available {
                 return Err(format!(
                     "{program} is not installed or not on PATH. Install its CLI, then refresh detection."
                 ));
