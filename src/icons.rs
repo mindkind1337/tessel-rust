@@ -9,6 +9,8 @@
 //!   `THIRD_PARTY_NOTICES.md`) for `Close` (`x`), `Help` (`circle-question-mark`), and
 //!   `Terminal` (`square-terminal`) and the `Files`, `GitBranch`, `ListChecks` side tabs.
 //! - Pane controls use the inline 16x16 SVG paths from `TerminalPane.vue`.
+//! - Settings Agent/Appearance/Account use `settingsPages.js` 16x16 paths at 1.3 px;
+//!   SSH uses the Lucide Cable geometry already covered by the third-party notices.
 
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
 
@@ -34,10 +36,14 @@ pub enum Icon {
     Files,
     GitBranch,
     ListChecks,
+    Agent,
+    Appearance,
+    Account,
+    Cable,
 }
 
 impl Icon {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 24] = [
         Self::Search,
         Self::Plus,
         Self::ChevronDown,
@@ -58,6 +64,10 @@ impl Icon {
         Self::Files,
         Self::GitBranch,
         Self::ListChecks,
+        Self::Agent,
+        Self::Appearance,
+        Self::Account,
+        Self::Cable,
     ];
 }
 
@@ -141,6 +151,27 @@ pub fn paint_brand(painter: &Painter, rect: Rect, development: bool) {
 /// Paints a crisp vector [`Icon`] inscribed 1:1 inside `rect` with `color`.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     match icon {
+        // Exact Settings pages paths (16 px); SSH uses Lucide Cable (24 px).
+        Icon::Agent | Icon::Appearance | Icon::Account | Icon::Cable => {
+            let size = if icon == Icon::Cable { 24.0 } else { 16.0 };
+            let Some(vp) = Viewport::new(rect, size) else {
+                return;
+            };
+            let path = match icon {
+                Icon::Agent => {
+                    "M5 5h6a2 2 0 012 2v4a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2zM8 2v3M6 9h.01M10 9h.01"
+                }
+                Icon::Appearance => "M8 2a6 6 0 100 12A6 6 0 008 2zM8 2v12",
+                Icon::Account => {
+                    "M8 8a2.75 2.75 0 100-5.5A2.75 2.75 0 008 8zM2.75 13.5c.7-2.3 2.8-3.75 5.25-3.75s4.55 1.45 5.25 3.75"
+                }
+                _ => {
+                    "M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1zM17 21v-2M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10M21 21v-2M3 5V3M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2zM7 5V3"
+                }
+            };
+            let width = if icon == Icon::Cable { 2.0 } else { 1.3 };
+            paint_svg_path(painter, vp, path, Stroke::new(vp.len(width), color), true);
+        }
         Icon::Files | Icon::GitBranch | Icon::ListChecks => {
             let Some(vp) = Viewport::new(rect, 24.0) else {
                 return;

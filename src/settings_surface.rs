@@ -1,28 +1,6 @@
 //! Native settings surface matching the reference page below the 40 px toolbar.
 use eframe::egui::{self, Color32, Id, Rect, Ui};
 
-/// Returns (focus search, close page), leaving keys to nested dialogs and popups.
-pub fn shortcuts(ui: &mut Ui, query: &mut String) -> (bool, bool) {
-    if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
-        return (false, false);
-    }
-    ui.input_mut(|input| {
-        let focus = input.consume_key(egui::Modifiers::CTRL, egui::Key::F);
-        let fresh_escape = input.events.iter().any(|event| {
-            matches!(event,
-            egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat: false, modifiers, .. }
-                if *modifiers == egui::Modifiers::NONE)
-        });
-        // Consume repeats too: holding Escape must not clear search and then close.
-        input.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
-        let close = fresh_escape && query.is_empty();
-        if fresh_escape {
-            query.clear();
-        }
-        (focus, close)
-    })
-}
-
 pub fn show<R>(
     ctx: &egui::Context,
     content: impl FnOnce(&mut Ui, f32) -> R,
@@ -94,42 +72,6 @@ pub fn body(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn escape_clears_search_then_closes_only_on_a_new_press_and_disabled_ui_keeps_keys() {
-        let ctx = egui::Context::default();
-        let mut query = "ssh".to_owned();
-        let mut frame = |pressed, enabled| {
-            let mut result = (false, false);
-            let mut escape_left = false;
-            let _ = ctx.run(
-                egui::RawInput {
-                    focused: true,
-                    events: vec![egui::Event::Key {
-                        key: egui::Key::Escape,
-                        physical_key: None,
-                        pressed,
-                        repeat: false,
-                        modifiers: egui::Modifiers::NONE,
-                    }],
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.add_enabled_ui(enabled, |ui| result = shortcuts(ui, &mut query));
-                        escape_left = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                    });
-                },
-            );
-            (result, escape_left, query.clone())
-        };
-        assert_eq!(frame(true, true), ((false, false), false, String::new()));
-        assert_eq!(frame(true, true), ((false, false), false, String::new()));
-        frame(false, true);
-        assert_eq!(frame(true, true).0, (false, true));
-        frame(false, true);
-        assert_eq!(frame(true, false), ((false, false), true, String::new()));
-    }
 
     #[test]
     fn page_stays_below_toolbar_and_long_content_is_clipped_at_both_window_sizes() {

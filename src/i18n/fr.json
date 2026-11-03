@@ -247,5 +247,11 @@
   "Search settings": "Rechercher dans les paramètres",
   "No matching settings": "Aucun paramètre correspondant",
   "Workspace": "Espace de travail",
-  "AI": "IA"
+  "AI": "IA",
+  "Native chats": "Conversations natives",
+  "Other": "Autre",
+  "1–9 or arrows and Enter to start · Esc to stay empty": "1–9 ou flèches et Entrée pour démarrer · Échap pour rester vide",
+  "What do you want to start in {{name}}?": "Que voulez-vous lancer dans {{name}} ?",
+  "Search panes, workspaces and commands": "Rechercher des panneaux, espaces et commandes",
+  "No matching commands": "Aucune commande correspondante"
 }
