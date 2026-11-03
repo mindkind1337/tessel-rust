@@ -683,6 +683,7 @@ pub fn configure_fonts(ctx: &egui::Context) {
         .unwrap_or_else(|| "C:/Windows".into());
     let mut fonts = egui::FontDefinitions::default();
     for (name, file) in [
+        ("windows-ui", "segoeui.ttf"),
         ("windows-emoji", "seguiemj.ttf"),
         ("windows-symbols", "seguisym.ttf"),
     ] {
@@ -702,6 +703,14 @@ pub fn configure_fonts(ctx: &egui::Context) {
             name.into(),
             std::sync::Arc::new(egui::FontData::from_owned(bytes)),
         );
+        if name == "windows-ui" {
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, name.into());
+            continue;
+        }
         for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
             fonts.families.entry(family).or_default().push(name.into());
         }

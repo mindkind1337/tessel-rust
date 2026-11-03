@@ -2,10 +2,13 @@
 
 Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete replacement.** The application UI and backend are Rust, using egui/eframe. No Electron, Vue or Node application runtime is bundled. External shells and agent CLIs remain separate programs; the Windows browser uses Microsoft's WebView2 engine.
 
+The target is the same appearance, layout, menus, shortcuts and behavior as Tessel. The current native interface does not yet meet that target; visual parity is a release acceptance requirement, not an optional redesign.
+
 ## Features
 
 ### Projects and workspace
 
+- The native dark palette uses Tessel Classic's source colors, with Segoe UI when available on Windows and a 13-point base UI size. Full panel/tab layout and theme parity are still in progress.
 - The status bar and `--version` show the compiled Git build and commit, so portable copies can be identified without consulting the source checkout. Builds without Git metadata are labeled as source archives.
 - Persistent local projects; newly added projects become selected automatically.
 - Saved theme, font size, one/two/three-column terminal layout, SSH hosts and per-project task boards.

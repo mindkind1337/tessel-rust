@@ -2,9 +2,12 @@
 
 Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-11-02. This ledger tracks capability, not just UI buttons. A row is complete only when its implementation and boundary tests pass. No existing credentials or user documents are migration fixtures.
 
+User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and behavior exactly in Rust. Existing native screenshots are development fixtures, not accepted visual parity. Compare matching synthetic workspaces, window sizes, display scaling, languages and themes before marking any screen complete. The reference source inspected for the first palette pass is Electron commit `2bb4184`: `src/renderer/src/style.css`, `themes.css`, `App.vue` and the workspace/pane components. Palette transcription alone does not satisfy layout, typography, icons, keyboard, focus or accessibility parity.
+
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
+| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Classic dark palette and base typography transcribed; remaining visual and interaction parity not accepted |
 | Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Implemented; filesystem tests pass |

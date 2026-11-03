@@ -25,6 +25,7 @@ mod remote_panel;
 mod share;
 mod share_panel;
 mod terminal;
+mod theme;
 #[cfg(windows)]
 mod vault;
 #[cfg(windows)]

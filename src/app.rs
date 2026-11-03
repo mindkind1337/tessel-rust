@@ -149,11 +149,7 @@ impl Tessel {
         #[cfg(windows)]
         crate::terminal::configure_fonts(&cc.egui_ctx);
         crate::i18n::set_language(state.language);
-        cc.egui_ctx.set_visuals(if state.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        crate::theme::apply(&cc.egui_ctx, state.dark);
         let mut app = Self {
             state,
             store,
@@ -1101,11 +1097,7 @@ impl Tessel {
             });
         }
         crate::i18n::set_language(self.state.language);
-        ctx.set_visuals(if self.state.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        crate::theme::apply(ctx, self.state.dark);
         self.refresh_project();
         self.backup_status = format!(
             "{} {}",
@@ -1206,11 +1198,7 @@ impl Tessel {
             .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text(tr("Font size")))
             .changed();
         if changed {
-            ui.ctx().set_visuals(if self.state.dark {
-                egui::Visuals::dark()
-            } else {
-                egui::Visuals::light()
-            });
+            crate::theme::apply(ui.ctx(), self.state.dark);
             self.save();
         }
         ui.separator();
