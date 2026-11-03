@@ -32,6 +32,7 @@ mod pane_header;
 pub mod pane_menu_model;
 mod pdf;
 mod preview;
+pub mod project_panel;
 mod remote;
 mod remote_panel;
 mod share;

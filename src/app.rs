@@ -101,6 +101,7 @@ pub struct Tessel {
     overlay: Option<Overlay>,
     help: crate::help_panel::HelpPanel,
     launcher: crate::launcher_panel::LauncherPanel,
+    project_panel: crate::project_panel::ProjectPanel,
     settings_section: SettingsSection,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
@@ -180,6 +181,7 @@ impl Tessel {
             overlay: None,
             help: Default::default(),
             launcher: Default::default(),
+            project_panel: Default::default(),
             settings_section: SettingsSection::Appearance,
             command_palette: Default::default(),
             command_palette_focused: false,
@@ -975,120 +977,134 @@ impl Tessel {
         }
     }
     fn sidebar(&mut self, ctx: &egui::Context) {
+        use crate::project_panel::{
+            ProjectAction, ProjectEntry, ProjectPanelInput, SessionEntry, SessionKind,
+        };
         if !self.state.panels.left_open {
             return;
         }
+        let entry = |session: &Session| SessionEntry {
+            id: session.id,
+            title: session.title.clone(),
+            kind: match session.launch {
+                Launch::Shell | Launch::Ssh(_) => SessionKind::Shell,
+                Launch::Agent(_) => SessionKind::Agent,
+                Launch::CodexChat | Launch::ClaudeChat => SessionKind::Chat,
+            },
+            sleeping: if let Some(provider) = session.launch.native_chat() {
+                match provider {
+                    "Codex" => !self
+                        .chats
+                        .iter()
+                        .any(|c| Some(c.project) == session.project && c.busy()),
+                    "Claude" => !self
+                        .claude_chats
+                        .iter()
+                        .any(|c| Some(c.project) == session.project && c.busy()),
+                    _ => true,
+                }
+            } else {
+                session.terminal.is_none() && session.loading.is_none()
+            },
+        };
+        let projects: Vec<_> = self
+            .state
+            .projects
+            .iter()
+            .map(|p| ProjectEntry {
+                id: p.id,
+                name: p.name.clone(),
+                path: p.path.display().to_string(),
+                sessions: self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project == Some(p.id))
+                    .map(&entry)
+                    .collect(),
+            })
+            .collect();
+        let global_sessions: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|s| s.project.is_none())
+            .map(&entry)
+            .collect();
+        let mut action = None;
         egui::SidePanel::left("projects")
             .default_width(280.0)
             .width_range(220.0..=500.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading(tr("Projects"));
-                    if ui.button("+").on_hover_text(tr("Open folder")).clicked() {
-                        self.choose_project();
-                    }
-                });
-                let mut selected_project = None;
-                let mut selected_session = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("project-session-cards")
-                    .show(ui, |ui| {
-                        for project in &self.state.projects {
-                            let active = Some(project.id) == self.state.active_project;
-                            let count = self
-                                .sessions
-                                .iter()
-                                .filter(|s| s.project == Some(project.id))
-                                .count();
-                            egui::collapsing_header::CollapsingState::load_with_default_open(
-                                ui.ctx(),
-                                ui.id().with(("project-card", project.id)),
-                                active || count > 0,
-                            )
-                            .show_header(ui, |ui| {
-                                if ui
-                                    .selectable_label(active, &project.name)
-                                    .on_hover_text(project.path.display().to_string())
-                                    .clicked()
-                                {
-                                    selected_project = Some(Some(project.id));
-                                }
-                                if count > 0 {
-                                    ui.weak(count.to_string()).on_hover_text(tr("Sessions"));
-                                }
-                            })
-                            .body(|ui| {
-                                for session in self
-                                    .sessions
-                                    .iter()
-                                    .filter(|s| s.project == Some(project.id))
-                                {
-                                    if ui
-                                        .selectable_label(
-                                            active && self.active_session == Some(session.id),
-                                            &session.title,
-                                        )
-                                        .clicked()
-                                    {
-                                        selected_session = Some((session.project, session.id));
-                                    }
-                                }
-                            });
-                        }
-                        if self.sessions.iter().any(|s| s.project.is_none()) {
-                            ui.separator();
-                            egui::CollapsingHeader::new(tr("Sessions without a project"))
-                                .id_salt("global-sessions")
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    for session in
-                                        self.sessions.iter().filter(|s| s.project.is_none())
-                                    {
-                                        if ui
-                                            .selectable_label(
-                                                self.state.active_project.is_none()
-                                                    && self.active_session == Some(session.id),
-                                                &session.title,
-                                            )
-                                            .clicked()
-                                        {
-                                            selected_session = Some((None, session.id));
-                                        }
-                                    }
-                                });
-                        }
-                    });
-                if let Some((project, id)) = selected_session {
-                    selected_project = Some(project);
-                    self.active_session = Some(id);
-                    self.view = View::Work;
-                    if let Some(layout) = self
-                        .state
-                        .terminal_layouts
-                        .get_mut(&crate::terminal_layout::project_key(project))
-                        && layout.maximized.is_some()
-                    {
-                        layout.maximized = Some(id);
-                        self.grid_dirty = true;
-                    }
-                    if let Some(terminal) = self
-                        .sessions
-                        .iter()
-                        .find(|s| s.id == id)
-                        .and_then(|s| s.terminal.as_ref())
-                    {
-                        terminal.request_focus(ctx);
-                    }
+                if self.overlay.is_some()
+                    || self.command_palette.open
+                    || self.finder.is_open()
+                    || self.toolbar_menu_open
+                    || self.pending_close.is_some()
+                    || self.pending_exit
+                    || self.file_action.is_some()
+                    || self.restore_preview.is_some()
+                {
+                    ui.disable();
                 }
-                if let Some(project) = selected_project {
-                    if self.state.active_project != project {
-                        self.state.active_project = project;
-                        self.refresh_project();
-                    }
-                    self.save();
-                }
+                action = self.project_panel.show(
+                    ui,
+                    ProjectPanelInput {
+                        projects: &projects,
+                        global_sessions: &global_sessions,
+                        active_project: self.state.active_project,
+                        active_session: self.active_session,
+                        french: self.state.language == crate::i18n::Language::French,
+                    },
+                );
             });
+        let project = match action {
+            Some(ProjectAction::Search) => {
+                if !self.command_palette.open {
+                    self.command_palette.toggle();
+                }
+                return;
+            }
+            Some(ProjectAction::OpenFolder) => {
+                self.choose_project();
+                return;
+            }
+            Some(ProjectAction::SelectProject(project)) => {
+                if project.is_some_and(|id| !self.state.projects.iter().any(|p| p.id == id)) {
+                    return;
+                }
+                project
+            }
+            Some(ProjectAction::SelectSession { project, id }) => {
+                let Some(session) = self
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == id && s.project == project)
+                else {
+                    return;
+                };
+                self.active_session = Some(id);
+                self.view = View::Work;
+                if let Some(layout) = self
+                    .state
+                    .terminal_layouts
+                    .get_mut(&crate::terminal_layout::project_key(project))
+                    && layout.maximized.is_some()
+                {
+                    layout.maximized = Some(id);
+                    self.grid_dirty = true;
+                }
+                if let Some(terminal) = &session.terminal {
+                    terminal.request_focus(ctx);
+                }
+                project
+            }
+            None => return,
+        };
+        if self.state.active_project != project {
+            self.state.active_project = project;
+            self.refresh_project();
+        }
+        self.save();
     }
     fn explorer(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new(tr("Open editors"))
