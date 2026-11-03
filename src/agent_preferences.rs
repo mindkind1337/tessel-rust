@@ -15,13 +15,22 @@ impl Default for Preferences {
 }
 
 pub fn enabled(state: &Workspace, id: &str) -> bool {
-    state.agent_prefs.get(id).is_none_or(|prefs| prefs.enabled)
+    let canonical = crate::agent_catalog::find(id).map_or(id, |preset| preset.id);
+    state
+        .agent_prefs
+        .get(canonical)
+        .or_else(|| {
+            if canonical == "cursor" {
+                state.agent_prefs.get("cursor-agent")
+            } else {
+                None
+            }
+        })
+        .is_none_or(|prefs| prefs.enabled)
 }
 
 pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) -> Result<()> {
-    if !crate::launch::AGENTS.contains(&id) {
-        return Err("Unknown agent.".into());
-    }
+    let id = crate::agent_catalog::find(id).ok_or("Unknown agent.")?.id;
     if enabled(state, id) == value {
         return Ok(());
     }
@@ -35,6 +44,24 @@ pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_cursor_visibility_uses_canonical_id_without_losing_the_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state
+            .agent_prefs
+            .insert("cursor-agent".into(), Preferences { enabled: false });
+        state.validate().unwrap();
+        assert!(!enabled(&state, "cursor"));
+        assert!(!enabled(&state, "cursor-agent"));
+        set_enabled(&mut state, &store, "cursor-agent", true).unwrap();
+        assert!(enabled(&state, "cursor"));
+        assert!(enabled(&state, "cursor-agent"));
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert!(enabled(&loaded, "cursor-agent"));
+    }
 
     #[test]
     fn old_settings_default_to_enabled_and_disabled_agents_survive_restart() {

@@ -508,9 +508,9 @@ impl Tessel {
     }
     fn detect_agents(&mut self) {
         self.agents.start(|| {
-            Ok(launch::AGENTS
+            Ok(crate::agent_catalog::ALL
                 .iter()
-                .map(|n| (n.to_string(), launch::installed(n)))
+                .map(|preset| (preset.id.to_string(), launch::installed(preset.id)))
                 .collect())
         });
     }
@@ -1414,7 +1414,9 @@ impl Tessel {
                 if *installed && crate::agent_preferences::enabled(&self.state, name) {
                     entries.push(Entry {
                         id: format!("agent:{name}"),
-                        label: name.clone(),
+                        label: crate::agent_catalog::find(name)
+                            .map_or(name.as_str(), |p| p.name)
+                            .into(),
                         group: tr("Agent CLIs").into(),
                         enabled: true,
                     });
@@ -2406,15 +2408,17 @@ impl Tessel {
         }
         let mut visibility_change = None;
         for (name, installed) in self.agents.entries() {
+            let preset = crate::agent_catalog::find(name);
+            let label = preset.map_or(name.as_str(), |p| p.name);
             let mut enabled = crate::agent_preferences::enabled(&self.state, name);
             if ui
-                .checkbox(&mut enabled, format!("{} {name}", tr("Offer in menus:")))
+                .checkbox(&mut enabled, format!("{} {label}", tr("Offer in menus:")))
                 .changed()
             {
                 visibility_change = Some((name.clone(), enabled));
             }
             ui.label(format!(
-                "{name}: {}",
+                "{label}: {}",
                 if *installed {
                     tr("available")
                 } else {
@@ -2490,7 +2494,9 @@ impl Tessel {
                 .map(|(name, available)| LauncherEntry {
                     item: LaunchMenuItem::Agent {
                         id: name.clone(),
-                        name: name.clone(),
+                        name: crate::agent_catalog::find(name)
+                            .map_or(name.as_str(), |p| p.name)
+                            .into(),
                     },
                     available: *available,
                     reason: (!available).then(|| tr("not on PATH").into()),

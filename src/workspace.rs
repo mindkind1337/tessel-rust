@@ -164,7 +164,7 @@ impl Workspace {
         if self
             .agent_prefs
             .keys()
-            .any(|id| !crate::launch::AGENTS.contains(&id.as_str()))
+            .any(|id| crate::agent_catalog::find(id).is_none())
         {
             return Err("Unknown saved agent preference.".into());
         }
@@ -221,7 +221,7 @@ impl Workspace {
             }
             match &session.launch {
                 crate::launch::Launch::Agent(name)
-                    if !crate::launch::AGENTS.contains(&name.as_str()) =>
+                    if crate::agent_catalog::find(name).is_none() =>
                 {
                     return Err("Unknown saved agent.".into());
                 }

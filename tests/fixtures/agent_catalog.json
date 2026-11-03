@@ -1,0 +1,300 @@
+{
+  "source": "Tessel src/main/index.js AGENT_PRESETS and src/shared/agentDocs.js",
+  "source_sha256": "3aed1ba55c78537b9f0a9b0283f0ed09c7cde13127b9181cb57f33ded3aefed3",
+  "agents": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "command": "claude",
+      "accent": "#d97757",
+      "docs": "https://code.claude.com/docs"
+    },
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "command": "codex",
+      "accent": "#10a37f",
+      "docs": "https://developers.openai.com/codex/cli"
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "command": "gemini",
+      "accent": "#4285f4",
+      "docs": "https://geminicli.com/docs/"
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "command": "opencode",
+      "accent": "#e8e8e8",
+      "docs": "https://opencode.ai/docs/"
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen Code",
+      "command": "qwen",
+      "accent": "#7c5cff",
+      "docs": "https://qwenlm.github.io/qwen-code-docs/"
+    },
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot CLI",
+      "command": "copilot",
+      "accent": "#8957e5",
+      "docs": "https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi Code",
+      "command": "kimi",
+      "accent": "#3b82f6",
+      "docs": "https://www.kimi.com/code/docs/en/kimi-code-cli/getting-started.html"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "command": "ollama",
+      "accent": "#f5f5f5",
+      "docs": null
+    },
+    {
+      "id": "cline",
+      "name": "Cline",
+      "command": "cline",
+      "accent": "#6ea8fe",
+      "docs": "https://docs.cline.bot/"
+    },
+    {
+      "id": "amp",
+      "name": "Amp",
+      "command": "amp",
+      "accent": "#f34e3f",
+      "docs": "https://ampcode.com/manual"
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor CLI",
+      "command": "cursor-agent",
+      "accent": "#a3a3a3",
+      "docs": "https://cursor.com/docs/cli/overview"
+    },
+    {
+      "id": "grok",
+      "name": "Grok Build",
+      "command": "grok",
+      "accent": "#b8b8b8",
+      "docs": "https://x.ai/cli"
+    },
+    {
+      "id": "pi",
+      "name": "Pi",
+      "command": "pi",
+      "accent": "#cf7cdb",
+      "docs": "https://pi.dev"
+    },
+    {
+      "id": "droid",
+      "name": "Factory Droid",
+      "command": "droid",
+      "accent": "#f08050",
+      "docs": "https://docs.factory.ai/cli/getting-started/quickstart"
+    },
+    {
+      "id": "crush",
+      "name": "Crush",
+      "command": "crush",
+      "accent": "#ff79c6",
+      "docs": "https://github.com/charmbracelet/crush"
+    },
+    {
+      "id": "goose",
+      "name": "Goose",
+      "command": "goose",
+      "accent": "#e4b65b",
+      "docs": "https://block.github.io/goose/docs/"
+    },
+    {
+      "id": "auggie",
+      "name": "Auggie",
+      "command": "auggie",
+      "accent": "#67c5ad",
+      "docs": "https://docs.augmentcode.com/cli/overview"
+    },
+    {
+      "id": "aider",
+      "name": "Aider",
+      "command": "aider",
+      "accent": "#14b014",
+      "docs": "https://aider.chat/docs/"
+    },
+    {
+      "id": "openclaude",
+      "name": "OpenClaude",
+      "command": "openclaude",
+      "accent": "#d9a077",
+      "docs": "https://openclaude.gitlawb.com/"
+    },
+    {
+      "id": "kilo",
+      "name": "Kilo Code",
+      "command": "kilo",
+      "accent": "#f8f675",
+      "docs": "https://kilo.ai/docs/cli"
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro",
+      "command": "kiro-cli chat --tui",
+      "accent": "#9046ff",
+      "docs": "https://kiro.dev/docs/cli/"
+    },
+    {
+      "id": "continue",
+      "name": "Continue",
+      "command": "cn",
+      "accent": "#be1fff",
+      "docs": "https://docs.continue.dev/guides/cli"
+    },
+    {
+      "id": "codebuff",
+      "name": "Codebuff",
+      "command": "codebuff",
+      "accent": "#56c271",
+      "docs": "https://www.codebuff.com/docs/help/quick-start"
+    },
+    {
+      "id": "vibe",
+      "name": "Mistral Vibe",
+      "command": "vibe",
+      "accent": "#fa520f",
+      "docs": "https://github.com/mistralai/mistral-vibe"
+    },
+    {
+      "id": "antigravity",
+      "name": "Antigravity",
+      "command": "agy",
+      "accent": "#5b8def",
+      "docs": "https://antigravity.google/docs/cli-overview"
+    },
+    {
+      "id": "rovo",
+      "name": "Rovo Dev",
+      "command": "rovo",
+      "accent": "#1868db",
+      "docs": "https://support.atlassian.com/rovo/docs/install-and-run-rovo-dev-cli-on-your-device/"
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes",
+      "command": "hermes --tui",
+      "accent": "#c9a86a",
+      "docs": "https://hermes-agent.nousresearch.com/docs/"
+    },
+    {
+      "id": "devin",
+      "name": "Devin",
+      "command": "devin",
+      "accent": "#3fb68b",
+      "docs": "https://devin.ai/cli"
+    },
+    {
+      "id": "trae",
+      "name": "Trae",
+      "command": "traecli",
+      "accent": "#ff4d4f",
+      "docs": "https://docs.trae.cn/cli_get-started-with-trae-cli"
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "command": "zcode",
+      "accent": "#6c8cff",
+      "docs": "https://zcode.z.ai/en/docs"
+    },
+    {
+      "id": "autohand",
+      "name": "Autohand Code",
+      "command": "autohand",
+      "accent": "#f59e0b",
+      "docs": "https://github.com/autohandai/code-cli"
+    },
+    {
+      "id": "commandcode",
+      "name": "Command Code",
+      "command": "command-code --trust",
+      "accent": "#e5e7eb",
+      "docs": "https://commandcode.ai/docs/quickstart"
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "command": "openclaw",
+      "accent": "#ef6b5b",
+      "docs": "https://github.com/openclaw/openclaw"
+    },
+    {
+      "id": "omp",
+      "name": "OMP",
+      "command": "omp",
+      "accent": "#c04fd8",
+      "docs": "https://omp.sh"
+    },
+    {
+      "id": "muse",
+      "name": "Muse",
+      "command": "muse --trust-workspace",
+      "accent": "#0668e1",
+      "docs": "https://dev.meta.ai/docs/muse-code"
+    },
+    {
+      "id": "opencode2",
+      "name": "OpenCode 2",
+      "command": "opencode2",
+      "accent": "#e8e8e8",
+      "docs": "https://opencode.ai/v2/docs/"
+    },
+    {
+      "id": "mimocode",
+      "name": "MiMo Code",
+      "command": "mimo",
+      "accent": "#ff6900",
+      "docs": "https://mimo.xiaomi.com/coder"
+    },
+    {
+      "id": "primeagent",
+      "name": "Prime Agent",
+      "command": "prime-agent",
+      "accent": "#8b8bf5",
+      "docs": "https://github.com/PrimeIntellect-ai/prime-agent"
+    },
+    {
+      "id": "ante",
+      "name": "Ante",
+      "command": "ante",
+      "accent": "#22c55e",
+      "docs": "https://github.com/AntigmaLabs/ante-preview"
+    },
+    {
+      "id": "qoder",
+      "name": "Qoder CLI",
+      "command": "qodercli",
+      "accent": "#2adb5c",
+      "docs": "https://docs.qoder.com/cli/overview"
+    },
+    {
+      "id": "freebuff",
+      "name": "Freebuff",
+      "command": "freebuff",
+      "accent": "#e5e7eb",
+      "docs": "https://freebuff.com/cli"
+    },
+    {
+      "id": "dsh",
+      "name": "DeepSeek Harness",
+      "command": "dsh-tui",
+      "accent": "#4d6bfe",
+      "docs": "https://deepseek-harness.github.io/deepseek-harness/"
+    }
+  ]
+}
