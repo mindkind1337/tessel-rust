@@ -11,6 +11,7 @@ mod backup;
 #[cfg(windows)]
 mod browser;
 mod chat;
+mod file_actions;
 mod files;
 mod git;
 mod i18n;

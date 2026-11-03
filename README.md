@@ -26,6 +26,7 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 ### Files and Git
 
 - Background directory loading with virtualized rows; paths are confined to the selected project and symlinks are not traversed automatically.
+- Local file/folder creation and context-menu rename/deletion, scoped to the selected project. Windows rename refuses existing targets atomically; permanent deletion requires confirmation and only removes files or empty folders. Unsaved edits block file mutations, open paths follow renames, and background directory results cannot overwrite a newer refresh.
 - UTF-8 text editor tabs (2 MiB limit), atomic saves, detection of external edits and unsaved-change guards on close.
 - On-demand Git status, working/staged diffs, recent history, literal-path staging and explicit commits. No continuous Git polling; operations have a 20-second deadline and bounded captured output.
 

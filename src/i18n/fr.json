@@ -200,5 +200,9 @@
   "Questions from the agent": "Questions de l’agent",
   "Your answer": "Votre réponse",
   "Send answers": "Envoyer les réponses",
-  "Skip questions": "Passer les questions"
+  "Skip questions": "Passer les questions",
+  "New…": "Nouveau…",
+  "Confirm": "Confirmer",
+  "Save pending edits before changing files.": "Enregistrez les modifications en cours avant de modifier les fichiers.",
+  "File operation in progress…": "Opération sur les fichiers en cours…"
 }

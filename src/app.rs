@@ -55,8 +55,9 @@ impl Session {
     }
 }
 enum Message {
+    FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
-    Directory(PathBuf, Result<Vec<Entry>, String>),
+    Directory(u64, PathBuf, Result<Vec<Entry>, String>),
     Document(PathBuf, Result<Box<Document>, String>),
 }
 #[derive(PartialEq)]
@@ -90,6 +91,7 @@ pub struct Tessel {
     directory: Option<PathBuf>,
     entries: Vec<Entry>,
     directory_loading: bool,
+    directory_generation: u64,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     agents: Vec<(String, bool)>,
@@ -99,6 +101,8 @@ pub struct Tessel {
     pending_close: Option<usize>,
     pending_exit: bool,
     restore_preview: Option<Workspace>,
+    file_action: Option<crate::file_actions::Action>,
+    file_action_pending: bool,
     backup_status: String,
     allow_exit: bool,
     #[cfg(feature = "visual-test")]
@@ -162,6 +166,7 @@ impl Tessel {
             directory: None,
             entries: vec![],
             directory_loading: false,
+            directory_generation: 0,
             sender,
             receiver,
             agents: vec![],
@@ -171,6 +176,8 @@ impl Tessel {
             pending_close: None,
             pending_exit: false,
             restore_preview: None,
+            file_action: None,
+            file_action_pending: false,
             backup_status: String::new(),
             allow_exit: false,
             #[cfg(feature = "visual-test")]
@@ -219,6 +226,17 @@ impl Tessel {
             if std::env::args().any(|a| a == "--remote-fixture") {
                 app.view = View::Remote;
                 app.remote = crate::remote_panel::RemotePanel::fixture();
+            }
+            if std::env::args().any(|a| a == "--file-action-fixture") {
+                let root = std::env::current_dir().expect("fixture cwd");
+                app.state.add_project(&root).expect("fixture project");
+                app.file_action = Some(crate::file_actions::Action {
+                    kind: crate::file_actions::Kind::File,
+                    root: root.clone(),
+                    path: root,
+                    name: "example.txt".into(),
+                });
+                app.view = View::Files;
             }
             if std::env::args().any(|a| a == "--questions-fixture") {
                 let root = std::env::current_dir().expect("fixture cwd");
@@ -320,13 +338,15 @@ impl Tessel {
         let Some(root) = self.state.active().map(|p| p.path.clone()) else {
             return;
         };
+        self.directory_generation = self.directory_generation.wrapping_add(1);
+        let generation = self.directory_generation;
         self.directory = Some(path.clone());
         self.directory_loading = true;
         self.entries.clear();
         let sender = self.sender.clone();
         thread::spawn(move || {
             let result = files::list(&root, &path);
-            let _ = sender.send(Message::Directory(path, result));
+            let _ = sender.send(Message::Directory(generation, path, result));
         });
     }
     fn refresh_project(&mut self) {
@@ -419,6 +439,42 @@ impl Tessel {
         }
         while let Ok(message) = self.receiver.try_recv() {
             match message {
+                Message::FileAction(result) => {
+                    self.file_action_pending = false;
+                    match result {
+                        Err(e) => self.error = e,
+                        Ok(change) => {
+                            if let Some(before) = &change.before {
+                                if let Some(after) = &change.after {
+                                    for doc in &mut self.documents {
+                                        if let Ok(suffix) = doc.path.strip_prefix(before) {
+                                            doc.path = if suffix.as_os_str().is_empty() {
+                                                after.clone()
+                                            } else {
+                                                after.join(suffix)
+                                            };
+                                        }
+                                    }
+                                    if let Some(dir) = &self.directory
+                                        && let Ok(suffix) = dir.strip_prefix(before)
+                                    {
+                                        self.directory = Some(after.join(suffix));
+                                    }
+                                } else {
+                                    self.documents.retain(|doc| !doc.path.starts_with(before));
+                                    self.active_document = self
+                                        .active_document
+                                        .min(self.documents.len().saturating_sub(1));
+                                    self.pending_close = None;
+                                }
+                            }
+                            if let Some(dir) = self.directory.clone() {
+                                self.list_directory(dir);
+                            }
+                        }
+                    }
+                }
+
                 Message::Folder(Some(path)) => match self.state.add_project(&path) {
                     Ok(_) => {
                         self.save();
@@ -427,14 +483,17 @@ impl Tessel {
                     Err(e) => self.error = e,
                 },
                 Message::Folder(None) => {}
-                Message::Directory(path, result) if self.directory.as_ref() == Some(&path) => {
+                Message::Directory(generation, path, result)
+                    if generation == self.directory_generation
+                        && self.directory.as_ref() == Some(&path) =>
+                {
                     self.directory_loading = false;
                     match result {
                         Ok(entries) => self.entries = entries,
                         Err(e) => self.error = e,
                     }
                 }
-                Message::Directory(_, _) => {}
+                Message::Directory(_, _, _) => {}
                 Message::Document(path, result) => {
                     self.document_pending.remove(&path);
                     match result {
@@ -493,6 +552,52 @@ impl Tessel {
         self.view = View::Work;
         self.save();
     }
+    fn file_actions_ready(&self) -> bool {
+        !self.file_action_pending
+            && self.document_pending.is_empty()
+            && !self.documents.iter().any(Document::dirty)
+    }
+    fn file_action_dialog(&mut self, ctx: &egui::Context) {
+        let ready = self.file_actions_ready();
+        if let Some(action) = &mut self.file_action {
+            let mut submit = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("file-action")).show(ctx, |ui| {
+                use crate::file_actions::Kind;
+                ui.heading(tr(match action.kind {
+                    Kind::File => "Create file",
+                    Kind::Folder => "Create folder",
+                    Kind::Rename => "Rename",
+                    Kind::Delete => "Delete permanently",
+                }));
+                ui.label(action.path.display().to_string());
+                if action.kind == Kind::Delete {
+                    ui.label(tr(
+                        "This does not use a recycle bin. Only empty folders can be deleted.",
+                    ));
+                } else {
+                    ui.text_edit_singleline(&mut action.name);
+                }
+                if !ready {
+                    ui.label(tr("Save pending edits before changing files."));
+                }
+                submit = ui
+                    .add_enabled(ready, egui::Button::new(tr("Confirm")))
+                    .clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+            if submit && let Some(action) = self.file_action.take() {
+                self.file_action_pending = true;
+                let sender = self.sender.clone();
+                thread::spawn(move || {
+                    let _ = sender.send(Message::FileAction(crate::file_actions::execute(action)));
+                });
+            }
+            if cancel {
+                self.file_action = None;
+            }
+        }
+    }
     fn sidebar(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("projects")
             .default_width(230.0)
@@ -542,6 +647,24 @@ impl Tessel {
                         self.list_directory(parent.to_owned());
                     }
                     ui.small(dir.file_name().unwrap_or_default().to_string_lossy());
+                    ui.add_enabled_ui(self.file_actions_ready(), |ui| {
+                        ui.menu_button(tr("New…"), |ui| {
+                            for (title, kind) in [
+                                ("Create file", crate::file_actions::Kind::File),
+                                ("Create folder", crate::file_actions::Kind::Folder),
+                            ] {
+                                if ui.button(tr(title)).clicked() {
+                                    self.file_action = Some(crate::file_actions::Action {
+                                        kind,
+                                        root: root.clone(),
+                                        path: dir.clone(),
+                                        name: String::new(),
+                                    });
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
                 }
                 let mut open = None;
                 egui::ScrollArea::vertical()
@@ -549,13 +672,31 @@ impl Tessel {
                     .show_rows(ui, 22.0, self.entries.len(), |ui, range| {
                         for i in range {
                             let e = &self.entries[i];
-                            if ui
-                                .selectable_label(
-                                    false,
-                                    format!("{} {}", if e.directory { ">" } else { "·" }, e.name),
-                                )
-                                .clicked()
+                            let response = ui.selectable_label(
+                                false,
+                                format!("{} {}", if e.directory { ">" } else { "·" }, e.name),
+                            );
+                            if self.file_actions_ready()
+                                && let Some(project) = self.state.active()
                             {
+                                response.context_menu(|ui| {
+                                    for (title, kind) in [
+                                        ("Rename…", crate::file_actions::Kind::Rename),
+                                        ("Delete…", crate::file_actions::Kind::Delete),
+                                    ] {
+                                        if ui.button(tr(title)).clicked() {
+                                            self.file_action = Some(crate::file_actions::Action {
+                                                kind,
+                                                root: project.path.clone(),
+                                                path: e.path.clone(),
+                                                name: e.name.clone(),
+                                            });
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            if response.clicked() && !self.file_action_pending {
                                 open = Some((e.path.clone(), e.directory));
                             }
                         }
@@ -655,6 +796,11 @@ impl Tessel {
         }
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
+        if self.file_action_pending {
+            ui.spinner();
+            ui.label(tr("File operation in progress…"));
+            return;
+        }
         let mut close = None;
         ui.horizontal_wrapped(|ui| {
             for (i, d) in self.documents.iter().enumerate() {
@@ -858,6 +1004,7 @@ impl Tessel {
     }
     fn can_restore(&self) -> bool {
         self.store.is_some()
+            && !self.file_action_pending
             && !self
                 .sessions
                 .iter()
@@ -1113,15 +1260,17 @@ impl Tessel {
                 });
             });
         }
+        self.file_action_dialog(ctx);
         if self.pending_exit {
             egui::Modal::new(egui::Id::new("close-app")).show(ctx, |ui| {
                 ui.label(tr("There are unsaved files or sessions. Closing ends sessions."));
                 if ui.button(tr("Keep working")).clicked() {
                     self.pending_exit = false;
                 }
+                if self.file_action_pending { ui.label(tr("File operation in progress…")); }
                 if self.account_busy() { ui.label(tr("Wait for the account request to finish before closing.")); }
                 if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
-                if ui.add_enabled(!self.remote.needs_close_confirmation() && !self.account_busy(),egui::Button::new(tr("Save all and close"))).clicked() {
+                if ui.add_enabled(!self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -1136,7 +1285,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!self.remote.busy() && !self.account_busy(),egui::Button::new(tr("Discard edits and close"))).clicked() {
+                if ui.add_enabled(!self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.allow_exit = true;
                     self.save();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1281,7 +1430,8 @@ impl eframe::App for Tessel {
                 || self.chats.iter().any(crate::chat::Chat::busy)
                 || self.share.hosting()
                 || self.remote.needs_close_confirmation()
-                || self.account_busy())
+                || self.account_busy()
+                || self.file_action_pending)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
@@ -1358,7 +1508,8 @@ impl eframe::App for Tessel {
             !self.show_agent_browser
                 && self.view == View::Browser
                 && !self.pending_exit
-                && self.pending_close.is_none(),
+                && self.pending_close.is_none()
+                && self.file_action.is_none(),
         );
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
             View::Work => self.work(ui),
@@ -1377,7 +1528,8 @@ impl eframe::App for Tessel {
             View::Account => self.account.show(ui),
             #[cfg(windows)]
             View::Browser => {
-                if !self.pending_exit && self.pending_close.is_none() {
+                if !self.pending_exit && self.pending_close.is_none() && self.file_action.is_none()
+                {
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut self.show_agent_browser,
