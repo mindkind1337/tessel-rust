@@ -9,6 +9,40 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, String>;
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SideTab {
+    #[default]
+    Files,
+    Changes,
+    Tasks,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Panels {
+    pub left_open: bool,
+    pub right_open: bool,
+    pub right_tab: SideTab,
+}
+
+impl Default for Panels {
+    fn default() -> Self {
+        Self {
+            left_open: true,
+            right_open: true,
+            right_tab: SideTab::Files,
+        }
+    }
+}
+
+impl Panels {
+    pub fn toggle_right(&mut self, tab: SideTab) {
+        self.right_open = !self.right_open || self.right_tab != tab;
+        self.right_tab = tab;
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Project {
     pub id: u64,
@@ -54,6 +88,7 @@ pub struct Workspace {
     pub theme: Option<crate::theme_palettes::ThemeId>,
     pub language: crate::i18n::Language,
     pub columns: usize,
+    pub panels: Panels,
     pub font_size: f32,
     pub next_id: u64,
 }
@@ -73,6 +108,7 @@ impl Default for Workspace {
             theme: None,
             language: Default::default(),
             columns: 1,
+            panels: Default::default(),
             font_size: 15.0,
             next_id: 1,
         }
@@ -341,6 +377,29 @@ mod tests {
         assert_eq!(
             fs::read(dir.path().join("workspace.json")).unwrap(),
             b"broken"
+        );
+    }
+    #[test]
+    fn panel_toggles_survive_restart_and_old_settings_keep_visible_defaults() {
+        let old: Workspace = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.panels, Panels::default());
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state.panels.left_open = false;
+        state.panels.toggle_right(SideTab::Files);
+        assert!(!state.panels.right_open);
+        state.panels.toggle_right(SideTab::Tasks);
+        assert!(state.panels.right_open);
+        assert_eq!(state.panels.right_tab, SideTab::Tasks);
+        state.panels.toggle_right(SideTab::Changes);
+        assert!(state.panels.right_open);
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(loaded.panels, state.panels);
+        assert!(loaded.sessions.is_empty());
+        assert!(
+            serde_json::from_str::<Workspace>(r#"{"panels":{"right_tab":"unknown"}}"#).is_err()
         );
     }
     #[test]

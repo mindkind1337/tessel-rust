@@ -21,11 +21,16 @@ pub struct Terminal {
     composition: String,
     composing: bool,
     mouse: mouse::Mouse,
+    widget_id: Option<egui::Id>,
     #[cfg(feature = "visual-test")]
     fixture: bool,
 }
 
 impl Terminal {
+    pub fn has_focus(&self, ctx: &egui::Context) -> bool {
+        self.widget_id
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(id)))
+    }
     #[cfg(feature = "visual-test")]
     pub fn visual_fixture() -> Result<Self, Box<dyn std::error::Error>> {
         let command = crate::launch::command(
@@ -97,6 +102,7 @@ impl Terminal {
             composition: String::new(),
             composing: false,
             mouse: Default::default(),
+            widget_id: None,
             #[cfg(feature = "visual-test")]
             fixture: false,
         })
@@ -172,6 +178,7 @@ impl Terminal {
             self.size = (rows, cols);
         }
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        self.widget_id = Some(response.id);
         if ui.is_enabled()
             && (response.clicked()
                 || response.drag_started()
@@ -797,6 +804,7 @@ mod tests {
                     });
                 },
             );
+            terminal.has_focus(&ctx)
         };
         render(true, vec![]);
         let pos = egui::pos2(50.0, 50.0);
@@ -815,7 +823,7 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             },
         ];
-        render(true, click.clone());
+        assert!(render(true, click.clone()));
         let packets: Vec<Vec<u8>> = receiver.try_iter().collect();
         assert!(packets.iter().any(|packet| packet.starts_with(b"\x1b[<")));
         render(true, vec![egui::Event::Text("enabled".into())]);
@@ -829,6 +837,8 @@ mod tests {
         );
         render(false, click);
         assert!(receiver.try_recv().is_err());
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("settings-text-field")));
+        assert!(!terminal.has_focus(&ctx));
     }
     #[test]
     fn interrupt_and_navigation_are_terminal_sequences() {

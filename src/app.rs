@@ -69,12 +69,7 @@ enum View {
     #[cfg(windows)]
     Browser,
 }
-#[derive(Clone, Copy, PartialEq)]
-enum RightTab {
-    Files,
-    Changes,
-    Tasks,
-}
+use crate::workspace::SideTab as RightTab;
 #[derive(Clone, Copy, PartialEq)]
 enum Overlay {
     Settings,
@@ -104,9 +99,6 @@ pub struct Tessel {
     view: View,
     overlay: Option<Overlay>,
     settings_section: SettingsSection,
-    right_open: bool,
-    right_tab: RightTab,
-    left_open: bool,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     directory: Option<PathBuf>,
@@ -184,9 +176,6 @@ impl Tessel {
             view: View::Work,
             overlay: None,
             settings_section: SettingsSection::Appearance,
-            right_open: true,
-            right_tab: RightTab::Files,
-            left_open: true,
             command_palette: Default::default(),
             command_palette_focused: false,
             directory: None,
@@ -778,8 +767,8 @@ impl Tessel {
                 "terminal" => self.new_session(Launch::Shell),
                 "chat" => self.view = View::Chat,
                 "files" | "changes" | "tasks" => {
-                    self.right_open = true;
-                    self.right_tab = match id.as_str() {
+                    self.state.panels.right_open = true;
+                    self.state.panels.right_tab = match id.as_str() {
                         "changes" => RightTab::Changes,
                         "tasks" => RightTab::Tasks,
                         _ => RightTab::Files,
@@ -808,7 +797,7 @@ impl Tessel {
         }
     }
     fn sidebar(&mut self, ctx: &egui::Context) {
-        if !self.left_open {
+        if !self.state.panels.left_open {
             return;
         }
         egui::SidePanel::left("projects")
@@ -965,7 +954,7 @@ impl Tessel {
         }
     }
     fn right_panel(&mut self, ctx: &egui::Context) {
-        if !self.right_open {
+        if !self.state.panels.right_open {
             return;
         }
         let max_width = (ctx.available_rect().width() - 420.0).max(260.0);
@@ -979,18 +968,18 @@ impl Tessel {
                         (RightTab::Changes, "Changes"),
                         (RightTab::Tasks, "Tasks"),
                     ] {
-                        ui.selectable_value(&mut self.right_tab, tab, tr(label));
+                        ui.selectable_value(&mut self.state.panels.right_tab, tab, tr(label));
                     }
                     if ui
                         .small_button("×")
                         .on_hover_text(tr("Close panel"))
                         .clicked()
                     {
-                        self.right_open = false;
+                        self.state.panels.right_open = false;
                     }
                 });
                 ui.separator();
-                match self.right_tab {
+                match self.state.panels.right_tab {
                     RightTab::Files => self.explorer(ui),
                     RightTab::Changes => {
                         egui::ScrollArea::both()
@@ -1817,16 +1806,58 @@ impl eframe::App for Tessel {
         }
 
         self.poll();
-        if self.overlay.is_none()
-            && self.pending_close.is_none()
-            && !self.pending_exit
-            && self.file_action.is_none()
-            && (!ctx.wants_keyboard_input() || self.view == View::Work)
-            && ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
-            })
+        let previous_panels = self.state.panels;
+        let terminal_focused = self.view == View::Work
+            && self.sessions.iter().any(|session| {
+                session.project == self.state.active_project
+                    && session
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|terminal| terminal.has_focus(ctx))
+            });
+        let confirmation_open = self.pending_close.is_some()
+            || self.pending_exit
+            || self.file_action.is_some()
+            || self.restore_preview.is_some();
+        let keyboard_free = !ctx.wants_keyboard_input() || terminal_focused;
+        if !confirmation_open
+            && !self.command_palette.open
+            && keyboard_free
+            && matches!(self.overlay, None | Some(Overlay::Settings))
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma))
         {
-            self.command_palette.toggle();
+            self.overlay = if self.overlay.is_some() {
+                None
+            } else {
+                Some(Overlay::Settings)
+            };
+        }
+        if self.overlay.is_none() && !confirmation_open {
+            if (keyboard_free || self.command_palette.open)
+                && ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
+                })
+            {
+                self.command_palette.toggle();
+            }
+            if keyboard_free && !self.command_palette.open {
+                for (key, tab) in [
+                    (egui::Key::X, RightTab::Files),
+                    (egui::Key::G, RightTab::Changes),
+                    (egui::Key::K, RightTab::Tasks),
+                ] {
+                    if ctx.input_mut(|i| {
+                        i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
+                    }) {
+                        self.state.panels.toggle_right(tab);
+                    }
+                }
+                if ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
+                }) {
+                    self.new_session(Launch::Shell);
+                }
+            }
         }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_exit
@@ -1895,8 +1926,8 @@ impl eframe::App for Tessel {
                         self.overlay = Some(Overlay::Share);
                     }
                     ui.menu_button(tr("Layout"), |ui| {
-                        ui.checkbox(&mut self.left_open, tr("Projects"));
-                        ui.checkbox(&mut self.right_open, tr("Side panel"));
+                        ui.checkbox(&mut self.state.panels.left_open, tr("Projects"));
+                        ui.checkbox(&mut self.state.panels.right_open, tr("Side panel"));
                         for columns in 1..=3 {
                             if ui
                                 .selectable_value(
@@ -1997,6 +2028,9 @@ impl eframe::App for Tessel {
         self.show_overlay(ctx);
         self.show_command_palette(ctx);
         self.confirmations(ctx);
+        if previous_panels != self.state.panels {
+            self.save();
+        }
         ctx.request_repaint_after(Duration::from_millis(if self.sessions.is_empty() {
             150
         } else {

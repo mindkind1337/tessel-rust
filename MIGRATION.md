@@ -42,3 +42,5 @@ The existing sync contract at `/api/sync` and `/api/sync/versions` carries accou
 ## Native overlay acceptance
 
 Settings and sharing now open over the existing center view. Settings sections expose the implemented appearance, CLI detection, SSH hosts, owner passwords, account and backup controls. Closing the overlay preserves the selected document/terminal/browser. Native WebView surfaces are hidden and underlying terminal input is disabled while dialogs are open, including file and exit confirmations. Full source Settings page coverage is still pending.
+
+Panel visibility and the selected Files/Changes/Tasks tab now persist in workspace settings and portable backups. Implemented source shortcuts: Ctrl+Shift+X/G/K for side panels, Ctrl+Shift+T for a terminal, Ctrl+Shift+P for commands, Ctrl+, for Settings. Routing distinguishes a focused terminal from text inputs and defers while confirmations are open; the full shortcut inventory remains pending.
