@@ -172,13 +172,14 @@ impl Terminal {
             self.size = (rows, cols);
         }
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
-        if response.clicked()
-            || response.drag_started()
-            || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed())
+        if ui.is_enabled()
+            && (response.clicked()
+                || response.drag_started()
+                || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))
         {
             response.request_focus();
         }
-        if response.has_focus() {
+        if response.has_focus() && ui.is_enabled() {
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(
                     response.id,
@@ -209,21 +210,26 @@ impl Terminal {
         };
         let shift = ui.input(|i| i.modifiers.shift);
         let tracking = mode != vt100::MouseProtocolMode::None;
-        let mouse_bytes = ui.input(|i| {
-            self.mouse.events(
-                &i.events,
-                &mouse::Area {
-                    rect,
-                    cell: egui::vec2(cell_width, line_height),
-                    size: self.size,
-                    hovered: response.contains_pointer(),
-                    pointer: i.pointer.hover_pos(),
-                    modifiers: i.modifiers,
-                },
-                mode,
-                self.parser.screen().mouse_protocol_encoding(),
-            )
-        });
+        let mouse_bytes = if !ui.is_enabled() {
+            self.mouse
+                .release(self.parser.screen().mouse_protocol_encoding())
+        } else {
+            ui.input(|i| {
+                self.mouse.events(
+                    &i.events,
+                    &mouse::Area {
+                        rect,
+                        cell: egui::vec2(cell_width, line_height),
+                        size: self.size,
+                        hovered: response.contains_pointer(),
+                        pointer: i.pointer.hover_pos(),
+                        modifiers: i.modifiers,
+                    },
+                    mode,
+                    self.parser.screen().mouse_protocol_encoding(),
+                )
+            })
+        };
         if !mouse_bytes.is_empty() {
             self.selection = None;
             if let Err(e) = self.send(mouse_bytes) {
@@ -386,7 +392,7 @@ impl Terminal {
                 }
             }
         }
-        if response.has_focus() {
+        if response.has_focus() && ui.is_enabled() {
             let (row, col) = screen.cursor_position();
             if !screen.hide_cursor() && screen.scrollback() == 0 {
                 let pos = rect.min
@@ -721,6 +727,66 @@ pub fn configure_fonts(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disabled_terminal_cannot_receive_modal_typing_or_mouse_clicks() {
+        let mut terminal = Terminal::spawn().unwrap();
+        let (sender, receiver) = mpsc::sync_channel(32);
+        terminal.input = Some(sender);
+        terminal.process_output(b"\x1b[?1000h\x1b[?1006h");
+        let ctx = egui::Context::default();
+        let mut render = |enabled: bool, events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    events,
+                    focused: true,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if !enabled {
+                            ui.disable();
+                        }
+                        terminal.show(ui, 14.0);
+                    });
+                },
+            );
+        };
+        render(true, vec![]);
+        let pos = egui::pos2(50.0, 50.0);
+        let click = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        render(true, click.clone());
+        let packets: Vec<Vec<u8>> = receiver.try_iter().collect();
+        assert!(packets.iter().any(|packet| packet.starts_with(b"\x1b[<")));
+        render(true, vec![egui::Event::Text("enabled".into())]);
+        assert_eq!(receiver.try_recv().unwrap(), b"enabled");
+        render(
+            false,
+            vec![
+                egui::Event::Text("private modal input".into()),
+                egui::Event::Paste("paste".into()),
+            ],
+        );
+        render(false, click);
+        assert!(receiver.try_recv().is_err());
+    }
     #[test]
     fn interrupt_and_navigation_are_terminal_sequences() {
         assert_eq!(key_bytes(egui::Key::C, egui::Modifiers::CTRL), vec![3]);

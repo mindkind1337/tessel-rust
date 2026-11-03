@@ -18,6 +18,7 @@ mod git;
 mod i18n;
 mod launch;
 mod office;
+pub mod palette;
 mod pdf;
 mod preview;
 mod remote;

@@ -64,9 +64,7 @@ enum Message {
 enum View {
     Work,
     Files,
-    Tasks,
     Settings,
-    Git,
     Chat,
     Share,
     Remote,
@@ -76,6 +74,12 @@ enum View {
     Vault,
     #[cfg(windows)]
     Account,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum RightTab {
+    Files,
+    Changes,
+    Tasks,
 }
 pub struct Tessel {
     state: Workspace,
@@ -88,6 +92,11 @@ pub struct Tessel {
     document_pending: std::collections::HashSet<PathBuf>,
     active_document: usize,
     view: View,
+    right_open: bool,
+    right_tab: RightTab,
+    left_open: bool,
+    command_palette: crate::palette::CommandPaletteState,
+    command_palette_focused: bool,
     directory: Option<PathBuf>,
     entries: Vec<Entry>,
     directory_loading: bool,
@@ -161,6 +170,11 @@ impl Tessel {
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
+            right_open: true,
+            right_tab: RightTab::Files,
+            left_open: true,
+            command_palette: Default::default(),
+            command_palette_focused: false,
             directory: None,
             entries: vec![],
             directory_loading: false,
@@ -215,6 +229,9 @@ impl Tessel {
         }
         #[cfg(feature = "visual-test")]
         {
+            if std::env::args().any(|a| a == "--palette-fixture") {
+                app.command_palette.open = true;
+            }
             if std::env::args().any(|a| a == "--claude-fixture") {
                 let root = std::env::current_dir().expect("fixture cwd");
                 app.state.add_project(&root).expect("fixture project");
@@ -625,9 +642,147 @@ impl Tessel {
             }
         }
     }
+    fn center_tabs(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::horizontal()
+            .id_salt("center-tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.view, View::Work, tr("Terminal"));
+                    if !self.chats.is_empty()
+                        || !self.claude_chats.is_empty()
+                        || self.view == View::Chat
+                    {
+                        ui.selectable_value(&mut self.view, View::Chat, tr("Native chat"));
+                    }
+                    #[cfg(windows)]
+                    ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
+                    for (i, document) in self.documents.iter().enumerate() {
+                        if ui
+                            .selectable_label(
+                                self.view == View::Files && self.active_document == i,
+                                format!(
+                                    "{}{}",
+                                    document
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy(),
+                                    if document.dirty() { " *" } else { "" }
+                                ),
+                            )
+                            .on_hover_text(document.path.display().to_string())
+                            .clicked()
+                        {
+                            self.view = View::Files;
+                            self.active_document = i;
+                        }
+                    }
+                });
+            });
+        ui.separator();
+    }
+    fn show_command_palette(&mut self, ctx: &egui::Context) {
+        if !self.command_palette.open {
+            self.command_palette_focused = false;
+            return;
+        }
+        use crate::palette::{PaletteCommand, filter_palette_commands};
+        let commands: Vec<_> = [
+            ("terminal", "Open terminal"),
+            ("chat", "Native chat"),
+            ("files", "Files"),
+            ("changes", "Changes"),
+            ("tasks", "Tasks"),
+            ("settings", "Settings"),
+            ("remote", "Remote files"),
+            ("share", "Share"),
+            #[cfg(windows)]
+            ("browser", "Browser"),
+            #[cfg(windows)]
+            ("vault", "Passwords"),
+            #[cfg(windows)]
+            ("account", "Account"),
+        ]
+        .into_iter()
+        .map(|(id, title)| PaletteCommand::new(id, "Tessel", tr(title)))
+        .collect();
+        let mut selected = None;
+        let response = egui::Modal::new(egui::Id::new("commands")).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 40.0).clamp(240.0, 560.0));
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut self.command_palette.query)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(tr("Search panes, run a command")),
+            );
+            if !self.command_palette_focused {
+                edit.request_focus();
+                self.command_palette_focused = true;
+            }
+            if edit.changed() {
+                self.command_palette.index = 0;
+            }
+            let rows = filter_palette_commands(&commands, &self.command_palette.query);
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                self.command_palette.move_selection(1, rows.len());
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+                self.command_palette.move_selection(-1, rows.len());
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                selected = self.command_palette.selected_id(&rows).map(str::to_owned);
+            }
+            egui::ScrollArea::vertical()
+                .max_height(360.0)
+                .show(ui, |ui| {
+                    for (i, row) in rows.iter().enumerate() {
+                        if ui
+                            .selectable_label(i == self.command_palette.index, &row.command.title)
+                            .clicked()
+                        {
+                            selected = Some(row.command.id.clone());
+                        }
+                    }
+                });
+        });
+        if response.should_close() {
+            self.command_palette.close();
+        }
+        if let Some(id) = selected {
+            self.command_palette.close();
+            match id.as_str() {
+                "terminal" => self.new_session(Launch::Shell),
+                "chat" => self.view = View::Chat,
+                "files" | "changes" | "tasks" => {
+                    self.right_open = true;
+                    self.right_tab = match id.as_str() {
+                        "changes" => RightTab::Changes,
+                        "tasks" => RightTab::Tasks,
+                        _ => RightTab::Files,
+                    };
+                }
+                "settings" => self.view = View::Settings,
+                "remote" => self.view = View::Remote,
+                "share" => self.view = View::Share,
+                #[cfg(windows)]
+                "browser" => self.view = View::Browser,
+                #[cfg(windows)]
+                "vault" => self.view = View::Vault,
+                #[cfg(windows)]
+                "account" => self.view = View::Account,
+                _ => {}
+            }
+        }
+        if !self.command_palette.open {
+            self.command_palette_focused = false;
+        }
+    }
     fn sidebar(&mut self, ctx: &egui::Context) {
+        if !self.left_open {
+            return;
+        }
         egui::SidePanel::left("projects")
-            .default_width(230.0)
+            .default_width(280.0)
+            .width_range(220.0..=500.0)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -652,87 +807,172 @@ impl Tessel {
                     self.refresh_project();
                 }
                 ui.separator();
-                ui.horizontal(|ui| {
-                    ui.strong(tr("Files"));
-                    if ui.small_button(tr("Refresh")).clicked()
-                        && let Some(path) = self.directory.clone()
+                for session in self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project == self.state.active_project)
+                {
+                    if ui
+                        .selectable_label(Some(session.id) == self.active_session, &session.title)
+                        .clicked()
                     {
-                        self.list_directory(path);
+                        self.active_session = Some(session.id);
+                        self.view = View::Work;
+                    }
+                }
+            });
+    }
+    fn explorer(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new(tr("Open editors"))
+            .default_open(true)
+            .show(ui, |ui| {
+                for (i, document) in self.documents.iter().enumerate() {
+                    if ui
+                        .selectable_label(
+                            self.view == View::Files && i == self.active_document,
+                            format!(
+                                "{}{}",
+                                document
+                                    .path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy(),
+                                if document.dirty() { " *" } else { "" }
+                            ),
+                        )
+                        .on_hover_text(document.path.display().to_string())
+                        .clicked()
+                    {
+                        self.active_document = i;
+                        self.view = View::Files;
+                    }
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong(tr("Files"));
+            if ui.small_button(tr("Refresh")).clicked()
+                && let Some(path) = self.directory.clone()
+            {
+                self.list_directory(path);
+            }
+        });
+        if self.directory_loading {
+            ui.spinner();
+        }
+        if let (Some(dir), Some(root)) = (
+            self.directory.clone(),
+            self.state.active().map(|p| p.path.clone()),
+        ) {
+            if dir != root
+                && let Some(parent) = dir.parent()
+                && ui.button(tr(".. Parent folder")).clicked()
+            {
+                self.list_directory(parent.to_owned());
+            }
+            ui.small(dir.file_name().unwrap_or_default().to_string_lossy());
+            ui.add_enabled_ui(self.file_actions_ready(), |ui| {
+                ui.menu_button(tr("New…"), |ui| {
+                    for (title, kind) in [
+                        ("Create file", crate::file_actions::Kind::File),
+                        ("Create folder", crate::file_actions::Kind::Folder),
+                    ] {
+                        if ui.button(tr(title)).clicked() {
+                            self.file_action = Some(crate::file_actions::Action {
+                                kind,
+                                root: root.clone(),
+                                path: dir.clone(),
+                                name: String::new(),
+                            });
+                            ui.close();
+                        }
                     }
                 });
-                if self.directory_loading {
-                    ui.spinner();
-                }
-                if let (Some(dir), Some(root)) = (
-                    self.directory.clone(),
-                    self.state.active().map(|p| p.path.clone()),
-                ) {
-                    if dir != root
-                        && let Some(parent) = dir.parent()
-                        && ui.button(tr(".. Parent folder")).clicked()
+            });
+        }
+        let mut open = None;
+        egui::ScrollArea::vertical()
+            .id_salt("files-list")
+            .show_rows(ui, 22.0, self.entries.len(), |ui, range| {
+                for i in range {
+                    let e = &self.entries[i];
+                    let response = ui.selectable_label(
+                        false,
+                        format!("{} {}", if e.directory { ">" } else { "·" }, e.name),
+                    );
+                    if self.file_actions_ready()
+                        && let Some(project) = self.state.active()
                     {
-                        self.list_directory(parent.to_owned());
-                    }
-                    ui.small(dir.file_name().unwrap_or_default().to_string_lossy());
-                    ui.add_enabled_ui(self.file_actions_ready(), |ui| {
-                        ui.menu_button(tr("New…"), |ui| {
+                        response.context_menu(|ui| {
                             for (title, kind) in [
-                                ("Create file", crate::file_actions::Kind::File),
-                                ("Create folder", crate::file_actions::Kind::Folder),
+                                ("Rename…", crate::file_actions::Kind::Rename),
+                                ("Delete…", crate::file_actions::Kind::Delete),
                             ] {
                                 if ui.button(tr(title)).clicked() {
                                     self.file_action = Some(crate::file_actions::Action {
                                         kind,
-                                        root: root.clone(),
-                                        path: dir.clone(),
-                                        name: String::new(),
+                                        root: project.path.clone(),
+                                        path: e.path.clone(),
+                                        name: e.name.clone(),
                                     });
                                     ui.close();
                                 }
                             }
                         });
-                    });
+                    }
+                    if response.clicked() && !self.file_action_pending {
+                        open = Some((e.path.clone(), e.directory));
+                    }
                 }
-                let mut open = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("files-list")
-                    .show_rows(ui, 22.0, self.entries.len(), |ui, range| {
-                        for i in range {
-                            let e = &self.entries[i];
-                            let response = ui.selectable_label(
-                                false,
-                                format!("{} {}", if e.directory { ">" } else { "·" }, e.name),
-                            );
-                            if self.file_actions_ready()
-                                && let Some(project) = self.state.active()
-                            {
-                                response.context_menu(|ui| {
-                                    for (title, kind) in [
-                                        ("Rename…", crate::file_actions::Kind::Rename),
-                                        ("Delete…", crate::file_actions::Kind::Delete),
-                                    ] {
-                                        if ui.button(tr(title)).clicked() {
-                                            self.file_action = Some(crate::file_actions::Action {
-                                                kind,
-                                                root: project.path.clone(),
-                                                path: e.path.clone(),
-                                                name: e.name.clone(),
-                                            });
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            }
-                            if response.clicked() && !self.file_action_pending {
-                                open = Some((e.path.clone(), e.directory));
-                            }
-                        }
-                    });
-                if let Some((path, dir)) = open {
-                    if dir {
-                        self.list_directory(path);
-                    } else {
-                        self.open_document(path);
+            });
+        if let Some((path, dir)) = open {
+            if dir {
+                self.list_directory(path);
+            } else {
+                self.open_document(path);
+            }
+        }
+    }
+    fn right_panel(&mut self, ctx: &egui::Context) {
+        if !self.right_open {
+            return;
+        }
+        let max_width = (ctx.available_rect().width() - 420.0).max(260.0);
+        egui::SidePanel::right("tools-panel")
+            .default_width(330.0)
+            .width_range(260.0..=max_width)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (tab, label) in [
+                        (RightTab::Files, "Files"),
+                        (RightTab::Changes, "Changes"),
+                        (RightTab::Tasks, "Tasks"),
+                    ] {
+                        ui.selectable_value(&mut self.right_tab, tab, tr(label));
+                    }
+                    if ui
+                        .small_button("×")
+                        .on_hover_text(tr("Close panel"))
+                        .clicked()
+                    {
+                        self.right_open = false;
+                    }
+                });
+                ui.separator();
+                match self.right_tab {
+                    RightTab::Files => self.explorer(ui),
+                    RightTab::Changes => {
+                        egui::ScrollArea::both()
+                            .id_salt("side-git")
+                            .show(ui, |ui| self.git_view(ui));
+                    }
+                    RightTab::Tasks => {
+                        egui::ScrollArea::both()
+                            .id_salt("side-tasks")
+                            .show(ui, |ui| {
+                                ui.set_min_width(880.0);
+                                self.tasks(ui);
+                            });
                     }
                 }
             });
@@ -829,24 +1069,6 @@ impl Tessel {
             return;
         }
         let mut close = None;
-        ui.horizontal_wrapped(|ui| {
-            for (i, d) in self.documents.iter().enumerate() {
-                if ui
-                    .selectable_label(
-                        i == self.active_document,
-                        format!(
-                            "{}{}",
-                            d.path.file_name().unwrap_or_default().to_string_lossy(),
-                            if d.dirty() { " *" } else { "" }
-                        ),
-                    )
-                    .on_hover_text(d.path.display().to_string())
-                    .clicked()
-                {
-                    self.active_document = i;
-                }
-            }
-        });
         let Some(d) = self.documents.get_mut(self.active_document) else {
             ui.label(tr("Choose a UTF-8 file in the explorer."));
             return;
@@ -1346,7 +1568,13 @@ impl Tessel {
                 .iter_mut()
                 .find(|c| c.project == project.id)
             {
-                chat.show(ui);
+                let height = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .id_salt("claude-panel-scroll")
+                    .show(ui, |ui| {
+                        ui.set_max_height(height);
+                        chat.show(ui);
+                    });
             } else {
                 ui.heading(tr("Native Claude chat"));
                 if ui.button(tr("Create chat")).clicked() {
@@ -1360,7 +1588,13 @@ impl Tessel {
             return;
         }
         if let Some(chat) = self.chats.iter_mut().find(|c| c.project == project.id) {
-            chat.show(ui);
+            let height = ui.available_height();
+            egui::ScrollArea::vertical()
+                .id_salt("codex-panel-scroll")
+                .show(ui, |ui| {
+                    ui.set_max_height(height);
+                    chat.show(ui);
+                });
         } else {
             ui.heading(tr("Native Codex chat"));
             ui.label(tr("Connect your installed Codex CLI with its existing sign-in. No API key is copied into Tessel Rust."));
@@ -1469,6 +1703,13 @@ impl eframe::App for Tessel {
         }
 
         self.poll();
+        if (!ctx.wants_keyboard_input() || self.view == View::Work)
+            && ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
+            })
+        {
+            self.command_palette.toggle();
+        }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_exit
             && (self.documents.iter().any(Document::dirty)
@@ -1483,56 +1724,79 @@ impl eframe::App for Tessel {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
         }
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("Tessel Rust");
-                ui.selectable_value(&mut self.view, View::Work, tr("Work"));
-                ui.selectable_value(&mut self.view, View::Files, tr("Editor"));
-                ui.selectable_value(&mut self.view, View::Tasks, tr("Tasks"));
-                ui.selectable_value(&mut self.view, View::Settings, tr("Settings"));
-                ui.selectable_value(&mut self.view, View::Git, "Git");
-                ui.selectable_value(&mut self.view, View::Chat, "Chat");
-                ui.selectable_value(&mut self.view, View::Share, tr("Share"));
-                ui.selectable_value(&mut self.view, View::Remote, tr("Remote files"));
-                #[cfg(windows)]
-                ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
-                #[cfg(windows)]
-                ui.selectable_value(&mut self.view, View::Vault, tr("Passwords"));
-                #[cfg(windows)]
-                ui.selectable_value(&mut self.view, View::Account, tr("Account"));
-                ui.separator();
-                if ui.button(tr("+ Terminal")).clicked() {
-                    self.new_session(Launch::Shell);
-                }
-                let mut agent = None;
-                ui.menu_button("+ Agent", |ui| {
-                    for (name, available) in &self.agents {
-                        if ui
-                            .add_enabled(*available, egui::Button::new(name))
-                            .clicked()
-                        {
-                            agent = Some(name.clone());
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(40.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(crate::theme::CHROME)
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.strong("Tessel").on_hover_text("Tessel Rust");
+                    ui.small(env!("TESSEL_BUILD"));
+                    let search_width = (ui.available_width() - 350.0).clamp(80.0, 380.0);
+                    if ui
+                        .add_sized(
+                            [search_width, 26.0],
+                            egui::Button::new(tr("Search panes, run a command")),
+                        )
+                        .on_hover_text("Ctrl+Shift+P")
+                        .clicked()
+                    {
+                        self.command_palette.toggle();
+                    }
+                    if ui.button("+").on_hover_text(tr("Open terminal")).clicked() {
+                        self.new_session(Launch::Shell);
+                    }
+                    let mut agent = None;
+                    ui.menu_button("▾", |ui| {
+                        if ui.button(tr("Open terminal")).clicked() {
+                            self.new_session(Launch::Shell);
                             ui.close();
                         }
+                        if ui.button(tr("Native chat")).clicked() {
+                            self.view = View::Chat;
+                            ui.close();
+                        }
+                        for (name, available) in &self.agents {
+                            if ui
+                                .add_enabled(*available, egui::Button::new(name))
+                                .clicked()
+                            {
+                                agent = Some(name.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+                    if let Some(agent) = agent {
+                        self.new_session(Launch::Agent(agent));
+                    }
+                    ui.separator();
+                    if ui.button(tr("Share")).clicked() {
+                        self.view = View::Share;
+                    }
+                    ui.menu_button(tr("Layout"), |ui| {
+                        ui.checkbox(&mut self.left_open, tr("Projects"));
+                        ui.checkbox(&mut self.right_open, tr("Side panel"));
+                        for columns in 1..=3 {
+                            if ui
+                                .selectable_value(
+                                    &mut self.state.columns,
+                                    columns,
+                                    format!("{columns} col"),
+                                )
+                                .changed()
+                            {
+                                self.save();
+                            }
+                        }
+                    });
+                    if ui.button("⚙").on_hover_text(tr("Settings")).clicked() {
+                        self.view = View::Settings;
                     }
                 });
-                if let Some(a) = agent {
-                    self.new_session(Launch::Agent(a));
-                }
-                for columns in 1..=3 {
-                    if ui
-                        .selectable_value(
-                            &mut self.state.columns,
-                            columns,
-                            format!("{columns} col"),
-                        )
-                        .changed()
-                    {
-                        self.save();
-                    }
-                }
             });
-        });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.small(tr("Rust native · development"));
@@ -1549,6 +1813,7 @@ impl eframe::App for Tessel {
             });
         });
         self.sidebar(ctx);
+        self.right_panel(ctx);
         #[cfg(windows)]
         self.agent_browsers.hide_all();
         #[cfg(windows)]
@@ -1557,53 +1822,62 @@ impl eframe::App for Tessel {
                 && self.view == View::Browser
                 && !self.pending_exit
                 && self.pending_close.is_none()
-                && self.file_action.is_none(),
+                && self.file_action.is_none()
+                && !self.command_palette.open,
         );
-        egui::CentralPanel::default().show(ctx, |ui| match self.view {
-            View::Work => self.work(ui),
-            View::Files => self.editor(ui),
-            View::Tasks => self.tasks(ui),
-            View::Settings => self.settings(ui),
-            View::Git => self.git_view(ui),
-            View::Chat => self.chat_view(ui),
-            View::Remote => self.remote.show(ui, &self.state.hosts),
-            View::Share => self
-                .share
-                .show(ui, self.state.active().map(|p| p.path.as_path())),
-            #[cfg(windows)]
-            View::Vault => self.vault.show(ui, &mut self.browser),
-            #[cfg(windows)]
-            View::Account => self.account.show(ui),
-            #[cfg(windows)]
-            View::Browser => {
-                if !self.pending_exit && self.pending_close.is_none() && self.file_action.is_none()
-                {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.show_agent_browser,
-                            false,
-                            tr("Owner browser"),
-                        );
-                        ui.selectable_value(
-                            &mut self.show_agent_browser,
-                            true,
-                            tr("Project agent"),
-                        );
-                    });
-                    if self.show_agent_browser {
-                        self.browser.visible(false);
-                        if let Some(project) = self.state.active() {
-                            self.agent_browsers
-                                .show(ui, frame, project.id, &project.path);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.command_palette.open {
+                ui.disable();
+            }
+            self.center_tabs(ui);
+            match self.view {
+                View::Work => self.work(ui),
+                View::Files => self.editor(ui),
+                View::Settings => self.settings(ui),
+                View::Chat => self.chat_view(ui),
+                View::Remote => self.remote.show(ui, &self.state.hosts),
+                View::Share => self
+                    .share
+                    .show(ui, self.state.active().map(|p| p.path.as_path())),
+                #[cfg(windows)]
+                View::Vault => self.vault.show(ui, &mut self.browser),
+                #[cfg(windows)]
+                View::Account => self.account.show(ui),
+                #[cfg(windows)]
+                View::Browser => {
+                    if !self.pending_exit
+                        && self.pending_close.is_none()
+                        && self.file_action.is_none()
+                        && !self.command_palette.open
+                    {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(
+                                &mut self.show_agent_browser,
+                                false,
+                                tr("Owner browser"),
+                            );
+                            ui.selectable_value(
+                                &mut self.show_agent_browser,
+                                true,
+                                tr("Project agent"),
+                            );
+                        });
+                        if self.show_agent_browser {
+                            self.browser.visible(false);
+                            if let Some(project) = self.state.active() {
+                                self.agent_browsers
+                                    .show(ui, frame, project.id, &project.path);
+                            } else {
+                                ui.label(tr("Select a project first."));
+                            }
                         } else {
-                            ui.label(tr("Select a project first."));
+                            self.browser.show(ui, frame);
                         }
-                    } else {
-                        self.browser.show(ui, frame);
                     }
                 }
             }
         });
+        self.show_command_palette(ctx);
         self.confirmations(ctx);
         ctx.request_repaint_after(Duration::from_millis(if self.sessions.is_empty() {
             150

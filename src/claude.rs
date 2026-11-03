@@ -444,12 +444,12 @@ impl Chat {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Native Claude chat"));
         ui.label(tr("Uses your installed Claude CLI sign-in and permission controls. Project hooks, customizations and external MCP servers are disabled in this native connection."));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(self.transport.is_none(), |ui| {
                 ui.label(tr("Model"));
-                ui.text_edit_singleline(&mut self.model);
+                ui.add(egui::TextEdit::singleline(&mut self.model).desired_width(140.0));
                 ui.label(tr("Resume ID"));
-                ui.text_edit_singleline(&mut self.resume);
+                ui.add(egui::TextEdit::singleline(&mut self.resume).desired_width(220.0));
                 if ui.button(tr("Connect")).clicked()
                     && let Err(e) = self.connect()
                 {

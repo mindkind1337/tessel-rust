@@ -214,5 +214,12 @@
   "Uses your installed Claude CLI sign-in and permission controls. Project hooks, customizations and external MCP servers are disabled in this native connection.": "Utilise la connexion et les autorisations de votre CLI Claude. Les automatisations du projet, les personnalisations et les serveurs MCP externes sont désactivés dans cette connexion native.",
   "New conversation": "Nouvelle conversation",
   "You": "Vous",
-  "Approval required": "Approbation requise"
+  "Approval required": "Approbation requise",
+  "Open editors": "Éditeurs ouverts",
+  "Side panel": "Panneau latéral",
+  "Close panel": "Fermer le panneau",
+  "Changes": "Modifications",
+  "Search panes, run a command": "Chercher des panneaux, lancer une commande",
+  "Native chat": "Chat natif",
+  "Layout": "Disposition"
 }
