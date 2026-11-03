@@ -15,7 +15,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Task board | Per-project cards; persistence; safe movement | Implemented, including scoped native chat tools |
 | Git | Nonblocking, bounded status/diff/log; explicit mutations; no auto polling storms | Implemented; real temporary-repository test passes |
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; other providers pending |
-| Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools and explicitly enabled project browser tools implemented; agent messaging and broader host tools pending |
+| Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions and explicitly enabled project browser tools implemented; agent messaging and broader host tools pending |
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; screenshots and iframe tools pending |
 | Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown, images and bounded original PDF rendering implemented; full webpage/office rendering pending |
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |

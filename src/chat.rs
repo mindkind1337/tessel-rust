@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod questions;
+
 const MAX_FRAME: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPT: usize = 2 * 1024 * 1024;
 
@@ -146,6 +148,7 @@ pub struct Chat {
     history_seen: std::collections::HashSet<String>,
     items: HashMap<String, Value>,
     approvals: VecDeque<Approval>,
+    questions: VecDeque<questions::Request>,
     pub tool_calls: VecDeque<ToolCall>,
     turn: Option<String>,
     ready: bool,
@@ -186,6 +189,13 @@ fn valid_id(id: &str) -> bool {
 }
 
 impl Chat {
+    #[cfg(feature = "visual-test")]
+    pub fn questions_fixture(project: u64, cwd: PathBuf) -> Self {
+        let mut chat = Self::new(project, cwd);
+        chat.questions.push_back(questions::Request::parse(json!(1), &json!({"questions":[{"id":"format","header":"Format","question":"Quel format souhaitez-vous exporter?","isOther":true,"options":[{"label":"PDF","description":"Document à partager"},{"label":"Texte","description":"Contenu modifiable"}]},{"id":"name","header":"Nom","question":"Quel nom utiliser pour le fichier?"}]})).expect("fixture"));
+        chat
+    }
+
     pub fn new(project: u64, cwd: PathBuf) -> Self {
         Self {
             project,
@@ -204,6 +214,7 @@ impl Chat {
             history_seen: Default::default(),
             items: HashMap::new(),
             approvals: VecDeque::new(),
+            questions: VecDeque::new(),
             tool_calls: VecDeque::new(),
             turn: None,
             ready: false,
@@ -356,6 +367,7 @@ impl Chat {
         self.starting_turn = false;
         self.pending.clear();
         self.approvals.clear();
+        self.questions.clear();
         self.tool_calls.clear();
         self.status = "Stopped".into();
     }
@@ -416,6 +428,23 @@ impl Chat {
                     });
                     return;
                 }
+                if method == "item/tool/requestUserInput"
+                    && same_thread
+                    && same_turn
+                    && self.questions.len() < 8
+                    && !self.questions.iter().any(|q| &q.id == id)
+                {
+                    match questions::Request::parse(id.clone(), &p) {
+                        Ok(request) => self.questions.push_back(request),
+                        Err(e) => {
+                            if let Some(rpc) = &self.rpc {
+                                let _ =
+                                    rpc.send(json!({"id":id,"error":{"code":-32602,"message":e}}));
+                            }
+                        }
+                    }
+                    return;
+                }
                 if matches!(
                     method,
                     "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
@@ -453,6 +482,7 @@ impl Chat {
                         return;
                     }
                     self.approvals.clear();
+                    self.questions.clear();
                     self.tool_calls.clear();
                     self.items.clear();
                     self.turn = p
@@ -469,6 +499,7 @@ impl Chat {
                     self.turn = None;
                     self.starting_turn = false;
                     self.approvals.clear();
+                    self.questions.clear();
                     self.status = p
                         .pointer("/turn/status")
                         .and_then(Value::as_str)
@@ -529,6 +560,7 @@ impl Chat {
                 }
                 "serverRequest/resolved" => {
                     self.approvals.retain(|a| Some(&a.id) != p.get("requestId"));
+                    self.questions.retain(|q| Some(&q.id) != p.get("requestId"));
                 }
                 "thread/settings/updated" => {
                     if !safe_posture(p.get("threadSettings").unwrap_or(&p)) {
@@ -769,6 +801,17 @@ impl Chat {
                 });
             });
         }
+        if let Some(question) = self.questions.front_mut()
+            && let Some(answer) = question.show(ui)
+            && let Some(rpc) = &self.rpc
+        {
+            match rpc.send(json!({"id":question.id,"result":answer})) {
+                Ok(()) => {
+                    self.questions.pop_front();
+                }
+                Err(e) => self.error = e,
+            }
+        }
         if self.history_cursor.is_some()
             && ui
                 .add_enabled(
@@ -954,6 +997,25 @@ mod tests {
         chat.turn = Some("turn-1".into());
         chat.frame(json!({"id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"owner","turnId":"turn-1","command":"echo fixture"}}));
         assert_eq!(chat.approvals.len(), 1);
+    }
+    #[test]
+    fn structured_questions_are_scoped_and_removed_when_resolved() {
+        let mut chat = Chat::new(1, std::env::temp_dir());
+        chat.thread_id = Some("owner".into());
+        chat.turn = Some("turn-1".into());
+        let request = |turn| json!({"id":7,"method":"item/tool/requestUserInput","params":{"threadId":"owner","turnId":turn,"itemId":"item-1","isBlocking":true,"questions":[{"id":"choice","header":"Choice","question":"Which?"}]}});
+        chat.frame(request("old"));
+        assert!(chat.questions.is_empty());
+        chat.frame(request("turn-1"));
+        assert_eq!(chat.questions.len(), 1);
+        assert!(chat.approvals.is_empty());
+        chat.frame(
+            json!({"method":"serverRequest/resolved","params":{"threadId":"owner","requestId":7}}),
+        );
+        assert!(chat.questions.is_empty());
+        chat.frame(request("turn-1"));
+        chat.frame(json!({"method":"turn/completed","params":{"threadId":"owner","turn":{"id":"turn-1","status":"completed"}}}));
+        assert!(chat.questions.is_empty());
     }
     #[test]
     fn stale_turn_cannot_request_approval() {

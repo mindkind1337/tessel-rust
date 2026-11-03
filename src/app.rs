@@ -220,6 +220,13 @@ impl Tessel {
                 app.view = View::Remote;
                 app.remote = crate::remote_panel::RemotePanel::fixture();
             }
+            if std::env::args().any(|a| a == "--questions-fixture") {
+                let root = std::env::current_dir().expect("fixture cwd");
+                let project = app.state.add_project(&root).expect("fixture project");
+                app.chats
+                    .push(crate::chat::Chat::questions_fixture(project, root));
+                app.view = View::Chat;
+            }
             if std::env::args().any(|a| a == "--restore-fixture") {
                 app.view = View::Settings;
                 app.restore_preview = Some(Workspace::default());

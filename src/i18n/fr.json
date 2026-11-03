@@ -196,5 +196,9 @@
   "Settings restored. Previous settings saved at:": "Réglages restaurés. Réglages précédents sauvegardés ici :",
   "Settings exported:": "Réglages exportés :",
   "Sessions": "Sessions",
-  "Project folders are checked when opened, not during restore.": "Les dossiers de projets sont vérifiés à leur ouverture, pas pendant la restauration."
+  "Project folders are checked when opened, not during restore.": "Les dossiers de projets sont vérifiés à leur ouverture, pas pendant la restauration.",
+  "Questions from the agent": "Questions de l’agent",
+  "Your answer": "Votre réponse",
+  "Send answers": "Envoyer les réponses",
+  "Skip questions": "Passer les questions"
 }

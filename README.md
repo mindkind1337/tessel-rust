@@ -54,6 +54,7 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Streaming text, tool events, model/effort fields, follow-up steering, interruption, thread-ID persistence and explicit resume.
 - Workspace-write sandbox and approval-on-request explicitly requested and checked. Unknown requests fail closed; approval requests are tied to the active thread and turn.
 - Project-scoped task-list/add/move tools connected to the native task board. Model arguments cannot select another project's authority.
+- Structured agent questions appear inline with explicit choice/free-text answers and a skip action. No choice is preselected or sent automatically; stale or resolved requests disappear. Secret-input requests are refused in favor of site sign-in. Questions do not grant command approvals.
 - Pending approvals are displayed inside the chat instead of stealing focus with a popup. Allow is disabled when action details are missing or the requested permission scope is unsupported; stale-turn events cannot change the active conversation.
 - Bounded resumed-history rendering, pagination when supported and a legacy read fallback. Some Codex app-server builds advertise these schemas but reject both history methods; the UI explicitly reports that limitation while leaving chat usable.
 
