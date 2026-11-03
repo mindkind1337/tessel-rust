@@ -24,7 +24,8 @@ agent icon designs, and per-agent permission flag references from Tessel's `main
 `src/shared/agent-icons`, `agent-session-option-catalog*.ts`, `agent-cli-flag-detection.ts`,
 `tui-agent-config.ts`, and `tui-agent-permissions.ts`.
 
-The model-list parser in `src/agent_model_probe_parse.rs` also adapts Tessel's
+The model-list parser and probe specifications in `src/agent_model_probe_parse.rs`
+and `src/agent_model_probe.rs` also adapt Tessel's
 `shared/agentModelProbe.js`, derived from Orca's `claude-model-list-probe.ts`,
 `commit-message-model-parsers.ts`, `grok-model-list-probe.ts` and `model-id-label.ts`.
 The successful-list cache in `src/agent_model_cache.rs` adapts Tessel's
