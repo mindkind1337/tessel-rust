@@ -14,7 +14,7 @@ ported from Orca’s `ssh-config-parser.ts`, `ssh-config-include-expander.ts` an
 `ssh-config-path-expansion.ts`. The shared agent preset catalog (`src/agent_catalog.rs`),
 agent CLI flag inspection, model-option catalog, launch composition, and model defaults
 (`src/agent_arg_options.rs`, `src/agent_model_catalog.rs`, `src/agent_model_catalog.json`,
-`src/agent_model_launch.rs`, and `src/agent_model_defaults.rs`), vector brand icon renderer
+`src/agent_model_launch.rs`, `src/agent_model_options.rs`, and `src/agent_model_defaults.rs`), vector brand icon renderer
 (`src/agent_brand_icons.rs`), and native Agents settings panel (`src/agents_panel.rs`) also
 adapt the built-in agent preset metadata, session model/option catalog, CLI flag detection
 and launch composition rules, the `aider`, `amp`, `cursor`, `kimi`, `omp`, `pi`, and `kilo`

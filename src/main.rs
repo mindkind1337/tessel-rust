@@ -15,6 +15,7 @@ pub mod agent_model_cache;
 pub mod agent_model_catalog;
 pub mod agent_model_defaults;
 pub mod agent_model_launch;
+pub mod agent_model_options;
 pub mod agent_model_probe_parse;
 pub mod agent_names;
 mod agent_paths;
