@@ -1163,20 +1163,49 @@ impl Tessel {
             .width_range(260.0..=max_width)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for (tab, label) in [
-                        (RightTab::Files, "Files"),
-                        (RightTab::Changes, "Changes"),
-                        (RightTab::Tasks, "Tasks"),
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    for (tab, label, icon, shortcut) in [
+                        (
+                            RightTab::Files,
+                            "Files",
+                            crate::icons::Icon::Files,
+                            "Ctrl+Shift+X",
+                        ),
+                        (
+                            RightTab::Changes,
+                            "Changes",
+                            crate::icons::Icon::GitBranch,
+                            "Ctrl+Shift+G",
+                        ),
+                        (
+                            RightTab::Tasks,
+                            "Tasks",
+                            crate::icons::Icon::ListChecks,
+                            "Ctrl+Shift+K",
+                        ),
                     ] {
-                        ui.selectable_value(&mut self.state.panels.right_tab, tab, tr(label));
-                    }
-                    if ui
-                        .small_button("×")
-                        .on_hover_text(tr("Close panel"))
+                        if crate::chrome::side_tab(
+                            ui,
+                            icon,
+                            &format!("{} ({shortcut})", tr(label)),
+                            self.state.panels.right_tab == tab,
+                        )
                         .clicked()
-                    {
-                        self.state.panels.right_open = false;
+                        {
+                            self.state.panels.right_tab = tab;
+                        }
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::pane_header::button(
+                            ui,
+                            crate::icons::Icon::PaneClose,
+                            tr("Close panel"),
+                        )
+                        .clicked()
+                        {
+                            self.state.panels.right_open = false;
+                        }
+                    });
                 });
                 ui.separator();
                 match self.state.panels.right_tab {

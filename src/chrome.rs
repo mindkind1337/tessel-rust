@@ -11,6 +11,55 @@ pub struct ToolbarRegions {
     pub actions: Rect,
 }
 
+pub fn side_tab(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> Response {
+    let response = ui.add(
+        egui::Button::new("")
+            .frame(false)
+            .min_size(Vec2::splat(36.0)),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
+    let color = if selected {
+        ui.visuals().strong_text_color()
+    } else if response.hovered() {
+        ui.visuals().weak_text_color()
+    } else {
+        ui.visuals().weak_text_color().gamma_multiply(0.6)
+    };
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(response.rect.center(), Vec2::splat(16.0)),
+        icon,
+        color,
+    );
+    if selected {
+        let r = response.rect;
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                egui::pos2(r.left() + r.width() * 0.25, r.bottom() - 2.0),
+                egui::pos2(r.right() - r.width() * 0.25, r.bottom()),
+            ),
+            2.0,
+            color,
+        );
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.shrink(0.5),
+            0.0,
+            ui.visuals().selection.stroke,
+            StrokeKind::Inside,
+        );
+    }
+    response.on_hover_text(label)
+}
+
 pub fn regions(room: Rect) -> ToolbarRegions {
     let actions_width = 264.0_f32.min(room.width() * 0.6);
     let brand_width = 160.0_f32.min((room.width() - actions_width).max(0.0));

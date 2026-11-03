@@ -7,7 +7,8 @@
 //!   and `Settings` gear (`24x24`).
 //! - Priority 2: Lucide (`lucide-vue-next` `v0.577.0`, ISC / Feather MIT — see
 //!   `THIRD_PARTY_NOTICES.md`) for `Close` (`x`), `Help` (`circle-question-mark`), and
-//!   `Terminal` (`square-terminal`).
+//!   `Terminal` (`square-terminal`) and the `Files`, `GitBranch`, `ListChecks` side tabs.
+//! - Pane controls use the inline 16x16 SVG paths from `TerminalPane.vue`.
 
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
 
@@ -30,10 +31,13 @@ pub enum Icon {
     PaneMaximize,
     PaneRestore,
     PaneClose,
+    Files,
+    GitBranch,
+    ListChecks,
 }
 
 impl Icon {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
         Self::Search,
         Self::Plus,
         Self::ChevronDown,
@@ -51,6 +55,9 @@ impl Icon {
         Self::PaneMaximize,
         Self::PaneRestore,
         Self::PaneClose,
+        Self::Files,
+        Self::GitBranch,
+        Self::ListChecks,
     ];
 }
 
@@ -134,6 +141,36 @@ pub fn paint_brand(painter: &Painter, rect: Rect, development: bool) {
 /// Paints a crisp vector [`Icon`] inscribed 1:1 inside `rect` with `color`.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     match icon {
+        Icon::Files | Icon::GitBranch | Icon::ListChecks => {
+            let Some(vp) = Viewport::new(rect, 24.0) else {
+                return;
+            };
+            let stroke = Stroke::new(vp.len(2.0), color);
+            match icon {
+                Icon::Files => {
+                    for path in [
+                        "M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8",
+                        "M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z",
+                        "M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1",
+                    ] {
+                        paint_svg_path(painter, vp, path, stroke, true);
+                    }
+                }
+                Icon::GitBranch => {
+                    paint_svg_path(painter, vp, "M15 6a9 9 0 0 0-9 9V3", stroke, true);
+                    for (x, y) in [(18.0, 6.0), (6.0, 18.0)] {
+                        painter.circle_stroke(vp.pt(x, y), vp.len(3.0), stroke);
+                    }
+                }
+                _ => paint_svg_path(
+                    painter,
+                    vp,
+                    "M13 5h8M13 12h8M13 19h8M3 17l2 2 4-4M3 7l2 2 4-4",
+                    stroke,
+                    true,
+                ),
+            }
+        }
         // Exact inline 16x16 TerminalPane.vue header controls.
         Icon::PaneMore | Icon::PaneMaximize | Icon::PaneRestore | Icon::PaneClose => {
             let Some(vp) = Viewport::new(rect, 16.0) else {
