@@ -38,3 +38,7 @@ Read-only inspection of `C:\tessel-server` on 2026-11-02 found that `src/auth.js
 The existing account contract uses `https://tesselcode.com/login?challenge=...&state=...&app=...`, a code/verifier POST to `/auth/token`, `/api/me` and `/auth/logout`. Connector flows additionally use `/api/connect/services`, `/api/connect/start` and service-specific exchange/refresh/revocation contracts. Tokens must remain outside projects, agent outputs and sharing. Native code must not copy the current Electron account/session files.
 
 The existing sync contract at `/api/sync` and `/api/sync/versions` carries account-bound encrypted, compressed and padded snapshots with revision/conflict handling. Rust workspace metadata has a different schema: uploading it as an Electron snapshot would be unsafe. An explicit schema/compatibility design and opt-in restore preview are still pending. No account, connector or sync production endpoint was exercised during this inspection.
+
+## Native overlay acceptance
+
+Settings and sharing now open over the existing center view. Settings sections expose the implemented appearance, CLI detection, SSH hosts, owner passwords, account and backup controls. Closing the overlay preserves the selected document/terminal/browser. Native WebView surfaces are hidden and underlying terminal input is disabled while dialogs are open, including file and exit confirmations. Full source Settings page coverage is still pending.

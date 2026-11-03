@@ -64,22 +64,32 @@ enum Message {
 enum View {
     Work,
     Files,
-    Settings,
     Chat,
-    Share,
     Remote,
     #[cfg(windows)]
     Browser,
-    #[cfg(windows)]
-    Vault,
-    #[cfg(windows)]
-    Account,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum RightTab {
     Files,
     Changes,
     Tasks,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum Overlay {
+    Settings,
+    Share,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsSection {
+    Appearance,
+    Hosts,
+    Backup,
+    Agents,
+    #[cfg(windows)]
+    Passwords,
+    #[cfg(windows)]
+    Account,
 }
 pub struct Tessel {
     state: Workspace,
@@ -92,6 +102,8 @@ pub struct Tessel {
     document_pending: std::collections::HashSet<PathBuf>,
     active_document: usize,
     view: View,
+    overlay: Option<Overlay>,
+    settings_section: SettingsSection,
     right_open: bool,
     right_tab: RightTab,
     left_open: bool,
@@ -170,6 +182,8 @@ impl Tessel {
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
+            overlay: None,
+            settings_section: SettingsSection::Appearance,
             right_open: true,
             right_tab: RightTab::Files,
             left_open: true,
@@ -258,7 +272,8 @@ impl Tessel {
             }
             #[cfg(windows)]
             if std::env::args().any(|a| a == "--account-fixture") {
-                app.view = View::Account;
+                app.overlay = Some(Overlay::Settings);
+                app.settings_section = SettingsSection::Account;
             }
             if std::env::args().any(|a| a == "--remote-fixture") {
                 app.view = View::Remote;
@@ -283,11 +298,12 @@ impl Tessel {
                 app.view = View::Chat;
             }
             if std::env::args().any(|a| a == "--restore-fixture") {
-                app.view = View::Settings;
+                app.overlay = Some(Overlay::Settings);
+                app.settings_section = SettingsSection::Backup;
                 app.restore_preview = Some(Workspace::default());
             }
             if std::env::args().any(|a| a == "--settings-fixture") {
-                app.view = View::Settings;
+                app.overlay = Some(Overlay::Settings);
             }
         }
         app.detect_agents();
@@ -769,15 +785,21 @@ impl Tessel {
                         _ => RightTab::Files,
                     };
                 }
-                "settings" => self.view = View::Settings,
+                "settings" => self.overlay = Some(Overlay::Settings),
                 "remote" => self.view = View::Remote,
-                "share" => self.view = View::Share,
+                "share" => self.overlay = Some(Overlay::Share),
                 #[cfg(windows)]
                 "browser" => self.view = View::Browser,
                 #[cfg(windows)]
-                "vault" => self.view = View::Vault,
+                "vault" => {
+                    self.overlay = Some(Overlay::Settings);
+                    self.settings_section = SettingsSection::Passwords;
+                }
                 #[cfg(windows)]
-                "account" => self.view = View::Account,
+                "account" => {
+                    self.overlay = Some(Overlay::Settings);
+                    self.settings_section = SettingsSection::Account;
+                }
                 _ => {}
             }
         }
@@ -1392,10 +1414,7 @@ impl Tessel {
             }
         }
     }
-    fn settings(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-        self.backup_controls(ui);
-        ui.separator();
+    fn appearance_settings(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(tr("Language"));
             let previous = self.state.language;
@@ -1426,12 +1445,17 @@ impl Tessel {
         let french = self.state.language == crate::i18n::Language::French;
         let selected = if self.state.theme.is_none() && !self.state.dark {
             tr("Legacy light theme")
-        } else { self.state.theme.unwrap_or_default().label(french) };
-        egui::ComboBox::from_id_salt("appearance-theme").selected_text(selected).show_ui(ui, |ui| {
-            for theme in crate::theme_palettes::THEMES {
-                ui.selectable_value(&mut self.state.theme, Some(theme), theme.label(french)).on_hover_text(theme.description(french));
-            }
-        });
+        } else {
+            self.state.theme.unwrap_or_default().label(french)
+        };
+        egui::ComboBox::from_id_salt("appearance-theme")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for theme in crate::theme_palettes::THEMES {
+                    ui.selectable_value(&mut self.state.theme, Some(theme), theme.label(french))
+                        .on_hover_text(theme.description(french));
+                }
+            });
         let mut changed = previous_theme != self.state.theme;
         changed |= ui
             .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text(tr("Font size")))
@@ -1440,7 +1464,8 @@ impl Tessel {
             crate::theme::apply(ui.ctx(), self.state.dark, self.state.theme);
             self.save();
         }
-        ui.separator();
+    }
+    fn host_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("SSH hosts"));
         ui.label(tr("Uses OpenSSH and your SSH config. Authentication and host verification remain with OpenSSH."));
         ui.horizontal(|ui| {
@@ -1476,8 +1501,10 @@ impl Tessel {
         }
         if let Some(h) = connect {
             self.new_session(Launch::Ssh(h));
+            self.overlay = None;
         }
-        ui.separator();
+    }
+    fn agent_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Agent CLIs"));
         if ui.button(tr("Refresh detection")).clicked() {
             self.detect_agents();
@@ -1492,9 +1519,79 @@ impl Tessel {
                 }
             ));
         }
-        ui.separator();
-        ui.small(tr("Local Rust workspace. No import from Electron Tessel. Processes start only by your clicks."));
+    }
+    fn show_overlay(&mut self, ctx: &egui::Context) {
+        let Some(overlay) = self.overlay else {
+            return;
+        };
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("workspace-overlay")).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 50.0).clamp(260.0, 880.0));
+            ui.horizontal(|ui| {
+                ui.heading(tr(if overlay == Overlay::Settings {
+                    "Settings"
+                } else {
+                    "Share"
+                }));
+                if ui.button("×").on_hover_text(tr("Close")).clicked() {
+                    close = true;
+                }
+            });
+            ui.separator();
+            let height = (ctx.content_rect().height() * 0.86 - 65.0).clamp(150.0, 615.0);
+            if overlay == Overlay::Settings {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(150.0);
+                        for (section, title) in [
+                            (SettingsSection::Agents, "Agent CLIs"),
+                            (SettingsSection::Appearance, "Appearance"),
+                            (SettingsSection::Hosts, "SSH hosts"),
+                            #[cfg(windows)]
+                            (SettingsSection::Passwords, "Passwords"),
+                            #[cfg(windows)]
+                            (SettingsSection::Account, "Account"),
+                            (SettingsSection::Backup, "Settings backup"),
+                        ] {
+                            ui.selectable_value(&mut self.settings_section, section, tr(title));
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("settings-content")
+                        .max_height(height)
+                        .show(ui, |ui| {
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.set_max_width(ui.available_width());
+                                ui.set_min_width(ui.available_width().min(320.0));
+                                match self.settings_section {
+                                    SettingsSection::Appearance => self.appearance_settings(ui),
+                                    SettingsSection::Hosts => self.host_settings(ui),
+                                    SettingsSection::Agents => self.agent_settings(ui),
+                                    SettingsSection::Backup => self.backup_controls(ui),
+                                    #[cfg(windows)]
+                                    SettingsSection::Passwords => {
+                                        self.vault.show(ui, &mut self.browser)
+                                    }
+                                    #[cfg(windows)]
+                                    SettingsSection::Account => self.account.show(ui),
+                                }
+                            });
+                        });
+                });
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("sharing-content")
+                    .max_height(height)
+                    .show(ui, |ui| {
+                        self.share
+                            .show(ui, self.state.active().map(|p| p.path.as_path()));
+                    });
+            }
         });
+        if self.restore_preview.is_none() && (close || response.should_close()) {
+            self.overlay = None;
+        }
     }
     fn confirmations(&mut self, ctx: &egui::Context) {
         if let Some(index) = self.pending_close {
@@ -1720,7 +1817,11 @@ impl eframe::App for Tessel {
         }
 
         self.poll();
-        if (!ctx.wants_keyboard_input() || self.view == View::Work)
+        if self.overlay.is_none()
+            && self.pending_close.is_none()
+            && !self.pending_exit
+            && self.file_action.is_none()
+            && (!ctx.wants_keyboard_input() || self.view == View::Work)
             && ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
             })
@@ -1791,7 +1892,7 @@ impl eframe::App for Tessel {
                     }
                     ui.separator();
                     if ui.button(tr("Share")).clicked() {
-                        self.view = View::Share;
+                        self.overlay = Some(Overlay::Share);
                     }
                     ui.menu_button(tr("Layout"), |ui| {
                         ui.checkbox(&mut self.left_open, tr("Projects"));
@@ -1810,7 +1911,7 @@ impl eframe::App for Tessel {
                         }
                     });
                     if ui.button("⚙").on_hover_text(tr("Settings")).clicked() {
-                        self.view = View::Settings;
+                        self.overlay = Some(Overlay::Settings);
                     }
                 });
             });
@@ -1840,32 +1941,31 @@ impl eframe::App for Tessel {
                 && !self.pending_exit
                 && self.pending_close.is_none()
                 && self.file_action.is_none()
-                && !self.command_palette.open,
+                && !self.command_palette.open
+                && self.overlay.is_none(),
         );
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.command_palette.open {
+            if self.command_palette.open
+                || self.overlay.is_some()
+                || self.pending_exit
+                || self.pending_close.is_some()
+                || self.file_action.is_some()
+            {
                 ui.disable();
             }
             self.center_tabs(ui);
             match self.view {
                 View::Work => self.work(ui),
                 View::Files => self.editor(ui),
-                View::Settings => self.settings(ui),
                 View::Chat => self.chat_view(ui),
                 View::Remote => self.remote.show(ui, &self.state.hosts),
-                View::Share => self
-                    .share
-                    .show(ui, self.state.active().map(|p| p.path.as_path())),
-                #[cfg(windows)]
-                View::Vault => self.vault.show(ui, &mut self.browser),
-                #[cfg(windows)]
-                View::Account => self.account.show(ui),
                 #[cfg(windows)]
                 View::Browser => {
                     if !self.pending_exit
                         && self.pending_close.is_none()
                         && self.file_action.is_none()
                         && !self.command_palette.open
+                        && self.overlay.is_none()
                     {
                         ui.horizontal(|ui| {
                             ui.selectable_value(
@@ -1894,6 +1994,7 @@ impl eframe::App for Tessel {
                 }
             }
         });
+        self.show_overlay(ctx);
         self.show_command_palette(ctx);
         self.confirmations(ctx);
         ctx.request_repaint_after(Duration::from_millis(if self.sessions.is_empty() {
