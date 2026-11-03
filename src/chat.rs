@@ -1,4 +1,5 @@
 //! Codex's documented stdio app-server protocol. No token copying or shell interpolation.
+use crate::i18n::tr;
 use eframe::egui;
 use serde_json::{Value, json};
 use std::{
@@ -695,12 +696,12 @@ impl Chat {
         }
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Codex · native chat");
+        ui.heading(tr("Codex · native chat"));
         ui.small(self.cwd.display().to_string());
         if let Some(id) = &self.thread_id {
             ui.horizontal(|ui| {
-                ui.small(format!("Thread: {id}"));
-                if ui.small_button("Copy ID").clicked() {
+                ui.small(format!("{}: {id}", tr("Thread")));
+                if ui.small_button(tr("Copy ID")).clicked() {
                     ui.ctx().copy_text(id.clone());
                 }
             });
@@ -708,14 +709,14 @@ impl Chat {
         ui.horizontal(|ui| {
             ui.label(&self.status);
             if self.rpc.is_none() {
-                if ui.button("Connect").clicked() {
+                if ui.button(tr("Connect")).clicked() {
                     self.start();
                 }
-            } else if ui.button("Stop process").clicked() {
+            } else if ui.button(tr("Stop process")).clicked() {
                 self.stop();
             }
             if self.turn.is_some()
-                && ui.button("Interrupt turn").clicked()
+                && ui.button(tr("Interrupt turn")).clicked()
                 && let Err(e) = self.request(
                     "turn/interrupt",
                     json!({"threadId":self.thread_id,"turnId":self.turn}),
@@ -726,11 +727,11 @@ impl Chat {
         });
         if self.rpc.is_none() {
             ui.horizontal(|ui| {
-                ui.label("Resume thread ID (optional)");
+                ui.label(tr("Resume thread ID (optional)"));
                 ui.text_edit_singleline(&mut self.resume);
             });
         }
-        ui.small("Workspace-write sandbox · approval on request · network disabled by default. Uses your existing Codex sign-in.");
+        ui.small(tr("Workspace-write sandbox · approval on request · network disabled by default. Uses your existing Codex sign-in."));
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
@@ -738,7 +739,7 @@ impl Chat {
             let can_accept = self.approval_has_details(&approval);
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 if !can_accept {ui.colored_label(egui::Color32::YELLOW,"Cannot allow: action details are missing or this permission scope is unsupported.");}
-                ui.strong("Approval requested — no action until you choose");
+                ui.strong(tr("Approval requested — no action until you choose"));
                 ui.label(&approval.method);
                 let item = approval
                     .params
@@ -753,7 +754,7 @@ impl Chat {
                     });
                 ui.horizontal(|ui| {
                     for (label, decision) in [("Deny", "decline"), ("Allow once", "accept")] {
-                        if ui.add_enabled(decision=="decline" || can_accept,egui::Button::new(label)).clicked()
+                        if ui.add_enabled(decision=="decline" || can_accept,egui::Button::new(tr(label))).clicked()
                             && let Some(rpc) = &self.rpc
                         {
                             match rpc.send(json!({"id":approval.id,"result":{"decision":decision}}))
@@ -772,7 +773,7 @@ impl Chat {
             && ui
                 .add_enabled(
                     !self.pending.values().any(|(m, _)| m == "thread/items/list"),
-                    egui::Button::new("Load older messages"),
+                    egui::Button::new(tr("Load older messages")),
                 )
                 .clicked()
         {
@@ -790,7 +791,7 @@ impl Chat {
                 }
             });
         ui.horizontal(|ui| {
-            ui.label("Model (empty = configured)");
+            ui.label(tr("Model (empty = configured)"));
             ui.text_edit_singleline(&mut self.model);
             egui::ComboBox::from_id_salt("effort")
                 .selected_text(&self.effort)
@@ -809,9 +810,9 @@ impl Chat {
             .add_enabled(
                 self.ready && !self.starting_turn,
                 egui::Button::new(if self.turn.is_some() {
-                    "Send follow-up"
+                    tr("Send follow-up")
                 } else {
-                    "Send"
+                    tr("Send")
                 }),
             )
             .clicked()

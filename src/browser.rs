@@ -1,4 +1,5 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
+use crate::i18n::tr;
 mod control;
 pub mod smoke;
 pub mod vault_smoke;
@@ -313,8 +314,8 @@ impl Browser {
     pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         self.poll();
         if self.view.is_none() {
-            ui.label("Private browser profile for this Rust app. No cookies or passwords are imported from Tessel.");
-            if ui.button("Start browser").clicked()
+            ui.label(tr("Private browser profile for this Rust app. No cookies or passwords are imported from Tessel."));
+            if ui.button(tr("Start browser")).clicked()
                 && let Err(e) = self.create(frame)
             {
                 self.error = e;
@@ -332,7 +333,7 @@ impl Browser {
                 if ui.button("→").clicked() {
                     let _ = view.go_forward();
                 }
-                if ui.button("Reload").clicked() {
+                if ui.button(tr("Reload")).clicked() {
                     let _ = view.reload();
                 }
             }
@@ -341,24 +342,24 @@ impl Browser {
                     .desired_width((ui.available_width() - 140.0).max(100.0)),
             );
             if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                || ui.button("Go").clicked()
+                || ui.button(tr("Go")).clicked()
             {
                 self.navigate();
             }
             ui.toggle_value(
                 &mut self.downloads_open,
-                format!("Downloads ({})", self.downloads.len()),
+                format!("{} ({})", tr("Downloads"), self.downloads.len()),
             );
         });
         if let Some(popup) = self.popup.clone() {
             ui.horizontal(|ui| {
-                ui.label("Page requested a new window.");
-                if ui.button("Open in this tab").clicked() {
+                ui.label(tr("Page requested a new window."));
+                if ui.button(tr("Open in this tab")).clicked() {
                     self.address = popup;
                     self.navigate();
                     self.popup = None;
                 }
-                if ui.button("Dismiss").clicked() {
+                if ui.button(tr("Dismiss")).clicked() {
                     self.popup = None;
                 }
             });
@@ -369,13 +370,18 @@ impl Browser {
         if self.downloads_open {
             if let Some(root) = &self.agent_root {
                 ui.label(format!(
-                    "Prepare agent downloads within project: {}",
+                    "{}: {}",
+                    tr("Prepare agent downloads within project"),
                     root.display()
                 ));
             } else if let Ok(folder) = self.destination.lock() {
-                ui.label(format!("Save original files to: {}", folder.display()));
+                ui.label(format!(
+                    "{}: {}",
+                    tr("Save original files to"),
+                    folder.display()
+                ));
             }
-            if self.agent_root.is_none() && ui.button("Choose download folder").clicked() {
+            if self.agent_root.is_none() && ui.button(tr("Choose download folder")).clicked() {
                 // File dialog is deliberately user initiated; no page can invoke it.
                 if let Some(path) = rfd::FileDialog::new().pick_folder()
                     && let Ok(mut folder) = self.destination.lock()
@@ -388,9 +394,9 @@ impl Browser {
                 .show(ui, |ui| {
                     for (path, status) in &self.downloads {
                         ui.horizontal(|ui| {
-                            ui.label(status);
+                            ui.label(tr(status));
                             ui.label(path.display().to_string());
-                            if ui.small_button("Copy path").clicked() {
+                            if ui.small_button(tr("Copy path")).clicked() {
                                 ui.ctx().copy_text(path.display().to_string());
                             }
                         });

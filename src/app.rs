@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{
     files::{self, Document, Entry},
     launch::{self, Launch},
@@ -96,6 +97,8 @@ pub struct Tessel {
     pending_close: Option<usize>,
     pending_exit: bool,
     allow_exit: bool,
+    #[cfg(feature = "visual-test")]
+    visual_frames: usize,
     git_output: String,
     git_pending: Option<Receiver<Result<String, String>>>,
     git_path: String,
@@ -133,6 +136,7 @@ impl Tessel {
         };
         #[cfg(windows)]
         crate::terminal::configure_fonts(&cc.egui_ctx);
+        crate::i18n::set_language(state.language);
         cc.egui_ctx.set_visuals(if state.dark {
             egui::Visuals::dark()
         } else {
@@ -161,6 +165,8 @@ impl Tessel {
             pending_close: None,
             pending_exit: false,
             allow_exit: false,
+            #[cfg(feature = "visual-test")]
+            visual_frames: 0,
             git_output: String::new(),
             git_pending: None,
             git_path: String::new(),
@@ -189,6 +195,16 @@ impl Tessel {
                 loading: None,
                 error: String::new(),
             });
+        }
+        #[cfg(feature = "visual-test")]
+        {
+            if std::env::args().any(|a| a == "--french-fixture") {
+                app.state.language = crate::i18n::Language::French;
+                crate::i18n::set_language(app.state.language);
+            }
+            if std::env::args().any(|a| a == "--settings-fixture") {
+                app.view = View::Settings;
+            }
         }
         app.detect_agents();
         app.refresh_project();
@@ -439,8 +455,8 @@ impl Tessel {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading("Projects");
-                    if ui.button("+").on_hover_text("Open folder").clicked() {
+                    ui.heading(tr("Projects"));
+                    if ui.button("+").on_hover_text(tr("Open folder")).clicked() {
                         self.choose_project();
                     }
                 });
@@ -461,8 +477,8 @@ impl Tessel {
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.strong("Files");
-                    if ui.small_button("Refresh").clicked()
+                    ui.strong(tr("Files"));
+                    if ui.small_button(tr("Refresh")).clicked()
                         && let Some(path) = self.directory.clone()
                     {
                         self.list_directory(path);
@@ -477,7 +493,7 @@ impl Tessel {
                 ) {
                     if dir != root
                         && let Some(parent) = dir.parent()
-                        && ui.button(".. Parent folder").clicked()
+                        && ui.button(tr(".. Parent folder")).clicked()
                     {
                         self.list_directory(parent.to_owned());
                     }
@@ -518,9 +534,9 @@ impl Tessel {
             .map(|(i, _)| i)
             .collect();
         if indices.is_empty() {
-            ui.heading("Start working");
-            ui.label("Open a project, then launch a terminal or installed agent. Switching projects keeps sessions running.");
-            if ui.button("Open terminal").clicked() {
+            ui.heading(tr("Start working"));
+            ui.label(tr("Open a project, then launch a terminal or installed agent. Switching projects keeps sessions running."));
+            if ui.button(tr("Open terminal")).clicked() {
                 self.new_session(Launch::Shell);
             }
             return;
@@ -566,7 +582,7 @@ impl Tessel {
                         ui.set_height(height);
                         ui.horizontal(|ui| {
                             ui.strong(&s.title);
-                            if ui.small_button("Sleep").clicked() {
+                            if ui.small_button(tr("Sleep")).clicked() {
                                 s.terminal = None;
                                 s.loading = None;
                             }
@@ -581,8 +597,8 @@ impl Tessel {
                             t.show(ui, self.state.font_size);
                         } else if s.loading.is_some() {
                             ui.spinner();
-                            ui.label("Starting…");
-                        } else if ui.button("Wake / reconnect").clicked() {
+                            ui.label(tr("Starting…"));
+                        } else if ui.button(tr("Wake / reconnect")).clicked() {
                             s.start();
                         }
                     });
@@ -615,7 +631,7 @@ impl Tessel {
             }
         });
         let Some(d) = self.documents.get_mut(self.active_document) else {
-            ui.label("Choose a UTF-8 file in the explorer.");
+            ui.label(tr("Choose a UTF-8 file in the explorer."));
             return;
         };
         let extension = d
@@ -627,16 +643,16 @@ impl Tessel {
         let readable = matches!(extension.as_str(), "html" | "htm" | "md" | "markdown");
         ui.horizontal(|ui| {
             if !d.media
-                && (ui.button("Save (Ctrl+S)").clicked()
+                && (ui.button(tr("Save (Ctrl+S)")).clicked()
                     || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
             {
                 d.error = d.save().err().unwrap_or_default();
             }
             if readable {
-                ui.selectable_value(&mut d.preview_mode, false, "Source");
-                ui.selectable_value(&mut d.preview_mode, true, "Readable preview");
+                ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
+                ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
             }
-            if ui.button("Close").clicked() {
+            if ui.button(tr("Close")).clicked() {
                 close = Some(self.active_document);
             }
             ui.small(d.path.display().to_string());
@@ -669,14 +685,16 @@ impl Tessel {
                     });
             }
         } else if readable && d.preview_mode {
-            ui.small("Native readable view · scripts, CSS and external resources are not loaded");
+            ui.small(tr(
+                "Native readable view · scripts, CSS and external resources are not loaded",
+            ));
             let preview = d.preview.get_or_insert_with(|| {
                 crate::preview::Preview::parse(
                     &d.text,
                     matches!(extension.as_str(), "md" | "markdown"),
                 )
             });
-            if ui.button("Copy plain text").clicked() {
+            if ui.button(tr("Copy plain text")).clicked() {
                 ui.ctx().copy_text(preview.plain());
             }
             egui::ScrollArea::vertical()
@@ -737,12 +755,12 @@ impl Tessel {
     }
     fn tasks(&mut self, ui: &mut egui::Ui) {
         let Some(project) = self.state.active_project else {
-            ui.label("Select a project first.");
+            ui.label(tr("Select a project first."));
             return;
         };
         ui.horizontal(|ui| {
             ui.text_edit_singleline(&mut self.task_title);
-            if ui.button("Add task").clicked() && !self.task_title.trim().is_empty() {
+            if ui.button(tr("Add task")).clicked() && !self.task_title.trim().is_empty() {
                 let id = self.state.id();
                 self.state.tasks.push(Task {
                     id,
@@ -758,7 +776,7 @@ impl Tessel {
         ui.columns(4, |uis| {
             for (column, title) in ["To do", "Doing", "Review", "Done"].iter().enumerate() {
                 let ui = &mut uis[column];
-                ui.heading(*title);
+                ui.heading(tr(title));
                 for task in self
                     .state
                     .tasks
@@ -789,10 +807,38 @@ impl Tessel {
         }
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Appearance");
-        let mut changed = ui.checkbox(&mut self.state.dark, "Dark theme").changed();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(tr("Language"));
+            let previous = self.state.language;
+            egui::ComboBox::from_id_salt("ui-language")
+                .selected_text(match previous {
+                    crate::i18n::Language::English => "English",
+                    crate::i18n::Language::French => "Français",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.state.language,
+                        crate::i18n::Language::English,
+                        "English",
+                    );
+                    ui.selectable_value(
+                        &mut self.state.language,
+                        crate::i18n::Language::French,
+                        "Français",
+                    );
+                });
+            if previous != self.state.language {
+                crate::i18n::set_language(self.state.language);
+                self.save();
+            }
+        });
+        ui.heading(tr("Appearance"));
+        let mut changed = ui
+            .checkbox(&mut self.state.dark, tr("Dark theme"))
+            .changed();
         changed |= ui
-            .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text("Font size"))
+            .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text(tr("Font size")))
             .changed();
         if changed {
             ui.ctx().set_visuals(if self.state.dark {
@@ -803,17 +849,17 @@ impl Tessel {
             self.save();
         }
         ui.separator();
-        ui.heading("SSH hosts");
-        ui.label("Uses OpenSSH and your SSH config. Authentication and host verification remain with OpenSSH.");
+        ui.heading(tr("SSH hosts"));
+        ui.label(tr("Uses OpenSSH and your SSH config. Authentication and host verification remain with OpenSSH."));
         ui.horizontal(|ui| {
-            ui.label("Alias / user@host");
+            ui.label(tr("Alias / user@host"));
             ui.text_edit_singleline(&mut self.host_alias);
         });
         ui.horizontal(|ui| {
-            ui.label("Remote folder (optional)");
+            ui.label(tr("Remote folder (optional)"));
             ui.text_edit_singleline(&mut self.host_folder);
         });
-        if ui.button("Save host").clicked() {
+        if ui.button(tr("Save host")).clicked() {
             match workspace::validate_host(&self.host_alias) {
                 Ok(()) => {
                     self.state.hosts.push(Host {
@@ -829,7 +875,10 @@ impl Tessel {
         }
         let mut connect = None;
         for host in &self.state.hosts {
-            if ui.button(format!("Connect {}", host.alias)).clicked() {
+            if ui
+                .button(format!("{} {}", tr("Connect"), host.alias))
+                .clicked()
+            {
                 connect = Some(host.clone());
             }
         }
@@ -837,32 +886,33 @@ impl Tessel {
             self.new_session(Launch::Ssh(h));
         }
         ui.separator();
-        ui.heading("Agent CLIs");
-        if ui.button("Refresh detection").clicked() {
+        ui.heading(tr("Agent CLIs"));
+        if ui.button(tr("Refresh detection")).clicked() {
             self.detect_agents();
         }
         for (name, installed) in &self.agents {
             ui.label(format!(
                 "{name}: {}",
                 if *installed {
-                    "available"
+                    tr("available")
                 } else {
-                    "not on PATH"
+                    tr("not on PATH")
                 }
             ));
         }
         ui.separator();
-        ui.small("Local Rust workspace. No import from Electron Tessel. Processes start only by your clicks.");
+        ui.small(tr("Local Rust workspace. No import from Electron Tessel. Processes start only by your clicks."));
+        });
     }
     fn confirmations(&mut self, ctx: &egui::Context) {
         if let Some(index) = self.pending_close {
             egui::Modal::new(egui::Id::new("unsaved-file")).show(ctx, |ui| {
-                ui.label("Save changes before closing this file?");
+                ui.label(tr("Save changes before closing this file?"));
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr("Cancel")).clicked() {
                         self.pending_close = None;
                     }
-                    if ui.button("Save and close").clicked() {
+                    if ui.button(tr("Save and close")).clicked() {
                         match self.documents[index].save() {
                             Ok(()) => {
                                 self.documents.remove(index);
@@ -872,7 +922,7 @@ impl Tessel {
                             Err(e) => self.error = e,
                         }
                     }
-                    if ui.button("Discard changes").clicked() {
+                    if ui.button(tr("Discard changes")).clicked() {
                         self.documents.remove(index);
                         self.pending_close = None;
                         self.active_document = 0;
@@ -882,12 +932,12 @@ impl Tessel {
         }
         if self.pending_exit {
             egui::Modal::new(egui::Id::new("close-app")).show(ctx, |ui| {
-                ui.label("There are unsaved files or sessions. Closing ends sessions.");
-                if ui.button("Keep working").clicked() {
+                ui.label(tr("There are unsaved files or sessions. Closing ends sessions."));
+                if ui.button(tr("Keep working")).clicked() {
                     self.pending_exit = false;
                 }
-                if self.remote.needs_close_confirmation() {ui.label("Finish remote requests and save remote edits in Remote files before saving and closing.");}
-                if ui.add_enabled(!self.remote.needs_close_confirmation(),egui::Button::new("Save all and close")).clicked() {
+                if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
+                if ui.add_enabled(!self.remote.needs_close_confirmation(),egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -902,7 +952,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!self.remote.busy(),egui::Button::new("Discard edits and close")).clicked() {
+                if ui.add_enabled(!self.remote.busy(),egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.allow_exit = true;
                     self.save();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -927,15 +977,15 @@ impl Tessel {
     }
     fn chat_view(&mut self, ui: &mut egui::Ui) {
         let Some(project) = self.state.active().cloned() else {
-            ui.label("Select a project for native chat.");
+            ui.label(tr("Select a project for native chat."));
             return;
         };
         if let Some(chat) = self.chats.iter_mut().find(|c| c.project == project.id) {
             chat.show(ui);
         } else {
-            ui.heading("Native Codex chat");
-            ui.label("Connect your installed Codex CLI with its existing sign-in. No API key is copied into Tessel Rust.");
-            if ui.button("Create chat").clicked() {
+            ui.heading(tr("Native Codex chat"));
+            ui.label(tr("Connect your installed Codex CLI with its existing sign-in. No API key is copied into Tessel Rust."));
+            if ui.button(tr("Create chat")).clicked() {
                 let mut chat = crate::chat::Chat::new(project.id, project.path);
                 if let Some(id) = self.state.chat_threads.get(&project.id) {
                     chat.set_resume(id.clone());
@@ -951,8 +1001,8 @@ impl Tessel {
             self.git_pending = None;
             self.git_output = result.unwrap_or_else(|e| format!("Error: {e}"));
         }
-        ui.heading("Source control");
-        ui.label("On-demand Git operations. Output is capped at 2 MiB; operations time out after 20 seconds.");
+        ui.heading(tr("Source control"));
+        ui.label(tr("On-demand Git operations. Output is capped at 2 MiB; operations time out after 20 seconds."));
         ui.add_enabled_ui(self.git_pending.is_none(), |ui| {
             ui.horizontal(|ui| {
                 for (label, args) in [
@@ -967,15 +1017,15 @@ impl Tessel {
                     ),
                     ("History", vec!["log", "-30", "--oneline", "--decorate"]),
                 ] {
-                    if ui.button(label).clicked() {
+                    if ui.button(tr(label)).clicked() {
                         self.git_start(args.into_iter().map(str::to_owned).collect(), None);
                     }
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Relative file path");
+                ui.label(tr("Relative file path"));
                 ui.text_edit_singleline(&mut self.git_path);
-                if ui.button("Stage file").clicked() && !self.git_path.trim().is_empty() {
+                if ui.button(tr("Stage file")).clicked() && !self.git_path.trim().is_empty() {
                     self.git_start(
                         vec![
                             "--literal-pathspecs".into(),
@@ -988,9 +1038,9 @@ impl Tessel {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Commit message");
+                ui.label(tr("Commit message"));
                 ui.text_edit_singleline(&mut self.commit_message);
-                if ui.button("Commit staged changes").clicked()
+                if ui.button(tr("Commit staged changes")).clicked()
                     && !self.commit_message.trim().is_empty()
                 {
                     self.git_start(
@@ -1015,6 +1065,30 @@ impl Tessel {
 }
 impl eframe::App for Tessel {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(feature = "visual-test")]
+        if let Ok(path) = std::env::var("TESSEL_SETTLED_SCREENSHOT") {
+            self.visual_frames += 1;
+            if self.visual_frames == 6 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            }
+            for event in ctx.input(|i| i.events.clone()) {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                    if let Err(e) = image::save_buffer(
+                        &path,
+                        &bytes,
+                        image.size[0] as u32,
+                        image.size[1] as u32,
+                        image::ColorType::Rgba8,
+                    ) {
+                        self.error = e.to_string();
+                    }
+                    self.allow_exit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
         self.poll();
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_exit
@@ -1030,20 +1104,20 @@ impl eframe::App for Tessel {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("Tessel Rust");
-                ui.selectable_value(&mut self.view, View::Work, "Work");
-                ui.selectable_value(&mut self.view, View::Files, "Editor");
-                ui.selectable_value(&mut self.view, View::Tasks, "Tasks");
-                ui.selectable_value(&mut self.view, View::Settings, "Settings");
+                ui.selectable_value(&mut self.view, View::Work, tr("Work"));
+                ui.selectable_value(&mut self.view, View::Files, tr("Editor"));
+                ui.selectable_value(&mut self.view, View::Tasks, tr("Tasks"));
+                ui.selectable_value(&mut self.view, View::Settings, tr("Settings"));
                 ui.selectable_value(&mut self.view, View::Git, "Git");
                 ui.selectable_value(&mut self.view, View::Chat, "Chat");
-                ui.selectable_value(&mut self.view, View::Share, "Share");
-                ui.selectable_value(&mut self.view, View::Remote, "Remote files");
+                ui.selectable_value(&mut self.view, View::Share, tr("Share"));
+                ui.selectable_value(&mut self.view, View::Remote, tr("Remote files"));
                 #[cfg(windows)]
-                ui.selectable_value(&mut self.view, View::Browser, "Browser");
+                ui.selectable_value(&mut self.view, View::Browser, tr("Browser"));
                 #[cfg(windows)]
-                ui.selectable_value(&mut self.view, View::Vault, "Passwords");
+                ui.selectable_value(&mut self.view, View::Vault, tr("Passwords"));
                 ui.separator();
-                if ui.button("+ Terminal").clicked() {
+                if ui.button(tr("+ Terminal")).clicked() {
                     self.new_session(Launch::Shell);
                 }
                 let mut agent = None;
@@ -1077,13 +1151,13 @@ impl eframe::App for Tessel {
         });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.small("Rust native · development");
+                ui.small(tr("Rust native · development"));
                 if self.store.is_none() {
                     ui.colored_label(egui::Color32::YELLOW, "Persistence unavailable");
                 }
                 if !self.error.is_empty() {
                     ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
-                    if ui.small_button("Dismiss").clicked() {
+                    if ui.small_button(tr("Dismiss")).clicked() {
                         self.error.clear();
                     }
                 }
@@ -1116,8 +1190,16 @@ impl eframe::App for Tessel {
             View::Browser => {
                 if !self.pending_exit && self.pending_close.is_none() {
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.show_agent_browser, false, "Owner browser");
-                        ui.selectable_value(&mut self.show_agent_browser, true, "Project agent");
+                        ui.selectable_value(
+                            &mut self.show_agent_browser,
+                            false,
+                            tr("Owner browser"),
+                        );
+                        ui.selectable_value(
+                            &mut self.show_agent_browser,
+                            true,
+                            tr("Project agent"),
+                        );
                     });
                     if self.show_agent_browser {
                         self.browser.visible(false);
@@ -1125,7 +1207,7 @@ impl eframe::App for Tessel {
                             self.agent_browsers
                                 .show(ui, frame, project.id, &project.path);
                         } else {
-                            ui.label("Select a project first.");
+                            ui.label(tr("Select a project first."));
                         }
                     } else {
                         self.browser.show(ui, frame);

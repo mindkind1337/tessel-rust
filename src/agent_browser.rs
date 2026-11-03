@@ -1,4 +1,5 @@
 //! User-enabled browser instances. No instance can target the owner browser or another project.
+use crate::i18n::tr;
 use crate::{
     browser::Browser,
     chat::{Chat, ToolCall},
@@ -92,11 +93,11 @@ impl AgentBrowsers {
     }
     pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame, project: u64, root: &Path) {
         if !self.browsers.contains_key(&project) {
-            ui.label("Enable a separate browser for this project's native chat agent. The agent can read pages, click and fill text fields. Sign in manually here if needed. Owner-browser cookies and the password vault are never copied. Access is off again after closing this app.");
+            ui.label(tr("Enable a separate browser for this project's native chat agent. The agent can read pages, click and fill text fields. Sign in manually here if needed. Owner-browser cookies and the password vault are never copied. Access is off again after closing this app."));
             if ui
                 .add_enabled(
                     self.browsers.len() < 4,
-                    egui::Button::new("Enable project agent browser"),
+                    egui::Button::new(tr("Enable project agent browser")),
                 )
                 .clicked()
             {
@@ -110,8 +111,8 @@ impl AgentBrowsers {
             }
         } else {
             ui.horizontal(|ui|{
-                ui.label("Agent access enabled for this project · isolated session · downloads require preparation");
-                if ui.button("Stop browser and revoke access").clicked(){self.browsers.remove(&project);}
+                ui.label(tr("Agent access enabled for this project · isolated session · downloads require preparation"));
+                if ui.button(tr("Stop browser and revoke access")).clicked(){self.browsers.remove(&project);}
             });
             if let Some(b) = self.browsers.get_mut(&project) {
                 b.show(ui, frame);

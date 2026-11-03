@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::share::{self, Host, Invitation};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use eframe::egui;
@@ -80,20 +81,27 @@ impl SharePanel {
                 Err(error) => self.error = error,
             }
         }
-        ui.heading("Live Share · native read-only preview");
-        ui.label("Direct LAN connection, encrypted with TLS and a pinned certificate. This is a separate protocol from Electron Tessel's Live Share.");
+        ui.heading(tr("Live Share · native read-only preview"));
+        ui.label(tr("Direct LAN connection, encrypted with TLS and a pinned certificate. This is a separate protocol from Electron Tessel's Live Share."));
         ui.separator();
-        ui.strong("Host a project");
+        ui.strong(tr("Host a project"));
         if let Some(host) = &self.host {
-            ui.label(format!("Sharing: {}", self.host_project));
-            ui.label(format!("Listening: {}", host.invitation.endpoint()));
-            if ui.button("Copy private invitation").clicked() {
+            ui.label(format!("{}: {}", tr("Sharing"), self.host_project));
+            ui.label(format!(
+                "{}: {}",
+                tr("Listening"),
+                host.invitation.endpoint()
+            ));
+            if ui.button(tr("Copy private invitation")).clicked() {
                 match host.invitation.encode() {
                     Ok(invite) => ui.ctx().copy_text(invite),
                     Err(e) => self.error = e,
                 }
             }
-            if ui.button("Stop sharing and revoke invitation").clicked() {
+            if ui
+                .button(tr("Stop sharing and revoke invitation"))
+                .clicked()
+            {
                 self.host = None;
             }
         } else {
@@ -101,14 +109,14 @@ impl SharePanel {
                 ui.label(project.display().to_string());
             }
             ui.horizontal(|ui| {
-                ui.label("This PC's LAN IP (127.0.0.1 = this PC only)");
+                ui.label(tr("This PC's LAN IP (127.0.0.1 = this PC only)"));
                 ui.text_edit_singleline(&mut self.address);
             });
-            ui.label("Anyone with the invitation can read this project's ordinary files (up to 8 MiB each). Hidden paths, credential files and Rust-app private data are excluded. No shell, write, browser or vault access is shared.");
+            ui.label(tr("Anyone with the invitation can read this project's ordinary files (up to 8 MiB each). Hidden paths, credential files and Rust-app private data are excluded. No shell, write, browser or vault access is shared."));
             if ui
                 .add_enabled(
                     project.is_some(),
-                    egui::Button::new("Start read-only sharing"),
+                    egui::Button::new(tr("Start read-only sharing")),
                 )
                 .clicked()
                 && let Some(root) = project
@@ -129,14 +137,14 @@ impl SharePanel {
             }
         }
         ui.separator();
-        ui.strong("Join as a guest");
+        ui.strong(tr("Join as a guest"));
         if self.guest.is_none() {
             ui.add(
                 egui::TextEdit::multiline(&mut self.invitation_text)
                     .desired_rows(2)
-                    .hint_text("Paste a private Tessel Rust invitation"),
+                    .hint_text(tr("Paste a private Tessel Rust invitation")),
             );
-            if ui.button("Join read-only").clicked() {
+            if ui.button(tr("Join read-only")).clicked() {
                 match Invitation::decode(&self.invitation_text) {
                     Ok(invite) => {
                         self.guest = Some(invite);
@@ -157,11 +165,11 @@ impl SharePanel {
                         .map(Invitation::endpoint)
                         .unwrap_or_default()
                 ));
-                if ui.button("Disconnect").clicked() {
+                if ui.button(tr("Disconnect")).clicked() {
                     disconnect = true;
                 }
                 if ui
-                    .add_enabled(self.pending.is_none(), egui::Button::new("Refresh"))
+                    .add_enabled(self.pending.is_none(), egui::Button::new(tr("Refresh")))
                     .clicked()
                 {
                     self.fetch("list", self.path.clone());
@@ -174,7 +182,7 @@ impl SharePanel {
                 self.file = None;
             }
             let mut open = None;
-            if !self.path.is_empty() && ui.button(".. Parent").clicked() {
+            if !self.path.is_empty() && ui.button(tr(".. Parent")).clicked() {
                 let parent = std::path::Path::new(&self.path)
                     .parent()
                     .map(|p| p.to_string_lossy().to_string())
@@ -214,8 +222,8 @@ impl SharePanel {
         }
         if let Some((name, bytes)) = &self.file {
             ui.separator();
-            ui.label(format!("{name} · {} bytes", bytes.len()));
-            if ui.button("Download original file…").clicked()
+            ui.label(format!("{name} · {} {}", bytes.len(), tr("bytes")));
+            if ui.button(tr("Download original file…")).clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .set_file_name(name.replace(['/', '\\'], "_"))
                     .save_file()

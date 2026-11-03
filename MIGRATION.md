@@ -22,7 +22,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |
 | Connectors/account/sync | Match existing service contracts; token isolation and consent | Pending |
 | Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending |
-| Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Pending |
+| Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; external/technical diagnostics and screen-reader acceptance pending |
 
 The Rust application can invoke external shells and agent CLIs. An embedded browser requires an external browser engine. Those are dependencies, not a JavaScript implementation of Tessel. Existing service credentials and production endpoints are not exercised automatically.
 

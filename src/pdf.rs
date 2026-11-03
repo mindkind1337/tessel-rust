@@ -1,4 +1,5 @@
 //! Original-page PDF rasterization in a disposable, deadline-bound worker.
+use crate::i18n::tr;
 use eframe::egui;
 use std::{
     fs::File,
@@ -335,7 +336,7 @@ impl PdfView {
         let mut rerender = false;
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!busy && self.page > 0, egui::Button::new("Previous"))
+                .add_enabled(!busy && self.page > 0, egui::Button::new(tr("Previous")))
                 .clicked()
             {
                 self.page -= 1;
@@ -353,7 +354,7 @@ impl PdfView {
             if ui
                 .add_enabled(
                     !busy && self.page + 1 < self.pages,
-                    egui::Button::new("Next"),
+                    egui::Button::new(tr("Next")),
                 )
                 .clicked()
             {
@@ -369,7 +370,7 @@ impl PdfView {
                 rerender = true;
             }
             ui.label(if self.fit {
-                "Fit width".into()
+                tr("Fit width").into()
             } else {
                 format!("{:.0}%", self.scale * 100.0)
             });
@@ -381,7 +382,7 @@ impl PdfView {
                 self.fit = false;
                 rerender = true;
             }
-            if ui.button("Fit width").clicked() {
+            if ui.button(tr("Fit width")).clicked() {
                 self.fit = true;
             }
         });
@@ -390,11 +391,11 @@ impl PdfView {
         }
         if busy {
             ui.spinner();
-            ui.label("Rendering original PDF page…");
+            ui.label(tr("Rendering original PDF page…"));
         }
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
-            if ui.button("Retry page").clicked() {
+            if ui.button(tr("Retry page")).clicked() {
                 self.request();
             }
         }

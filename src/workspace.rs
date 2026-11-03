@@ -50,6 +50,7 @@ pub struct Workspace {
     pub chat_threads: std::collections::HashMap<u64, String>,
     pub active_project: Option<u64>,
     pub dark: bool,
+    pub language: crate::i18n::Language,
     pub columns: usize,
     pub font_size: f32,
     pub next_id: u64,
@@ -66,6 +67,7 @@ impl Default for Workspace {
             chat_threads: std::collections::HashMap::new(),
             active_project: None,
             dark: true,
+            language: Default::default(),
             columns: 1,
             font_size: 15.0,
             next_id: 1,
@@ -268,6 +270,19 @@ mod tests {
         drop(store);
         let (_, loaded) = Store::open(dir.path()).unwrap();
         assert_eq!(loaded.projects, state.projects);
+    }
+    #[test]
+    fn language_survives_restart_and_old_workspaces_keep_their_default() {
+        let old: Workspace = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.language, crate::i18n::Language::English);
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state.language = crate::i18n::Language::French;
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(loaded.language, crate::i18n::Language::French);
+        assert!(loaded.sessions.is_empty());
     }
     #[test]
     fn corrupt_state_is_not_overwritten() {

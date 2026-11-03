@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use eframe::egui;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
@@ -170,11 +171,11 @@ impl Terminal {
             }
         }
         response.context_menu(|ui| {
-            if ui.button("Copy visible text").clicked() {
+            if ui.button(tr("Copy visible text")).clicked() {
                 ui.ctx().copy_text(self.parser.screen().contents());
                 ui.close();
             }
-            if ui.button("Back to live output").clicked() {
+            if ui.button(tr("Back to live output")).clicked() {
                 self.parser.set_scrollback(0);
                 ui.close();
             }

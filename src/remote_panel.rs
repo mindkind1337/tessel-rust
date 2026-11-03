@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{
     remote::{self, Action, Entry, Reply},
     workspace::Host,
@@ -99,10 +100,10 @@ impl RemotePanel {
     }
     pub fn show(&mut self, ui: &mut egui::Ui, hosts: &[Host]) {
         self.poll();
-        ui.heading("Remote files · SFTP");
-        ui.label("Uses OpenSSH config and existing key/agent authentication. Unknown host keys are refused. Connect from a terminal first when trust or authentication needs setup.");
+        ui.heading(tr("Remote files · SFTP"));
+        ui.label(tr("Uses OpenSSH config and existing key/agent authentication. Unknown host keys are refused. Connect from a terminal first when trust or authentication needs setup."));
         if hosts.is_empty() && self.host.is_none() {
-            ui.label("Add an SSH host in Settings first.");
+            ui.label(tr("Add an SSH host in Settings first."));
             return;
         }
         self.selected = self.selected.min(hosts.len().saturating_sub(1));
@@ -118,7 +119,7 @@ impl RemotePanel {
                                 ui.selectable_value(&mut self.selected, index, &host.alias);
                             }
                         });
-                    if ui.button("Connect / change host").clicked() {
+                    if ui.button(tr("Connect / change host")).clicked() {
                         self.host = Some(hosts[self.selected].clone());
                         self.root.clear();
                         self.path.clear();
@@ -126,7 +127,7 @@ impl RemotePanel {
                         self.document = None;
                         self.request(Action::List(String::new()));
                     }
-                    if self.host.is_some() && ui.button("Disconnect").clicked() {
+                    if self.host.is_some() && ui.button(tr("Disconnect")).clicked() {
                         self.host = None;
                         self.root.clear();
                         self.entries.clear();
@@ -140,23 +141,25 @@ impl RemotePanel {
         }
         if busy {
             ui.spinner();
-            ui.label("SFTP request in progress (30-second limit)…");
+            ui.label(tr("SFTP request in progress (30-second limit)…"));
         }
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
         if dirty {
-            ui.label("Save or discard local edits before opening another remote file or host.");
+            ui.label(tr(
+                "Save or discard local edits before opening another remote file or host.",
+            ));
         }
         let mut action = None;
         ui.add_enabled_ui(!busy && !dirty, |ui| {
             ui.horizontal(|ui| {
-                if self.host.is_some() && ui.button("Refresh").clicked() {
+                if self.host.is_some() && ui.button(tr("Refresh")).clicked() {
                     action = Some(Action::List(self.path.clone()));
                 }
                 if self.path != self.root
                     && !self.path.is_empty()
-                    && ui.button("Parent folder").clicked()
+                    && ui.button(tr("Parent folder")).clicked()
                 {
                     let parent = self.path.rsplit_once('/').map(|p| p.0).unwrap_or("");
                     action = Some(Action::List(if parent.is_empty() {
@@ -203,7 +206,7 @@ impl RemotePanel {
                 if ui
                     .add_enabled(
                         !busy && doc.dirty(),
-                        egui::Button::new("Save to remote host"),
+                        egui::Button::new(tr("Save to remote host")),
                     )
                     .clicked()
                 {
@@ -218,13 +221,13 @@ impl RemotePanel {
                 if ui
                     .add_enabled(
                         !busy && doc.dirty(),
-                        egui::Button::new("Discard local edits"),
+                        egui::Button::new(tr("Discard local edits")),
                     )
                     .clicked()
                 {
                     doc.text = String::from_utf8(doc.original.clone()).ok();
                 }
-                if ui.button("Download original…").clicked()
+                if ui.button(tr("Download original…")).clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .set_file_name(
                             doc.path
@@ -265,8 +268,11 @@ impl RemotePanel {
                 });
             } else {
                 ui.label(format!(
-                    "Binary or large file · {} bytes · download the original to view it locally",
-                    doc.original.len()
+                    "{} · {} {} · {}",
+                    tr("Binary or large file"),
+                    doc.original.len(),
+                    tr("bytes"),
+                    tr("Download the original to view it locally")
                 ));
             }
         }
