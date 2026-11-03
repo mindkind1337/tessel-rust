@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_FILE: usize = 16 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Entry {
@@ -153,13 +154,17 @@ pub fn execute(host: Host, action: Action) -> Result<Reply, String> {
         let mut child=command.spawn().map_err(|_|"OpenSSH was not found or could not start")?;
         #[cfg(windows)] let _job=ProcessJob::attach(child.raw_handle().ok_or("SSH process handle unavailable")?)?;
         let stream=Transport{reader:child.stdout.take().ok_or("No SSH output")?,writer:child.stdin.take().ok_or("No SSH input")?};
-        let result=tokio::time::timeout(Duration::from_secs(30),async {
-            let session=RawSftpSession::new_with_config(stream,Config{max_concurrent_reads:1,max_concurrent_writes:1,..Default::default()});
+        let session=RawSftpSession::new_with_config(stream,Config{max_concurrent_reads:1,max_concurrent_writes:1,..Default::default()});
+        let setup=tokio::time::timeout(Duration::from_secs(30),async {
             let version=session.init().await.map_err(|_|"SSH/SFTP connection failed. Confirm the host key and key-based login in a terminal first.")?;
             let root=canonical(&session,if host.folder.is_empty(){"."}else{&host.folder}).await?;
-            let result=operate(&session,&root,action,version.extensions.contains_key("posix-rename@openssh.com")).await;
-            let _=session.close_session();result
-        }).await.map_err(|_|"SFTP operation exceeded 30 seconds".to_string()).and_then(|r|r);
+            Ok::<_,String>((root,version.extensions.contains_key("posix-rename@openssh.com")))
+        }).await.map_err(|_|"SFTP connection setup exceeded 30 seconds".to_string()).and_then(|r|r);
+        let result=match setup {
+            Ok((root,rename))=>operate(&session,&root,action,rename).await,
+            Err(error)=>Err(error),
+        };
+        let _=session.close_session();
         let _=child.kill().await;let _=child.wait().await;
         result
     })
@@ -246,6 +251,50 @@ async fn operate(
     root: &str,
     action: Action,
     posix_rename: bool,
+) -> Result<Reply, String> {
+    operate_with_timeout(session, root, action, posix_rename, OPERATION_TIMEOUT).await
+}
+
+async fn operate_with_timeout(
+    session: &RawSftpSession,
+    root: &str,
+    action: Action,
+    posix_rename: bool,
+    deadline: Duration,
+) -> Result<Reply, String> {
+    // Kept outside the cancellable future: a deadline must not skip save cleanup.
+    let pending = std::cell::RefCell::new(None);
+    let mut result = tokio::time::timeout(
+        deadline,
+        operate_inner(session, root, action, posix_rename, &pending),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err("SFTP operation deadline exceeded; check the remote file before retrying a save".into())
+    });
+    if let Some((path, handle)) = pending.into_inner()
+        && result.is_err()
+    {
+        let cleaned = tokio::time::timeout(Duration::from_secs(5), async {
+            let _ = session.close(handle).await;
+            session.remove(path).await
+        })
+        .await;
+        if !matches!(cleaned, Ok(Ok(_)))
+            && let Err(error) = &mut result
+        {
+            error.push_str("; remote temporary-file cleanup could not be confirmed");
+        }
+    }
+    result
+}
+
+async fn operate_inner(
+    session: &RawSftpSession,
+    root: &str,
+    action: Action,
+    posix_rename: bool,
+    pending: &std::cell::RefCell<Option<(String, String)>>,
 ) -> Result<Reply, String> {
     match action {
         Action::Delete { path, directory } => {
@@ -450,7 +499,8 @@ async fn operate(
                 .await
                 .map_err(remote_error)?
                 .handle;
-            let result = async {
+            *pending.borrow_mut() = Some((temp.clone(), handle.clone()));
+            async {
                 for (index, chunk) in replacement.chunks(32768).enumerate() {
                     session
                         .write(&handle, (index * 32768) as u64, chunk.to_vec())
@@ -489,12 +539,7 @@ async fn operate(
                     _ => Err("Server did not confirm atomic save".into()),
                 }
             }
-            .await;
-            if result.is_err() {
-                let _ = session.close(handle).await;
-                let _ = session.remove(temp).await;
-            }
-            result
+            .await
         }
     }
 }

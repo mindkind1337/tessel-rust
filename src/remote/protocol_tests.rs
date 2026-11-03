@@ -15,6 +15,9 @@ struct Record {
 struct Fixture {
     files: Arc<Mutex<HashMap<String, Record>>>,
     listed: bool,
+    read_delay: Duration,
+    write_delay: Duration,
+    remove_delay: Duration,
 }
 fn status(id: u32) -> Status {
     Status {
@@ -172,6 +175,7 @@ impl Handler for Fixture {
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
+        tokio::time::sleep(self.read_delay).await;
         let files = self.files.lock().unwrap();
         let bytes = &files.get(&handle).ok_or(StatusCode::NoSuchFile)?.bytes;
         let offset = offset as usize;
@@ -190,6 +194,7 @@ impl Handler for Fixture {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        tokio::time::sleep(self.write_delay).await;
         let mut files = self.files.lock().unwrap();
         let bytes = &mut files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?.bytes;
         let offset = offset as usize;
@@ -218,6 +223,7 @@ impl Handler for Fixture {
         Ok(status(id))
     }
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        tokio::time::sleep(self.remove_delay).await;
         self.files.lock().unwrap().remove(&path);
         Ok(status(id))
     }
@@ -266,6 +272,9 @@ fn real_sftp_frames_preserve_originals_and_refuse_conflicts() {
                 Fixture {
                     files: files.clone(),
                     listed: false,
+                    read_delay: Duration::ZERO,
+                    write_delay: Duration::ZERO,
+                    remove_delay: Duration::ZERO,
                 },
             ));
             let session = RawSftpSession::new(client);
@@ -448,6 +457,153 @@ fn real_sftp_frames_preserve_originals_and_refuse_conflicts() {
                 .await
                 .unwrap();
                 assert!(!files.lock().unwrap().contains_key(path));
+            }
+            session.close_session().unwrap();
+            server.abort();
+        });
+}
+
+#[test]
+fn slow_progress_and_cancelled_save_cleanup() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::pause();
+            let original = vec![42; 8 * 32768];
+            let files = Arc::new(Mutex::new(HashMap::from([(
+                "/root/file.txt".into(),
+                Record {
+                    bytes: original.clone(),
+                    attrs: FileAttributes {
+                        permissions: Some(0o100600),
+                        ..Default::default()
+                    },
+                },
+            )])));
+            let (client, server) = tokio::io::duplex(65536);
+            let server = tokio::spawn(russh_sftp::server::run(
+                server,
+                Fixture {
+                    files: files.clone(),
+                    listed: false,
+                    read_delay: Duration::from_secs(4),
+                    write_delay: Duration::from_secs(2),
+                    remove_delay: Duration::ZERO,
+                },
+            ));
+            let session = RawSftpSession::new(client);
+            session.init().await.unwrap();
+            assert!(
+                operate_with_timeout(
+                    &session,
+                    "/root",
+                    Action::Read("file.txt".into()),
+                    true,
+                    Duration::from_secs(30)
+                )
+                .await
+                .is_err(),
+                "the former deadline must reproduce the failure"
+            );
+            let start = tokio::time::Instant::now();
+            let Reply::File { bytes, .. } =
+                operate(&session, "/root", Action::Read("file.txt".into()), true)
+                    .await
+                    .unwrap()
+            else {
+                panic!("expected file")
+            };
+            assert_eq!(bytes, original);
+            assert!(start.elapsed() > Duration::from_secs(30));
+            // Nine read replies take 36 seconds; expire during the first temp-file write.
+            let error = operate_with_timeout(
+                &session,
+                "/root",
+                Action::Save {
+                    path: "/root/file.txt".into(),
+                    original: original.clone(),
+                    replacement: vec![9; 65536],
+                },
+                true,
+                Duration::from_secs(37),
+            )
+            .await
+            .err()
+            .expect("deadline must cancel save");
+            assert!(error.contains("deadline exceeded"), "{error}");
+            assert!(!error.contains("cleanup could not"), "{error}");
+            {
+                let files = files.lock().unwrap();
+                assert_eq!(
+                    files.len(),
+                    1,
+                    "temporary file must be removed after cancellation"
+                );
+                assert_eq!(files["/root/file.txt"].bytes, original);
+            }
+            session.close_session().unwrap();
+            server.abort();
+        });
+}
+
+#[test]
+fn unresponsive_cleanup_is_bounded_and_reported() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::pause();
+            let files = Arc::new(Mutex::new(HashMap::from([(
+                "/root/file.txt".into(),
+                Record {
+                    bytes: b"original".to_vec(),
+                    attrs: FileAttributes {
+                        permissions: Some(0o100600),
+                        ..Default::default()
+                    },
+                },
+            )])));
+            let (client, server) = tokio::io::duplex(65536);
+            let server = tokio::spawn(russh_sftp::server::run(
+                server,
+                Fixture {
+                    files: files.clone(),
+                    listed: false,
+                    read_delay: Duration::ZERO,
+                    write_delay: Duration::from_secs(2),
+                    remove_delay: Duration::from_secs(20),
+                },
+            ));
+            let session = RawSftpSession::new(client);
+            session.init().await.unwrap();
+            let start = tokio::time::Instant::now();
+            let error = operate_with_timeout(
+                &session,
+                "/root",
+                Action::Save {
+                    path: "/root/file.txt".into(),
+                    original: b"original".to_vec(),
+                    replacement: b"updated".to_vec(),
+                },
+                true,
+                Duration::from_secs(1),
+            )
+            .await
+            .err()
+            .expect("deadline");
+            assert!(error.contains("cleanup could not be confirmed"), "{error}");
+            assert!(start.elapsed() < Duration::from_secs(7));
+            {
+                let files = files.lock().unwrap();
+                assert_eq!(files["/root/file.txt"].bytes, b"original");
+                assert_eq!(
+                    files.len(),
+                    2,
+                    "unacknowledged cleanup must not be reported as success"
+                );
             }
             session.close_session().unwrap();
             server.abort();
