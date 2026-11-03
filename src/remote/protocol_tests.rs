@@ -72,6 +72,28 @@ impl Handler for Fixture {
         ));
         Ok(Name { id, files: names })
     }
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let mut files = self.files.lock().unwrap();
+        if files.contains_key(&path) {
+            return Err(StatusCode::Failure);
+        }
+        files.insert(
+            path,
+            Record {
+                bytes: vec![],
+                attrs: FileAttributes {
+                    permissions: Some(0o40000 | attrs.permissions.unwrap_or(0o700)),
+                    ..attrs
+                },
+            },
+        );
+        Ok(status(id))
+    }
     async fn open(
         &mut self,
         id: u32,
@@ -254,6 +276,38 @@ fn real_sftp_frames_preserve_originals_and_refuse_conflicts() {
                 assert_eq!(files.len(), 1);
             }
             assert!(operate(&session, &root, save(), true).await.is_err());
+            assert_eq!(files.lock().unwrap()["/root/file.txt"].bytes, b"updated");
+            for directory in [false, true] {
+                let name = if directory { "new-folder" } else { "new.txt" };
+                let create = || Action::Create {
+                    parent: "/root".into(),
+                    name: name.into(),
+                    directory,
+                };
+                operate(&session, &root, create(), true).await.unwrap();
+                assert!(operate(&session, &root, create(), true).await.is_err());
+                let permissions = files.lock().unwrap()[&format!("/root/{name}")]
+                    .attrs
+                    .permissions
+                    .unwrap();
+                assert_eq!(permissions & 0o777, if directory { 0o700 } else { 0o600 });
+            }
+            for (parent, name) in [("/root", "../outside"), ("/root/escape", "private.txt")] {
+                assert!(
+                    operate(
+                        &session,
+                        &root,
+                        Action::Create {
+                            parent: parent.into(),
+                            name: name.into(),
+                            directory: false
+                        },
+                        true
+                    )
+                    .await
+                    .is_err()
+                );
+            }
             assert_eq!(files.lock().unwrap()["/root/file.txt"].bytes, b"updated");
             session.close_session().unwrap();
             server.abort();

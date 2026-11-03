@@ -32,7 +32,8 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 
 - On-demand SFTP browsing, original-file downloads (16 MiB) and UTF-8 editing (2 MiB) through OpenSSH config and existing key/agent authentication. Unknown host keys are refused; no background polling or automatic production connections.
 - Canonical remote-root checks, bounded directory reads and a 30-second operation deadline. Saves compare the opened bytes again before atomic replacement and preserve ordinary permissions/ownership; servers without atomic rename support are read-only.
-- Unsaved edits and active requests block accidental close or host changes. Local downloads never overwrite an existing file. Password-only SSH authentication, remote file creation/deletion and direct remote previews are not implemented yet.
+- Create empty files and folders directly in the current remote directory. Exclusive file creation and server mkdir refuse existing names; names cannot supply path separators or traversal. New files request owner-only 0600 permissions and folders 0700.
+- Unsaved edits and active requests block accidental close or host changes. Local downloads never overwrite an existing file. Password-only SSH authentication, remote rename/deletion and direct remote previews are not implemented yet.
 
 ### Document previews
 

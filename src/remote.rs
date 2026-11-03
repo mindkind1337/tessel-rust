@@ -20,6 +20,11 @@ pub struct Entry {
     pub size: u64,
 }
 pub enum Action {
+    Create {
+        parent: String,
+        name: String,
+        directory: bool,
+    },
     List(String),
     Read(String),
     Save {
@@ -40,6 +45,9 @@ pub enum Reply {
         bytes: Vec<u8>,
     },
     Saved,
+    Created {
+        parent: String,
+    },
 }
 struct Transport {
     reader: tokio::process::ChildStdout,
@@ -71,6 +79,14 @@ impl AsyncWrite for Transport {
 }
 fn clean(path: &str) -> bool {
     path.len() <= 8192 && !path.chars().any(char::is_control) && !path.split('/').any(|p| p == "..")
+}
+fn child_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\'])
+        && !name.chars().any(char::is_control)
 }
 fn within(root: &str, path: &str) -> bool {
     path == root
@@ -215,6 +231,44 @@ async fn operate(
     posix_rename: bool,
 ) -> Result<Reply, String> {
     match action {
+        Action::Create {
+            parent,
+            name,
+            directory,
+        } => {
+            if !child_name(&name) {
+                return Err("Enter one file or folder name, without path separators".into());
+            }
+            let parent = scoped(session, root, &parent).await?;
+            let path = format!("{}/{name}", parent.trim_end_matches('/'));
+            if directory {
+                session
+                    .mkdir(
+                        &path,
+                        FileAttributes {
+                            permissions: Some(0o700),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(remote_error)?;
+            } else {
+                let handle = session
+                    .open(
+                        &path,
+                        OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                        FileAttributes {
+                            permissions: Some(0o600),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(remote_error)?
+                    .handle;
+                session.close(handle).await.map_err(remote_error)?;
+            }
+            Ok(Reply::Created { parent })
+        }
         Action::List(requested) => {
             let path = scoped(session, root, &requested).await?;
             let handle = session.opendir(&path).await.map_err(remote_error)?.handle;
@@ -379,6 +433,10 @@ mod tests {
     use super::*;
     #[test]
     fn remote_paths_are_component_scoped() {
+        assert!(child_name("résumé.txt"));
+        for bad in ["", ".", "..", "../outside", "a/b", "a\\b", "a\n"] {
+            assert!(!child_name(bad));
+        }
         assert!(within("/work", "/work/a"));
         assert!(!within("/work", "/workspace/private"));
         assert!(!clean("/work/../secret"));

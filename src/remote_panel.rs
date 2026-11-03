@@ -23,6 +23,7 @@ impl RemoteDocument {
 #[derive(Default)]
 pub struct RemotePanel {
     selected: usize,
+    new_name: String,
     host: Option<Host>,
     root: String,
     path: String,
@@ -80,6 +81,10 @@ impl RemotePanel {
                         original: bytes,
                         text,
                     });
+                }
+                Ok(Reply::Created { parent }) => {
+                    self.new_name.clear();
+                    self.request(Action::List(parent));
                 }
                 Ok(Reply::Saved) => {
                     if let Some(bytes) = self.submitted.take()
@@ -169,6 +174,24 @@ impl RemotePanel {
                     }));
                 }
             });
+            if self.host.is_some() && !self.path.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr("New name"));
+                    ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(190.0));
+                    for (caption, directory) in [("Create file", false), ("Create folder", true)] {
+                        if ui
+                            .add_enabled(!self.new_name.is_empty(), egui::Button::new(tr(caption)))
+                            .clicked()
+                        {
+                            action = Some(Action::Create {
+                                parent: self.path.clone(),
+                                name: self.new_name.clone(),
+                                directory,
+                            });
+                        }
+                    }
+                });
+            }
             egui::ScrollArea::vertical().max_height(180.0).show_rows(
                 ui,
                 22.0,

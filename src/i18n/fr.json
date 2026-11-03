@@ -173,5 +173,8 @@
   "Account verified": "Compte vérifié",
   "Completing sign-in": "Connexion en cours",
   "Sign-in cancelled": "Connexion annulée",
-  "Wait for the account request to finish before closing.": "Attendez la fin de la requête du compte avant de fermer."
+  "Wait for the account request to finish before closing.": "Attendez la fin de la requête du compte avant de fermer.",
+  "New name": "Nouveau nom",
+  "Create file": "Créer un fichier",
+  "Create folder": "Créer un dossier"
 }
