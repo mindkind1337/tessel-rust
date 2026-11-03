@@ -102,6 +102,8 @@ pub struct Tessel {
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     finder: crate::finder_panel::Finder,
+    grid_room: [f64; 2],
+    grid_dirty: bool,
     directory: Option<PathBuf>,
     entries: Vec<Entry>,
     directory_loading: bool,
@@ -180,6 +182,8 @@ impl Tessel {
             command_palette: Default::default(),
             command_palette_focused: false,
             finder: Default::default(),
+            grid_room: [800.0, 600.0],
+            grid_dirty: false,
             directory: None,
             entries: vec![],
             directory_loading: false,
@@ -356,6 +360,25 @@ impl Tessel {
                 Err(e) => app.error = e.to_string(),
             }
         }
+        #[cfg(feature = "visual-test")]
+        if std::env::args().any(|a| a == "--grid-fixture") {
+            for _ in 0..3 {
+                let id = app.next_session;
+                app.next_session += 1;
+                app.sessions.push(Session {
+                    id,
+                    project: app.state.active_project,
+                    title: format!("Terminal {id}"),
+                    launch: Launch::Shell,
+                    cwd: launch::default_directory(),
+                    terminal: Terminal::visual_fixture().ok(),
+                    loading: None,
+                    error: String::new(),
+                });
+            }
+            app.active_session = app.sessions.first().map(|s| s.id);
+            app.view = View::Work;
+        }
         app
     }
     fn save(&mut self) {
@@ -370,6 +393,7 @@ impl Tessel {
                 cwd: s.cwd.clone(),
             })
             .collect();
+        self.state.sync_terminal_layouts(self.grid_room);
         if let Some(s) = &self.store
             && let Err(e) = s.save(&self.state)
         {
@@ -587,6 +611,13 @@ impl Tessel {
         }
     }
     fn new_session(&mut self, launch: Launch) {
+        self.new_session_placed(launch, None);
+    }
+    fn new_session_placed(
+        &mut self,
+        launch: Launch,
+        split: Option<(u64, crate::pane_grid::SplitDir)>,
+    ) {
         if self.sessions.len() >= 100 {
             self.error = "Session limit: 100".into();
             return;
@@ -619,6 +650,15 @@ impl Tessel {
         };
         s.start();
         self.sessions.push(s);
+        if let Some((target, dir)) = split {
+            self.state
+                .terminal_layouts
+                .entry(crate::terminal_layout::project_key(
+                    self.state.active_project,
+                ))
+                .or_default()
+                .split(target, id, dir);
+        }
         self.active_session = Some(id);
         self.view = View::Work;
         self.save();
@@ -862,6 +902,18 @@ impl Tessel {
                     {
                         self.active_session = Some(session.id);
                         self.view = View::Work;
+                        if let Some(layout) = self
+                            .state
+                            .terminal_layouts
+                            .get_mut(&crate::terminal_layout::project_key(session.project))
+                            && layout.maximized.is_some()
+                        {
+                            layout.maximized = Some(session.id);
+                            self.grid_dirty = true;
+                        }
+                        if let Some(terminal) = &session.terminal {
+                            terminal.request_focus(ctx);
+                        }
                     }
                 }
             });
@@ -1021,15 +1073,22 @@ impl Tessel {
                 }
             });
     }
+    fn tile_sessions(&mut self, columns: Option<usize>) {
+        let key = crate::terminal_layout::project_key(self.state.active_project);
+        if let Some(layout) = self.state.terminal_layouts.get_mut(&key) {
+            layout.tile(self.grid_room, columns);
+            self.save();
+        }
+    }
     fn work(&mut self, ui: &mut egui::Ui) {
-        let indices: Vec<usize> = self
+        use crate::pane_grid::{self, SplitDir};
+        let ids: Vec<u64> = self
             .sessions
             .iter()
-            .enumerate()
-            .filter(|(_, s)| s.project == self.state.active_project)
-            .map(|(i, _)| i)
+            .filter(|s| s.project == self.state.active_project)
+            .map(|s| s.id)
             .collect();
-        if indices.is_empty() {
+        if ids.is_empty() {
             ui.heading(tr("Start working"));
             ui.label(tr("Open a project, then launch a terminal or installed agent. Switching projects keeps sessions running."));
             if ui.button(tr("Open terminal")).clicked() {
@@ -1037,72 +1096,256 @@ impl Tessel {
             }
             return;
         }
-        if !indices
-            .iter()
-            .any(|&i| Some(self.sessions[i].id) == self.active_session)
-        {
-            self.active_session = Some(self.sessions[indices[0]].id);
+        if !self.active_session.is_some_and(|id| ids.contains(&id)) {
+            self.active_session = ids.first().copied();
         }
-        let mut close = None;
-        ui.horizontal_wrapped(|ui| {
-            for &i in &indices {
-                let s = &self.sessions[i];
-                if ui
-                    .selectable_label(
-                        Some(s.id) == self.active_session,
-                        format!("{} #{}", s.title, s.id),
+        let key = crate::terminal_layout::project_key(self.state.active_project);
+        let room = ui.available_rect_before_wrap();
+        self.grid_room = [room.width() as f64, room.height() as f64];
+        let layout = self.state.terminal_layouts.entry(key.clone()).or_default();
+        self.grid_dirty |= layout.sync(&ids, self.grid_room);
+        let maximized = layout.maximized;
+        let geometry = pane_grid::grid_layout(layout.tree.as_ref());
+        if maximized.is_none()
+            && ui.is_enabled()
+            && (!ui.ctx().wants_keyboard_input()
+                || self
+                    .sessions
+                    .iter()
+                    .any(|s| s.terminal.as_ref().is_some_and(|t| t.has_focus(ui.ctx()))))
+        {
+            let positions: Vec<_> = geometry
+                .tiles
+                .iter()
+                .map(|tile| {
+                    (
+                        tile.leaf.id.clone(),
+                        tile.rect
+                            .to_px(room.width() as f64, room.height() as f64, 4.0),
                     )
-                    .clicked()
+                })
+                .collect();
+            for (key, direction) in [
+                (egui::Key::ArrowLeft, pane_grid::FocusDir::Left),
+                (egui::Key::ArrowRight, pane_grid::FocusDir::Right),
+                (egui::Key::ArrowUp, pane_grid::FocusDir::Up),
+                (egui::Key::ArrowDown, pane_grid::FocusDir::Down),
+            ] {
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, key))
+                    && let Some(next) = self
+                        .active_session
+                        .and_then(|id| {
+                            pane_grid::move_focus(&positions, &id.to_string(), direction)
+                        })
+                        .and_then(|id| id.parse::<u64>().ok())
                 {
-                    self.active_session = Some(s.id);
+                    self.active_session = Some(next);
+                    if let Some(terminal) = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.id == next)
+                        .and_then(|s| s.terminal.as_ref())
+                    {
+                        terminal.request_focus(ui.ctx());
+                    }
                 }
             }
-        });
-        let columns = self.state.columns;
-        let visible: Vec<usize> = if columns == 1 {
-            indices
-                .into_iter()
-                .filter(|&i| Some(self.sessions[i].id) == self.active_session)
-                .collect()
-        } else {
-            indices
+        }
+        ui.allocate_rect(room, egui::Sense::hover());
+        let screen_rect = |relative: pane_grid::GridRect| {
+            let px = relative.to_px(room.width() as f64, room.height() as f64, 4.0);
+            egui::Rect::from_min_size(
+                room.min + egui::vec2(px.left as f32, px.top as f32),
+                egui::vec2(px.width as f32, px.height as f32),
+            )
         };
-        let rows = visible.len().div_ceil(columns);
-        let height = ((ui.available_height() - 8.0 * rows as f32) / rows as f32).max(100.0);
-        for row in visible.chunks(columns) {
-            ui.columns(columns, |uis| {
-                for (column, &index) in row.iter().enumerate() {
-                    let s = &mut self.sessions[index];
-                    let ui = &mut uis[column];
-                    ui.push_id(s.id, |ui| {
-                        ui.set_height(height);
-                        ui.horizontal(|ui| {
-                            ui.strong(&s.title);
-                            if ui.small_button(tr("Sleep")).clicked() {
-                                s.terminal = None;
-                                s.loading = None;
+        let mut close = None;
+        let mut split = None;
+        let mut maximize = None;
+        for tile in &geometry.tiles {
+            let Ok(id) = tile.leaf.id.parse::<u64>() else {
+                continue;
+            };
+            if maximized.is_some_and(|active| active != id) {
+                continue;
+            }
+            let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) else {
+                continue;
+            };
+            let rect = if maximized.is_some() {
+                room
+            } else {
+                screen_rect(tile.rect)
+            };
+            if rect.width() < 1.0 || rect.height() < 1.0 {
+                continue;
+            }
+            if ui.is_enabled()
+                && ui.input(|i| {
+                    i.pointer.any_pressed()
+                        && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+                })
+            {
+                self.active_session = Some(id);
+            }
+            let active = self.active_session == Some(id);
+            let color = if active {
+                ui.visuals().selection.stroke.color
+            } else {
+                ui.visuals().widgets.noninteractive.bg_stroke.color
+            };
+            let clip = ui.clip_rect().intersect(rect);
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .id_salt(("grid-terminal", id))
+                    .max_rect(rect),
+                |ui| {
+                    ui.set_clip_rect(clip);
+                    egui::Frame::new()
+                        .stroke(egui::Stroke::new(1.0_f32, color))
+                        .inner_margin(4)
+                        .show(ui, |ui| {
+                            ui.set_min_size(ui.available_size());
+                            ui.horizontal(|ui| {
+                                ui.label(&session.title);
+                                ui.menu_button("+", |ui| {
+                                    if ui.button(tr("Split right")).clicked() {
+                                        split = Some((id, SplitDir::Row));
+                                        ui.close();
+                                    }
+                                    if ui.button(tr("Split down")).clicked() {
+                                        split = Some((id, SplitDir::Col));
+                                        ui.close();
+                                    }
+                                    if ui.button(tr("Sleep")).clicked() {
+                                        session.terminal = None;
+                                        session.loading = None;
+                                        ui.close();
+                                    }
+                                });
+                                if ui
+                                    .small_button(if maximized.is_some() { "▣" } else { "□" })
+                                    .on_hover_text(tr("Maximize / restore pane"))
+                                    .clicked()
+                                {
+                                    maximize = Some(id);
+                                }
+                                if ui.small_button("×").on_hover_text(tr("Close")).clicked() {
+                                    close = Some(id);
+                                }
+                            });
+                            if !session.error.is_empty() {
+                                ui.colored_label(egui::Color32::LIGHT_RED, &session.error);
                             }
-                            if ui.small_button("×").clicked() {
-                                close = Some(s.id);
+                            if let Some(terminal) = &mut session.terminal {
+                                terminal.show(ui, self.state.font_size);
+                            } else if session.loading.is_some() {
+                                ui.spinner();
+                                ui.label(tr("Starting…"));
+                            } else if ui.button(tr("Wake / reconnect")).clicked() {
+                                session.start();
                             }
                         });
-                        if !s.error.is_empty() {
-                            ui.colored_label(egui::Color32::LIGHT_RED, &s.error);
-                        }
-                        if let Some(t) = &mut s.terminal {
-                            t.show(ui, self.state.font_size);
-                        } else if s.loading.is_some() {
-                            ui.spinner();
-                            ui.label(tr("Starting…"));
-                        } else if ui.button(tr("Wake / reconnect")).clicked() {
-                            s.start();
-                        }
+                },
+            );
+        }
+        if maximized.is_none() {
+            for divider in &geometry.dividers {
+                let rect = screen_rect(divider.rect);
+                let horizontal = divider.dir == SplitDir::Row;
+                let response = ui
+                    .interact(
+                        rect,
+                        ui.id().with(("grid-divider", &divider.key)),
+                        egui::Sense::click_and_drag(),
+                    )
+                    .on_hover_cursor(if horizontal {
+                        egui::CursorIcon::ResizeHorizontal
+                    } else {
+                        egui::CursorIcon::ResizeVertical
                     });
+                if response.clicked() {
+                    response.request_focus();
                 }
-            });
+                let focused = response.has_focus();
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    if response.hovered() || response.dragged() || focused {
+                        ui.visuals().selection.stroke.color
+                    } else {
+                        ui.visuals().widgets.noninteractive.bg_stroke.color
+                    },
+                );
+                let delta = if response.dragged() {
+                    ui.input(|i| {
+                        if horizontal {
+                            i.pointer.delta().x
+                        } else {
+                            i.pointer.delta().y
+                        }
+                    }) as f64
+                } else {
+                    0.0
+                };
+                let direction = if focused && ui.is_enabled() {
+                    let back = if horizontal {
+                        egui::Key::ArrowLeft
+                    } else {
+                        egui::Key::ArrowUp
+                    };
+                    let forward = if horizontal {
+                        egui::Key::ArrowRight
+                    } else {
+                        egui::Key::ArrowDown
+                    };
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, back)) {
+                        Some(false)
+                    } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, forward)) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if ui.is_enabled() && (delta != 0.0 || direction.is_some()) {
+                    let bounds = screen_rect(divider.split_rect);
+                    let pixels = if horizontal {
+                        bounds.width()
+                    } else {
+                        bounds.height()
+                    } as f64;
+                    self.grid_dirty |= self
+                        .state
+                        .terminal_layouts
+                        .get_mut(&key)
+                        .expect("layout")
+                        .resize(&divider.split_id, divider.index, pixels, delta, direction);
+                }
+            }
+        }
+        if let Some(id) = maximize {
+            self.state
+                .terminal_layouts
+                .get_mut(&key)
+                .expect("layout")
+                .maximized = if maximized == Some(id) {
+                None
+            } else {
+                Some(id)
+            };
+            self.grid_dirty = true;
         }
         if let Some(id) = close {
             self.sessions.retain(|s| s.id != id);
+            self.grid_dirty = true;
+        }
+        if let Some(placement) = split {
+            self.new_session_placed(Launch::Shell, Some(placement));
+        }
+        if self.grid_dirty && !ui.input(|i| i.pointer.any_down()) {
+            self.grid_dirty = false;
             self.save();
         }
     }
@@ -1878,6 +2121,25 @@ impl eframe::App for Tessel {
                 }) {
                     self.open_finder();
                 }
+                for (key, dir) in [
+                    (egui::Key::E, crate::pane_grid::SplitDir::Row),
+                    (egui::Key::O, crate::pane_grid::SplitDir::Col),
+                ] {
+                    if ctx.input_mut(|i| {
+                        i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
+                    }) && let Some(target) = self.active_session
+                    {
+                        self.new_session_placed(Launch::Shell, Some((target, dir)));
+                    }
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    let key = crate::terminal_layout::project_key(self.state.active_project);
+                    if let Some(layout) = self.state.terminal_layouts.get_mut(&key)
+                        && layout.maximized.take().is_some()
+                    {
+                        self.grid_dirty = true;
+                    }
+                }
                 for (key, tab) in [
                     (egui::Key::X, RightTab::Files),
                     (egui::Key::G, RightTab::Changes),
@@ -1965,6 +2227,10 @@ impl eframe::App for Tessel {
                     ui.menu_button(tr("Layout"), |ui| {
                         ui.checkbox(&mut self.state.panels.left_open, tr("Projects"));
                         ui.checkbox(&mut self.state.panels.right_open, tr("Side panel"));
+                        if ui.button(tr("Arrange panes automatically")).clicked() {
+                            self.tile_sessions(None);
+                            ui.close();
+                        }
                         for columns in 1..=3 {
                             if ui
                                 .selectable_value(
@@ -1974,7 +2240,7 @@ impl eframe::App for Tessel {
                                 )
                                 .changed()
                             {
-                                self.save();
+                                self.tile_sessions(Some(columns));
                             }
                         }
                     });

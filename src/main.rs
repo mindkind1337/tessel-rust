@@ -21,6 +21,7 @@ mod i18n;
 mod launch;
 mod office;
 pub mod palette;
+pub mod pane_grid;
 mod pdf;
 mod preview;
 mod remote;
@@ -28,6 +29,7 @@ mod remote_panel;
 mod share;
 mod share_panel;
 mod terminal;
+mod terminal_layout;
 mod theme;
 pub mod theme_palettes;
 #[cfg(windows)]

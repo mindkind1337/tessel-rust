@@ -229,5 +229,9 @@
   "Search limit reached; some files are not listed.": "Limite de recherche atteinte; certains fichiers ne sont pas affichés.",
   "No matching files.": "Aucun fichier correspondant.",
   "The previous file search is still stopping.": "La recherche précédente est encore en cours d’arrêt.",
-  "File search stopped unexpectedly.": "La recherche de fichiers s’est arrêtée de façon inattendue."
+  "File search stopped unexpectedly.": "La recherche de fichiers s’est arrêtée de façon inattendue.",
+  "Split right": "Diviser à droite",
+  "Split down": "Diviser en bas",
+  "Maximize / restore pane": "Agrandir / restaurer le panneau",
+  "Arrange panes automatically": "Disposer les panneaux automatiquement"
 }

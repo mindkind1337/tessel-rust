@@ -27,6 +27,11 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    pub fn request_focus(&self, ctx: &egui::Context) {
+        if let Some(id) = self.widget_id {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
+    }
     pub fn has_focus(&self, ctx: &egui::Context) -> bool {
         self.widget_id
             .is_some_and(|id| ctx.memory(|m| m.has_focus(id)))

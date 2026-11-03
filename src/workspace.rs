@@ -89,6 +89,7 @@ pub struct Workspace {
     pub language: crate::i18n::Language,
     pub columns: usize,
     pub panels: Panels,
+    pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
     pub next_id: u64,
 }
@@ -109,6 +110,7 @@ impl Default for Workspace {
             language: Default::default(),
             columns: 1,
             panels: Default::default(),
+            terminal_layouts: Default::default(),
             font_size: 15.0,
             next_id: 1,
         }
@@ -116,6 +118,23 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    pub fn sync_terminal_layouts(&mut self, room: [f64; 2]) {
+        let mut groups: std::collections::HashMap<String, Vec<u64>> = Default::default();
+        for session in &self.sessions {
+            groups
+                .entry(crate::terminal_layout::project_key(session.project))
+                .or_default()
+                .push(session.id);
+        }
+        self.terminal_layouts
+            .retain(|key, _| groups.contains_key(key));
+        for (key, ids) in groups {
+            self.terminal_layouts
+                .entry(key)
+                .or_default()
+                .sync(&ids, room);
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         if self.schema != 1 {
             return Err(
@@ -164,6 +183,18 @@ impl Workspace {
                 crate::launch::Launch::Ssh(host) => validate_host(&host.alias)?,
                 _ => {}
             }
+        }
+        if self.terminal_layouts.len() > 101 {
+            return Err("Too many terminal layouts".into());
+        }
+        for (key, layout) in &self.terminal_layouts {
+            let allowed = self
+                .sessions
+                .iter()
+                .filter(|session| crate::terminal_layout::project_key(session.project) == *key)
+                .map(|session| session.id)
+                .collect();
+            layout.validate(&allowed)?;
         }
         if !(1..=3).contains(&self.columns)
             || !self.font_size.is_finite()
@@ -401,6 +432,30 @@ mod tests {
         assert!(
             serde_json::from_str::<Workspace>(r#"{"panels":{"right_tab":"unknown"}}"#).is_err()
         );
+    }
+    #[test]
+    fn terminal_split_geometry_survives_storage_without_starting_saved_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        for id in 1..=2 {
+            state.sessions.push(SavedSession {
+                id,
+                project: None,
+                title: format!("Sleeping {id}"),
+                launch: crate::launch::Launch::Shell,
+                cwd: dir.path().to_owned(),
+            });
+        }
+        state.sync_terminal_layouts([1200.0, 700.0]);
+        let layout = state.terminal_layouts.get_mut("global").unwrap();
+        let geometry = crate::pane_grid::grid_layout(layout.tree.as_ref());
+        assert!(layout.resize(&geometry.dividers[0].split_id, 0, 1200.0, 80.0, None));
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(loaded.terminal_layouts, state.terminal_layouts);
+        assert_eq!(loaded.sessions.len(), 2);
+        assert_eq!(loaded.sessions[0].title, "Sleeping 1");
     }
     #[test]
     fn refuses_ssh_options_and_shell_syntax() {

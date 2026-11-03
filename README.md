@@ -15,7 +15,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 - Seven persisted appearance choices match Tessel's source palettes: Classic, Warp-inspired, Dracula, Nord, Tokyo Night, Gruvbox and Solarized Dark. Chrome, controls and terminal defaults update immediately; the five named palettes also supply their 16 ANSI colors. Classic/Warp retain default ANSI colors, and explicit RGB/extended terminal colors stay unchanged. Existing light-theme preferences remain readable until a named theme is selected. Segoe UI is used when available on Windows, with a 13-point base UI size. Full visual/layout parity remains in progress.
 - The status bar and `--version` show the compiled Git build and commit, so portable copies can be identified without consulting the source checkout. Builds without Git metadata are labeled as source archives.
 - Persistent local projects; newly added projects become selected automatically.
-- Saved theme, font size, one/two/three-column terminal layout, SSH hosts and per-project task boards.
+- Saved theme, font size, per-project terminal split layouts, SSH hosts and per-project task boards.
 - English/French interface selection in Settings, applied immediately and retained across restarts. Main navigation, settings, task columns, file actions, browser/download controls, PDF controls, sharing, vault and approval captions are translated. User content, tool protocol values and external/technical error messages retain their original text. Settings remain scrollable on smaller windows.
 - Terminal and agent metadata restored asleep: reopening the app never automatically executes saved processes.
 - Export/import portable Rust settings as bounded JSON, with a review of project paths and metadata counts before replacement. A local copy preserves previous settings; restored terminals stay asleep, projects require explicit selection, sharing stops and agent-browser access is revoked. Active work must be stopped or saved first. Exports contain paths and metadata but no credentials, browser profiles or project files, and are not encrypted.
@@ -23,7 +23,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Terminals, agents and SSH
 
-- Real PTYs (ConPTY on Windows), independent tabs and grid layout. Switching projects keeps existing sessions running and drains their output.
+- Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `+` menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
 - PowerShell without user profiles on Windows; `/bin/sh` on Unix.
 - ANSI colors, underlines, cursor, resize, scrollback, copy-visible-text menu, bounded paste, bracketed paste and application cursor keys. Wide glyphs render above both cell backgrounds; painting is clipped to each pane. Installed Windows emoji/symbol fonts are used as fallbacks.
 - Ctrl+A–Z, Ctrl+Space, Shift+Tab, Insert/Delete, Page Up/Down, F1–F12 and modified navigation/function keys. The input cursor is hidden while viewing scrollback.
