@@ -112,6 +112,8 @@ pub struct Tessel {
     git_path: String,
     commit_message: String,
     chats: Vec<crate::chat::Chat>,
+    claude_chats: Vec<crate::claude::Chat>,
+    show_claude: bool,
     share: crate::share_panel::SharePanel,
     remote: crate::remote_panel::RemotePanel,
     #[cfg(windows)]
@@ -187,6 +189,8 @@ impl Tessel {
             git_path: String::new(),
             commit_message: String::new(),
             chats: Vec::new(),
+            claude_chats: Vec::new(),
+            show_claude: false,
             share: crate::share_panel::SharePanel::default(),
             remote: crate::remote_panel::RemotePanel::default(),
             #[cfg(windows)]
@@ -215,6 +219,17 @@ impl Tessel {
         }
         #[cfg(feature = "visual-test")]
         {
+            if std::env::args().any(|a| a == "--claude-fixture") {
+                let root = std::env::current_dir().expect("fixture cwd");
+                app.state.add_project(&root).expect("fixture project");
+                let project = app.state.active().expect("fixture project");
+                app.claude_chats.push(crate::claude::Chat::fixture(
+                    project.id,
+                    project.path.clone(),
+                ));
+                app.show_claude = true;
+                app.view = View::Chat;
+            }
             if std::env::args().any(|a| a == "--french-fixture") {
                 app.state.language = crate::i18n::Language::French;
                 crate::i18n::set_language(app.state.language);
@@ -433,6 +448,17 @@ impl Tessel {
                 && self.state.chat_threads.get(&chat.project) != Some(id)
             {
                 self.state.chat_threads.insert(chat.project, id.clone());
+                chat_metadata_changed = true;
+            }
+        }
+        for chat in &mut self.claude_chats {
+            chat.poll();
+            if self.state.claude_threads.get(&chat.project) != chat.saved_session.as_ref() {
+                if let Some(id) = &chat.saved_session {
+                    self.state.claude_threads.insert(chat.project, id.clone());
+                } else {
+                    self.state.claude_threads.remove(&chat.project);
+                }
                 chat_metadata_changed = true;
             }
         }
@@ -1017,6 +1043,7 @@ impl Tessel {
                 .iter()
                 .any(|s| s.terminal.is_some() || s.loading.is_some())
             && !self.chats.iter().any(|chat| chat.busy())
+            && !self.claude_chats.iter().any(|chat| chat.busy())
             && !self.remote.needs_close_confirmation()
             && !self.documents.iter().any(Document::dirty)
             && self.git_pending.is_none()
@@ -1042,6 +1069,7 @@ impl Tessel {
             .restore(&self.state, &state)?;
         self.sessions.clear();
         self.chats.clear();
+        self.claude_chats.clear();
         self.documents.clear();
         self.document_pending.clear();
         self.active_session = None;
@@ -1320,6 +1348,29 @@ impl Tessel {
             ui.label(tr("Select a project for native chat."));
             return;
         };
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.show_claude, false, "Codex");
+            ui.selectable_value(&mut self.show_claude, true, "Claude");
+        });
+        if self.show_claude {
+            if let Some(chat) = self
+                .claude_chats
+                .iter_mut()
+                .find(|c| c.project == project.id)
+            {
+                chat.show(ui);
+            } else {
+                ui.heading(tr("Native Claude chat"));
+                if ui.button(tr("Create chat")).clicked() {
+                    self.claude_chats.push(crate::claude::Chat::new(
+                        project.id,
+                        project.path,
+                        self.state.claude_threads.get(&project.id).cloned(),
+                    ));
+                }
+            }
+            return;
+        }
         if let Some(chat) = self.chats.iter_mut().find(|c| c.project == project.id) {
             chat.show(ui);
         } else {
@@ -1435,6 +1486,7 @@ impl eframe::App for Tessel {
             && (self.documents.iter().any(Document::dirty)
                 || !self.sessions.is_empty()
                 || self.chats.iter().any(crate::chat::Chat::busy)
+                || self.claude_chats.iter().any(crate::claude::Chat::busy)
                 || self.share.hosting()
                 || self.remote.needs_close_confirmation()
                 || self.account_busy()

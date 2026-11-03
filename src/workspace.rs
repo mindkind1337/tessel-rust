@@ -48,6 +48,7 @@ pub struct Workspace {
     pub tasks: Vec<Task>,
     pub sessions: Vec<SavedSession>,
     pub chat_threads: std::collections::HashMap<u64, String>,
+    pub claude_threads: std::collections::HashMap<u64, String>,
     pub active_project: Option<u64>,
     pub dark: bool,
     pub language: crate::i18n::Language,
@@ -65,6 +66,7 @@ impl Default for Workspace {
             tasks: vec![],
             sessions: vec![],
             chat_threads: std::collections::HashMap::new(),
+            claude_threads: Default::default(),
             active_project: None,
             dark: true,
             language: Default::default(),
@@ -97,6 +99,14 @@ impl Workspace {
             })
         {
             return Err("Invalid saved chat metadata.".into());
+        }
+        if self.claude_threads.len() > 1000
+            || self
+                .claude_threads
+                .values()
+                .any(|id| !crate::claude::valid_uuid(id))
+        {
+            return Err("Invalid saved Claude chat metadata".into());
         }
         let mut session_ids = std::collections::HashSet::new();
         for session in &self.sessions {

@@ -209,5 +209,10 @@
   "Preview truncated at the document limits.": "Aperçu tronqué aux limites du document.",
   "Cancelled": "Annulé",
   "Failed": "Échec",
-  "Copy selection": "Copier la sélection"
+  "Copy selection": "Copier la sélection",
+  "Native Claude chat": "Chat Claude natif",
+  "Uses your installed Claude CLI sign-in and permission controls. Project hooks, customizations and external MCP servers are disabled in this native connection.": "Utilise la connexion et les autorisations de votre CLI Claude. Les automatisations du projet, les personnalisations et les serveurs MCP externes sont désactivés dans cette connexion native.",
+  "New conversation": "Nouvelle conversation",
+  "You": "Vous",
+  "Approval required": "Approbation requise"
 }

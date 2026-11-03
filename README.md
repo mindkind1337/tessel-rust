@@ -53,6 +53,14 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Office parsing runs in a disposable worker with the same 20-second/512 MiB Windows limits as PDFs, for local and SFTP originals. Inputs are limited to 32 MiB; sheet/slide, row, column and output limits bound previews. Macros and formulas are never executed. Damaged/encrypted/unsupported inputs report an error.
 - Bounded document loading and up to 24 open or loading documents. Office previews accept DOCX/ODT readable paragraphs and headings, PPTX/ODP text in slide order, and XLSX/XLSM/ODS sheets with cached cell values. These are content previews, not layout-faithful Office renderers; document tables are flattened and embedded images/charts are not displayed.
 
+### Native Claude chat
+
+- Separate Claude provider in the native chat panel, using the installed Claude Code CLI and its existing sign-in. Tessel does not copy the CLI's tokens.
+- Streamed text, explicit connection and resume, model selection, persisted session IDs, interruption and process-tree shutdown on Windows. Workspace restore never starts Claude automatically.
+- Tool permission requests show their original arguments with Allow once / Deny. Interrupted, cancelled, duplicate or mismatched-session requests cannot gain approval. Project customizations, hooks and external MCP servers are disabled for this connection; the CLI's default permission mode remains active.
+- Inline Claude questions support single or multiple choices and free text, with no preselected answer. Skipping denies the question request; cancelled, completed or interrupted turns clear pending questions. Answers preserve the original question text and do not grant unrelated command permissions.
+- Bounded transport queues, frame sizes and transcript display. The native initialization test connects to the installed CLI without sending a model prompt; protocol fixtures cover streaming, approvals, cancellation and failures. The optional `--self-test-claude-turn` sends one synthetic message and refuses every tool request. The current live model test is blocked by the CLI reporting that sign-in is required. End-to-end model/tool execution, history rendering and native Tessel tools for Claude remain pending.
+
 ### Native Codex chat
 
 - Rust client for the installed Codex app-server, using its existing sign-in without copying tokens.

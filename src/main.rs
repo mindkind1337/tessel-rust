@@ -11,6 +11,7 @@ mod backup;
 #[cfg(windows)]
 mod browser;
 mod chat;
+mod claude;
 mod file_actions;
 mod files;
 mod git;
@@ -46,6 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if std::env::args().any(|a| a == "--self-test-pdf") {
         return pdf::smoke();
+    }
+    if std::env::args().any(|arg| arg == "--self-test-claude") {
+        return claude::smoke(false);
+    }
+    if std::env::args().any(|arg| arg == "--self-test-claude-turn") {
+        return claude::smoke(true);
     }
     if std::env::args().any(|arg| arg == "--self-test-codex") {
         return chat::smoke();
