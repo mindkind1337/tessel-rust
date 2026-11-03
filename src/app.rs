@@ -3,7 +3,7 @@ use crate::{
     files::Document,
     launch::{self, Launch},
     terminal::Terminal,
-    workspace::{self, Host, Store, Task, Workspace},
+    workspace::{self, Host, Store, Workspace},
 };
 use eframe::egui;
 use std::{
@@ -117,7 +117,8 @@ pub struct Tessel {
     agents: Vec<(String, bool)>,
     host_alias: String,
     host_folder: String,
-    task_title: String,
+    tasks_board: crate::tasks_board_panel::TasksBoard,
+    tasks_board_project: Option<u64>,
     pending_close: Option<usize>,
     pending_exit: bool,
     restore_preview: Option<Workspace>,
@@ -147,6 +148,7 @@ pub struct Tessel {
 }
 impl Tessel {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        crate::system_fonts::install(&cc.egui_ctx);
         let (sender, receiver) = mpsc::channel();
         let override_dir = std::env::args()
             .collect::<Vec<_>>()
@@ -198,7 +200,8 @@ impl Tessel {
             agents: vec![],
             host_alias: String::new(),
             host_folder: String::new(),
-            task_title: String::new(),
+            tasks_board: Default::default(),
+            tasks_board_project: None,
             pending_close: None,
             pending_exit: false,
             restore_preview: None,
@@ -465,6 +468,10 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        if self.tasks_board_project != self.state.active_project {
+            self.tasks_board.reset();
+            self.tasks_board_project = self.state.active_project;
+        }
         self.finder.close();
         self.sync_git_project();
         self.explorer_tree
@@ -1329,14 +1336,7 @@ impl Tessel {
                             .id_salt("side-git")
                             .show(ui, |ui| self.git_view(ui));
                     }
-                    RightTab::Tasks => {
-                        egui::ScrollArea::both()
-                            .id_salt("side-tasks")
-                            .show(ui, |ui| {
-                                ui.set_min_width(880.0);
-                                self.tasks(ui);
-                            });
-                    }
+                    RightTab::Tasks => self.tasks(ui),
                 }
             });
     }
@@ -1927,62 +1927,45 @@ impl Tessel {
         }
     }
     fn tasks(&mut self, ui: &mut egui::Ui) {
-        let Some(project) = self.state.active_project else {
-            ui.label(tr("Select a project first."));
+        use crate::tasks_board_panel::{TaskCard, TasksBoardInput};
+        let project = self.state.active_project.filter(|id| {
+            self.state
+                .projects
+                .iter()
+                .any(|candidate| candidate.id == *id)
+        });
+        if self.tasks_board_project != project {
+            self.tasks_board.reset();
+            self.tasks_board_project = project;
+        }
+        let cards: Vec<_> = self
+            .state
+            .tasks
+            .iter()
+            .filter(|task| Some(task.project) == project)
+            .map(|task| TaskCard {
+                id: task.id,
+                title: task.title.clone(),
+                column: task.column,
+            })
+            .collect();
+        let action = self.tasks_board.show(
+            ui,
+            TasksBoardInput {
+                tasks: &cards,
+                french: self.state.language == crate::i18n::Language::French,
+                project_selected: project.is_some(),
+            },
+        );
+        let Some(project) = project else {
             return;
         };
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.task_title);
-            if ui.button(tr("Add task")).clicked() && !self.task_title.trim().is_empty() {
-                let id = match self.state.id() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        self.error = e;
-                        return;
-                    }
-                };
-                self.state.tasks.push(Task {
-                    id,
-                    project,
-                    title: self.task_title.trim().chars().take(1000).collect(),
-                    column: 0,
-                });
-                self.task_title.clear();
-                self.save();
+        if let Some(action) = action {
+            match crate::task_actions::apply(&mut self.state, project, action) {
+                Ok(true) => self.save(),
+                Ok(false) => {}
+                Err(error) => self.error = tr(&error).into(),
             }
-        });
-        let mut movement = None;
-        ui.columns(4, |uis| {
-            for (column, title) in ["To do", "Doing", "Review", "Done"].iter().enumerate() {
-                let ui = &mut uis[column];
-                ui.heading(tr(title));
-                for task in self
-                    .state
-                    .tasks
-                    .iter()
-                    .filter(|t| t.project == project && t.column == column)
-                {
-                    ui.push_id(task.id, |ui| {
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.label(&task.title);
-                            ui.horizontal(|ui| {
-                                if column > 0 && ui.small_button("←").clicked() {
-                                    movement = Some((task.id, column - 1));
-                                }
-                                if column < 3 && ui.small_button("→").clicked() {
-                                    movement = Some((task.id, column + 1));
-                                }
-                            });
-                        });
-                    });
-                }
-            }
-        });
-        if let Some((id, column)) = movement {
-            if let Some(t) = self.state.tasks.iter_mut().find(|t| t.id == id) {
-                t.column = column;
-            }
-            self.save();
         }
     }
     fn can_restore(&self) -> bool {
@@ -3197,15 +3180,20 @@ impl eframe::App for Tessel {
 }
 
 fn take_close_pane_shortcut(ctx: &egui::Context, allowed: bool) -> bool {
+    take_close_shortcut(ctx, allowed, egui::Modifiers::CTRL | egui::Modifiers::SHIFT)
+}
+
+fn take_close_shortcut(ctx: &egui::Context, allowed: bool, modifiers: egui::Modifiers) -> bool {
     if !allowed {
         return false;
     }
     ctx.input_mut(|input| {
-        let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
         let fresh = input.events.iter().any(|event| matches!(event,
             egui::Event::Key { key: egui::Key::W, pressed: true, repeat: false, modifiers: actual, .. }
-                if actual.matches_logically(modifiers)));
-        input.consume_key(modifiers, egui::Key::W);
+                if actual.matches_exact(modifiers)));
+        input.events.retain(|event| !matches!(event,
+            egui::Event::Key { key: egui::Key::W, pressed: true, modifiers: actual, .. }
+                if actual.matches_exact(modifiers)));
         fresh
     })
 }
@@ -3226,8 +3214,7 @@ fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool
             ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
         }
         let close = ui.button(tr("Close")).clicked()
-            || (ui.is_enabled()
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::W)));
+            || take_close_shortcut(ui.ctx(), ui.is_enabled(), egui::Modifiers::CTRL);
         ui.small(d.path.display().to_string());
         close
     })
@@ -3246,6 +3233,43 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_documents_ignores_held_keys_and_pane_close_modifiers() {
+        let ctx = egui::Context::default();
+        let frame = |pressed, modifiers, allowed| {
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::W,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    close = take_close_shortcut(ctx, allowed, egui::Modifiers::CTRL);
+                },
+            );
+            close
+        };
+        assert!(frame(true, egui::Modifiers::CTRL, true));
+        assert!(!frame(true, egui::Modifiers::CTRL, true));
+        assert!(!frame(false, egui::Modifiers::CTRL, true));
+        assert!(!frame(
+            true,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            true
+        ));
+        assert!(!frame(false, egui::Modifiers::CTRL, true));
+        assert!(!frame(true, egui::Modifiers::CTRL, false));
+        assert!(!frame(true, egui::Modifiers::CTRL, true));
+        assert!(!frame(false, egui::Modifiers::CTRL, true));
+        assert!(frame(true, egui::Modifiers::CTRL, true));
+    }
 
     #[test]
     fn closing_a_pane_requires_a_fresh_press_and_an_unblocked_workspace() {
@@ -3286,13 +3310,13 @@ mod tests {
         let mut document = Document::open(dir.path(), &path).unwrap();
         document.text = "edited".into();
         let ctx = egui::Context::default();
-        let mut frame = |key, enabled| {
+        let mut frame = |key, pressed, enabled| {
             let mut close = false;
             let input = egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
                     physical_key: None,
-                    pressed: true,
+                    pressed,
                     repeat: false,
                     modifiers: egui::Modifiers::CTRL,
                 }],
@@ -3307,11 +3331,13 @@ mod tests {
             });
             close
         };
-        assert!(!frame(egui::Key::S, false));
+        assert!(!frame(egui::Key::S, true, false));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
-        assert!(!frame(egui::Key::W, false));
-        assert!(frame(egui::Key::W, true));
-        assert!(!frame(egui::Key::S, true));
+        assert!(!frame(egui::Key::W, true, false));
+        assert!(!frame(egui::Key::W, true, true));
+        assert!(!frame(egui::Key::W, false, true));
+        assert!(frame(egui::Key::W, true, true));
+        assert!(!frame(egui::Key::S, true, true));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
     }
 

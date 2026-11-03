@@ -254,5 +254,6 @@
   "What do you want to start in {{name}}?": "Que voulez-vous lancer dans {{name}} ?",
   "Search panes, workspaces and commands": "Rechercher des panneaux, espaces et commandes",
   "No matching commands": "Aucune commande correspondante",
+  "Task board is full.": "Le tableau de tâches est plein.",
   "Git in progress": "Git en cours"
 }
