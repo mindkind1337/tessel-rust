@@ -348,6 +348,7 @@ pub struct ProjectPanel {
     focus_requested: bool,
     list_root_id: Option<Id>,
     focused_nav: Option<NavItem>,
+    last_nav_items: Vec<NavItem>,
     held_activate_key: Option<Key>,
 }
 
@@ -447,13 +448,101 @@ impl ProjectPanel {
         Some(0)
     }
 
-    fn classify_focus(focused: Option<Id>, panel_id: Id) -> Option<FocusOwner> {
+    fn recover_deleted_focus(
+        &self,
+        deleted: NavItem,
+        nav_items: &[NavItem],
+        input: &ProjectPanelInput<'_>,
+    ) -> Option<NavItem> {
+        if nav_items.is_empty() {
+            return None;
+        }
+        if let Some(old_idx) = self.last_nav_items.iter().position(|it| *it == deleted) {
+            if let NavItem::Session { project, .. } = deleted {
+                if old_idx < nav_items.len()
+                    && matches!(nav_items[old_idx], NavItem::Session { project: p, .. } if p == project)
+                {
+                    return Some(nav_items[old_idx]);
+                }
+                if old_idx > 0 {
+                    let prev = nav_items[old_idx - 1];
+                    let same_parent = matches!(prev, NavItem::Session { project: p, .. } if p == project)
+                        || project.is_some_and(|pid| prev == NavItem::Project(pid))
+                        || (project.is_none() && prev == NavItem::GlobalHeader);
+                    if same_parent {
+                        return Some(prev);
+                    }
+                }
+            }
+            return Some(nav_items[old_idx.min(nav_items.len() - 1)]);
+        }
+        self.default_nav_index(nav_items, input)
+            .map(|idx| nav_items[idx])
+    }
+
+    fn list_a11y_label(item: Option<NavItem>, input: &ProjectPanelInput<'_>) -> String {
+        let base = if input.french { "Projets" } else { "Projects" };
+        let Some(nav) = item else {
+            return base.to_owned();
+        };
+        let unnamed = if input.french {
+            "(sans nom)"
+        } else {
+            "(unnamed)"
+        };
+        let global_title = if input.french {
+            "Sessions sans projet"
+        } else {
+            "Sessions without a project"
+        };
+        let detail = match nav {
+            NavItem::Project(pid) => input.projects.iter().find(|p| p.id == pid).map(|p| {
+                if p.name.trim().is_empty() {
+                    unnamed.to_owned()
+                } else {
+                    p.name.clone()
+                }
+            }),
+            NavItem::GlobalHeader => Some(global_title.to_owned()),
+            NavItem::Session {
+                project: Some(pid),
+                id,
+            } => input.projects.iter().find(|p| p.id == pid).map(|p| {
+                let pname = if p.name.trim().is_empty() {
+                    unnamed
+                } else {
+                    p.name.as_str()
+                };
+                let stitle = p
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map_or("Session", session_display_title);
+                format!("{pname} / {stitle}")
+            }),
+            NavItem::Session { project: None, id } => input
+                .global_sessions
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| format!("{global_title} / {}", session_display_title(s))),
+        };
+        match detail {
+            Some(d) => format!("{base} — {d}"),
+            None => base.to_owned(),
+        }
+    }
+
+    fn classify_focus(
+        focused: Option<Id>,
+        panel_id: Id,
+        has_list_items: bool,
+    ) -> Option<FocusOwner> {
         let fid = focused?;
         if fid == panel_id.with("search") {
             Some(FocusOwner::Search)
         } else if fid == panel_id.with("open-folder") {
             Some(FocusOwner::OpenFolder)
-        } else if fid == panel_id.with("list") {
+        } else if has_list_items && fid == panel_id.with("list") {
             Some(FocusOwner::List)
         } else {
             None
@@ -598,8 +687,10 @@ impl ProjectPanel {
         let list_root_id = panel_id.with("list");
         self.list_root_id = Some(list_root_id);
 
+        let keyboard_blocked = !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx());
+
         if let Some(held) = self.held_activate_key {
-            let released = !ui.is_enabled()
+            let released = keyboard_blocked
                 || !ui.input(|i| i.focused)
                 || ui.input(|i| {
                     i.events.iter().any(|ev| {
@@ -619,17 +710,26 @@ impl ProjectPanel {
         }
 
         let pre_nav_items = self.build_nav_items(&input);
+        let has_list_items = !pre_nav_items.is_empty();
         if let Some(cur) = self.focused_nav
             && !pre_nav_items.contains(&cur)
         {
-            self.focused_nav = self
-                .default_nav_index(&pre_nav_items, &input)
-                .map(|idx| pre_nav_items[idx]);
+            self.focused_nav = self.recover_deleted_focus(cur, &pre_nav_items, &input);
+        }
+
+        if !has_list_items
+            && ui.is_enabled()
+            && ui.ctx().memory(|m| m.focused()) == Some(list_root_id)
+        {
+            ui.ctx()
+                .memory_mut(|m| m.request_focus(panel_id.with("open-folder")));
         }
 
         let focused_now = ui.ctx().memory(|m| m.focused());
-        let focus_owner = if !ui.is_enabled() {
-            self.focus_requested = false;
+        let focus_owner = if keyboard_blocked {
+            if !ui.is_enabled() {
+                self.focus_requested = false;
+            }
             self.held_activate_key = None;
             None
         } else if self.focus_requested {
@@ -644,7 +744,7 @@ impl ProjectPanel {
                 Some(FocusOwner::Search)
             }
         } else {
-            let classified = Self::classify_focus(focused_now, panel_id);
+            let classified = Self::classify_focus(focused_now, panel_id, has_list_items);
             if classified == Some(FocusOwner::List) && self.focused_nav.is_none() {
                 self.focused_nav = self
                     .default_nav_index(&pre_nav_items, &input)
@@ -671,13 +771,19 @@ impl ProjectPanel {
             action = Some(header_act);
         }
 
-        let _ = ui.interact(
-            Rect::from_min_size(ui.cursor().min, Vec2::ZERO),
-            list_root_id,
-            Sense::focusable_noninteractive(),
-        );
+        let list_resp = if has_list_items {
+            let list_viewport = ui.available_rect_before_wrap();
+            Some(ui.interact(
+                list_viewport,
+                list_root_id,
+                Sense::focusable_noninteractive(),
+            ))
+        } else {
+            None
+        };
 
-        let list_has_focus = ui.is_enabled() && ui.ctx().memory(|m| m.has_focus(list_root_id));
+        let list_has_focus =
+            has_list_items && ui.is_enabled() && ui.ctx().memory(|m| m.has_focus(list_root_id));
         let active_focused_nav = if list_has_focus {
             self.focused_nav
         } else {
@@ -737,9 +843,23 @@ impl ProjectPanel {
                 }
             });
 
+        let post_nav_items = self.build_nav_items(&input);
+        if let Some(list_resp) = list_resp {
+            let a11y_item = self
+                .focused_nav
+                .filter(|item| post_nav_items.contains(item))
+                .or_else(|| {
+                    self.default_nav_index(&post_nav_items, &input)
+                        .map(|idx| post_nav_items[idx])
+                });
+            let list_label = Self::list_a11y_label(a11y_item, &input);
+            list_resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), &list_label)
+            });
+        }
         let end_focus = ui.ctx().memory(|m| m.focused());
-        if ui.is_enabled()
-            && Self::classify_focus(end_focus, panel_id).is_some()
+        if !keyboard_blocked
+            && Self::classify_focus(end_focus, panel_id, !post_nav_items.is_empty()).is_some()
             && let Some(fid) = end_focus
         {
             ui.ctx().memory_mut(|m| {
@@ -754,6 +874,7 @@ impl ProjectPanel {
                 );
             });
         }
+        self.last_nav_items = post_nav_items;
 
         action
     }

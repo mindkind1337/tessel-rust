@@ -747,3 +747,395 @@ fn vector_icons_and_sleeping_moon_render_non_empty_geometry_without_glyph_fallba
         "expected active project status dot (#10b981) for live sessions"
     );
 }
+
+#[test]
+fn tab_and_shift_tab_cycle_cleanly_across_header_list_and_outside_widgets_including_empty_state() {
+    let ctx = egui::Context::default();
+    let mut panel = ProjectPanel::new();
+    let (projects, global_sessions) = sample_catalog();
+    let outside_id = egui::Id::new("central-pane-target");
+
+    let tab_press = |shift: bool| {
+        let modifiers = if shift {
+            egui::Modifiers::SHIFT
+        } else {
+            egui::Modifiers::NONE
+        };
+        vec![
+            egui::Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            },
+            egui::Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            },
+        ]
+    };
+
+    let run_frame = |panel: &mut ProjectPanel,
+                     projs: &[ProjectEntry],
+                     globals: &[SessionEntry],
+                     events: Vec<egui::Event>| {
+        let mut action = None;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 640.0))),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("projects")
+                    .exact_width(280.0)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        action = panel.show(
+                            ui,
+                            ProjectPanelInput {
+                                projects: projs,
+                                global_sessions: globals,
+                                active_project: projs.first().map(|p| p.id),
+                                active_session: projs
+                                    .first()
+                                    .and_then(|p| p.sessions.first())
+                                    .map(|s| s.id),
+                                french: false,
+                            },
+                        );
+                    });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (_, rect) = ui.allocate_space(Vec2::new(180.0, 48.0));
+                    let _ = ui.interact(rect, outside_id, egui::Sense::click());
+                });
+            },
+        );
+        action
+    };
+
+    // Start focused on `outside_id`, then Tab into ProjectPanel:
+    // outside -> Search -> Add project -> List (1 stop for all cards/rows!) -> outside.
+    let _ = run_frame(&mut panel, &projects, &global_sessions, Vec::new());
+    ctx.memory_mut(|m| m.request_focus(outside_id));
+    let _ = run_frame(&mut panel, &projects, &global_sessions, Vec::new());
+    assert_eq!(ctx.memory(|m| m.focused()), Some(outside_id));
+
+    // Tab 1 -> Search button
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
+    let act_search = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(act_search, Some(ProjectAction::Search));
+
+    // Tab 2 -> Add project (`+`) button
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
+    let act_open = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(act_open, Some(ProjectAction::OpenFolder));
+
+    // Tab 3 -> Virtualized project/session list container (single Tab stop!)
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
+    let act_list = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(
+        act_list,
+        Some(ProjectAction::SelectSession {
+            project: Some(10),
+            id: 101,
+        })
+    );
+
+    // Tab 4 -> Exits ProjectPanel straight to `outside_id` (proving cards/chevrons/rows add 0 extra Tab stops!)
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
+    assert_eq!(ctx.memory(|m| m.focused()), Some(outside_id));
+
+    // Shift+Tab reverses cleanly: outside -> List -> Add project -> Search
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(true));
+    let act_rev_list = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(
+        act_rev_list,
+        Some(ProjectAction::SelectSession {
+            project: Some(10),
+            id: 101,
+        })
+    );
+
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(true));
+    let act_rev_open = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(act_rev_open, Some(ProjectAction::OpenFolder));
+
+    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(true));
+    let act_rev_search = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(act_rev_search, Some(ProjectAction::Search));
+
+    // In empty state (`projects = []`, `global_sessions = []`), Tab goes Search -> Add project -> outside_id!
+    let _ = run_frame(&mut panel, &[], &[], tab_press(false));
+    let act_empty_open = run_frame(
+        &mut panel,
+        &[],
+        &[],
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(act_empty_open, Some(ProjectAction::OpenFolder));
+    let _ = run_frame(&mut panel, &[], &[], tab_press(false));
+    assert_eq!(
+        ctx.memory(|m| m.focused()),
+        Some(outside_id),
+        "empty ProjectPanel must not expose an empty list Tab stop"
+    );
+}
+
+#[test]
+fn focused_row_deletion_held_enter_repeat_popup_guard_and_accesskit_labels_work_cleanly() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut panel = ProjectPanel::new();
+    let (mut projects, mut global_sessions) = sample_catalog();
+    let popup_anchor_id = egui::Id::new("toolbar-popup-anchor");
+
+    let run_frame = |panel: &mut ProjectPanel,
+                     projs: &[ProjectEntry],
+                     globals: &[SessionEntry],
+                     open_popup: bool,
+                     events: Vec<egui::Event>| {
+        let mut action = None;
+        let mut popup_saw_down = false;
+        let out = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 640.0))),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                if open_popup {
+                    egui::Popup::open_id(ctx, popup_anchor_id);
+                } else {
+                    egui::Popup::close_id(ctx, popup_anchor_id);
+                }
+                egui::SidePanel::left("projects")
+                    .exact_width(280.0)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        action = panel.show(
+                            ui,
+                            ProjectPanelInput {
+                                projects: projs,
+                                global_sessions: globals,
+                                active_project: projs.first().map(|p| p.id),
+                                active_session: projs
+                                    .first()
+                                    .and_then(|p| p.sessions.first())
+                                    .map(|s| s.id),
+                                french: false,
+                            },
+                        );
+                    });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let resp = ui.button("Menu");
+                    if open_popup {
+                        let _ = egui::Popup::from_response(&resp)
+                            .id(popup_anchor_id)
+                            .show(|ui| {
+                                ui.label("Popup item");
+                                popup_saw_down = ui.input(|i| i.key_pressed(Key::ArrowDown));
+                            });
+                    }
+                });
+            },
+        );
+        let labels: Vec<String> = out
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|u| {
+                u.nodes
+                    .iter()
+                    .filter_map(|(_, n)| n.label().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (action, popup_saw_down, labels, out.shapes)
+    };
+
+    // 1. Focus list and verify AccessKit labels exist on list root AND clickable rows/buttons!
+    panel.request_focus(&ctx);
+    let (_, _, labels0, shapes0) =
+        run_frame(&mut panel, &projects, &global_sessions, false, Vec::new());
+    for expected in [
+        "Search (Ctrl+Shift+P)",
+        "Add project",
+        "Projects — tessel-rust / PowerShell 7",
+        "tessel-rust",
+        "Collapse tessel-rust",
+        "PowerShell 7",
+        "Native Codex",
+        "Sessions without a project",
+    ] {
+        assert!(
+            labels0.iter().any(|l| l == expected),
+            "expected AccessKit label `{expected}` in {labels0:?}"
+        );
+    }
+
+    // Verify mouse click on `Native Codex` row still works and updates virtual focus!
+    let codex_rect = find_painted_text_rect(&shapes0, "Native Codex").expect("Native Codex rect");
+    let (click_act, _, labels_after_click, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        click_events(codex_rect.center()),
+    );
+    assert_eq!(
+        click_act,
+        Some(ProjectAction::SelectSession {
+            project: Some(10),
+            id: 102,
+        })
+    );
+    assert!(
+        labels_after_click
+            .iter()
+            .any(|l| l == "Projects — tessel-rust / Native Codex"),
+        "clicking session row must update list accessible focus label: {labels_after_click:?}"
+    );
+
+    // 2. Held Enter: fresh press fires once, OS `repeat: true` AND unreleased hold do NOT re-fire!
+    let (enter1, _, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![key_event(Key::Enter, true)],
+    );
+    assert_eq!(
+        enter1,
+        Some(ProjectAction::SelectSession {
+            project: Some(10),
+            id: 102,
+        })
+    );
+    let (enter_os_repeat, _, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert_eq!(enter_os_repeat, None);
+    let (enter_held, _, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![key_event(Key::Enter, true)],
+    );
+    assert_eq!(enter_held, None);
+    let _ = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![key_event(Key::Enter, false)],
+    );
+
+    // 3. Open popup guard: while an `egui::Popup` is open, ProjectPanel must not consume ArrowDown/Enter!
+    let _ = run_frame(&mut panel, &projects, &global_sessions, true, Vec::new());
+    let (popup_act, popup_saw_down, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        true,
+        vec![
+            key_event(Key::ArrowDown, true),
+            key_event(Key::Enter, true),
+            key_event(Key::ArrowDown, false),
+            key_event(Key::Enter, false),
+        ],
+    );
+    assert_eq!(popup_act, None);
+    assert!(
+        popup_saw_down,
+        "open Popup must receive ArrowDown without ProjectPanel stealing it"
+    );
+    let _ = run_frame(&mut panel, &projects, &global_sessions, false, Vec::new());
+
+    // 4. Deletion of focused row (`Session(10, 102)`):
+    // Focus stays inside Project 10 on sibling `Session(10, 101)` (`PowerShell 7`), NOT lost or reset!
+    projects[0].sessions.retain(|s| s.id != 102);
+    let (_, _, labels_after_del, _) =
+        run_frame(&mut panel, &projects, &global_sessions, false, Vec::new());
+    assert!(
+        labels_after_del
+            .iter()
+            .any(|l| l == "Projects — tessel-rust / PowerShell 7"),
+        "deleting focused session 102 must recover virtual focus to sibling 101: {labels_after_del:?}"
+    );
+    let (after_del_enter, _, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(
+        after_del_enter,
+        Some(ProjectAction::SelectSession {
+            project: Some(10),
+            id: 101,
+        })
+    );
+
+    // 5. Deleting ALL projects and global sessions while list holds focus moves focus cleanly
+    // to `Add project` (`OpenFolder`) so the keyboard user is never stranded!
+    projects.clear();
+    global_sessions.clear();
+    let _ = run_frame(&mut panel, &projects, &global_sessions, false, Vec::new());
+    let (empty_enter, _, _, _) = run_frame(
+        &mut panel,
+        &projects,
+        &global_sessions,
+        false,
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+    );
+    assert_eq!(empty_enter, Some(ProjectAction::OpenFolder));
+}
