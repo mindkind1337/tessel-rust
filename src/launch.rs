@@ -26,15 +26,42 @@ pub fn installed_on(program: &str, search: &crate::agent_paths::SearchPath) -> b
         return false;
     };
     let program = preset.executable;
-    search.directories.iter().any(|dir| {
+    let first = search.directories.iter().find_map(|dir| {
         if cfg!(windows) {
             ["exe", "cmd", "bat", "ps1"]
                 .iter()
-                .any(|ext| dir.join(format!("{program}.{ext}")).is_file())
+                .map(|ext| dir.join(format!("{program}.{ext}")))
+                .find(|path| path.is_file())
         } else {
-            dir.join(program).is_file()
+            let path = dir.join(program);
+            path.is_file().then_some(path)
         }
-    })
+    });
+    first.is_some_and(|path| preset.id != "kimi" || !legacy_kimi(&path.to_string_lossy()))
+}
+
+/// Source AGENT_PRESETS.kimi.notFrom: only the first resolved command counts.
+fn legacy_kimi(path: &str) -> bool {
+    let parts: Vec<_> = path.split(['/', '\\']).collect();
+    let count = parts.len();
+    if count < 4
+        || !parts[count - 2].eq_ignore_ascii_case("Scripts")
+        || !(parts[count - 1].eq_ignore_ascii_case("kimi")
+            || parts[count - 1].eq_ignore_ascii_case("kimi.exe"))
+    {
+        return false;
+    }
+    let folder = parts[count - 3];
+    let python = folder
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Python"))
+        && folder
+            .get(6..)
+            .is_some_and(|suffix| suffix.bytes().all(|b| b.is_ascii_digit()));
+    python
+        || (count >= 5
+            && !folder.is_empty()
+            && parts[count - 4].eq_ignore_ascii_case("local-packages"))
 }
 
 pub fn posix_quote(text: &str) -> String {
@@ -137,6 +164,41 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kimi_exclusions_match_the_vue_regex_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/kimi_not_from.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let path = case["path"].as_str().unwrap();
+            assert_eq!(
+                legacy_kimi(path),
+                case["excluded"].as_bool().unwrap(),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_python_kimi_shadows_newer_install_until_path_order_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("Python313/Scripts");
+        let new = temp.path().join(".kimi-code/bin");
+        let filename = if cfg!(windows) { "kimi.exe" } else { "kimi" };
+        for dir in [&old, &new] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(filename), "fixture only").unwrap();
+        }
+        let old_first = crate::agent_paths::SearchPath::with_extras(
+            std::ffi::OsStr::new(""),
+            &[old.clone(), new.clone()],
+        )
+        .unwrap();
+        assert!(!installed_on("kimi", &old_first));
+        let new_first =
+            crate::agent_paths::SearchPath::with_extras(std::ffi::OsStr::new(""), &[new, old])
+                .unwrap();
+        assert!(installed_on("kimi", &new_first));
+    }
     #[test]
     fn detection_finds_catalog_executable_in_appended_installer_folder() {
         let dir = tempfile::tempdir().unwrap();

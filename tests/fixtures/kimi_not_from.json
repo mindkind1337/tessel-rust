@@ -1,0 +1,82 @@
+{
+  "source_sha256": "1d40b51f577cf5a64484feedd753d0b0f8e847e60f2d9e10192fe8db6b098443",
+  "expression": "/[\\\\/](Python\\d*[\\\\/]Scripts|local-packages[\\\\/][^\\\\/]+[\\\\/]Scripts)[\\\\/]kimi(\\.exe)?$/i",
+  "cases": [
+    {
+      "path": "C:/Python313/Scripts/kimi.exe",
+      "excluded": true
+    },
+    {
+      "path": "C:/Python/Scripts/kimi",
+      "excluded": true
+    },
+    {
+      "path": "C:\\User\\local-packages\\Python313\\Scripts\\kimi.exe",
+      "excluded": true
+    },
+    {
+      "path": "/local-packages/custom/Scripts/kimi",
+      "excluded": true
+    },
+    {
+      "path": "C:/home/.kimi-code/bin/kimi.exe",
+      "excluded": false
+    },
+    {
+      "path": "C:/PythonXYZ/Scripts/kimi.exe",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313/Scripts/kimi.cmd",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313/Scripts/kimi.exe.bak",
+      "excluded": false
+    },
+    {
+      "path": "Python313/Scripts/kimi",
+      "excluded": false
+    },
+    {
+      "path": "local-packages/x/Scripts/kimi",
+      "excluded": false
+    },
+    {
+      "path": "/Python313/Scripts/kimi",
+      "excluded": true
+    },
+    {
+      "path": "/PYTHON313/SCRIPTS/KIMI.EXE",
+      "excluded": true
+    },
+    {
+      "path": "C:/local-packages//Scripts/kimi",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313//Scripts/kimi",
+      "excluded": false
+    },
+    {
+      "path": "C:/x/local-packages/custom/Scripts/kimi",
+      "excluded": true
+    },
+    {
+      "path": "C:/Python３１３/Scripts/kimi",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313/Scripts/akimi.exe",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313/Scripts/kimi.exe/",
+      "excluded": false
+    },
+    {
+      "path": "C:/Python313/Scripts/kimi.exe\n",
+      "excluded": false
+    }
+  ]
+}
