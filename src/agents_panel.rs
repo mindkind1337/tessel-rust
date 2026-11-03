@@ -336,6 +336,14 @@ impl AgentsPanel {
                     let preset = row.preset;
                     ui.push_id(preset.id, |ui| {
                         ui.horizontal_wrapped(|ui| {
+                            let (icon, _) = ui
+                                .allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                            crate::agent_brand_icons::paint_preset(
+                                ui.painter(),
+                                icon,
+                                preset,
+                                false,
+                            );
                             ui.label(RichText::new(preset.name).strong());
                             if crate::agent_installs::find(preset.id)
                                 .is_some_and(|entry| entry.install.is_some())
@@ -587,8 +595,13 @@ fn agent_row(ui: &mut Ui, row: &Row, expanded: bool, french: bool) -> RowControl
     } else {
         ui.visuals().text_color().gamma_multiply(0.55)
     };
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(main_rect.left() + 12.0, main_rect.center().y),
+        egui::vec2(20.0, 20.0),
+    );
+    crate::agent_brand_icons::paint_preset(ui.painter(), icon, row.preset, !row.enabled);
     let title_rect = egui::Rect::from_min_max(
-        main_rect.min + egui::vec2(2.0, 4.0),
+        main_rect.min + egui::vec2(32.0, 4.0),
         egui::pos2(main_rect.right() - 4.0, main_rect.top() + 23.0),
     );
     paint_line(
@@ -793,6 +806,55 @@ mod tests {
         );
         frame(ctx, panel, vec![pointer(false)], project, enabled, 620.0).1
     }
+    #[test]
+    fn installed_brand_geometry_keeps_the_source_gap_before_text() {
+        let ctx = egui::Context::default();
+        let mut rect = egui::Rect::NOTHING;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let row = Row {
+                        preset: crate::agent_catalog::find("codex").unwrap(),
+                        available: true,
+                        enabled: true,
+                        prefs: Default::default(),
+                        model_defaults: Default::default(),
+                    };
+                    rect = agent_row(ui, &row, false, false).main.rect;
+                });
+            },
+        );
+        let mut meshes = 0;
+        let mut labels = 0;
+        for clipped in output.shapes {
+            match clipped.shape {
+                egui::Shape::Mesh(mesh) => {
+                    meshes += 1;
+                    assert!(!mesh.indices.is_empty());
+                    assert!(
+                        mesh.vertices
+                            .iter()
+                            .all(|v| v.pos.x >= rect.left() + 1.9 && v.pos.x <= rect.left() + 22.1)
+                    );
+                }
+                egui::Shape::Text(text) if text.galley.job.text == "Codex CLI" => {
+                    labels += 1;
+                    assert!(text.pos.x >= rect.left() + 32.0);
+                }
+                _ => {}
+            }
+        }
+        assert!(meshes > 0, "brand painter must be connected to the row");
+        assert_eq!(labels, 1);
+    }
+
     #[test]
     fn model_picker_emits_only_an_explicit_model_choice() {
         let ctx = egui::Context::default();
