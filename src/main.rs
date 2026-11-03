@@ -7,6 +7,7 @@ mod account_panel;
 mod agent_browser;
 pub mod agent_catalog;
 mod agent_detection;
+pub mod agent_installs;
 pub mod agent_names;
 mod agent_paths;
 mod agent_preferences;

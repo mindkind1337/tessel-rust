@@ -2423,6 +2423,13 @@ impl Tessel {
                     tr("not on PATH")
                 }
             ));
+            if !*installed
+                && let Some(install) = crate::agent_installs::find(name)
+                && let Some(command) = install.copy_text()
+                && ui.button(tr("Copy install command")).clicked()
+            {
+                ui.ctx().copy_text(command);
+            }
         }
         if let Some((id, enabled)) = visibility_change {
             self.change_agent_visibility(&id, enabled);

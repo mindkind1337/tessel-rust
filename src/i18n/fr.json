@@ -70,6 +70,7 @@
   "Could not read agent command lookup output.": "Impossible de lire les résultats de recherche des agents.",
   "Agent command lookup output exceeded its limit.": "Les résultats de recherche des agents dépassent la limite autorisée.",
   "Agent command lookup failed.": "La recherche des commandes des agents a échoué.",
+  "Copy install command": "Copier la commande d’installation",
   "Refresh detection": "Actualiser la détection",
   "available": "disponible",
   "not on PATH": "absent du PATH",

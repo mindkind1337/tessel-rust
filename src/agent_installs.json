@@ -1,0 +1,405 @@
+{
+  "source_sha256": "3232de3f26bd50516bbd6861b262c8affe28000b78dc5b633305e14dd3c65fbd",
+  "presets_sha256": "1d40b51f577cf5a64484feedd753d0b0f8e847e60f2d9e10192fe8db6b098443",
+  "agents": [
+    {
+      "id": "claude",
+      "install": [
+        "npm install -g @anthropic-ai/claude-code"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "codex",
+      "install": [
+        "npm install -g @openai/codex"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "gemini",
+      "install": [
+        "npm install -g @google/gemini-cli"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "opencode",
+      "install": [
+        "npm install -g opencode-ai"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "qwen",
+      "install": [
+        "npm install -g @qwen-code/qwen-code"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "copilot",
+      "install": [
+        "npm install -g @github/copilot"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "kimi",
+      "install": [
+        "irm https://code.kimi.com/kimi-code/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://code.kimi.com/kimi-code",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "ollama",
+      "install": [
+        "winget install --id Ollama.Ollama -e"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "cline",
+      "install": [
+        "npm install -g cline"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "amp",
+      "install": [
+        "npm install -g @ampcode/cli"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "cursor",
+      "install": [
+        "irm 'https://cursor.com/install?win32=true' | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://cursor.com/docs/cli/installation",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "grok",
+      "install": [
+        "irm https://x.ai/cli/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://docs.x.ai/build/overview",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "pi",
+      "install": [
+        "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "droid",
+      "install": [
+        "npm install -g @factory/cli"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "crush",
+      "install": [
+        "npm install -g @charmland/crush"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "goose",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://goose-docs.ai/docs/getting-started/installation"
+    },
+    {
+      "id": "auggie",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://docs.augmentcode.com/cli/setup-auggie/install-auggie-cli"
+    },
+    {
+      "id": "aider",
+      "install": [
+        "python -m pip install aider-install",
+        "aider-install"
+      ],
+      "installShell": null,
+      "installSource": "https://aider.chat/docs/install.html",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "openclaude",
+      "install": [
+        "npm install -g @gitlawb/openclaude"
+      ],
+      "installShell": null,
+      "installSource": "https://github.com/Gitlawb/openclaude",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "kilo",
+      "install": [
+        "npm install -g @kilocode/cli"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "kiro",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://kiro.dev/docs/getting-started/installation/"
+    },
+    {
+      "id": "continue",
+      "install": [
+        "npm install -g @continuedev/cli"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "codebuff",
+      "install": [
+        "npm install -g codebuff"
+      ],
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "vibe",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://github.com/mistralai/mistral-vibe"
+    },
+    {
+      "id": "antigravity",
+      "install": [
+        "irm https://antigravity.google/cli/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://antigravity.google/docs/cli/install",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "rovo",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://developer.atlassian.com/cloud/acli/guides/install-windows/"
+    },
+    {
+      "id": "hermes",
+      "install": [
+        "iex (irm https://hermes-agent.nousresearch.com/install.ps1)"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "devin",
+      "install": [
+        "irm https://static.devin.ai/cli/setup.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://docs.devin.ai/cli",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "trae",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://docs.trae.cn/cli_get-started-with-trae-code-cli-2"
+    },
+    {
+      "id": "zcode",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://zcode.z.ai/"
+    },
+    {
+      "id": "autohand",
+      "install": [
+        "npm install -g autohand-cli"
+      ],
+      "installShell": null,
+      "installSource": "https://docs.autohand.ai/working-with-autohand-code/cli",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "commandcode",
+      "install": [
+        "npm install -g command-code"
+      ],
+      "installShell": null,
+      "installSource": "https://commandcode.ai/docs/quickstart",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "openclaw",
+      "install": [
+        "npm install -g openclaw"
+      ],
+      "installShell": null,
+      "installSource": "https://docs.openclaw.ai/install",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "omp",
+      "install": [
+        "irm https://omp.sh/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://github.com/can1357/oh-my-pi",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "muse",
+      "install": [
+        "irm https://dev.meta.ai/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://dev.meta.ai/docs/muse-code",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "opencode2",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://opencode.ai/v2/docs/"
+    },
+    {
+      "id": "mimocode",
+      "install": [
+        "npm install -g @mimo-ai/cli"
+      ],
+      "installShell": null,
+      "installSource": "https://github.com/XiaomiMiMo/MiMo-Code",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "primeagent",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://github.com/PrimeIntellect-ai/prime-agent"
+    },
+    {
+      "id": "ante",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://github.com/AntigmaLabs/ante-preview"
+    },
+    {
+      "id": "qoder",
+      "install": [
+        "irm https://qoder.com/install.ps1 | iex"
+      ],
+      "installShell": "powershell",
+      "installSource": "https://docs.qoder.com/cli/installation",
+      "installConfirm": true,
+      "docsUrl": null
+    },
+    {
+      "id": "freebuff",
+      "install": [
+        "npm install -g freebuff"
+      ],
+      "installShell": null,
+      "installSource": "https://freebuff.com/cli",
+      "installConfirm": false,
+      "docsUrl": null
+    },
+    {
+      "id": "dsh",
+      "install": null,
+      "installShell": null,
+      "installSource": null,
+      "installConfirm": false,
+      "docsUrl": "https://deepseek-harness.github.io/deepseek-harness/"
+    }
+  ]
+}
