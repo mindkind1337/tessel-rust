@@ -710,6 +710,28 @@ impl Tessel {
         self.view = View::Work;
         self.save();
     }
+    fn close_session(&mut self, id: u64) {
+        let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
+            return;
+        };
+        let session = self.sessions.remove(index);
+        match session.launch {
+            Launch::CodexChat => self.chats.retain(|c| Some(c.project) != session.project),
+            Launch::ClaudeChat => self
+                .claude_chats
+                .retain(|c| Some(c.project) != session.project),
+            _ => {}
+        }
+        if self.active_session == Some(id) {
+            self.active_session = self
+                .sessions
+                .iter()
+                .find(|s| s.project == session.project)
+                .map(|s| s.id);
+        }
+        self.save();
+        self.grid_dirty = false;
+    }
     fn file_actions_ready(&self) -> bool {
         !self.file_action_pending
             && self.document_pending.is_empty()
@@ -1564,17 +1586,7 @@ impl Tessel {
             self.grid_dirty = true;
         }
         if let Some(id) = close {
-            if let Some(session) = self.sessions.iter().find(|s| s.id == id) {
-                match session.launch {
-                    Launch::CodexChat => self.chats.retain(|c| Some(c.project) != session.project),
-                    Launch::ClaudeChat => self
-                        .claude_chats
-                        .retain(|c| Some(c.project) != session.project),
-                    _ => {}
-                }
-            }
-            self.sessions.retain(|s| s.id != id);
-            self.grid_dirty = true;
+            self.close_session(id);
         }
         if let Some(placement) = split {
             self.new_session_placed(Launch::Shell, Some(placement));
@@ -2157,6 +2169,7 @@ impl Tessel {
                     self.state.language == crate::i18n::Language::French,
                     &[
                         "Ctrl+Shift+T",
+                        "Ctrl+Shift+W",
                         "Ctrl+Shift+Space",
                         "Ctrl+Shift+P",
                         "Ctrl+Shift+J",
@@ -2501,6 +2514,20 @@ impl eframe::App for Tessel {
                 }
             }
         }
+        if take_close_pane_shortcut(
+            ctx,
+            keyboard_free
+                && !confirmation_open
+                && !self.command_palette.open
+                && self.overlay.is_none()
+                && self.view == View::Work,
+        ) && let Some(id) = self.active_session.filter(|id| {
+            self.sessions
+                .iter()
+                .any(|s| s.id == *id && s.project == self.state.active_project)
+        }) {
+            self.close_session(id);
+        }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_exit
             && (self.documents.iter().any(Document::dirty)
@@ -2799,6 +2826,20 @@ impl eframe::App for Tessel {
     }
 }
 
+fn take_close_pane_shortcut(ctx: &egui::Context, allowed: bool) -> bool {
+    if !allowed {
+        return false;
+    }
+    ctx.input_mut(|input| {
+        let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+        let fresh = input.events.iter().any(|event| matches!(event,
+            egui::Event::Key { key: egui::Key::W, pressed: true, repeat: false, modifiers: actual, .. }
+                if actual.matches_logically(modifiers)));
+        input.consume_key(modifiers, egui::Key::W);
+        fresh
+    })
+}
+
 fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool {
     ui.horizontal(|ui| {
         if !d.media {
@@ -2835,6 +2876,37 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_a_pane_requires_a_fresh_press_and_an_unblocked_workspace() {
+        let ctx = egui::Context::default();
+        let frame = |pressed: bool, allowed: bool| {
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::W,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    close = take_close_pane_shortcut(ctx, allowed);
+                },
+            );
+            close
+        };
+        assert!(!frame(true, false));
+        assert!(!frame(true, true)); // Holding the key after a modal closes is not a new command.
+        assert!(!frame(false, true));
+        assert!(frame(true, true));
+        assert!(!frame(true, true)); // Holding W must not close successive panes.
+        assert!(!frame(false, true));
+        assert!(frame(true, true));
+    }
 
     #[test]
     fn document_shortcuts_cannot_save_or_close_behind_a_modal() {
