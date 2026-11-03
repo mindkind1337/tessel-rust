@@ -222,5 +222,12 @@
   "Search panes, run a command": "Chercher des panneaux, lancer une commande",
   "Native chat": "Chat natif",
   "Layout": "Disposition",
-  "Legacy light theme": "Ancien thème clair"
+  "Legacy light theme": "Ancien thème clair",
+  "Find a file": "Trouver un fichier",
+  "Search project files…": "Rechercher dans les fichiers du projet…",
+  "Scanning project files…": "Recherche des fichiers du projet…",
+  "Search limit reached; some files are not listed.": "Limite de recherche atteinte; certains fichiers ne sont pas affichés.",
+  "No matching files.": "Aucun fichier correspondant.",
+  "The previous file search is still stopping.": "La recherche précédente est encore en cours d’arrêt.",
+  "File search stopped unexpectedly.": "La recherche de fichiers s’est arrêtée de façon inattendue."
 }

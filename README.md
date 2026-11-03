@@ -36,6 +36,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Files and Git
 
+- Ctrl+Shift+J or the command palette opens a fuzzy project-file finder with keyboard selection. Enumeration runs off the UI thread, skips build/dependency directories and links, and reports truncated results when its limits are reached. Closing the finder or switching projects cancels its single worker cooperatively; late results cannot open a file from the old project. Selected files still pass the editor's project-scope checks.
 - Background directory loading with virtualized rows; paths are confined to the selected project and symlinks are not traversed automatically.
 - Local file/folder creation and context-menu rename/deletion, scoped to the selected project. Windows rename refuses existing targets atomically; permanent deletion requires confirmation and only removes files or empty folders. Unsaved edits block file mutations, open paths follow renames, and background directory results cannot overwrite a newer refresh.
 - UTF-8 text editor tabs (2 MiB limit), atomic saves, detection of external edits and unsaved-change guards on close.

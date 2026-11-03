@@ -14,6 +14,8 @@ mod chat;
 mod claude;
 mod file_actions;
 mod files;
+pub mod finder_model;
+mod finder_panel;
 mod git;
 mod i18n;
 mod launch;

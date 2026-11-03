@@ -101,6 +101,7 @@ pub struct Tessel {
     settings_section: SettingsSection,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
+    finder: crate::finder_panel::Finder,
     directory: Option<PathBuf>,
     entries: Vec<Entry>,
     directory_loading: bool,
@@ -178,6 +179,7 @@ impl Tessel {
             settings_section: SettingsSection::Appearance,
             command_palette: Default::default(),
             command_palette_focused: false,
+            finder: Default::default(),
             directory: None,
             entries: vec![],
             directory_loading: false,
@@ -298,6 +300,15 @@ impl Tessel {
         app.detect_agents();
         app.refresh_project();
         #[cfg(feature = "visual-test")]
+        if std::env::args().any(|a| a == "--finder-fixture") {
+            let root = std::env::current_dir().expect("fixture cwd");
+            app.state.add_project(&root).expect("fixture project");
+            app.finder = crate::finder_panel::Finder::fixture(
+                app.state.active().expect("fixture project").path.clone(),
+            );
+        }
+
+        #[cfg(feature = "visual-test")]
         if let Some(path) = std::env::args()
             .collect::<Vec<_>>()
             .windows(2)
@@ -397,6 +408,7 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        self.finder.close();
         if let Some(p) = self.state.active() {
             self.list_directory(p.path.clone());
         } else {
@@ -442,6 +454,7 @@ impl Tessel {
     }
     fn poll(&mut self) {
         self.remote.poll();
+        self.finder.poll();
         #[cfg(windows)]
         {
             self.browser.poll();
@@ -705,6 +718,7 @@ impl Tessel {
             ("terminal", "Open terminal"),
             ("chat", "Native chat"),
             ("files", "Files"),
+            ("finder", "Find a file"),
             ("changes", "Changes"),
             ("tasks", "Tasks"),
             ("settings", "Settings"),
@@ -766,6 +780,7 @@ impl Tessel {
             match id.as_str() {
                 "terminal" => self.new_session(Launch::Shell),
                 "chat" => self.view = View::Chat,
+                "finder" => self.open_finder(),
                 "files" | "changes" | "tasks" => {
                     self.state.panels.right_open = true;
                     self.state.panels.right_tab = match id.as_str() {
@@ -794,6 +809,15 @@ impl Tessel {
         }
         if !self.command_palette.open {
             self.command_palette_focused = false;
+        }
+    }
+    fn open_finder(&mut self) {
+        if let Some(project) = self.state.active() {
+            if let Err(error) = self.finder.open(&project.path) {
+                self.error = error;
+            }
+        } else {
+            self.error = tr("Select a project first.").into();
         }
     }
     fn sidebar(&mut self, ctx: &egui::Context) {
@@ -1815,7 +1839,15 @@ impl eframe::App for Tessel {
                         .as_ref()
                         .is_some_and(|terminal| terminal.has_focus(ctx))
             });
-        let confirmation_open = self.pending_close.is_some()
+        if self.finder.is_open()
+            && ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::J)
+            })
+        {
+            self.finder.close();
+        }
+        let confirmation_open = self.finder.is_open()
+            || self.pending_close.is_some()
             || self.pending_exit
             || self.file_action.is_some()
             || self.restore_preview.is_some();
@@ -1841,6 +1873,11 @@ impl eframe::App for Tessel {
                 self.command_palette.toggle();
             }
             if keyboard_free && !self.command_palette.open {
+                if ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::J)
+                }) {
+                    self.open_finder();
+                }
                 for (key, tab) in [
                     (egui::Key::X, RightTab::Files),
                     (egui::Key::G, RightTab::Changes),
@@ -1973,10 +2010,12 @@ impl eframe::App for Tessel {
                 && self.pending_close.is_none()
                 && self.file_action.is_none()
                 && !self.command_palette.open
-                && self.overlay.is_none(),
+                && self.overlay.is_none()
+                && !self.finder.is_open(),
         );
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.command_palette.open
+            if self.finder.is_open()
+                || self.command_palette.open
                 || self.overlay.is_some()
                 || self.pending_exit
                 || self.pending_close.is_some()
@@ -1997,6 +2036,7 @@ impl eframe::App for Tessel {
                         && self.file_action.is_none()
                         && !self.command_palette.open
                         && self.overlay.is_none()
+                        && !self.finder.is_open()
                     {
                         ui.horizontal(|ui| {
                             ui.selectable_value(
@@ -2025,6 +2065,12 @@ impl eframe::App for Tessel {
                 }
             }
         });
+        if let Some(path) = self
+            .finder
+            .show(ctx, self.state.active().map(|p| p.path.as_path()))
+        {
+            self.open_document(path);
+        }
         self.show_overlay(ctx);
         self.show_command_palette(ctx);
         self.confirmations(ctx);
