@@ -101,10 +101,7 @@ impl NavItem {
 enum FocusOwner {
     Search,
     OpenFolder,
-    ListRoot,
-    ProjectCollapse(u64),
-    GlobalCollapse,
-    Nav(usize),
+    List,
 }
 
 const fn sidebar_lang(french: bool) -> SidebarLang {
@@ -349,7 +346,9 @@ pub struct ProjectPanel {
     collapsed_projects: HashSet<u64>,
     global_collapsed: bool,
     focus_requested: bool,
-    last_focused_panel_id: Option<Id>,
+    list_root_id: Option<Id>,
+    focused_nav: Option<NavItem>,
+    held_activate_key: Option<Key>,
 }
 
 impl ProjectPanel {
@@ -379,6 +378,9 @@ impl ProjectPanel {
     /// Requests keyboard focus on the active (or first) sidebar item on the next frame.
     pub fn request_focus(&mut self, ctx: &egui::Context) {
         self.focus_requested = true;
+        if let Some(id) = self.list_root_id {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
         ctx.request_repaint();
     }
 
@@ -445,41 +447,17 @@ impl ProjectPanel {
         Some(0)
     }
 
-    fn classify_focus(
-        &self,
-        focused: Option<Id>,
-        panel_id: Id,
-        input: &ProjectPanelInput<'_>,
-        nav_items: &[NavItem],
-    ) -> Option<FocusOwner> {
+    fn classify_focus(focused: Option<Id>, panel_id: Id) -> Option<FocusOwner> {
         let fid = focused?;
         if fid == panel_id.with("search") {
-            return Some(FocusOwner::Search);
+            Some(FocusOwner::Search)
+        } else if fid == panel_id.with("open-folder") {
+            Some(FocusOwner::OpenFolder)
+        } else if fid == panel_id.with("list") {
+            Some(FocusOwner::List)
+        } else {
+            None
         }
-        if fid == panel_id.with("open-folder") {
-            return Some(FocusOwner::OpenFolder);
-        }
-        if fid == panel_id.with("list") {
-            return Some(FocusOwner::ListRoot);
-        }
-        for project in input.projects {
-            if fid == panel_id.with(("project-collapse", project.id)) {
-                return Some(FocusOwner::ProjectCollapse(project.id));
-            }
-        }
-        if !input.global_sessions.is_empty() && fid == panel_id.with("global-collapse") {
-            return Some(FocusOwner::GlobalCollapse);
-        }
-        if let Some(idx) = nav_items
-            .iter()
-            .position(|item| item.widget_id(panel_id) == fid)
-        {
-            return Some(FocusOwner::Nav(idx));
-        }
-        if self.last_focused_panel_id == Some(fid) {
-            return Some(FocusOwner::ListRoot);
-        }
-        None
     }
 
     fn handle_focused_keys(
@@ -489,21 +467,25 @@ impl ProjectPanel {
         owner: FocusOwner,
         input: &ProjectPanelInput<'_>,
         nav_items: &[NavItem],
-    ) -> (Option<ProjectAction>, Option<Id>, bool) {
-        let mut fresh_activate = false;
+    ) -> (Option<ProjectAction>, bool) {
+        let mut pressed_activate: Option<Key> = None;
+        let held_before = self.held_activate_key;
         let (down, up, left, right) = ui.input_mut(|i| {
-            fresh_activate = i.events.iter().any(|ev| {
-                matches!(
-                    ev,
-                    egui::Event::Key {
-                        key: Key::Enter | Key::Space,
-                        pressed: true,
-                        repeat: false,
-                        modifiers,
-                        ..
-                    } if modifiers.matches_logically(Modifiers::NONE)
-                )
-            });
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key: k @ (Key::Enter | Key::Space),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                    ..
+                } = ev
+                    && modifiers.matches_logically(Modifiers::NONE)
+                    && held_before != Some(*k)
+                {
+                    pressed_activate = Some(*k);
+                    break;
+                }
+            }
             let _ = i.consume_key(Modifiers::NONE, Key::Enter);
             let _ = i.consume_key(Modifiers::NONE, Key::Space);
             let down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
@@ -513,38 +495,24 @@ impl ProjectPanel {
             (down, up, left, right)
         });
 
-        if down || up || left || right {
-            // Egui queues directional focus at the beginning of the frame. Consuming
-            // the event alone does not clear that queue, so otherwise it moves focus
-            // a second time after our explicit navigation, especially just after Tab.
-            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        if let Some(k) = pressed_activate {
+            self.held_activate_key = Some(k);
         }
 
         let mut action = None;
-        let mut next_focus: Option<Id> = None;
         let mut scroll_to_focused = false;
 
-        if fresh_activate {
+        if pressed_activate.is_some() {
             match owner {
                 FocusOwner::Search => action = Some(ProjectAction::Search),
                 FocusOwner::OpenFolder => action = Some(ProjectAction::OpenFolder),
-                FocusOwner::ProjectCollapse(pid) => {
-                    if !self.collapsed_projects.remove(&pid) {
-                        self.collapsed_projects.insert(pid);
+                FocusOwner::List => {
+                    if self.focused_nav.is_none()
+                        && let Some(idx) = self.default_nav_index(nav_items, input)
+                    {
+                        self.focused_nav = Some(nav_items[idx]);
                     }
-                }
-                FocusOwner::GlobalCollapse => {
-                    self.global_collapsed = !self.global_collapsed;
-                }
-                FocusOwner::Nav(idx) => {
-                    if let Some(item) = nav_items.get(idx) {
-                        action = Some(item.activate_action());
-                    }
-                }
-                FocusOwner::ListRoot => {
-                    if let Some(idx) = self.default_nav_index(nav_items, input) {
-                        let item = nav_items[idx];
-                        next_focus = Some(item.widget_id(panel_id));
+                    if let Some(item) = self.focused_nav {
                         action = Some(item.activate_action());
                     }
                 }
@@ -554,9 +522,14 @@ impl ProjectPanel {
         if (down || up) && !nav_items.is_empty() {
             let len = nav_items.len() as isize;
             let step: isize = if down { 1 } else { -1 };
-            let target_idx = match owner {
-                FocusOwner::Nav(cur) => (cur as isize + step).rem_euclid(len) as usize,
+            let cur_idx = self
+                .focused_nav
+                .and_then(|cur| nav_items.iter().position(|it| *it == cur));
+            let target_idx = match (owner, cur_idx) {
+                (FocusOwner::List, Some(cur)) => (cur as isize + step).rem_euclid(len) as usize,
                 _ => {
+                    ui.ctx()
+                        .memory_mut(|m| m.request_focus(panel_id.with("list")));
                     if let Some(def) = self.default_nav_index(nav_items, input) {
                         def
                     } else if down {
@@ -566,12 +539,11 @@ impl ProjectPanel {
                     }
                 }
             };
-            let target_id = nav_items[target_idx].widget_id(panel_id);
-            next_focus = Some(target_id);
+            self.focused_nav = Some(nav_items[target_idx]);
             scroll_to_focused = true;
         } else if left {
-            if let FocusOwner::Nav(idx) = owner
-                && let Some(&item) = nav_items.get(idx)
+            if owner == FocusOwner::List
+                && let Some(item) = self.focused_nav
             {
                 match item {
                     NavItem::Project(pid) => {
@@ -583,18 +555,18 @@ impl ProjectPanel {
                     NavItem::Session {
                         project: Some(pid), ..
                     } => {
-                        next_focus = Some(NavItem::Project(pid).widget_id(panel_id));
+                        self.focused_nav = Some(NavItem::Project(pid));
                         scroll_to_focused = true;
                     }
                     NavItem::Session { project: None, .. } => {
-                        next_focus = Some(NavItem::GlobalHeader.widget_id(panel_id));
+                        self.focused_nav = Some(NavItem::GlobalHeader);
                         scroll_to_focused = true;
                     }
                 }
             }
         } else if right
-            && let FocusOwner::Nav(idx) = owner
-            && let Some(&item) = nav_items.get(idx)
+            && owner == FocusOwner::List
+            && let Some(item) = self.focused_nav
         {
             match item {
                 NavItem::Project(pid) => {
@@ -607,7 +579,7 @@ impl ProjectPanel {
             }
         }
 
-        (action, next_focus, scroll_to_focused)
+        (action, scroll_to_focused)
     }
 
     /// Renders the left project/session sidebar and returns any triggered [`ProjectAction`].
@@ -624,59 +596,71 @@ impl ProjectPanel {
 
         let panel_id = ui.id().with("tessel-project-panel");
         let list_root_id = panel_id.with("list");
-        let _ = ui.interact(
-            Rect::from_min_size(ui.cursor().min, Vec2::ZERO),
-            list_root_id,
-            Sense::focusable_noninteractive(),
-        );
+        self.list_root_id = Some(list_root_id);
+
+        if let Some(held) = self.held_activate_key {
+            let released = !ui.is_enabled()
+                || !ui.input(|i| i.focused)
+                || ui.input(|i| {
+                    i.events.iter().any(|ev| {
+                        matches!(
+                            ev,
+                            egui::Event::Key {
+                                key,
+                                pressed: false,
+                                ..
+                            } if *key == held
+                        )
+                    })
+                });
+            if released {
+                self.held_activate_key = None;
+            }
+        }
 
         let pre_nav_items = self.build_nav_items(&input);
-        let mut initial_focus: Option<Id> = None;
+        if let Some(cur) = self.focused_nav
+            && !pre_nav_items.contains(&cur)
+        {
+            self.focused_nav = self
+                .default_nav_index(&pre_nav_items, &input)
+                .map(|idx| pre_nav_items[idx]);
+        }
+
         let focused_now = ui.ctx().memory(|m| m.focused());
         let focus_owner = if !ui.is_enabled() {
             self.focus_requested = false;
+            self.held_activate_key = None;
             None
         } else if self.focus_requested {
             self.focus_requested = false;
             if let Some(idx) = self.default_nav_index(&pre_nav_items, &input) {
-                let fid = pre_nav_items[idx].widget_id(panel_id);
-                initial_focus = Some(fid);
-                Some(FocusOwner::Nav(idx))
+                self.focused_nav = Some(pre_nav_items[idx]);
+                ui.ctx().memory_mut(|m| m.request_focus(list_root_id));
+                Some(FocusOwner::List)
             } else {
                 let search_id = panel_id.with("search");
-                initial_focus = Some(search_id);
+                ui.ctx().memory_mut(|m| m.request_focus(search_id));
                 Some(FocusOwner::Search)
             }
         } else {
-            self.classify_focus(focused_now, panel_id, &input, &pre_nav_items)
+            let classified = Self::classify_focus(focused_now, panel_id);
+            if classified == Some(FocusOwner::List) && self.focused_nav.is_none() {
+                self.focused_nav = self
+                    .default_nav_index(&pre_nav_items, &input)
+                    .map(|idx| pre_nav_items[idx]);
+            }
+            if classified.is_none() {
+                self.held_activate_key = None;
+            }
+            classified
         };
 
-        if focus_owner.is_none() {
-            self.last_focused_panel_id = None;
-        }
-
-        let (mut action, pending_focus, mut scroll_to_focused) = if let Some(owner) = focus_owner {
+        let (mut action, scroll_to_focused) = if let Some(owner) = focus_owner {
             self.handle_focused_keys(ui, panel_id, owner, &input, &pre_nav_items)
         } else {
-            (None, None, false)
+            (None, false)
         };
-
-        if let Some(fid) = pending_focus.or(initial_focus) {
-            ui.ctx().memory_mut(|m| m.request_focus(fid));
-            self.last_focused_panel_id = Some(fid);
-        } else if matches!(focus_owner, Some(FocusOwner::ListRoot))
-            && focused_now != Some(panel_id.with("list"))
-        {
-            // Recover focus cleanly onto the nearest remaining list item if the previously
-            // focused row disappeared when the catalog mutated.
-            let updated_nav = self.build_nav_items(&input);
-            if let Some(idx) = self.default_nav_index(&updated_nav, &input) {
-                let target_id = updated_nav[idx].widget_id(panel_id);
-                ui.ctx().memory_mut(|m| m.request_focus(target_id));
-                self.last_focused_panel_id = Some(target_id);
-                scroll_to_focused = true;
-            }
-        }
 
         ui.spacing_mut().item_spacing.y = 4.0_f32;
 
@@ -687,7 +671,18 @@ impl ProjectPanel {
             action = Some(header_act);
         }
 
-        let focused_after_keys = ui.ctx().memory(|m| m.focused());
+        let _ = ui.interact(
+            Rect::from_min_size(ui.cursor().min, Vec2::ZERO),
+            list_root_id,
+            Sense::focusable_noninteractive(),
+        );
+
+        let list_has_focus = ui.is_enabled() && ui.ctx().memory(|m| m.has_focus(list_root_id));
+        let active_focused_nav = if list_has_focus {
+            self.focused_nav
+        } else {
+            None
+        };
         let lang = sidebar_lang(input.french);
 
         egui::ScrollArea::vertical()
@@ -716,7 +711,7 @@ impl ProjectPanel {
                         project,
                         &input,
                         lang,
-                        focused_after_keys,
+                        active_focused_nav,
                         scroll_to_focused,
                     ) {
                         action = Some(proj_act);
@@ -734,7 +729,7 @@ impl ProjectPanel {
                         panel_id,
                         &input,
                         lang,
-                        focused_after_keys,
+                        active_focused_nav,
                         scroll_to_focused,
                     ) {
                         action = Some(glob_act);
@@ -743,26 +738,21 @@ impl ProjectPanel {
             });
 
         let end_focus = ui.ctx().memory(|m| m.focused());
-        let nav_end = self.build_nav_items(&input);
         if ui.is_enabled()
-            && self
-                .classify_focus(end_focus, panel_id, &input, &nav_end)
-                .is_some()
+            && Self::classify_focus(end_focus, panel_id).is_some()
+            && let Some(fid) = end_focus
         {
-            if let Some(fid) = end_focus {
-                ui.ctx().memory_mut(|m| {
-                    m.set_focus_lock_filter(
-                        fid,
-                        egui::EventFilter {
-                            tab: false,
-                            horizontal_arrows: true,
-                            vertical_arrows: true,
-                            escape: false,
-                        },
-                    );
-                });
-            }
-            self.last_focused_panel_id = end_focus;
+            ui.ctx().memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    fid,
+                    egui::EventFilter {
+                        tab: false,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: false,
+                    },
+                );
+            });
         }
 
         action
@@ -884,7 +874,6 @@ impl ProjectPanel {
         resp.on_hover_text(a11y_label);
         if clicked {
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
-            self.last_focused_panel_id = Some(search_id);
             Some(ProjectAction::Search)
         } else {
             None
@@ -959,7 +948,6 @@ impl ProjectPanel {
         resp.on_hover_text(add_label);
         if clicked {
             ui.ctx().memory_mut(|m| m.request_focus(open_id));
-            self.last_focused_panel_id = Some(open_id);
             Some(ProjectAction::OpenFolder)
         } else {
             None
@@ -974,7 +962,7 @@ impl ProjectPanel {
         project: &ProjectEntry,
         input: &ProjectPanelInput<'_>,
         lang: SidebarLang,
-        focused_id: Option<Id>,
+        focused_nav: Option<NavItem>,
         scroll_to_focused: bool,
     ) -> Option<ProjectAction> {
         let collapsed = self.collapsed_projects.contains(&project.id);
@@ -996,7 +984,8 @@ impl ProjectPanel {
         let (_, outer_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
         let card_rect = outer_rect.shrink2(Vec2::new(2.0_f32, 0.0_f32));
 
-        let card_id = NavItem::Project(project.id).widget_id(panel_id);
+        let nav_item = NavItem::Project(project.id);
+        let card_id = nav_item.widget_id(panel_id);
         let collapse_id = panel_id.with(("project-collapse", project.id));
 
         let top_band_rect = Rect::from_min_size(
@@ -1015,7 +1004,7 @@ impl ProjectPanel {
             ),
         );
 
-        let card_resp = ui.interact(card_click_rect, card_id, Sense::click());
+        let card_resp = ui.interact(card_click_rect, card_id, Sense::CLICK);
         let display_name = if project.name.trim().is_empty() {
             if input.french {
                 "(sans nom)"
@@ -1033,18 +1022,16 @@ impl ProjectPanel {
                 display_name,
             )
         });
-        if scroll_to_focused && focused_id == Some(card_id) {
+        let card_focused = focused_nav == Some(nav_item);
+        if scroll_to_focused && card_focused {
             card_resp.scroll_to_me(Some(egui::Align::Center));
         }
 
         let collapse_label = collapse_button_label(display_name, collapsed, input.french);
-        let collapse_resp = ui.interact(collapse_rect, collapse_id, Sense::click());
+        let collapse_resp = ui.interact(collapse_rect, collapse_id, Sense::CLICK);
         collapse_resp.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &collapse_label)
         });
-
-        let card_focused = focused_id == Some(card_id);
-        let collapse_focused = focused_id == Some(collapse_id);
 
         // Card container surface (`.wtc-surface`).
         let painter = ui.painter().with_clip_rect(card_rect);
@@ -1171,21 +1158,16 @@ impl ProjectPanel {
         );
 
         // Collapse chevron button visuals.
-        if collapse_resp.hovered() || collapse_focused {
-            let c_stroke = if collapse_focused {
-                Stroke::new(1.0_f32, accent)
-            } else {
-                Stroke::NONE
-            };
+        if collapse_resp.hovered() {
             painter.rect(
                 collapse_rect,
                 5.0_f32,
                 ui.visuals().widgets.hovered.bg_fill,
-                c_stroke,
+                Stroke::NONE,
                 StrokeKind::Inside,
             );
         }
-        let chev_color = if collapse_resp.hovered() || collapse_focused {
+        let chev_color = if collapse_resp.hovered() {
             ui.visuals().strong_text_color()
         } else {
             ui.visuals().weak_text_color()
@@ -1215,14 +1197,15 @@ impl ProjectPanel {
         }
 
         let mut action = None;
+        let list_id = panel_id.with("list");
         let collapse_clicked = collapse_resp.clicked();
         collapse_resp.on_hover_text(&collapse_label);
         if collapse_clicked {
             if !self.collapsed_projects.remove(&project.id) {
                 self.collapsed_projects.insert(project.id);
             }
-            ui.ctx().memory_mut(|m| m.request_focus(collapse_id));
-            self.last_focused_panel_id = Some(collapse_id);
+            self.focused_nav = Some(nav_item);
+            ui.ctx().memory_mut(|m| m.request_focus(list_id));
         }
 
         let card_hover = if project.path.trim().is_empty() {
@@ -1237,8 +1220,8 @@ impl ProjectPanel {
         let card_clicked = card_resp.clicked();
         card_resp.on_hover_text(card_hover);
         if card_clicked && !collapse_clicked {
-            ui.ctx().memory_mut(|m| m.request_focus(card_id));
-            self.last_focused_panel_id = Some(card_id);
+            self.focused_nav = Some(nav_item);
+            ui.ctx().memory_mut(|m| m.request_focus(list_id));
             action = Some(ProjectAction::SelectProject(Some(project.id)));
         }
 
@@ -1259,7 +1242,7 @@ impl ProjectPanel {
                     session,
                     is_active && input.active_session == Some(session.id),
                     lang,
-                    focused_id,
+                    focused_nav,
                     scroll_to_focused,
                 ) {
                     action = Some(sess_act);
@@ -1277,7 +1260,7 @@ impl ProjectPanel {
         panel_id: Id,
         input: &ProjectPanelInput<'_>,
         lang: SidebarLang,
-        focused_id: Option<Id>,
+        focused_nav: Option<NavItem>,
         scroll_to_focused: bool,
     ) -> Option<ProjectAction> {
         let collapsed = self.global_collapsed;
@@ -1298,7 +1281,8 @@ impl ProjectPanel {
         let (_, outer_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
         let card_rect = outer_rect.shrink2(Vec2::new(2.0_f32, 0.0_f32));
 
-        let card_id = NavItem::GlobalHeader.widget_id(panel_id);
+        let nav_item = NavItem::GlobalHeader;
+        let card_id = nav_item.widget_id(panel_id);
         let collapse_id = panel_id.with("global-collapse");
 
         let top_band_rect = Rect::from_min_size(
@@ -1323,7 +1307,7 @@ impl ProjectPanel {
             "Sessions without a project"
         };
 
-        let card_resp = ui.interact(card_click_rect, card_id, Sense::click());
+        let card_resp = ui.interact(card_click_rect, card_id, Sense::CLICK);
         card_resp.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
@@ -1332,18 +1316,16 @@ impl ProjectPanel {
                 title,
             )
         });
-        if scroll_to_focused && focused_id == Some(card_id) {
+        let card_focused = focused_nav == Some(nav_item);
+        if scroll_to_focused && card_focused {
             card_resp.scroll_to_me(Some(egui::Align::Center));
         }
 
         let collapse_label = collapse_button_label(title, collapsed, input.french);
-        let collapse_resp = ui.interact(collapse_rect, collapse_id, Sense::click());
+        let collapse_resp = ui.interact(collapse_rect, collapse_id, Sense::CLICK);
         collapse_resp.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &collapse_label)
         });
-
-        let card_focused = focused_id == Some(card_id);
-        let collapse_focused = focused_id == Some(collapse_id);
 
         let painter = ui.painter().with_clip_rect(card_rect);
         let accent = ui.visuals().selection.stroke.color;
@@ -1466,21 +1448,16 @@ impl ProjectPanel {
             ui.visuals().strong_text_color(),
         );
 
-        if collapse_resp.hovered() || collapse_focused {
-            let c_stroke = if collapse_focused {
-                Stroke::new(1.0_f32, accent)
-            } else {
-                Stroke::NONE
-            };
+        if collapse_resp.hovered() {
             painter.rect(
                 collapse_rect,
                 5.0_f32,
                 ui.visuals().widgets.hovered.bg_fill,
-                c_stroke,
+                Stroke::NONE,
                 StrokeKind::Inside,
             );
         }
-        let chev_color = if collapse_resp.hovered() || collapse_focused {
+        let chev_color = if collapse_resp.hovered() {
             ui.visuals().strong_text_color()
         } else {
             ui.visuals().weak_text_color()
@@ -1493,19 +1470,20 @@ impl ProjectPanel {
         }
 
         let mut action = None;
+        let list_id = panel_id.with("list");
         let collapse_clicked = collapse_resp.clicked();
         collapse_resp.on_hover_text(&collapse_label);
         if collapse_clicked {
             self.global_collapsed = !self.global_collapsed;
-            ui.ctx().memory_mut(|m| m.request_focus(collapse_id));
-            self.last_focused_panel_id = Some(collapse_id);
+            self.focused_nav = Some(nav_item);
+            ui.ctx().memory_mut(|m| m.request_focus(list_id));
         }
 
         let card_clicked = card_resp.clicked();
         card_resp.on_hover_text(format!("{title}\n{}", status.label(lang)));
         if card_clicked && !collapse_clicked {
-            ui.ctx().memory_mut(|m| m.request_focus(card_id));
-            self.last_focused_panel_id = Some(card_id);
+            self.focused_nav = Some(nav_item);
+            ui.ctx().memory_mut(|m| m.request_focus(list_id));
             action = Some(ProjectAction::SelectProject(None));
         }
 
@@ -1526,7 +1504,7 @@ impl ProjectPanel {
                     session,
                     is_active && input.active_session == Some(session.id),
                     lang,
-                    focused_id,
+                    focused_nav,
                     scroll_to_focused,
                 ) {
                     action = Some(sess_act);
@@ -1548,16 +1526,16 @@ impl ProjectPanel {
         session: &SessionEntry,
         is_selected: bool,
         lang: SidebarLang,
-        focused_id: Option<Id>,
+        focused_nav: Option<NavItem>,
         scroll_to_focused: bool,
     ) -> Option<ProjectAction> {
-        let row_id = NavItem::Session {
+        let nav_item = NavItem::Session {
             project,
             id: session.id,
-        }
-        .widget_id(panel_id);
+        };
+        let row_id = nav_item.widget_id(panel_id);
         let display_title = session_display_title(session);
-        let resp = ui.interact(row_rect, row_id, Sense::click());
+        let resp = ui.interact(row_rect, row_id, Sense::CLICK);
         resp.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
@@ -1566,11 +1544,10 @@ impl ProjectPanel {
                 display_title,
             )
         });
-        if scroll_to_focused && focused_id == Some(row_id) {
+        let has_focus = focused_nav == Some(nav_item);
+        if scroll_to_focused && has_focus {
             resp.scroll_to_me(Some(egui::Align::Center));
         }
-
-        let has_focus = focused_id == Some(row_id);
         let painter = ui.painter().with_clip_rect(row_rect);
         let accent = ui.visuals().selection.stroke.color;
 
@@ -1683,8 +1660,9 @@ impl ProjectPanel {
         let clicked = resp.clicked();
         resp.on_hover_text(hover_text);
         if clicked {
-            ui.ctx().memory_mut(|m| m.request_focus(row_id));
-            self.last_focused_panel_id = Some(row_id);
+            self.focused_nav = Some(nav_item);
+            ui.ctx()
+                .memory_mut(|m| m.request_focus(panel_id.with("list")));
             Some(ProjectAction::SelectSession {
                 project,
                 id: session.id,
