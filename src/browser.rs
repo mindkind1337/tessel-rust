@@ -1,6 +1,7 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
 use crate::i18n::tr;
 mod control;
+mod downloads;
 pub mod smoke;
 pub mod vault_smoke;
 use eframe::egui;
@@ -15,8 +16,6 @@ use std::{
 use wry::{WebContext, WebView, WebViewBuilder};
 
 enum Event {
-    Started(PathBuf),
-    Completed(Option<PathBuf>, bool),
     Popup(String),
     Error(String),
     Navigation(String),
@@ -29,7 +28,8 @@ pub struct Browser {
     address: String,
     popup: Option<String>,
     error: String,
-    downloads: VecDeque<(PathBuf, String)>,
+    downloads: VecDeque<downloads::Record>,
+    download_tracker: downloads::Downloads,
     destination: Arc<Mutex<PathBuf>>,
     sender: Sender<Event>,
     receiver: Receiver<Event>,
@@ -52,6 +52,7 @@ impl Default for Browser {
             popup: None,
             error: String::new(),
             downloads: VecDeque::new(),
+            download_tracker: Default::default(),
             destination: Arc::new(Mutex::new(destination)),
             sender,
             receiver,
@@ -174,7 +175,6 @@ impl Browser {
     ) -> Result<(), String> {
         self.context = Some(WebContext::new(Some(profile)));
         let start = self.sender.clone();
-        let completed = self.sender.clone();
         let popup = self.sender.clone();
         let navigation = self.sender.clone();
         let destination = self.destination.clone();
@@ -201,56 +201,47 @@ impl Browser {
             }
             wry::NewWindowResponse::Deny
         })
-        .with_download_started_handler(move |_, path| {
-            let result = if agent {
-                planned
-                    .lock()
-                    .map_err(|_| "Download settings unavailable".to_string())
-                    .and_then(|mut plan| {
-                        let (path, deadline) = plan
-                            .take()
-                            .ok_or("Prepare a download with the agent tool first")?;
-                        if std::time::Instant::now() > deadline || path.exists() {
-                            return Err(
-                                "Download plan expired or destination already exists".into()
-                            );
-                        }
-                        let parent = path
-                            .parent()
-                            .ok_or("Download folder unavailable")?
-                            .canonicalize()
-                            .map_err(|_| "Download folder unavailable")?;
-                        if agent_root
-                            .as_ref()
-                            .is_none_or(|root| !parent.starts_with(root))
-                        {
-                            return Err("Download folder left this project".into());
-                        }
-                        Ok(path)
-                    })
-            } else {
-                destination
-                    .lock()
-                    .map_err(|_| "Download settings unavailable".to_string())
-                    .and_then(|folder| download_target(&folder, path))
-            };
-            match result {
-                Ok(target) => {
-                    *path = target.clone();
-                    let _ = start.send(Event::Started(target));
-                    true
-                }
-                Err(e) => {
-                    let _ = start.send(Event::Error(e));
-                    false
-                }
-            }
-        })
-        .with_download_completed_handler(move |_, path, ok| {
-            let _ = completed.send(Event::Completed(path, ok));
-        })
         .build_as_child(frame)
         .map_err(|e| e.to_string())?;
+        self.download_tracker.attach(
+            &view,
+            move |suggested| {
+                let path = &suggested;
+                if agent {
+                    planned
+                        .lock()
+                        .map_err(|_| "Download settings unavailable".to_string())
+                        .and_then(|mut plan| {
+                            let (path, deadline) = plan
+                                .take()
+                                .ok_or("Prepare a download with the agent tool first")?;
+                            if std::time::Instant::now() > deadline || path.exists() {
+                                return Err(
+                                    "Download plan expired or destination already exists".into()
+                                );
+                            }
+                            let parent = path
+                                .parent()
+                                .ok_or("Download folder unavailable")?
+                                .canonicalize()
+                                .map_err(|_| "Download folder unavailable")?;
+                            if agent_root
+                                .as_ref()
+                                .is_none_or(|root| !parent.starts_with(root))
+                            {
+                                return Err("Download folder left this project".into());
+                            }
+                            Ok(path)
+                        })
+                } else {
+                    destination
+                        .lock()
+                        .map_err(|_| "Download settings unavailable".to_string())
+                        .and_then(|folder| download_target(&folder, path))
+                }
+            },
+            start,
+        )?;
         self.view = Some(view);
         Ok(())
     }
@@ -274,37 +265,9 @@ impl Browser {
         }
     }
     pub fn poll(&mut self) {
+        self.downloads = self.download_tracker.poll();
         while let Ok(event) = self.receiver.try_recv() {
             match event {
-                Event::Started(path) => {
-                    let path = download_key(path);
-                    self.downloads.push_front((path, "Downloading".into()));
-                    self.downloads.truncate(100);
-                }
-                Event::Completed(path, ok) => {
-                    if let Some(path) = path {
-                        let path = download_key(path);
-                        if let Some(d) = self.downloads.iter_mut().find(|d| d.0 == path) {
-                            d.1 = if ok {
-                                "Completed"
-                            } else {
-                                "Cancelled / failed"
-                            }
-                            .into();
-                        } else {
-                            self.downloads.push_front((
-                                path,
-                                if ok {
-                                    "Completed"
-                                } else {
-                                    "Cancelled / failed"
-                                }
-                                .into(),
-                            ));
-                            self.downloads.truncate(100);
-                        }
-                    }
-                }
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
                 Event::Navigation(address) => self.address = address,
@@ -392,9 +355,24 @@ impl Browser {
             egui::ScrollArea::vertical()
                 .max_height(160.0)
                 .show(ui, |ui| {
-                    for (path, status) in &self.downloads {
+                    for download in &self.downloads {
+                        let path = &download.path;
+                        let status = &download.status;
                         ui.horizontal(|ui| {
                             ui.label(tr(status));
+                            ui.label(match download.total_bytes {
+                                Some(total) => format!("{} / {} B", download.received_bytes, total),
+                                None => format!("{} B", download.received_bytes),
+                            });
+                            if status == "Downloading"
+                                && ui.small_button(tr("Cancel")).clicked()
+                                && let Err(e) = self.download_tracker.cancel(download.id)
+                            {
+                                self.error = e;
+                            }
+                            if let Some(error) = &download.error {
+                                ui.colored_label(egui::Color32::LIGHT_RED, error);
+                            }
                             ui.label(path.display().to_string());
                             if ui.small_button(tr("Copy path")).clicked() {
                                 ui.ctx().copy_text(path.display().to_string());
@@ -402,6 +380,10 @@ impl Browser {
                         });
                     }
                 });
+        }
+        if self.downloads.iter().any(|d| d.status == "Downloading") {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         let rect = ui.available_rect_before_wrap();
         let scale = ui.ctx().pixels_per_point();

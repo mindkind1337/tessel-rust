@@ -121,6 +121,7 @@ impl Browser {
         let keys: &[&str] = match operation {
             "snapshot" | "downloads" => &["operation"],
             "navigate" => &["operation", "url"],
+            "cancel_download" => &["operation", "id"],
             "click" | "scroll" => &["operation", "origin", "selector"],
             "select" => &["operation", "origin", "selector", "value"],
             "check" => &["operation", "origin", "selector", "checked"],
@@ -134,7 +135,12 @@ impl Browser {
         let (tx, rx) = mpsc::channel();
         let value = match operation {
             "downloads" => {
-                json!({"downloads":self.downloads.iter().map(|(p,s)|json!({"path":p,"status":s})).collect::<Vec<_>>(),"error":self.error})
+                json!({"downloads":self.downloads,"error":self.error})
+            }
+            "cancel_download" => {
+                self.download_tracker
+                    .cancel(args["id"].as_u64().ok_or("Missing download ID")?)?;
+                json!({"cancellation_requested":true})
             }
             "prepare_download" => {
                 let folder = folder_in(root, args["folder"].as_str().unwrap_or("."))?;

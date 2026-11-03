@@ -48,6 +48,7 @@ fn run_mode(agent: bool) -> Result<(), Box<dyn std::error::Error>> {
     let expected = pdf();
     let served = expected.clone();
     let server = thread::spawn(move || {
+        let mut incomplete_attempts = 0;
         while !stop.load(Ordering::Relaxed) {
             let (mut stream, _) = match listener.accept() {
                 Ok(v) => v,
@@ -74,16 +75,41 @@ fn run_mode(agent: bool) -> Result<(), Box<dyn std::error::Error>> {
                 .next()
                 .and_then(|l| l.split_whitespace().nth(1))
                 .unwrap_or("/");
+            if path == "/slow" || path == "/incomplete" {
+                if path == "/incomplete" {
+                    incomplete_attempts += 1;
+                    if incomplete_attempts > 1 {
+                        let _=stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        continue;
+                    }
+                }
+                let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=transfer.bin\r\nContent-Length: 8388608\r\nConnection: close\r\n\r\n");
+                for _ in 0..256 {
+                    if stop.load(Ordering::Relaxed) || stream.write_all(&[7; 32768]).is_err() {
+                        break;
+                    }
+                    if path == "/incomplete" {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(30));
+                }
+                continue;
+            }
             let authenticated = request.lines().any(|l| {
                 l.to_ascii_lowercase().starts_with("cookie:")
                     && l.contains("fixture_session=synthetic-only")
             });
             let (status, extra, body) = if path == "/controls" {
                 ("200 OK","Content-Type: text/html".to_string()+"\r\n", br#"<!doctype html><title>Agent controls fixture</title><input id='query'><input id='secret' type='password'><button id='apply' onclick="document.getElementById('result').textContent=document.getElementById('query').value">Apply</button><p id='result'>untouched</p><select id='language' onchange="choices()"><option value='en'>English</option><option value='fr'>French</option><option disabled value='disabled'>Disabled</option></select><input type='checkbox' id='enabled' onchange="choices()"><p id='choices'>choices:en:false</p><div style='height:2000px'></div><button id='bottom'>Bottom</button><script>function choices(){document.getElementById('choices').textContent='choices:'+document.getElementById('language').value+':'+document.getElementById('enabled').checked;}</script>"#.to_vec())
-            } else if matches!(path, "/" | "/case-auth" | "/case-blob") {
+            } else if matches!(
+                path,
+                "/" | "/case-auth" | "/case-blob" | "/case-slow" | "/case-fail"
+            ) {
                 let script = match path {
                     "/" => "save('/direct','direct.pdf');",
                     "/case-auth" => "save('/auth','auth.pdf');",
+                    "/case-slow" => "save('/slow','slow.bin');",
+                    "/case-fail" => "save('/incomplete','incomplete.bin');",
                     _ => {
                         "const r=await fetch('/auth');if(!r.ok)throw Error('fixture authentication failed');save(URL.createObjectURL(await r.blob()),'blob.pdf');"
                     }
@@ -144,6 +170,7 @@ setTimeout(async()=>{{{script}}},700);</script>"#
                 started: Instant::now(),
                 initialized: false,
                 stage: 0,
+                transfer_probe: Default::default(),
                 result: result_for_app,
             }))
         }),
@@ -168,6 +195,7 @@ struct Smoke {
     started: Instant,
     initialized: bool,
     stage: usize,
+    transfer_probe: TransferProbe,
     result: Arc<Mutex<Option<Result<(), String>>>>,
 }
 impl eframe::App for Smoke {
@@ -194,15 +222,15 @@ impl eframe::App for Smoke {
             .browser
             .downloads
             .iter()
-            .filter(|d| d.1 == "Completed")
+            .filter(|d| d.status == "Completed")
             .collect();
         let mut outcome = if completed.len() == 3 {
             let all_original = completed
                 .iter()
-                .all(|d| std::fs::read(&d.0).is_ok_and(|bytes| bytes == self.expected));
+                .all(|d| std::fs::read(&d.path).is_ok_and(|bytes| bytes == self.expected));
             let names: std::collections::HashSet<_> = completed
                 .iter()
-                .filter_map(|d| d.0.file_name().map(|n| n.to_string_lossy().to_string()))
+                .filter_map(|d| d.path.file_name().map(|n| n.to_string_lossy().to_string()))
                 .collect();
             Some(
                 if all_original
@@ -221,21 +249,38 @@ impl eframe::App for Smoke {
             )
         } else if self.started.elapsed() > Duration::from_secs(40) {
             Some(Err(format!(
-                "Browser acceptance timed out: {} completed downloads; {} tracked.",
+                "Browser acceptance timed out: {} completed downloads; {:?} tracked.",
                 completed.len(),
-                self.browser.downloads.len()
+                self.browser
+                    .downloads
+                    .iter()
+                    .map(|d| (&d.status, &d.error, d.received_bytes, d.total_bytes))
+                    .collect::<Vec<_>>()
             )))
         } else {
             None
         };
         let completed_count = completed.len();
+        if outcome.as_ref().is_some_and(Result::is_ok) {
+            outcome = self
+                .transfer_probe
+                .advance(&mut self.browser, &self.address, self.agent);
+        }
         if self.agent && outcome.as_ref().is_some_and(Result::is_ok) {
             outcome = self
                 .probe
                 .advance(&mut self.browser, frame, &self.root, &self.address);
         }
-        if self.started.elapsed() > Duration::from_secs(45) {
-            outcome = Some(Err("Agent acceptance timed out".into()));
+        if self.started.elapsed() > Duration::from_secs(75) {
+            outcome = Some(Err(format!(
+                "Browser acceptance timed out at transfer phase {}: {:?}",
+                self.transfer_probe.phase,
+                self.browser
+                    .downloads
+                    .iter()
+                    .map(|d| (&d.status, d.received_bytes, d.total_bytes))
+                    .collect::<Vec<_>>()
+            )));
         }
         if outcome.is_none() && completed_count > self.stage && completed_count < 3 {
             self.stage = completed_count;
@@ -327,13 +372,16 @@ impl Probe {
             });
             if !status.is_ok_and(|v| {
                 v["downloads"].as_array().is_some_and(|items| {
-                    items.len() == 3
-                        && items.iter().all(|d| {
-                            d["status"] == "Completed"
-                                && d["path"]
-                                    .as_str()
-                                    .is_some_and(|p| std::path::Path::new(p).is_file())
-                        })
+                    items.iter().filter(|d| d["status"] == "Completed").count() == 3
+                        && items
+                            .iter()
+                            .filter(|d| d["status"] == "Completed")
+                            .all(|d| {
+                                d["status"] == "Completed"
+                                    && d["path"]
+                                        .as_str()
+                                        .is_some_and(|p| std::path::Path::new(p).is_file())
+                            })
                 })
             }) {
                 return Some(Err("Agent download status/path verification failed".into()));
@@ -396,6 +444,96 @@ impl Probe {
                 self.phase += 1;
                 None
             }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+#[derive(Default)]
+struct TransferProbe {
+    phase: usize,
+    cancelled_id: Option<u64>,
+}
+impl TransferProbe {
+    fn advance(
+        &mut self,
+        b: &mut Browser,
+        address: &str,
+        agent: bool,
+    ) -> Option<Result<(), String>> {
+        use serde_json::json;
+        let result = (|| -> Result<bool, String> {
+            match self.phase {
+                0 | 2 => {
+                    b.download_tracker.set_stall_timeout(Duration::from_secs(3));
+                    if self.phase == 2 {
+                        let Some(download) =
+                            b.downloads.iter().find(|d| Some(d.id) == self.cancelled_id)
+                        else {
+                            return Ok(false);
+                        };
+                        if download.status == "Downloading" {
+                            return Ok(false);
+                        }
+                        if download.status != "Cancelled" {
+                            return Err("Native cancellation did not report Cancelled".into());
+                        }
+                    }
+                    if agent {
+                        b.control(&json!({"operation":"prepare_download","folder":".","filename":if self.phase==0{"slow.bin"}else{"incomplete.bin"}}))?;
+                    }
+                    b.open_address(format!(
+                        "{address}{}",
+                        if self.phase == 0 {
+                            "case-slow"
+                        } else {
+                            "case-fail"
+                        }
+                    ));
+                    self.phase += 1;
+                    Ok(false)
+                }
+                1 => {
+                    let Some(download) = b.downloads.iter().find(|d| {
+                        d.status == "Downloading"
+                            && d.received_bytes > 0
+                            && d.total_bytes.is_some_and(|t| t > d.received_bytes)
+                    }) else {
+                        return Ok(false);
+                    };
+                    let id = download.id;
+                    self.cancelled_id = Some(id);
+                    if agent {
+                        b.control(&json!({"operation":"cancel_download","id":id}))?;
+                    } else {
+                        b.download_tracker.cancel(id)?;
+                    }
+                    self.phase = 2;
+                    Ok(false)
+                }
+                3 => {
+                    let Some(download) = b
+                        .downloads
+                        .iter()
+                        .find(|d| d.id > self.cancelled_id.unwrap_or(0) && d.status == "Failed")
+                    else {
+                        return Ok(false);
+                    };
+                    if download.status == "Downloading" {
+                        return Ok(false);
+                    }
+                    if download.status != "Failed" || download.error.is_none() {
+                        return Err("Interrupted original incorrectly reported as complete".into());
+                    }
+                    self.phase = 4;
+                    Ok(true)
+                }
+                _ => Ok(true),
+            }
+        })();
+        match result {
+            Ok(true) => Some(Ok(())),
+            Ok(false) => None,
             Err(e) => Some(Err(e)),
         }
     }
