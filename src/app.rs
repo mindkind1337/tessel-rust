@@ -41,12 +41,23 @@ impl Session {
         });
     }
     fn poll(&mut self) {
-        if let Some(receiver) = &self.loading
-            && let Ok(result) = receiver.try_recv()
-        {
+        let result = self
+            .loading
+            .as_ref()
+            .and_then(|receiver| match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "Terminal startup stopped without a result; retry the connection.".into(),
+                )),
+            });
+        if let Some(result) = result {
             self.loading = None;
             match result {
-                Ok(t) => self.terminal = Some(t),
+                Ok(t) => {
+                    self.error.clear();
+                    self.terminal = Some(t);
+                }
                 Err(e) => self.error = e,
             }
         }
@@ -3463,5 +3474,33 @@ mod tests {
             assert!(session.terminal.is_none());
             assert!(session.error.is_empty());
         }
+    }
+    #[test]
+    fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
+        let (sender, receiver) = mpsc::channel();
+        let mut session = Session {
+            id: 1,
+            project: Some(1),
+            title: "Fixture".into(),
+            launch: Launch::Shell,
+            cwd: PathBuf::from("unused"),
+            terminal: None,
+            loading: Some(receiver),
+            error: String::new(),
+        };
+        session.poll();
+        assert!(session.loading.is_some());
+        assert!(session.error.is_empty());
+        drop(sender);
+        session.poll();
+        assert!(session.loading.is_none());
+        assert!(session.error.contains("stopped without a result"));
+        let (sender, receiver) = mpsc::channel();
+        session.loading = Some(receiver);
+        sender.send(Err("explicit startup error".into())).unwrap();
+        session.poll();
+        assert!(session.loading.is_none());
+        assert_eq!(session.error, "explicit startup error");
+        assert!(session.terminal.is_none());
     }
 }

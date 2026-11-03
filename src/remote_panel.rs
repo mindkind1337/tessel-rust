@@ -122,9 +122,14 @@ impl RemotePanel {
         });
     }
     pub fn poll(&mut self) {
-        if let Some(rx) = &self.pending
-            && let Ok(result) = rx.try_recv()
-        {
+        let result = self.pending.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                "SFTP worker stopped without a result; verify the remote file before retrying a save.".into(),
+            )),
+        });
+        if let Some(result) = result {
             self.pending = None;
             let (result, preview) = match result {
                 Ok((reply, preview)) => (Ok(reply), preview),
@@ -525,5 +530,40 @@ mod tests {
         assert!(!view.path.exists());
         assert!(prepare_preview("broken.png", b"invalid").unwrap().is_err());
         assert!(prepare_preview("script.html", b"<script>bad</script>").is_none());
+    }
+    #[test]
+    fn disconnected_sftp_worker_keeps_unsaved_text_and_releases_busy() {
+        let (sender, receiver) = mpsc::channel();
+        let mut panel = RemotePanel {
+            pending: Some(receiver),
+            submitted: Some(b"edited".to_vec()),
+            document: Some(RemoteDocument {
+                path: "/fixture/file.txt".into(),
+                original: b"original".to_vec(),
+                text: Some("edited".into()),
+                preview: None,
+                preview_error: String::new(),
+            }),
+            ..Default::default()
+        };
+        panel.poll();
+        assert!(panel.busy());
+        drop(sender);
+        panel.poll();
+        assert!(!panel.busy());
+        assert!(panel.submitted.is_none());
+        assert!(panel.error.contains("stopped without a result"));
+        let doc = panel.document.as_ref().unwrap();
+        assert_eq!(doc.original, b"original");
+        assert_eq!(doc.text.as_deref(), Some("edited"));
+        assert!(panel.needs_close_confirmation());
+        // Receiving a later successful operation still updates the panel normally.
+        let (sender, receiver) = mpsc::channel();
+        panel.pending = Some(receiver);
+        panel.submitted = Some(b"edited".to_vec());
+        sender.send(Ok((Reply::Saved, None))).unwrap();
+        panel.poll();
+        assert!(!panel.busy());
+        assert!(!panel.document.as_ref().unwrap().dirty());
     }
 }
