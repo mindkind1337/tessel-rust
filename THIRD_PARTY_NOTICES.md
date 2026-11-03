@@ -153,3 +153,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+The same Orca/Tessel model-discovery attribution above also covers `src/agent_model_listed.rs`, adapted from `src/shared/agentModelProbe.js` (`listedToCatalogModels`).

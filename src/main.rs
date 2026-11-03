@@ -18,6 +18,7 @@ pub mod agent_model_defaults;
 pub mod agent_model_defaults_ui;
 pub mod agent_model_discovery;
 pub mod agent_model_launch;
+pub mod agent_model_listed;
 pub mod agent_model_options;
 pub mod agent_model_probe;
 pub mod agent_model_probe_parse;
