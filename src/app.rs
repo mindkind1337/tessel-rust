@@ -107,6 +107,7 @@ pub struct Tessel {
     empty_state: crate::empty_state_panel::EmptyState,
     settings_section: SettingsSection,
     settings_nav: crate::settings_nav::SettingsNav,
+    appearance_panel: crate::appearance_panel::AppearancePanel,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     toolbar_menu_open: bool,
@@ -200,6 +201,7 @@ impl Tessel {
             empty_state: Default::default(),
             settings_section: SettingsSection::Appearance,
             settings_nav: Default::default(),
+            appearance_panel: Default::default(),
             command_palette: Default::default(),
             command_palette_focused: false,
             toolbar_menu_open: false,
@@ -2111,53 +2113,42 @@ impl Tessel {
         }
     }
     fn appearance_settings(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(tr("Language"));
-            let previous = self.state.language;
-            egui::ComboBox::from_id_salt("ui-language")
-                .selected_text(match previous {
-                    crate::i18n::Language::English => "English",
-                    crate::i18n::Language::French => "Français",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.state.language,
-                        crate::i18n::Language::English,
-                        "English",
-                    );
-                    ui.selectable_value(
-                        &mut self.state.language,
-                        crate::i18n::Language::French,
-                        "Français",
-                    );
-                });
-            if previous != self.state.language {
-                crate::i18n::set_language(self.state.language);
-                self.save();
+        use crate::appearance_panel::{AppearanceAction, AppearanceInput};
+        let action = self.appearance_panel.show(
+            ui,
+            &AppearanceInput {
+                theme: self.state.theme,
+                dark: self.state.dark,
+                french: self.state.language == crate::i18n::Language::French,
+                terminal_font_size: self.state.font_size,
+            },
+        );
+        let changed = match action {
+            Some(AppearanceAction::Theme(theme)) if self.state.theme != Some(theme) => {
+                self.state.theme = Some(theme);
+                crate::theme::apply(ui.ctx(), self.state.dark, self.state.theme);
+                true
             }
-        });
-        ui.heading(tr("Appearance"));
-        let previous_theme = self.state.theme;
-        let french = self.state.language == crate::i18n::Language::French;
-        let selected = if self.state.theme.is_none() && !self.state.dark {
-            tr("Legacy light theme")
-        } else {
-            self.state.theme.unwrap_or_default().label(french)
+            Some(AppearanceAction::Language { french }) => {
+                let language = if french {
+                    crate::i18n::Language::French
+                } else {
+                    crate::i18n::Language::English
+                };
+                let changed = self.state.language != language;
+                self.state.language = language;
+                crate::i18n::set_language(language);
+                changed
+            }
+            Some(AppearanceAction::TerminalFontSize(size)) if size.is_finite() => {
+                let size = size.clamp(10.0, 28.0);
+                let changed = self.state.font_size != size;
+                self.state.font_size = size;
+                changed
+            }
+            _ => false,
         };
-        egui::ComboBox::from_id_salt("appearance-theme")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for theme in crate::theme_palettes::THEMES {
-                    ui.selectable_value(&mut self.state.theme, Some(theme), theme.label(french))
-                        .on_hover_text(theme.description(french));
-                }
-            });
-        let mut changed = previous_theme != self.state.theme;
-        changed |= ui
-            .add(egui::Slider::new(&mut self.state.font_size, 10.0..=28.0).text(tr("Font size")))
-            .changed();
         if changed {
-            crate::theme::apply(ui.ctx(), self.state.dark, self.state.theme);
             self.save();
         }
     }

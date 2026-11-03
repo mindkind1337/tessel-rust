@@ -216,7 +216,7 @@ fn paint_wrapped_text(
     }
     let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, width);
     job.wrap.max_rows = max_rows;
-    job.wrap.break_anywhere = true;
+    job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let h = galley.size().y;
@@ -234,7 +234,7 @@ fn layout_wrapped_galley(
 ) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, width.max(12.0_f32));
     job.wrap.max_rows = max_rows;
-    job.wrap.break_anywhere = true;
+    job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
     ui.fonts_mut(|f| f.layout_job(job))
 }

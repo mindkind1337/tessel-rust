@@ -1,6 +1,7 @@
 //! Windows title-bar prototype. System non-client actions remain owned by Windows.
 //! https://learn.microsoft.com/windows/win32/dwm/customframe
 use eframe::egui::{self, Pos2, Rect, Vec2};
+use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -85,6 +86,7 @@ impl Regions {
 struct Hook {
     ctx: egui::Context,
     regions: Arc<Mutex<Regions>>,
+    pressed_control: Cell<u32>,
 }
 
 unsafe extern "system" fn procedure(
@@ -104,6 +106,46 @@ unsafe extern "system" fn procedure(
         }
     }
     let hook = unsafe { &*(data as *const Hook) };
+    // DWM recognizes HTMAXBUTTON for Snap, but its default click tracking uses
+    // native caption bounds, not our custom rectangles. Route paired clicks
+    // through the normal system-command path so close still reaches winit.
+    if message == WM_NCLBUTTONDOWN {
+        let hit = wparam.0 as u32;
+        hook.pressed_control.set(0);
+        if matches!(hit, HTMINBUTTON | HTMAXBUTTON | HTCLOSE) {
+            hook.pressed_control.set(hit);
+            hook.ctx.request_repaint();
+            return LRESULT(0);
+        }
+    }
+    if message == WM_NCLBUTTONUP {
+        let pressed = hook.pressed_control.replace(0);
+        if pressed != 0 {
+            if pressed == wparam.0 as u32 {
+                let command = match pressed {
+                    HTMINBUTTON => SC_MINIMIZE,
+                    HTMAXBUTTON if unsafe { IsZoomed(hwnd).as_bool() } => SC_RESTORE,
+                    HTMAXBUTTON => SC_MAXIMIZE,
+                    _ => SC_CLOSE,
+                };
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd),
+                        WM_SYSCOMMAND,
+                        WPARAM(command as usize),
+                        LPARAM(0),
+                    )
+                };
+            }
+            hook.ctx.request_repaint();
+            return LRESULT(0);
+        }
+    }
+    if matches!(message, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_CANCELMODE)
+        || (message == WM_ACTIVATE && wparam.0 & 0xffff == WA_INACTIVE as usize)
+    {
+        hook.pressed_control.set(0);
+    }
     if message == WM_NCHITTEST
         && let Ok(regions) = hook.regions.try_lock()
     {
@@ -152,6 +194,7 @@ impl WindowFrame {
         let hook = Box::into_raw(Box::new(Hook {
             ctx: cc.egui_ctx.clone(),
             regions: regions.clone(),
+            pressed_control: Cell::new(0),
         }));
         // Installation and callbacks both run on the window's owning UI thread.
         if !unsafe {
@@ -232,7 +275,7 @@ impl WindowFrame {
             } else {
                 ui.visuals().text_color()
             };
-            let stroke = egui::Stroke::new(1.0, color);
+            let stroke = egui::Stroke::new(1.0_f32, color);
             let glyph = Rect::from_center_size(rect.center(), Vec2::splat(10.0));
             match index {
                 0 => {
