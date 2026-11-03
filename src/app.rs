@@ -265,6 +265,11 @@ impl Tessel {
         {
             match Document::open(root, &path) {
                 Ok(mut document) => {
+                    if let Some(office) = &mut document.office
+                        && let Err(e) = office.prime()
+                    {
+                        document.error = e;
+                    }
                     if let Some(pdf) = &mut document.pdf
                         && let Err(e) = pdf.prime(&cc.egui_ctx)
                     {
@@ -851,7 +856,9 @@ impl Tessel {
             ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
         }
         let mut link = None;
-        if let Some(pdf) = &mut d.pdf {
+        if let Some(office) = &mut d.office {
+            office.show(ui);
+        } else if let Some(pdf) = &mut d.pdf {
             pdf.show(ui);
         } else if d.media {
             if d.texture.is_none()

@@ -14,10 +14,12 @@ fn prepare_preview(
     bytes: &[u8],
 ) -> Option<Result<Box<crate::files::Document>, String>> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
-    if !matches!(
-        extension.as_str(),
-        "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-    ) {
+    if !crate::office::supported(&extension)
+        && !matches!(
+            extension.as_str(),
+            "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        )
+    {
         return None;
     }
     Some((|| {
@@ -447,7 +449,9 @@ impl RemotePanel {
                 ui.colored_label(egui::Color32::LIGHT_RED, &doc.preview_error);
             }
             if let Some(preview) = &mut doc.preview {
-                if let Some(pdf) = &mut preview.pdf {
+                if let Some(office) = &mut preview.office {
+                    office.show(ui);
+                } else if let Some(pdf) = &mut preview.pdf {
                     pdf.show(ui);
                 } else {
                     if preview.texture.is_none()

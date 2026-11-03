@@ -15,7 +15,7 @@ use std::{
 };
 const MAX_INPUT: usize = 32 * 1024 * 1024;
 const MAX_PIXELS: usize = 8 * 1024 * 1024;
-static RENDER_SLOT: Mutex<()> = Mutex::new(());
+pub(crate) static RENDER_SLOT: Mutex<()> = Mutex::new(());
 pub struct Rendered {
     pub image: egui::ColorImage,
     pub pages: usize,
@@ -115,7 +115,7 @@ pub fn worker() -> Result<(), String> {
     output.write_all(&rgba).map_err(|_| "Cannot write pixels")?;
     Ok(())
 }
-struct Process(Child);
+pub(crate) struct Process(pub(crate) Child);
 impl Drop for Process {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -123,10 +123,10 @@ impl Drop for Process {
     }
 }
 #[cfg(windows)]
-struct Job(windows::Win32::Foundation::HANDLE);
+pub(crate) struct Job(windows::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 impl Job {
-    fn attach(child: &Child) -> Result<Self, String> {
+    pub(crate) fn attach(child: &Child) -> Result<Self, String> {
         use std::os::windows::io::AsRawHandle;
         use windows::{
             Win32::{Foundation::HANDLE, System::JobObjects::*},

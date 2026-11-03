@@ -15,6 +15,8 @@ try {
     $exe = Join-Path $repoRoot 'target\release\tessel-rust.exe'
     $check = Start-Process -FilePath $exe -ArgumentList '--self-test-pdf' -WindowStyle Hidden -Wait -PassThru
     if ($check.ExitCode -ne 0) { throw 'Release PDF worker acceptance failed.' }
+    $officeCheck = Start-Process -FilePath $exe -ArgumentList '--self-test-office' -WindowStyle Hidden -Wait -PassThru
+    if ($officeCheck.ExitCode -ne 0) { throw 'Release Office worker acceptance failed.' }
     # Every package uses a new staging directory; no recursive cleanup or overwrite.
     $packageRoot = Join-Path $repoRoot 'target\packages'
     New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null

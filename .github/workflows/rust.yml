@@ -24,6 +24,7 @@ jobs:
       - run: cargo clippy --locked -j 2 --all-targets --all-features -- -D warnings
       - run: cargo build --locked -j 2
       - run: .\target\debug\tessel-rust.exe --self-test-pdf
+      - run: .\target\debug\tessel-rust.exe --self-test-office
       - name: Build and verify portable release package
         run: ./scripts/package-windows.ps1
       - uses: actions/upload-artifact@v4

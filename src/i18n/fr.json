@@ -204,5 +204,7 @@
   "New…": "Nouveau…",
   "Confirm": "Confirmer",
   "Save pending edits before changing files.": "Enregistrez les modifications en cours avant de modifier les fichiers.",
-  "File operation in progress…": "Opération sur les fichiers en cours…"
+  "File operation in progress…": "Opération sur les fichiers en cours…",
+  "Read-only content preview · macros and formulas are not executed · formatting may differ": "Aperçu en lecture seule · macros et formules non exécutées · mise en forme simplifiée",
+  "Preview truncated at the document limits.": "Aperçu tronqué aux limites du document."
 }

@@ -75,6 +75,7 @@ pub struct Document {
     pub texture: Option<eframe::egui::TextureHandle>,
     pub media: bool,
     pub pdf: Option<crate::pdf::PdfView>,
+    pub office: Option<crate::office::OfficeView>,
 }
 impl Document {
     pub fn open(root: &Path, path: &Path) -> Result<Self> {
@@ -84,6 +85,23 @@ impl Document {
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
+        if crate::office::supported(&extension) {
+            let office = crate::office::OfficeView::open(&path)?;
+            return Ok(Self {
+                root: root.to_owned(),
+                path,
+                text: String::new(),
+                original: vec![],
+                error: String::new(),
+                preview_mode: true,
+                preview: None,
+                image: None,
+                texture: None,
+                media: true,
+                pdf: None,
+                office: Some(office),
+            });
+        }
         if extension == "pdf" {
             let pdf = crate::pdf::PdfView::open(&path)?;
             return Ok(Self {
@@ -98,6 +116,7 @@ impl Document {
                 texture: None,
                 media: true,
                 pdf: Some(pdf),
+                office: None,
             });
         }
         if matches!(
@@ -138,6 +157,7 @@ impl Document {
                 texture: None,
                 media: true,
                 pdf: None,
+                office: None,
             });
         }
         let original = read(&path)?;
@@ -158,6 +178,7 @@ impl Document {
             texture: None,
             media: false,
             pdf: None,
+            office: None,
         })
     }
     pub fn dirty(&self) -> bool {

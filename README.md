@@ -47,7 +47,8 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 - Read-only PNG, JPEG, WebP, GIF-first-frame and BMP previews, with background decoding, compressed-size/dimension/allocation limits and fit-to-width display.
 - Original PDF page rendering in Rust with previous/next page, zoom and fit-width controls. Rendering runs in a disposable worker with a 20-second deadline; Windows additionally enforces a 512 MiB process-memory limit. Closing the document cancels its worker.
 - PDF inputs are limited to 32 MiB/2,000 pages; raster output is bounded to 4,096 pixels per side and 8 million pixels. The source file is never rewritten. Unsupported or damaged documents report an error; forms, text selection and every PDF feature are not supported yet.
-- Bounded document loading and up to 24 open or loading documents. Office-document previews remain pending.
+- Office parsing runs in a disposable worker with the same 20-second/512 MiB Windows limits as PDFs, for local and SFTP originals. Inputs are limited to 32 MiB; sheet/slide, row, column and output limits bound previews. Macros and formulas are never executed. Damaged/encrypted/unsupported inputs report an error.
+- Bounded document loading and up to 24 open or loading documents. Office previews accept DOCX/ODT readable paragraphs and headings, PPTX/ODP text in slide order, and XLSX/XLSM/ODS sheets with cached cell values. These are content previews, not layout-faithful Office renderers; document tables are flattened and embedded images/charts are not displayed.
 
 ### Native Codex chat
 
@@ -98,7 +99,7 @@ Native Rust rewrite of Tessel. **Active migration, not yet a feature-complete re
 
 ### Windows distribution
 
-- An optimized portable Windows x64 ZIP can be built with `./scripts/package-windows.ps1` from a clean committed checkout. The script builds with two compiler jobs, runs the original-PDF worker acceptance check, writes commit/build metadata and SHA-256 checksums, and extracts the ZIP to verify the executable bytes.
+- An optimized portable Windows x64 ZIP can be built with `./scripts/package-windows.ps1` from a clean committed checkout. The script builds with two compiler jobs, runs the original-PDF and Office worker acceptance checks, writes commit/build metadata and SHA-256 checksums, and extracts the ZIP to verify the executable bytes.
 - GitHub Actions runs formatting, tests and strict Clippy before packaging. This is an unsigned portable development build, not an installer or published product release. Windows, WebView2 Runtime, Git/OpenSSH and agent CLI requirements still apply.
 
 ## Run and verify
@@ -123,9 +124,10 @@ Optional native acceptance checks:
 .\target\debug\tessel-rust.exe --self-test-codex
 .\target\debug\tessel-rust.exe --self-test-vault
 .\target\debug\tessel-rust.exe --self-test-pdf
+.\target\debug\tessel-rust.exe --self-test-office
 ```
 
-The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The agent-browser check repeats those original downloads with tool-selected names, checks returned paths/status, exercises snapshot/fill/click, refuses origin mismatch and password-field entry, and checks cookie isolation against a separate profile. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The PDF check renders two synthetic original pages in the resource-limited worker and rejects invalid input. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
+The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. It uses no personal account. The agent-browser check repeats those original downloads with tool-selected names, checks returned paths/status, exercises snapshot/fill/click, refuses origin mismatch and password-field entry, and checks cookie isolation against a separate profile. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The PDF check renders two synthetic original pages in the resource-limited worker and rejects invalid input. The Office check decodes synthetic DOCX and XLSX files through the actual isolated worker, checks original text/cached values and refuses damaged/cancelled input. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
 
 ## Validation and remaining migration
 

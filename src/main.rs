@@ -16,6 +16,7 @@ mod files;
 mod git;
 mod i18n;
 mod launch;
+mod office;
 mod pdf;
 mod preview;
 mod remote;
@@ -34,8 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let raw = std::env::args().nth(2).unwrap_or_default();
         return account::receive_callback(&raw).map_err(Into::into);
     }
+    if std::env::args().nth(1).as_deref() == Some("--office-worker") {
+        std::process::exit(if office::worker().is_ok() { 0 } else { 1 });
+    }
     if std::env::args().nth(1).as_deref() == Some("--pdf-worker") {
         std::process::exit(if pdf::worker().is_ok() { 0 } else { 1 });
+    }
+    if std::env::args().any(|a| a == "--self-test-office") {
+        return office::smoke();
     }
     if std::env::args().any(|a| a == "--self-test-pdf") {
         return pdf::smoke();
