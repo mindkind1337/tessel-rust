@@ -88,6 +88,8 @@ enum SettingsSection {
     Account,
 }
 pub struct Tessel {
+    #[cfg(windows)]
+    window_frame: Option<crate::window_frame::WindowFrame>,
     state: Workspace,
     store: Option<Store>,
     error: String,
@@ -149,6 +151,14 @@ pub struct Tessel {
 impl Tessel {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::system_fonts::install(&cc.egui_ctx);
+        #[cfg(windows)]
+        let window_frame = if cfg!(feature = "visual-test")
+            && std::env::args().any(|arg| arg == "--native-frame-fixture")
+        {
+            crate::window_frame::WindowFrame::install(cc)
+        } else {
+            None
+        };
         let (sender, receiver) = mpsc::channel();
         let override_dir = std::env::args()
             .collect::<Vec<_>>()
@@ -171,6 +181,8 @@ impl Tessel {
         crate::i18n::set_language(state.language);
         crate::theme::apply(&cc.egui_ctx, state.dark, state.theme);
         let mut app = Self {
+            #[cfg(windows)]
+            window_frame,
             state,
             store,
             error,
@@ -2905,7 +2917,17 @@ impl eframe::App for Tessel {
             )
             .show(ctx, |ui| {
                 use crate::{chrome, icons::Icon};
-                let regions = chrome::regions(ui.max_rect());
+                #[allow(unused_mut)]
+                let mut toolbar_room = ui.max_rect();
+                #[cfg(windows)]
+                if self.window_frame.is_some() {
+                    toolbar_room.max.x -= crate::window_frame::CONTROL_WIDTH + 2.0;
+                }
+                let regions = chrome::regions(toolbar_room);
+                #[cfg(windows)]
+                if let Some(frame) = &self.window_frame {
+                    frame.show(ui, [regions.search, regions.actions]);
+                }
                 chrome::brand(ui, regions.brand);
                 if regions.search.width() >= 40.0
                     && chrome::command_button(ui, regions.search).clicked()

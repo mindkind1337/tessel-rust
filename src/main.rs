@@ -59,6 +59,8 @@ mod vault;
 mod vault_panel;
 mod view_tabs;
 pub mod view_tabs_browser_model;
+#[cfg(windows)]
+mod window_frame;
 mod workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {

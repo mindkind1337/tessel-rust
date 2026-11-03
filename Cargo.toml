@@ -44,7 +44,7 @@ reqwest = { version="0.12", default-features=false, features=["blocking","json",
 sha2 = "0.10"
 webbrowser = "1"
 winreg = "0.55"
-windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage"] }
+windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
 
 [profile.release]
 opt-level = 2
