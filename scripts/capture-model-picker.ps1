@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [switch]$Compact
+    [switch]$Compact,
+    [switch]$Discovered
 )
 $ErrorActionPreference = 'Stop'
 # Requires a binary built with --features visual-test. Every run gets isolated
@@ -11,6 +12,10 @@ $captureRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $runDirectory = Join-Path $captureRoot ([Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $runDirectory -Force
 $dataDirectory = Join-Path $runDirectory 'data'
+if ($Discovered) {
+    $null = New-Item -ItemType Directory -Path $dataDirectory
+    '{"codex":{"models":[{"id":"gpt-5.6-sol","label":"Synthetic model fixture","effortLevels":["low","high"]}],"fetchedAt":1700000000000}}' | Set-Content -LiteralPath (Join-Path $dataDirectory 'agent-models.json') -Encoding utf8
+}
 $pngPath = Join-Path $runDirectory 'models-fr.png'
 $errorPath = Join-Path $runDirectory 'stderr.txt'
 $outputPath = Join-Path $runDirectory 'stdout.txt'

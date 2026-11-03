@@ -143,6 +143,7 @@ pub struct Tessel {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     agents: crate::agent_detection::Detection,
+    model_discovery: Option<crate::agent_model_discovery::Discovery>,
     agents_panel: crate::agents_panel::AgentsPanel,
     agents_notice: Option<String>,
     host_panel: crate::ssh_hosts_panel::SshHostsPanel,
@@ -212,6 +213,9 @@ impl Tessel {
         crate::i18n::set_language(state.language);
         crate::theme::apply(&cc.egui_ctx, state.dark, state.theme);
         let next_session = state.next_pane_id();
+        let model_discovery = store
+            .as_ref()
+            .map(|s| crate::agent_model_discovery::Discovery::open(s.directory()));
         let mut app = Self {
             #[cfg(windows)]
             window_frame,
@@ -244,6 +248,7 @@ impl Tessel {
             sender,
             receiver,
             agents: Default::default(),
+            model_discovery,
             agents_panel: Default::default(),
             agents_notice: None,
             host_panel: Default::default(),
@@ -597,6 +602,9 @@ impl Tessel {
     }
     fn poll(&mut self) {
         self.agents.poll();
+        if let Some(discovery) = &mut self.model_discovery {
+            discovery.poll();
+        }
         self.poll_host_import();
         self.sync_git_project();
         let git_owner = self.git_result.pending_owner().cloned();
@@ -784,7 +792,11 @@ impl Tessel {
             error: String::new(),
         };
         let prefs = match &s.launch {
-            Launch::Agent(id) => Some(crate::agent_preferences::for_launch(&self.state, id)),
+            Launch::Agent(id) => Some(crate::agent_preferences::for_launch_with_models(
+                &self.state,
+                id,
+                self.model_discovery.as_ref().and_then(|d| d.models(id)),
+            )),
             _ => None,
         };
         s.start(prefs);
@@ -1803,7 +1815,13 @@ impl Tessel {
                             } else if ui.button(tr("Wake / reconnect")).clicked() {
                                 let prefs = match &session.launch {
                                     Launch::Agent(id) => {
-                                        Some(crate::agent_preferences::for_launch(&self.state, id))
+                                        Some(crate::agent_preferences::for_launch_with_models(
+                                            &self.state,
+                                            id,
+                                            self.model_discovery
+                                                .as_ref()
+                                                .and_then(|d| d.models(id)),
+                                        ))
                                     }
                                     _ => None,
                                 };
@@ -2447,6 +2465,7 @@ impl Tessel {
             ui,
             Input {
                 rows: &rows,
+                discovery: self.model_discovery.as_ref(),
                 loaded: self.agents.loaded(),
                 detecting: self.agents.detecting(),
                 error: self.agents.error(),
@@ -2460,6 +2479,15 @@ impl Tessel {
             return;
         }
         match action {
+            Some(Action::RefreshModels(id)) => {
+                let command = crate::agent_preferences::get(&self.state, &id)
+                    .map(|p| p.command.clone())
+                    .unwrap_or_default();
+                if let Some(discovery) = &mut self.model_discovery {
+                    let ctx = ui.ctx().clone();
+                    discovery.refresh(&id, &command, move || ctx.request_repaint());
+                }
+            }
             Some(Action::Detect) => {
                 self.agents_notice = None;
                 self.detect_agents();
@@ -3054,6 +3082,7 @@ impl Tessel {
         }
         self.file_action_dialog(ctx);
         if self.pending_exit {
+            let model_busy = self.model_discovery.as_ref().is_some_and(|d| d.active());
             egui::Modal::new(egui::Id::new("close-app")).show(ctx, |ui| {
                 ui.label(tr("There are unsaved files or sessions. Closing ends sessions."));
                 if ui.button(tr("Keep working")).clicked() {
@@ -3061,8 +3090,9 @@ impl Tessel {
                 }
                 if self.file_action_pending { ui.label(tr("File operation in progress…")); }
                 if self.account_busy() { ui.label(tr("Wait for the account request to finish before closing.")); }
+                if model_busy { ui.label(if self.state.language == crate::i18n::Language::French { "Attendez la fin de la recherche et de la sauvegarde des modèles avant de fermer." } else { "Wait for model discovery and saving to finish before closing." }); }
                 if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
-                if ui.add_enabled(!self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
+                if ui.add_enabled(!model_busy && !self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -3077,7 +3107,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
+                if ui.add_enabled(!model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.allow_exit = true;
                     self.save();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -3444,6 +3474,7 @@ impl eframe::App for Tessel {
                 || self.share.hosting()
                 || self.remote.needs_close_confirmation()
                 || self.account_busy()
+                || self.model_discovery.as_ref().is_some_and(|d| d.active())
                 || self.file_action_pending)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

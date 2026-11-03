@@ -448,6 +448,9 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn directory(&self) -> &Path {
+        self.path.parent().expect("workspace file has a directory")
+    }
     pub fn open(dir: &Path) -> Result<(Self, Workspace)> {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let lock = fs::OpenOptions::new()

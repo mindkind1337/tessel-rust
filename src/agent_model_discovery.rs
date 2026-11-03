@@ -20,11 +20,22 @@ pub struct Discovery {
     storage_error: bool,
     disk: Option<Receiver<bool>>,
     dirty: bool,
+    catalogs: BTreeMap<String, Vec<Value>>,
 }
 impl Discovery {
     pub fn open(dir: &Path) -> Self {
+        let cache = Cache::open(dir);
+        let catalogs = cache
+            .entries()
+            .iter()
+            .filter_map(|(agent, entry)| {
+                crate::agent_model_listed::catalog(agent, &entry.models)
+                    .map(|rows| (agent.clone(), rows))
+            })
+            .collect();
         Self {
-            cache: Cache::open(dir),
+            cache,
+            catalogs,
             pending: BTreeMap::new(),
             errors: BTreeMap::new(),
             storage_error: false,
@@ -47,6 +58,16 @@ impl Discovery {
     pub fn saving(&self) -> bool {
         self.dirty || self.disk.is_some()
     }
+    pub fn active(&self) -> bool {
+        !self.pending.is_empty() || self.saving()
+    }
+    pub fn models(&self, agent: &str) -> Option<&[Value]> {
+        self.catalogs.get(agent).map(Vec::as_slice)
+    }
+    pub fn can_refresh(agent: &str) -> bool {
+        agent_model_probe::spec(agent).is_some_and(|s| s.protocol.is_none())
+            && crate::agent_model_listed::catalog(agent, &[]).is_some()
+    }
 
     pub fn refresh(
         &mut self,
@@ -54,6 +75,9 @@ impl Discovery {
         command: &str,
         wake: impl FnOnce() + Send + 'static,
     ) -> bool {
+        if !Self::can_refresh(agent) {
+            return false;
+        }
         let Some(spec) = agent_model_probe::spec(agent) else {
             return false;
         };
@@ -65,7 +89,7 @@ impl Discovery {
             && custom.len() <= 300
             && custom
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-\\/:".contains(&b))
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-\\/: ".contains(&b))
         {
             custom
         } else {
@@ -141,7 +165,7 @@ impl Discovery {
                     }
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+                        .map_or(0.0, |d| d.as_millis() as f64);
                     if self
                         .cache
                         .keep_in_memory(&agent, &Value::Array(models), now)
@@ -151,6 +175,12 @@ impl Discovery {
                         continue;
                     }
                     self.dirty = true;
+                    if let Some(rows) = crate::agent_model_listed::catalog(
+                        &agent,
+                        &self.cache.entries()[&agent].models,
+                    ) {
+                        self.catalogs.insert(agent.clone(), rows);
+                    }
                     self.errors.remove(&agent);
                 }
                 Err(error) => {
@@ -212,12 +242,16 @@ mod tests {
             .cache
             .keep("codex", &json!([{"id":"old-model"}]), 1.0)
             .unwrap();
+        let mut state = Discovery::open(dir.path());
+        assert_eq!(state.models("codex").unwrap()[0]["id"], "old-model");
         let (tx, rx) = mpsc::channel();
         assert!(state.start("codex", move || rx.recv().unwrap(), || {}));
         assert!(!state.start("codex", || panic!("duplicate must never run"), || {}));
         state.poll();
         assert!(state.busy("codex"));
+        assert!(state.active());
         assert_eq!(state.lists()["codex"].models[0]["id"], "old-model");
+        assert_eq!(state.models("codex").unwrap()[0]["id"], "old-model");
         tx.send(Err(Failure::Empty)).unwrap();
         complete(&mut state);
         assert_eq!(state.error("codex"), Some(&Failure::Empty));
@@ -234,6 +268,12 @@ mod tests {
             vec![json!({"id":"new-model","label":"new-model"})]
         );
         assert_eq!(Discovery::open(dir.path()).lists(), state.lists());
+        assert_eq!(
+            Discovery::open(dir.path()).models("codex"),
+            state.models("codex")
+        );
+        assert_eq!(state.models("codex").unwrap()[0]["id"], "new-model");
+        assert!(!state.active());
     }
     #[test]
     fn disk_failure_retains_results_and_next_success_persists_all_agents() {
@@ -272,5 +312,41 @@ mod tests {
         assert!(!state.refresh("unknown", "must-not-run", || panic!(
             "unknown provider must not run"
         )));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn custom_command_with_spaces_runs_only_listing_and_restores_catalog() {
+        let dir = tempfile::Builder::new()
+            .prefix("model discovery ")
+            .tempdir()
+            .unwrap();
+        let shim = dir.path().join("synthetic.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\"%~dp0node.exe\" \"%~dp0listing.cjs\" %*\r\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("listing.cjs"), r#"
+if (JSON.stringify(process.argv.slice(2)) !== '["debug","models"]') process.exit(7);
+console.log(JSON.stringify({models:[{slug:'synthetic-model',display_name:'Synthetic model',supported_reasoning_levels:[{effort:'high'}]}]}));
+"#).unwrap();
+        let cache = dir.path().join("cache");
+        let mut state = Discovery::open(&cache);
+        assert!(state.refresh("codex", shim.to_str().unwrap(), || {}));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while state.active() && std::time::Instant::now() < until {
+            state.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!state.active());
+        assert_eq!(state.error("codex"), None);
+        let restored = Discovery::open(&cache);
+        let models = restored.models("codex").unwrap();
+        assert_eq!(models[0]["id"], "synthetic-model");
+        assert_eq!(
+            models[0]["options"][0]["kind"]["choices"][0]["value"],
+            "high"
+        );
     }
 }

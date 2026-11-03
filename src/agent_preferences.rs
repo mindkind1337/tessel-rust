@@ -57,14 +57,23 @@ pub fn save(state: &mut Workspace, store: &Store, id: &str, value: Preferences) 
 }
 
 /// Snapshot the effective local terminal launch without mutating saved arguments.
+#[cfg(test)]
 pub fn for_launch(state: &Workspace, id: &str) -> Preferences {
+    for_launch_with_models(state, id, None)
+}
+pub fn for_launch_with_models(
+    state: &Workspace,
+    id: &str,
+    discovered: Option<&[serde_json::Value]>,
+) -> Preferences {
     let mut prefs = get(state, id).cloned().unwrap_or_default();
     if let Some(values) = state
         .agent_model_defaults
         .get(id)
         .and_then(crate::agent_model_defaults::Defaults::values)
     {
-        let flags = crate::agent_model_launch::text(id, &values, &prefs.args, None);
+        let models = crate::agent_model_catalog::models_for(id, discovered);
+        let flags = crate::agent_model_launch::text(id, &values, &prefs.args, Some(&models));
         if !flags.is_empty() {
             prefs.args = format!("{flags} {}", prefs.args).trim_end().into();
         }
@@ -89,6 +98,45 @@ pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovered_options_control_launch_without_inventing_unadvertised_effort() {
+        let mut state = Workspace::default();
+        let mut defaults = crate::agent_model_defaults::Defaults {
+            model: Some("dynamic-model".into()),
+            ..Default::default()
+        };
+        defaults.set_option("effort", Some("high".into()));
+        state.agent_model_defaults.insert("claude".into(), defaults);
+        let rows =
+            vec![serde_json::json!({"id":"dynamic-model", "label":"Dynamic", "effortLevels":[]})];
+        let models = crate::agent_model_listed::catalog("claude", &rows).unwrap();
+        assert_eq!(
+            for_launch_with_models(&state, "claude", Some(&models)).args,
+            "--model dynamic-model"
+        );
+        let rows = vec![
+            serde_json::json!({"id":"dynamic-model", "label":"Dynamic", "effortLevels":["high"]}),
+        ];
+        let models = crate::agent_model_listed::catalog("claude", &rows).unwrap();
+        assert_eq!(
+            for_launch_with_models(&state, "claude", Some(&models)).args,
+            "--model dynamic-model --effort high"
+        );
+        // Source Codex merging inherits seed options when an unknown listed
+        // model advertises none; Claude above replaces its seed entirely.
+        state
+            .agent_model_defaults
+            .insert("codex".into(), state.agent_model_defaults["claude"].clone());
+        let models = crate::agent_model_listed::catalog(
+            "codex",
+            &[serde_json::json!({"id":"dynamic-model", "label":"Dynamic"})],
+        )
+        .unwrap();
+        assert_eq!(
+            for_launch_with_models(&state, "codex", Some(&models)).args,
+            "-m dynamic-model -c model_reasoning_effort=high"
+        );
+    }
 
     #[test]
     fn model_flags_are_explicit_and_manual_arguments_win_without_mutating_settings() {

@@ -10,6 +10,7 @@ pub struct Row {
 }
 
 pub struct Input<'a> {
+    pub discovery: Option<&'a crate::agent_model_discovery::Discovery>,
     pub rows: &'a [Row],
     pub loaded: bool,
     pub detecting: bool,
@@ -22,6 +23,7 @@ pub struct Input<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
+    RefreshModels(String),
     Detect,
     SetEnabled(String, bool),
     SetModelDefaults(String, crate::agent_model_defaults::Defaults),
@@ -215,12 +217,16 @@ impl AgentsPanel {
                                 .inner_margin(10)
                                 .corner_radius(6)
                                 .show(ui, |ui| {
-                                    let (model_change, model_focus) = model_defaults_ui(
+                                    let (model_change, model_focus, refresh) = model_defaults_ui(
                                         &mut self.model_ui,
                                         ui,
                                         row,
                                         input.french,
+                                        input.discovery,
                                     );
+                                    if refresh {
+                                        action = Some(Action::RefreshModels(preset.id.into()));
+                                    }
                                     if let Some(defaults) = model_change {
                                         action = Some(Action::SetModelDefaults(
                                             preset.id.into(),
@@ -413,23 +419,77 @@ fn model_defaults_ui(
     ui: &mut Ui,
     row: &Row,
     french: bool,
-) -> (Option<crate::agent_model_defaults::Defaults>, Vec<egui::Id>) {
-    use crate::agent_model_defaults_ui::{Capabilities, Input, ProbeState};
+    discovery: Option<&crate::agent_model_discovery::Discovery>,
+) -> (
+    Option<crate::agent_model_defaults::Defaults>,
+    Vec<egui::Id>,
+    bool,
+) {
+    use crate::agent_model_defaults_ui::{Capabilities, Input, ListedMeta, ProbeError, ProbeState};
+    use crate::agent_model_probe::Failure;
+    use crate::agent_model_process::Error;
+    let id = row.preset.id;
+    let models = discovery.and_then(|d| d.models(id));
+    let entry = discovery
+        .filter(|_| models.is_some())
+        .and_then(|d| d.lists().get(id));
+    let date = entry
+        .and_then(|e| chrono::DateTime::from_timestamp_millis(e.fetched_at as i64))
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "—".into());
+    let probe = if discovery.is_some_and(|d| d.busy(id)) {
+        ProbeState::Busy
+    } else if let Some(error) = discovery.and_then(|d| d.error(id)) {
+        ProbeState::Error(match error {
+            Failure::NotFound => ProbeError::NotFound,
+            Failure::Empty => ProbeError::Empty,
+            Failure::Unsupported | Failure::ProtocolRequired => ProbeError::Unsupported,
+            Failure::Process(Error::Timeout) => ProbeError::Timeout,
+            Failure::Process(Error::TooMuch) => ProbeError::TooMuch,
+            Failure::Failed(detail) => ProbeError::Failed {
+                detail: Some(detail),
+            },
+            _ => ProbeError::Failed { detail: None },
+        })
+    } else {
+        ProbeState::Idle
+    };
     let result = picker.show(
         ui,
         Input {
             agent_id: row.preset.id,
             agent_name: row.preset.name,
             defaults: &row.model_defaults,
-            discovered_models: None,
-            listed_meta: None,
-            probe: ProbeState::Idle,
-            capabilities: Capabilities::default(),
+            discovered_models: models,
+            listed_meta: entry.map(|e| ListedMeta {
+                count: e.models.len(),
+                date_label: &date,
+            }),
+            probe,
+            capabilities: Capabilities {
+                can_refresh_models: discovery.is_some()
+                    && crate::agent_model_discovery::Discovery::can_refresh(id),
+                ..Default::default()
+            },
             french,
             show_section_header: true,
         },
     );
-    (result.changed, result.focus_ids)
+    if discovery.is_some_and(|d| d.storage_error()) {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            if french {
+                "La liste reste en mémoire; sa sauvegarde a échoué."
+            } else {
+                "The list remains in memory; saving it failed."
+            },
+        );
+    }
+    (result.changed, result.focus_ids, result.refresh_models)
 }
 
 struct RowControls {
@@ -608,6 +668,85 @@ fn paint_line(ui: &Ui, rect: egui::Rect, text: &str, font: egui::FontId, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_models_are_selectable_and_refresh_emits_an_action_without_starting_a_process() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::agent_model_cache::Cache::open(dir.path()).keep("codex", &serde_json::json!([{"id":"dynamic-model", "label":"Synthetic discovery", "effortLevels":["high"]}]), 1_700_000_000_000.0).unwrap();
+        let discovery = crate::agent_model_discovery::Discovery::open(dir.path());
+        let ctx = egui::Context::default();
+        let mut panel = AgentsPanel {
+            open: Some("codex".into()),
+            ..Default::default()
+        };
+        let rows = [Row {
+            preset: crate::agent_catalog::find("codex").unwrap(),
+            available: true,
+            enabled: true,
+            prefs: Default::default(),
+            model_defaults: Default::default(),
+        }];
+        let mut render = |events| {
+            let mut action = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 900.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        action = panel.show(
+                            ui,
+                            Input {
+                                discovery: Some(&discovery),
+                                rows: &rows,
+                                loaded: true,
+                                detecting: false,
+                                error: None,
+                                notice: None,
+                                has_project: true,
+                                french: false,
+                                search: "",
+                            },
+                        );
+                    });
+                },
+            );
+            (output, action)
+        };
+        render(vec![]);
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (out, _) = render(vec![]);
+        let pos = text_center(&out, "Refresh models");
+        render(vec![egui::Event::PointerMoved(pos), pointer(pos, true)]);
+        assert_eq!(
+            render(vec![pointer(pos, false)]).1,
+            Some(Action::RefreshModels("codex".into()))
+        );
+        assert!(!discovery.active());
+        let (out, _) = render(vec![]);
+        let pos = text_center(&out, "Agent's own default");
+        render(vec![egui::Event::PointerMoved(pos), pointer(pos, true)]);
+        render(vec![pointer(pos, false)]);
+        let (out, _) = render(vec![]);
+        let pos = text_center(&out, "Synthetic discovery");
+        render(vec![egui::Event::PointerMoved(pos), pointer(pos, true)]);
+        let Some(Action::SetModelDefaults(id, defaults)) = render(vec![pointer(pos, false)]).1
+        else {
+            panic!("Expected selecting the cached model");
+        };
+        assert_eq!(id, "codex");
+        assert_eq!(defaults.model.as_deref(), Some("dynamic-model"));
+    }
     fn frame(
         ctx: &egui::Context,
         panel: &mut AgentsPanel,
@@ -661,6 +800,7 @@ mod tests {
                         action = panel.show(
                             ui,
                             Input {
+                                discovery: None,
                                 rows: &rows,
                                 loaded: true,
                                 detecting: false,
