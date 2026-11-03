@@ -65,6 +65,9 @@ impl Discovery {
         self.catalogs.get(agent).map(Vec::as_slice)
     }
     pub fn can_refresh(agent: &str) -> bool {
+        if agent == "muse" {
+            return true;
+        }
         agent_model_probe::spec(agent).is_some_and(|s| s.protocol.is_none())
             && crate::agent_model_listed::catalog(agent, &[]).is_some()
     }
@@ -77,6 +80,9 @@ impl Discovery {
     ) -> bool {
         if !Self::can_refresh(agent) {
             return false;
+        }
+        if agent == "muse" {
+            return self.start(agent, crate::muse_model_probe::list, wake);
         }
         let Some(spec) = agent_model_probe::spec(agent) else {
             return false;
@@ -297,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_worker_clears_busy_and_muse_never_runs_as_bare_serve() {
+    fn disconnected_worker_clears_busy_and_unknown_provider_never_runs() {
         let dir = tempfile::tempdir().unwrap();
         let mut state = Discovery::open(dir.path());
         let (tx, rx) = mpsc::channel();
@@ -306,9 +312,7 @@ mod tests {
         state.poll();
         assert!(!state.busy("codex"));
         assert_eq!(state.error("codex"), Some(&Failure::Process(Error::Io)));
-        assert!(!state.refresh("muse", "must-not-run", || panic!(
-            "unsupported protocol must not run"
-        )));
+        assert!(Discovery::can_refresh("muse"));
         assert!(!state.refresh("unknown", "must-not-run", || panic!(
             "unknown provider must not run"
         )));

@@ -45,11 +45,11 @@ impl Default for Limits {
 /// Handles UTF-8 split across read boundaries without double-counting surrogate
 /// pairs or replacement characters. Invalid UTF-8 has String::from_utf8_lossy semantics.
 #[derive(Default)]
-struct Units {
+pub(crate) struct Units {
     carry: Vec<u8>,
 }
 impl Units {
-    fn push(&mut self, bytes: &[u8], eof: bool) -> usize {
+    pub(crate) fn push(&mut self, bytes: &[u8], eof: bool) -> usize {
         self.carry.extend_from_slice(bytes);
         let mut remaining = self.carry.as_slice();
         let mut units = 0;

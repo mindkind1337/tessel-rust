@@ -157,3 +157,5 @@ SOFTWARE.
 The same Orca/Tessel model-discovery attribution above also covers `src/agent_model_listed.rs`, adapted from `src/shared/agentModelProbe.js` (`listedToCatalogModels`).
 
 `src/muse_catalog.rs` is also adapted from Tessel `src/main/museCatalog.js` and the model-id/data-directory helpers in `src/main/museSessions.js`, under the same Orca attribution above (MIT, Copyright (c) 2026 Lovecast Inc.).
+
+`src/muse_model_probe.rs` and `src/muse_protocol.rs` adapt Tessel `src/main/museServe.js` and `src/main/agentModelList.js`, following Muse's JSON-RPC session-protocol handshake and model/list query. The same Orca/Tessel MIT attribution above applies.
