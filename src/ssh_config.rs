@@ -73,7 +73,7 @@ fn arguments(value: &str) -> Vec<String> {
         if !quoted && ch == '#' {
             break;
         }
-        if !quoted && ch.is_whitespace() {
+        if !quoted && crate::agent_names::js_space(ch) {
             if !word.is_empty() {
                 words.push(std::mem::take(&mut word));
             }
@@ -88,13 +88,17 @@ fn arguments(value: &str) -> Vec<String> {
 }
 
 fn directive(line: &str) -> Option<(&str, &str)> {
-    let line = line.trim().trim_start_matches('\u{feff}');
+    let line = crate::agent_names::js_trim(line);
     if line.starts_with('#') {
         return None;
     }
-    let split = line.find(|c: char| c == '=' || c.is_whitespace())?;
+    let split = line.find(|c: char| c == '=' || crate::agent_names::js_space(c))?;
     let (key, value) = line.split_at(split);
-    Some((key, value.trim_start().trim_start_matches('=').trim_start()))
+    let value = crate::agent_names::js_trim(value);
+    Some((
+        key,
+        crate::agent_names::js_trim(value.strip_prefix('=').unwrap_or(value)),
+    ))
 }
 
 fn key_name(path: &Path) -> bool {
@@ -259,52 +263,38 @@ impl Scan<'_> {
             .ok()
     }
 
-    fn include_path(&self, input: &str) -> Option<PathBuf> {
-        let mut env = String::new();
-        let mut rest = input;
-        while let Some(start) = rest.find("${") {
-            env.push_str(&rest[..start]);
-            let close = rest[start + 2..].find('}')? + start + 2;
-            env.push_str(&std::env::var(&rest[start + 2..close]).ok()?);
-            rest = &rest[close + 1..];
-        }
-        env.push_str(rest);
-        let mut expanded = String::new();
-        let mut chars = env.chars();
-        while let Some(ch) = chars.next() {
-            if ch != '%' {
-                expanded.push(ch);
-                continue;
-            }
-            match chars.next() {
-                None => expanded.push('%'),
-                Some('%') => expanded.push('%'),
-                Some('d') => expanded.push_str(self.home.to_str()?),
-                Some('u') => expanded.push_str(
-                    &std::env::var("USERNAME")
-                        .or_else(|_| std::env::var("USER"))
-                        .ok()?,
-                ),
-                Some(token @ ('l' | 'L')) => {
+    fn include_path(&mut self, input: &str) -> Option<PathBuf> {
+        let expanded = expand_include(
+            input,
+            |name| std::env::var(name).ok(),
+            |token| match token {
+                '%' => Some("%".into()),
+                'd' => self.home.to_str().map(str::to_owned),
+                'u' => std::env::var("USERNAME")
+                    .or_else(|_| std::env::var("USER"))
+                    .ok(),
+                'l' | 'L' => {
                     let hostname = std::env::var("COMPUTERNAME")
                         .or_else(|_| std::env::var("HOSTNAME"))
                         .ok()?;
-                    expanded.push_str(if token == 'L' {
-                        hostname.split('.').next()?
+                    Some(if token == 'L' {
+                        hostname.split('.').next()?.into()
                     } else {
-                        &hostname
-                    });
+                        hostname
+                    })
                 }
-                Some('h' | 'n' | 'p' | 'r' | 'j' | 'k' | 'C' | 'i') => return None,
-                Some(other) => {
-                    expanded.push('%');
-                    expanded.push(other);
-                }
+                'h' | 'n' | 'p' | 'r' | 'j' | 'k' | 'C' | 'i' => None,
+                other => Some(format!("%{other}")),
+            },
+        );
+        let expanded = match expanded {
+            Ok(value) => value,
+            Err(ExpansionError::Limit) => {
+                self.result.truncated = true;
+                return None;
             }
-        }
-        if expanded.len() > 8192 {
-            return None;
-        }
+            Err(ExpansionError::Unavailable) => return None,
+        };
         if expanded == "~" {
             return Some(self.home.to_owned());
         }
@@ -394,6 +384,65 @@ impl Scan<'_> {
             })
             .collect()
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ExpansionError {
+    Limit,
+    Unavailable,
+}
+
+const MAX_INCLUDE_PATH: usize = 8192;
+
+fn push_bounded(out: &mut String, part: &str) -> Result<(), ExpansionError> {
+    if part.len() > MAX_INCLUDE_PATH.saturating_sub(out.len()) {
+        return Err(ExpansionError::Limit);
+    }
+    out.push_str(part);
+    Ok(())
+}
+
+fn expand_include(
+    input: &str,
+    environment: impl Fn(&str) -> Option<String>,
+    token: impl Fn(char) -> Option<String>,
+) -> Result<String, ExpansionError> {
+    if input.len() > MAX_INCLUDE_PATH {
+        return Err(ExpansionError::Limit);
+    }
+    let mut env = String::new();
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        push_bounded(&mut env, &rest[..start])?;
+        let Some(close) = rest[start + 2..].find('}').map(|offset| offset + start + 2) else {
+            push_bounded(&mut env, &rest[start..])?;
+            rest = "";
+            break;
+        };
+        if close == start + 2 {
+            push_bounded(&mut env, "${}")?;
+        } else {
+            let value = environment(&rest[start + 2..close]).ok_or(ExpansionError::Unavailable)?;
+            push_bounded(&mut env, &value)?;
+        }
+        rest = &rest[close + 1..];
+    }
+    push_bounded(&mut env, rest)?;
+    let mut expanded = String::new();
+    let mut chars = env.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let value = match chars.next() {
+                Some(next) => token(next).ok_or(ExpansionError::Unavailable)?,
+                None => "%".into(),
+            };
+            push_bounded(&mut expanded, &value)?;
+        } else {
+            let mut bytes = [0; 4];
+            push_bounded(&mut expanded, ch.encode_utf8(&mut bytes))?;
+        }
+    }
+    Ok(expanded)
 }
 
 // Iterative DP avoids exponential backtracking on hostile Include patterns.
@@ -552,5 +601,56 @@ mod tests {
         let result = discover(dir.path());
         assert!(result.truncated);
         assert_eq!(result.aliases, ["alias0", "alias1", "alias2", "alias3"]);
+    }
+    #[test]
+    fn env_and_token_expansion_stop_before_an_oversized_allocation() {
+        assert_eq!(
+            expand_include(
+                &"${VALUE}".repeat(34),
+                |_| Some("x".repeat(32000)),
+                |_| None
+            ),
+            Err(ExpansionError::Limit)
+        );
+        assert_eq!(
+            expand_include("%d%d", |_| None, |_| Some("x".repeat(5000))),
+            Err(ExpansionError::Limit)
+        );
+        assert_eq!(
+            expand_include("${MISSING}", |_| None, |_| None),
+            Err(ExpansionError::Unavailable)
+        );
+        assert_eq!(
+            expand_include(
+                "${ROOT}/%%/%d",
+                |_| Some("folder".into()),
+                |ch| match ch {
+                    '%' => Some("%".into()),
+                    'd' => Some("home".into()),
+                    _ => None,
+                }
+            )
+            .unwrap(),
+            "folder/%/home"
+        );
+        let mut bounded = "a".repeat(MAX_INCLUDE_PATH - 1);
+        assert_eq!(push_bounded(&mut bounded, "é"), Err(ExpansionError::Limit));
+        assert_eq!(bounded.len(), MAX_INCLUDE_PATH - 1);
+    }
+    #[test]
+    fn directive_whitespace_equals_and_literal_environment_syntax_match_source() {
+        assert_eq!(
+            directive(" \u{feff} Host = fixture "),
+            Some(("Host", "fixture"))
+        );
+        assert_eq!(directive("Host==invalid"), Some(("Host", "=invalid")));
+        assert_eq!(
+            arguments("one\u{feff}two\u{0085}three"),
+            ["one", "two\u{0085}three"]
+        );
+        assert_eq!(
+            expand_include("literal${}and${unfinished", |_| None, |_| None).unwrap(),
+            "literal${}and${unfinished"
+        );
     }
 }
