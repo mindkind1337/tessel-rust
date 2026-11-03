@@ -5,7 +5,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
-| Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, real OS IME and mouse protocols pending |
+| Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Implemented; filesystem tests pass |
 | Layout | Persistent grid; project switching retains sessions | In progress |
@@ -16,7 +16,7 @@ Source baseline: the Features sections of `C:\Tessel\README.md`, inspected 2026-
 | Git | Nonblocking, bounded status/diff/log; explicit mutations; no auto polling storms | Implemented; real temporary-repository test passes |
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; other providers pending |
 | Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions and explicitly enabled project browser tools implemented; agent messaging and broader host tools pending |
-| Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; screenshots and iframe tools pending |
+| Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending |
 | Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown, images and bounded original PDF rendering implemented; bounded Office/OpenDocument content previews implemented with synthetic format and native worker acceptance; full webpage rendering and rich Office layout pending |
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |

@@ -355,6 +355,40 @@ impl Probe {
                     "Select/check/scroll did not update native fixture".into()
                 ));
             }
+            if self.phase == 15 {
+                let valid = result.as_ref().is_ok_and(|v| {
+                    let Some(path) = v["path"].as_str() else {
+                        return false;
+                    };
+                    let Ok(path) = std::path::Path::new(path).canonicalize() else {
+                        return false;
+                    };
+                    let Ok(root) = root.canonicalize() else {
+                        return false;
+                    };
+                    if !path.starts_with(root) {
+                        return false;
+                    }
+                    let Ok(bytes) = std::fs::read(path) else {
+                        return false;
+                    };
+                    let Ok(image) = image::load_from_memory(&bytes) else {
+                        return false;
+                    };
+                    image.width() >= 500
+                        && image.height() >= 200
+                        && u64::from(image.width()) == v["width"].as_u64().unwrap_or(0)
+                        && u64::from(image.height()) == v["height"].as_u64().unwrap_or(0)
+                        && image.to_rgba8().pixels().any(|p| p.0[0] < 200)
+                });
+                if !valid {
+                    return Some(Err(format!(
+                        "Native screenshot content/path verification failed: {result:?}"
+                    )));
+                }
+                if b.control(&json!({"operation":"screenshot","origin":"https://wrong.invalid","filename":"denied.png"})).is_ok(){return Some(Err("Screenshot accepted another origin".into()));}
+                if b.control(&json!({"operation":"screenshot","origin":address.trim_end_matches('/'),"folder":"..","filename":"denied.png"})).is_ok(){return Some(Err("Screenshot escaped the project".into()));}
+            }
             if matches!(self.phase, 6 | 7 | 12 | 13 | 14) {
                 if result.is_ok() {
                     return Some(Err(
@@ -409,6 +443,9 @@ impl Probe {
             }
             12 => json!({"operation":"check","origin":origin,"selector":"#query","checked":true}),
             13 => json!({"operation":"check","origin":origin,"selector":"#secret","checked":true}),
+            14 => {
+                json!({"operation":"screenshot","origin":origin,"folder":".","filename":"native-fixture.png"})
+            }
             _ => {
                 let result = (|| -> Result<(), String> {
                     let cookies = b

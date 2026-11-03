@@ -127,6 +127,7 @@ impl Browser {
             "check" => &["operation", "origin", "selector", "checked"],
             "fill" => &["operation", "origin", "selector", "text"],
             "prepare_download" => &["operation", "folder", "filename"],
+            "screenshot" => &["operation", "origin", "folder", "filename"],
             _ => return Err("Unknown browser operation".into()),
         };
         if obj.keys().any(|k| !keys.contains(&k.as_str())) {
@@ -141,6 +142,27 @@ impl Browser {
                 self.download_tracker
                     .cancel(args["id"].as_u64().ok_or("Missing download ID")?)?;
                 json!({"cancellation_requested":true})
+            }
+            "screenshot" => {
+                let origin = args["origin"].as_str().ok_or("Missing exact page origin")?;
+                let parsed = url::Url::parse(origin).map_err(|_| "Invalid page origin")?;
+                if !matches!(parsed.scheme(), "http" | "https")
+                    || parsed.origin().ascii_serialization() != origin
+                {
+                    return Err("Use the exact HTTP(S) origin from snapshot".into());
+                }
+                let folder = folder_in(root, args["folder"].as_str().unwrap_or("."))?;
+                let name = args["filename"].as_str().unwrap_or("screenshot.png");
+                if safe_name(name) != name || !name.to_ascii_lowercase().ends_with(".png") {
+                    return Err("Screenshot requires a safe PNG filename".into());
+                }
+                let path = download_target(&folder, Path::new(name))?;
+                return self.capture.start(
+                    self.view.as_ref().ok_or("Browser unavailable")?,
+                    root.clone(),
+                    path,
+                    origin.into(),
+                );
             }
             "prepare_download" => {
                 let folder = folder_in(root, args["folder"].as_str().unwrap_or("."))?;

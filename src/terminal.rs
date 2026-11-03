@@ -1,3 +1,4 @@
+mod mouse;
 use crate::i18n::tr;
 use eframe::egui;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -19,6 +20,7 @@ pub struct Terminal {
     selection: Option<Selection>,
     composition: String,
     composing: bool,
+    mouse: mouse::Mouse,
     #[cfg(feature = "visual-test")]
     fixture: bool,
 }
@@ -94,6 +96,7 @@ impl Terminal {
             selection: None,
             composition: String::new(),
             composing: false,
+            mouse: Default::default(),
             #[cfg(feature = "visual-test")]
             fixture: false,
         })
@@ -169,7 +172,10 @@ impl Terminal {
             self.size = (rows, cols);
         }
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
-        if response.clicked() || response.drag_started() {
+        if response.clicked()
+            || response.drag_started()
+            || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed())
+        {
             response.request_focus();
         }
         if response.has_focus() {
@@ -196,6 +202,34 @@ impl Terminal {
             self.composition.clear();
             self.composing = false;
         }
+        let mode = if self.parser.screen().scrollback() == 0 {
+            self.parser.screen().mouse_protocol_mode()
+        } else {
+            vt100::MouseProtocolMode::None
+        };
+        let shift = ui.input(|i| i.modifiers.shift);
+        let tracking = mode != vt100::MouseProtocolMode::None;
+        let mouse_bytes = ui.input(|i| {
+            self.mouse.events(
+                &i.events,
+                &mouse::Area {
+                    rect,
+                    cell: egui::vec2(cell_width, line_height),
+                    size: self.size,
+                    hovered: response.contains_pointer(),
+                    pointer: i.pointer.hover_pos(),
+                    modifiers: i.modifiers,
+                },
+                mode,
+                self.parser.screen().mouse_protocol_encoding(),
+            )
+        });
+        if !mouse_bytes.is_empty() {
+            self.selection = None;
+            if let Err(e) = self.send(mouse_bytes) {
+                self.status = e;
+            }
+        }
         let cell_at = |pos: egui::Pos2| {
             (
                 ((pos.y - rect.min.y) / line_height)
@@ -206,14 +240,16 @@ impl Terminal {
                     .clamp(0.0, f32::from(cols)) as u16,
             )
         };
-        if response.drag_started_by(egui::PointerButton::Primary)
+        if (!tracking || shift)
+            && response.drag_started_by(egui::PointerButton::Primary)
             && let Some(pos) = ui.input(|i| i.pointer.press_origin())
         {
             let start = cell_at(pos);
             self.selection = Some(Selection { start, end: start });
         }
-        if (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary))
+        if (!tracking || shift)
+            && (response.dragged_by(egui::PointerButton::Primary)
+                || response.drag_stopped_by(egui::PointerButton::Primary))
             && let (Some(selection), Some(pos)) =
                 (&mut self.selection, response.interact_pointer_pos())
         {
@@ -222,32 +258,42 @@ impl Terminal {
         if response.clicked() {
             self.selection = None;
         }
-        if response.hovered() {
+        if (!tracking || shift) && response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta != 0.0 {
+                let release = self
+                    .mouse
+                    .release(self.parser.screen().mouse_protocol_encoding());
+                if !release.is_empty()
+                    && let Err(e) = self.send(release)
+                {
+                    self.status = e;
+                }
                 let scroll =
                     self.parser.screen().scrollback() as i64 + (delta / line_height).round() as i64;
                 self.selection = None;
                 self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
             }
         }
-        response.context_menu(|ui| {
-            if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
-                if let Some(selection) = self.selection {
-                    ui.ctx().copy_text(selection.text(self.parser.screen()));
+        if !tracking || shift {
+            response.context_menu(|ui| {
+                if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
+                    if let Some(selection) = self.selection {
+                        ui.ctx().copy_text(selection.text(self.parser.screen()));
+                    }
+                    ui.close();
                 }
-                ui.close();
-            }
 
-            if ui.button(tr("Copy visible text")).clicked() {
-                ui.ctx().copy_text(self.parser.screen().contents());
-                ui.close();
-            }
-            if ui.button(tr("Back to live output")).clicked() {
-                self.parser.set_scrollback(0);
-                ui.close();
-            }
-        });
+                if ui.button(tr("Copy visible text")).clicked() {
+                    ui.ctx().copy_text(self.parser.screen().contents());
+                    ui.close();
+                }
+                if ui.button(tr("Back to live output")).clicked() {
+                    self.parser.set_scrollback(0);
+                    ui.close();
+                }
+            });
+        }
         let screen = self.parser.screen();
         let painter = ui.painter().with_clip_rect(rect);
         let default_bg = color(vt100::Color::Default, false);

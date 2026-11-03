@@ -1,5 +1,6 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
 use crate::i18n::tr;
+mod capture;
 mod control;
 mod downloads;
 pub mod smoke;
@@ -30,6 +31,7 @@ pub struct Browser {
     error: String,
     downloads: VecDeque<downloads::Record>,
     download_tracker: downloads::Downloads,
+    capture: capture::Capture,
     destination: Arc<Mutex<PathBuf>>,
     sender: Sender<Event>,
     receiver: Receiver<Event>,
@@ -53,6 +55,7 @@ impl Default for Browser {
             error: String::new(),
             downloads: VecDeque::new(),
             download_tracker: Default::default(),
+            capture: Default::default(),
             destination: Arc::new(Mutex::new(destination)),
             sender,
             receiver,
