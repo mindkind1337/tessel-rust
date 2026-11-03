@@ -7,7 +7,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
-| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Seven source palettes and terminal ANSI/default colors integrated with persisted theme IDs; base typography transcribed; projects moved left, Files/Changes/Tasks moved right, central document tabs and functional command palette integrated; remaining visual and interaction parity not accepted |
+| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Seven source palettes and terminal ANSI/default colors integrated with persisted theme IDs; base typography transcribed; projects moved left, Files/Changes/Tasks moved right, central document tabs and functional command palette integrated; native three-zone vector toolbar and right-aligned dialog close controls visually checked; remaining visual and interaction parity not accepted |
 | Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Expandable native tree integrated with bounded background enumeration and cached rows; preserved expansions and project-switch cancellation; existing scoped file operations retained; real egui pointer, cancellation, cache and confinement tests pass; native tree rendering visually checked |
@@ -28,6 +28,10 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; searchable native shortcut help visually checked, modal Escape/focus and document shortcut isolation tests pass; external/technical diagnostics and screen-reader acceptance pending |
 
 The Rust application can invoke external shells and agent CLIs. An embedded browser requires an external browser engine. Those are dependencies, not a JavaScript implementation of Tessel. Existing service credentials and production endpoints are not exercised automatically.
+
+## Isolated visual reference
+
+Read-only inspection of the Electron startup identifies `TESSEL_USER_DATA` as the supported separate-profile override. It also skips user-data migration and development protocol registration; the PTY channel can be separated with `TESSEL_PTYHOST_CHANNEL`. A future reference capture must use a separate source checkout, a new empty profile and a unique PTY channel, with synthetic workspace data only. Do not start the active checkout or copy its real profile. This identifies the isolation mechanism; an isolated Electron reference has not yet been launched or accepted for pixel comparisons.
 
 ## Account / connector backend boundary
 

@@ -26,7 +26,7 @@ try {
     $stage = Join-Path $packageRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath $exe -Destination $stage
-    foreach ($name in @('README.md','MIGRATION.md','LICENSE')) { Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $stage }
+    foreach ($name in @('README.md','MIGRATION.md','LICENSE','THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $stage }
     $binaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage 'tessel-rust.exe')).Hash.ToLowerInvariant()
     [ordered]@{ commit=$commit; build="b$build"; target='x86_64-pc-windows-msvc'; sha256=$binaryHash; configuration='release'; signed=$false } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $stage 'build.json')
     "$binaryHash  tessel-rust.exe" | Set-Content -Encoding ascii (Join-Path $stage 'SHA256SUMS.txt')

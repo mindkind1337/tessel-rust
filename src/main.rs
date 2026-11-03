@@ -11,6 +11,7 @@ mod backup;
 #[cfg(windows)]
 mod browser;
 mod chat;
+mod chrome;
 mod claude;
 pub mod explorer_scm_model;
 pub mod explorer_tree;
@@ -21,6 +22,7 @@ mod finder_panel;
 mod git;
 pub mod help_panel;
 mod i18n;
+pub mod icons;
 mod launch;
 mod office;
 pub mod palette;
@@ -94,15 +96,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Tessel Rust",
         eframe::NativeOptions {
-            viewport: eframe::egui::ViewportBuilder::default().with_inner_size(
-                if cfg!(feature = "visual-test")
-                    && std::env::args().any(|a| a == "--compact-fixture")
-                {
-                    [800.0, 520.0]
-                } else {
-                    [1280.0, 800.0]
-                },
-            ),
+            viewport: eframe::egui::ViewportBuilder::default()
+                .with_inner_size(
+                    if cfg!(feature = "visual-test")
+                        && std::env::args().any(|a| a == "--compact-fixture")
+                    {
+                        [800.0, 520.0]
+                    } else {
+                        [1280.0, 800.0]
+                    },
+                )
+                .with_min_inner_size([640.0, 420.0]),
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(app::Tessel::new(cc)))),

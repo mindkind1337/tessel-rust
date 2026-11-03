@@ -1,4 +1,7 @@
 {
+  "Toggle left sidebar": "Afficher ou masquer le panneau gauche",
+  "Toggle right sidebar": "Afficher ou masquer le panneau droit",
+  "Open a terminal or agent": "Ouvrir un terminal ou un agent",
   "Keyboard shortcuts": "Raccourcis clavier",
   "Sessions without a project": "Sessions sans projet",
   "Not connected": "Non connecté",

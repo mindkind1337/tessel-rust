@@ -102,6 +102,7 @@ pub struct Tessel {
     settings_section: SettingsSection,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
+    toolbar_menu_open: bool,
     finder: crate::finder_panel::Finder,
     grid_room: [f64; 2],
     grid_dirty: bool,
@@ -179,6 +180,7 @@ impl Tessel {
             settings_section: SettingsSection::Appearance,
             command_palette: Default::default(),
             command_palette_focused: false,
+            toolbar_menu_open: false,
             finder: Default::default(),
             grid_room: [800.0, 600.0],
             grid_dirty: false,
@@ -1956,9 +1958,19 @@ impl Tessel {
                     Overlay::Share => "Share",
                     Overlay::Help => "Keyboard shortcuts",
                 }));
-                if ui.button("×").on_hover_text(tr("Close")).clicked() {
-                    close = true;
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::chrome::icon_button(
+                        ui,
+                        crate::icons::Icon::Close,
+                        tr("Close"),
+                        false,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        close = true;
+                    }
+                });
             });
             ui.separator();
             let height = (ctx.content_rect().height() * 0.86 - 65.0).clamp(150.0, 615.0);
@@ -2223,6 +2235,7 @@ impl eframe::App for Tessel {
             self.finder.close();
         }
         let confirmation_open = self.finder.is_open()
+            || self.toolbar_menu_open
             || self.pending_close.is_some()
             || self.pending_exit
             || self.file_action.is_some()
@@ -2316,6 +2329,7 @@ impl eframe::App for Tessel {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_exit = true;
         }
+        self.toolbar_menu_open = false;
         egui::TopBottomPanel::top("toolbar")
             .exact_height(40.0)
             .frame(
@@ -2324,85 +2338,118 @@ impl eframe::App for Tessel {
                     .inner_margin(egui::Margin::symmetric(10, 6)),
             )
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.strong("Tessel").on_hover_text("Tessel Rust");
-                    ui.small(env!("TESSEL_BUILD"));
-                    let search_width = (ui.available_width() - 350.0).clamp(80.0, 380.0);
-                    if ui
-                        .add_sized(
-                            [search_width, 26.0],
-                            egui::Button::new(tr("Search panes, run a command")),
-                        )
-                        .on_hover_text("Ctrl+Shift+P")
-                        .clicked()
-                    {
-                        self.command_palette.toggle();
-                    }
-                    if ui.button("+").on_hover_text(tr("Open terminal")).clicked() {
+                use crate::{chrome, icons::Icon};
+                let regions = chrome::regions(ui.max_rect());
+                chrome::brand(ui, regions.brand);
+                if regions.search.width() >= 40.0
+                    && chrome::command_button(ui, regions.search).clicked()
+                {
+                    self.command_palette.toggle();
+                }
+                let mut actions = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(regions.actions)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                let ui = &mut actions;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if chrome::icon_button(ui, Icon::Plus, tr("Open terminal"), false, false).clicked()
+                {
+                    self.new_session(Launch::Shell);
+                }
+                let mut agent = None;
+                let launcher = chrome::icon_button(
+                    ui,
+                    Icon::ChevronDown,
+                    tr("Open a terminal or agent"),
+                    false,
+                    true,
+                );
+                let popup = egui::Popup::menu(&launcher);
+                let shown = popup.show(|ui| {
+                    if ui.button(tr("Open terminal")).clicked() {
                         self.new_session(Launch::Shell);
+                        ui.close();
                     }
-                    let mut agent = None;
-                    ui.menu_button("▾", |ui| {
-                        if ui.button(tr("Open terminal")).clicked() {
-                            self.new_session(Launch::Shell);
+                    if ui.button(tr("Native Codex chat")).clicked() {
+                        self.new_session(Launch::CodexChat);
+                        ui.close();
+                    }
+                    if ui.button(tr("Native Claude chat")).clicked() {
+                        self.new_session(Launch::ClaudeChat);
+                        ui.close();
+                    }
+                    for (name, available) in &self.agents {
+                        if ui
+                            .add_enabled(*available, egui::Button::new(name))
+                            .clicked()
+                        {
+                            agent = Some(name.clone());
                             ui.close();
                         }
-                        if ui.button(tr("Native Codex chat")).clicked() {
-                            self.new_session(Launch::CodexChat);
-                            ui.close();
-                        }
-                        if ui.button(tr("Native Claude chat")).clicked() {
-                            self.new_session(Launch::ClaudeChat);
-                            ui.close();
-                        }
-                        for (name, available) in &self.agents {
-                            if ui
-                                .add_enabled(*available, egui::Button::new(name))
-                                .clicked()
-                            {
-                                agent = Some(name.clone());
-                                ui.close();
-                            }
-                        }
-                    });
-                    if let Some(agent) = agent {
-                        self.new_session(Launch::Agent(agent));
-                    }
-                    ui.separator();
-                    if ui.button(tr("Share")).clicked() {
-                        self.overlay = Some(Overlay::Share);
-                    }
-                    ui.menu_button(tr("Layout"), |ui| {
-                        ui.checkbox(&mut self.state.panels.left_open, tr("Projects"));
-                        ui.checkbox(&mut self.state.panels.right_open, tr("Side panel"));
-                        if ui.button(tr("Arrange panes automatically")).clicked() {
-                            self.tile_sessions(None);
-                            ui.close();
-                        }
-                        for columns in 1..=3 {
-                            if ui
-                                .selectable_value(
-                                    &mut self.state.columns,
-                                    columns,
-                                    format!("{columns} col"),
-                                )
-                                .changed()
-                            {
-                                self.tile_sessions(Some(columns));
-                            }
-                        }
-                    });
-                    if ui.button("⚙").on_hover_text(tr("Settings")).clicked() {
-                        self.overlay = Some(Overlay::Settings);
-                    }
-                    if ui
-                        .button("?")
-                        .on_hover_text(tr("Keyboard shortcuts"))
-                        .clicked()
-                    {
-                        self.open_help();
                     }
                 });
+                self.toolbar_menu_open |= shown.is_some();
+                if let Some(agent) = agent {
+                    self.new_session(Launch::Agent(agent));
+                }
+                ui.separator();
+                if chrome::icon_button(ui, Icon::Share, tr("Share"), self.share.hosting(), false)
+                    .clicked()
+                {
+                    self.overlay = Some(Overlay::Share);
+                }
+                let layout = chrome::icon_button(ui, Icon::Layout, tr("Layout"), false, false);
+                let popup = egui::Popup::menu(&layout);
+                let shown = popup.show(|ui| {
+                    ui.checkbox(&mut self.state.panels.left_open, tr("Projects"));
+                    ui.checkbox(&mut self.state.panels.right_open, tr("Side panel"));
+                    if ui.button(tr("Arrange panes automatically")).clicked() {
+                        self.tile_sessions(None);
+                        ui.close();
+                    }
+                    for columns in 1..=3 {
+                        if ui
+                            .selectable_value(
+                                &mut self.state.columns,
+                                columns,
+                                format!("{columns} col"),
+                            )
+                            .changed()
+                        {
+                            self.tile_sessions(Some(columns));
+                        }
+                    }
+                });
+                self.toolbar_menu_open |= shown.is_some();
+                let left_icon = if self.state.panels.left_open {
+                    Icon::PanelLeftOpen
+                } else {
+                    Icon::PanelLeftClosed
+                };
+                if chrome::icon_button(ui, left_icon, tr("Toggle left sidebar"), false, false)
+                    .clicked()
+                {
+                    self.state.panels.left_open = !self.state.panels.left_open;
+                }
+                let right_icon = if self.state.panels.right_open {
+                    Icon::PanelRightOpen
+                } else {
+                    Icon::PanelRightClosed
+                };
+                if chrome::icon_button(ui, right_icon, tr("Toggle right sidebar"), false, false)
+                    .clicked()
+                {
+                    self.state.panels.right_open = !self.state.panels.right_open;
+                }
+                if chrome::icon_button(ui, Icon::Settings, tr("Settings"), false, false).clicked() {
+                    self.overlay = Some(Overlay::Settings);
+                }
+                if chrome::icon_button(ui, Icon::Help, tr("Keyboard shortcuts"), false, false)
+                    .clicked()
+                {
+                    self.open_help();
+                }
             });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -2432,10 +2479,12 @@ impl eframe::App for Tessel {
                 && self.file_action.is_none()
                 && !self.command_palette.open
                 && self.overlay.is_none()
+                && !self.toolbar_menu_open
                 && !self.finder.is_open(),
         );
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.finder.is_open()
+                || self.toolbar_menu_open
                 || self.command_palette.open
                 || self.overlay.is_some()
                 || self.pending_exit
@@ -2456,6 +2505,7 @@ impl eframe::App for Tessel {
                         && self.file_action.is_none()
                         && !self.command_palette.open
                         && self.overlay.is_none()
+                        && !self.toolbar_menu_open
                         && !self.finder.is_open()
                     {
                         ui.horizontal(|ui| {
