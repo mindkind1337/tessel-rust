@@ -160,9 +160,9 @@ The same Orca/Tessel model-discovery attribution above also covers `src/agent_mo
 
 `src/muse_model_probe.rs` and `src/muse_protocol.rs` adapt Tessel `src/main/museServe.js` and `src/main/agentModelList.js`, following Muse's JSON-RPC session-protocol handshake and model/list query. The same Orca/Tessel MIT attribution above applies.
 
-## ICU4X Unicode collation
+## ICU4X Unicode collation and date formatting
 
-The Cursor model-label comparator uses ICU4X icu_collator 2.4.0 and its compiled Unicode data (https://github.com/unicode-org/icu4x).
+The Cursor model-label comparator and regional date formatter use ICU4X icu_collator, icu_datetime and icu_locale_core 2.4.0 and compiled Unicode data (https://github.com/unicode-org/icu4x).
 
 UNICODE LICENSE V3
 

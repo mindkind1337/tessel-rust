@@ -67,6 +67,7 @@ pub mod pane_menu_model;
 mod pdf;
 mod preview;
 pub mod project_panel;
+mod regional_date;
 mod remote;
 mod remote_panel;
 pub mod scm_changes_panel;

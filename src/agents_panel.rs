@@ -434,12 +434,7 @@ fn model_defaults_ui(
         .filter(|_| models.is_some())
         .and_then(|d| d.lists().get(id));
     let date = entry
-        .and_then(|e| chrono::DateTime::from_timestamp_millis(e.fetched_at as i64))
-        .map(|d| {
-            d.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
+        .and_then(|e| crate::regional_date::local(e.fetched_at, french))
         .unwrap_or_else(|| "—".into());
     let probe = if discovery.is_some_and(|d| d.busy(id)) {
         ProbeState::Busy

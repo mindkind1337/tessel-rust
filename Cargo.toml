@@ -16,6 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 icu_collator = "=2.4.0"
+icu_datetime = { version = "=2.4.0", default-features = false, features = ["compiled_data"] }
+icu_locale_core = "=2.4.0"
 directories = "6"
 tempfile = "3"
 rfd = "0.15"
@@ -46,7 +48,7 @@ reqwest = { version="0.12", default-features=false, features=["blocking","json",
 sha2 = "0.10"
 webbrowser = "1"
 winreg = "0.55"
-windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_System_WindowsProgramming"] }
+windows = { version = "0.62", features = ["Win32_Globalization", "Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_System_WindowsProgramming"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
