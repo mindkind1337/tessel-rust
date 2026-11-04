@@ -10,11 +10,24 @@ The protocol foundation now lives in `crates/host-protocol`; daemon, PTY,
 installation and desktop transport integration are not implemented yet.
 
 Ownership handoff: Halley takes gates 1–7; Hopper returns to desktop UI parity.
-The foundation has seven passing tests on Windows MSVC and Ubuntu 24.04 WSL
-(Rust 1.99.1), plus strict Windows Clippy. It covers bounded framing, fragmented
-reads, malformed messages, negotiation, budget intersection and connection-state
-ordering. It does NOT yet cover stream/chunk messages, structured wire errors,
-cancel/dedup lifetimes across reconnects, property fuzzing or any daemon behavior.
+
+Gate 1 (protocol crate) is complete; the exact wire contract, error table and
+compatibility matrix are in `crates/host-protocol/PROTOCOL.md`. It adds, over
+the foundation: separate client frames (request, acknowledgment) and host frames
+(reply ok/error, stream event, connection error); structured error codes with a
+retryable flag and fixed details that never echo input; the core messages
+(hello, ping, cancel); host-side admission (hello first, increasing identifiers,
+capability by message family, bounded in-flight requests, exactly one reply,
+cancellation); stream sequencing with a per-stream acknowledgment window;
+deduplication keys that survive reconnects for 10 minutes and refuse rather
+than forget when full; canonical base64 chunks (64 KiB) and raw-byte path
+components; a pre-parse nesting limit; and integer-only JSON numbers within
+±(2^53 − 1), a rule the fuzzer motivated (a fraction did not survive a resend).
+Evidence, Ubuntu 24.04 WSL, Rust 1.99.1: 20 tests including seven golden
+fixtures and the matrix row by row, strict Clippy, and a deterministic mutation
+fuzzer (frames, bounded reads, connection rules, streams, chunks/paths,
+deduplication model) run for 1,000,000 iterations in release mode
+(`TESSEL_FUZZ_ITERATIONS`). Not run on Windows for gate 1; no daemon exists yet.
 `cargo test --locked -j 2 -p tessel-host-protocol` runs only this lightweight crate.
 Workspace default-members remains the desktop; existing desktop commands retain
 their scope. The lockfile adds only the local crate, no dependency upgrades.

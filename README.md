@@ -180,8 +180,10 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 ## Validation and remaining migration
 
 The remote-host work is specified in [HOST_PROTOCOL_PLAN.md](HOST_PROTOCOL_PLAN.md).
-Its isolated `tessel-host-protocol` crate currently provides bounded frames and
-capability/budget negotiation, tested on Windows and Linux. It is not yet connected
+Its isolated `tessel-host-protocol` crate provides the version 1 wire contract
+([PROTOCOL.md](crates/host-protocol/PROTOCOL.md)): bounded frames, negotiation,
+structured errors, cancellation, stream acknowledgments and deduplication, with
+golden fixtures and a deterministic fuzzer. It is not yet connected
 to the desktop and does not yet replace remote shells, tmux or the JavaScript helper.
 
 Current Windows evidence: the integrated binary suite passes 237 tests (three fixture/reference tests ignored), and the standalone model-selector suite passes 15 tests, including the Changes panel and real nested-repository status fixtures. The per-pane model planning suite passes 17 tests, including 197 source reference vectors and opaque launch-identity/observer boundary checks; the runtime picker now saves per-pane launch choices, while live model changes remain pending. The per-pane picker UI suite passes 18 tests covering English/French, Unicode, disabled controls, viewport bounds, arrow navigation and held-Escape focus restoration. Native French captures were checked at normal and compact sizes. Strict Clippy passes. Earlier acceptance evidence: formatting passes, native UI screenshot inspected, all three real WebView2 download cases pass, and real Codex initialization passes. Real loopback TLS host/guest tests and Windows DPAPI round-trip/tamper tests pass. Native WebView2 password-fill acceptance passes with a synthetic HTTPS origin, mismatched-origin refusal, ambiguous-form refusal and no form submission. Framed SFTP fixture tests cover listing, original reads, root escape refusal, atomic saves and edit conflicts. No live SSH server or paid inference turn has been used for acceptance testing.
