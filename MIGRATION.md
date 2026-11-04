@@ -512,3 +512,19 @@ Validation: 6 `browser_clip` tests pass, including 1px region boundaries,
 full-window `NULLREGION` occlusion, cache-hit proof, 200-iteration GDI handle
 leak check, and isolated real WebView2 child-container `ChildWindowFromPointEx`
 hit-testing, with strict all-target/all-feature Clippy and formatting clean.
+
+Complete Status Bar integration: `status_metrics` and `status_strip` implement
+the full `StatusBar.vue` / `PortRow.vue` / `RemoteHostsStatus.vue` contract on
+Windows without spawning external telemetry subprocesses. `KeepAwakeController`
+applies `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` for `On`
+and active `Agents` modes and resets on `Drop`. A single bounded background
+worker samples Win32 Toolhelp32 + `K32GetProcessMemoryInfo` + `GetProcessTimes`
+process trees (claiming PTY session subtrees before `tessel-rust.exe` to prevent
+double-counting, with creation-time PID-reuse guards and 60-sample workspace/app
+sparklines) and `iphlpapi` `GetExtendedTcpTable` IPv4/IPv6 TCP listeners (32-hop
+ancestor walk + workspace path-boundary attribution, dual-stack deduplication,
+embedded-Browser navigation, address copy, and re-scanned creation-time-verified
+`TerminateProcess` stop). Popovers (`256px` Keep Awake, `416px` Resource
+Manager, `384px` Ports, `288px` Remote Hosts, `204px` right-click visibility
+menu) block underlying central/floating/WebView2 surfaces while open, and
+`StatusBarPreferences` persist across restarts and portable backups.

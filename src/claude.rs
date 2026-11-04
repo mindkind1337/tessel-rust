@@ -148,6 +148,15 @@ impl Chat {
     pub fn busy(&self) -> bool {
         self.transport.is_some() || self.active || self.initializing.is_some()
     }
+    pub fn waiting_for_user(&self) -> bool {
+        !self.approvals.is_empty() || self.questions.is_some()
+    }
+    pub fn working(&self) -> bool {
+        !self.waiting_for_user() && (self.active || self.initializing.is_some())
+    }
+    pub fn process_id(&self) -> Option<u32> {
+        self.transport.as_ref().map(|t| t.child_id())
+    }
     fn push(&mut self, role: &str, text: &str) {
         self.transcript.push_back((role.into(), bounded(text)));
         while self.transcript.len() > 500

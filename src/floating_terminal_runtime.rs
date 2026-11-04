@@ -438,6 +438,11 @@ impl<T: Process> Controller<T> {
         self.process.as_mut()
     }
 
+    /// Read-only view of the program while it is ready.
+    pub fn process_ref(&self) -> Option<&T> {
+        self.process.as_ref()
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }

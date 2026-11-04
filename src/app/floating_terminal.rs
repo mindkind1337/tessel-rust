@@ -93,6 +93,9 @@ impl State {
     pub fn busy(&self) -> bool {
         self.runtime.phase() != Phase::Closed
     }
+    pub fn process_id(&self) -> Option<u32> {
+        self.runtime.process_ref().and_then(Terminal::process_id)
+    }
     #[cfg(feature = "visual-test")]
     pub fn capture_ready(&self) -> bool {
         self.runtime.phase() == Phase::Ready || self.runtime.error().is_some()
@@ -329,7 +332,8 @@ impl Tessel {
             || self.pending_close.is_some()
             || self.file_action.is_some()
             || self.restore_preview.is_some()
-            || self.toolbar_menu_open;
+            || self.toolbar_menu_open
+            || self.status_bar.has_open_popover();
         let phase = self.floating.runtime.phase();
         let error = self.floating.runtime.error().map(str::to_owned);
         let focus_id = egui::Id::new("floating-terminal-content");

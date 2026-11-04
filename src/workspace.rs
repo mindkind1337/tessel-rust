@@ -30,6 +30,66 @@ pub struct Panels {
     pub right_tab: SideTab,
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepAwakeSetting {
+    #[default]
+    Off,
+    #[serde(alias = "agent")]
+    Agents,
+    On,
+}
+
+impl KeepAwakeSetting {
+    #[must_use]
+    pub const fn into_mode(self) -> crate::sidebar_model::KeepAwakeMode {
+        match self {
+            Self::Off => crate::sidebar_model::KeepAwakeMode::Off,
+            Self::Agents => crate::sidebar_model::KeepAwakeMode::Agents,
+            Self::On => crate::sidebar_model::KeepAwakeMode::On,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_mode(mode: crate::sidebar_model::KeepAwakeMode) -> Self {
+        match mode {
+            crate::sidebar_model::KeepAwakeMode::Off => Self::Off,
+            crate::sidebar_model::KeepAwakeMode::Agents => Self::Agents,
+            crate::sidebar_model::KeepAwakeMode::On => Self::On,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct StatusBarPreferences {
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    pub keep_awake: KeepAwakeSetting,
+    #[serde(default = "default_true")]
+    pub show_ssh: bool,
+    #[serde(default = "default_true")]
+    pub show_resources: bool,
+    #[serde(default = "default_true")]
+    pub show_ports: bool,
+}
+
+impl Default for StatusBarPreferences {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            keep_awake: KeepAwakeSetting::Off,
+            show_ssh: true,
+            show_resources: true,
+            show_ports: true,
+        }
+    }
+}
+
 /// Floating-terminal preferences are separate from the project pane tree.
 /// They contain no terminal output, process authority or remote credentials.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -158,6 +218,7 @@ pub struct Workspace {
     pub columns: usize,
     pub broadcast: bool,
     pub panels: Panels,
+    pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
@@ -185,6 +246,7 @@ impl Default for Workspace {
             columns: 1,
             broadcast: false,
             panels: Default::default(),
+            status_bar: Default::default(),
             floating: Default::default(),
             terminal_layouts: Default::default(),
             font_size: 15.0,

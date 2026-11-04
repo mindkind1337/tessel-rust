@@ -93,6 +93,9 @@ impl LocalPty {
     pub fn try_output(&self) -> Option<Vec<u8>> {
         self.output.try_recv().ok()
     }
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.process_id()
+    }
     pub fn exit_status(&mut self) -> Option<ExitStatus> {
         self.child.try_wait().ok().flatten()
     }

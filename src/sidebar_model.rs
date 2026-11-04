@@ -1527,7 +1527,7 @@ pub struct AwakeCopy {
 #[must_use]
 pub fn awake_copy(mode: KeepAwakeMode, active: bool, lang: SidebarLang) -> AwakeCopy {
     let (label, hint) = match (mode, lang) {
-        (KeepAwakeMode::On, SidebarLang::En) => ("On", "Keep this computer awake at all times"),
+        (KeepAwakeMode::On, SidebarLang::En) => ("On", "Keep this computer awake continuously"),
         (KeepAwakeMode::On, SidebarLang::Fr) => {
             ("Activé", "Maintenir cet ordinateur éveillé en permanence")
         }

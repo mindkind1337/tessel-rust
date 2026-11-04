@@ -40,10 +40,35 @@ pub enum Icon {
     Appearance,
     Account,
     Cable,
+    Coffee,
+    MemoryStick,
+    Plug,
+    LoaderCircle,
+    Server,
+    ServerOff,
+    MonitorSmartphone,
+    Activity,
+    ChevronRight,
+    FolderOpen,
+    RefreshCw,
+    Copy,
+    ExternalLink,
+    Trash2,
+    Check,
+    ScreenShare,
+    SlidersHorizontal,
+    Bell,
+    FolderPlus,
+    ChevronsDownUp,
+    Maximize2,
+    Minimize2,
+    Pencil,
+    ShieldCheck,
+    UserX,
 }
 
 impl Icon {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 49] = [
         Self::Search,
         Self::Plus,
         Self::ChevronDown,
@@ -68,6 +93,31 @@ impl Icon {
         Self::Appearance,
         Self::Account,
         Self::Cable,
+        Self::Coffee,
+        Self::MemoryStick,
+        Self::Plug,
+        Self::LoaderCircle,
+        Self::Server,
+        Self::ServerOff,
+        Self::MonitorSmartphone,
+        Self::Activity,
+        Self::ChevronRight,
+        Self::FolderOpen,
+        Self::RefreshCw,
+        Self::Copy,
+        Self::ExternalLink,
+        Self::Trash2,
+        Self::Check,
+        Self::ScreenShare,
+        Self::SlidersHorizontal,
+        Self::Bell,
+        Self::FolderPlus,
+        Self::ChevronsDownUp,
+        Self::Maximize2,
+        Self::Minimize2,
+        Self::Pencil,
+        Self::ShieldCheck,
+        Self::UserX,
     ];
 }
 
@@ -367,7 +417,286 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             );
             paint_svg_path(painter, vp, "m7 11 2-2-2-2M11 13h4", stroke, true);
         }
+        Icon::Coffee
+        | Icon::MemoryStick
+        | Icon::Plug
+        | Icon::LoaderCircle
+        | Icon::Server
+        | Icon::ServerOff
+        | Icon::MonitorSmartphone
+        | Icon::Activity
+        | Icon::ChevronRight
+        | Icon::FolderOpen
+        | Icon::RefreshCw
+        | Icon::Copy
+        | Icon::ExternalLink
+        | Icon::Trash2
+        | Icon::Check
+        | Icon::ScreenShare
+        | Icon::SlidersHorizontal
+        | Icon::Bell
+        | Icon::FolderPlus
+        | Icon::ChevronsDownUp
+        | Icon::Maximize2
+        | Icon::Minimize2
+        | Icon::Pencil
+        | Icon::ShieldCheck
+        | Icon::UserX => {
+            let Some(vp) = Viewport::new(rect, 24.0_f32) else {
+                return;
+            };
+            let stroke = Stroke::new(vp.len(2.0_f32), color);
+            match icon {
+                Icon::Coffee => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M6 2.5v2M10 2.5v2M14 2.5v2M17 8h1a3.5 3.5 0 0 1 0 7h-1M3 8h14v8.5a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::MemoryStick => {
+                    painter.rect_stroke(
+                        vp.rect_xywh(2.5_f32, 6.0_f32, 19.0_f32, 10.0_f32),
+                        vp.len(2.0_f32),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M8 12v-2M12 12v-2M16 12v-2M6 18v-2M10 18v-2M14 18v-2M18 18v-2",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Plug => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M12 21.5v-4.5M9 8V2.5M15 8V2.5M7 8h10v5a4 4 0 0 1-4 4h-2a4 4 0 0 1-4-4Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::LoaderCircle => {
+                    paint_svg_path(painter, vp, "M21 12a9 9 0 1 1-6.22-8.56", stroke, true);
+                }
+                Icon::Server => {
+                    painter.rect_stroke(
+                        vp.rect_xywh(2.5_f32, 2.5_f32, 19.0_f32, 7.5_f32),
+                        vp.len(2.0_f32),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    painter.rect_stroke(
+                        vp.rect_xywh(2.5_f32, 14.0_f32, 19.0_f32, 7.5_f32),
+                        vp.len(2.0_f32),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    painter.circle_filled(vp.pt(6.5_f32, 6.25_f32), vp.len(1.0_f32), color);
+                    painter.circle_filled(vp.pt(6.5_f32, 17.75_f32), vp.len(1.0_f32), color);
+                }
+                Icon::ServerOff => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M7 2.5h12.5a2 2 0 0 1 2 2v3.5a2 2 0 0 1-2 2H15M21.5 17v-1a2 2 0 0 0-2-2h-1M4.5 14a2 2 0 0 0-2 2v3.5a2 2 0 0 0 2 2h15M2.5 2.5l19 19",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::MonitorSmartphone => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M18 8V6a2 2 0 0 0-2-2H4.5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h7.5M10 19v-3.5M7 19h5",
+                        stroke,
+                        true,
+                    );
+                    painter.rect_stroke(
+                        vp.rect_xywh(15.5_f32, 11.5_f32, 6.0_f32, 9.5_f32),
+                        vp.len(1.5_f32),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                }
+                Icon::Activity => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M21.5 12h-2.4a2 2 0 0 0-1.9 1.45l-2.3 7.8-4.4-18.5-2.3 7.8A2 2 0 0 1 6.3 12H2.5",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::ChevronRight => {
+                    paint_svg_path(painter, vp, "M9 18l6-6-6-6", stroke, true);
+                }
+                Icon::FolderOpen => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M3 19V5.5a2 2 0 0 1 2-2h3.8l2 2.5H18a2 2 0 0 1 2 2v2M3 19l2-8h16l-2 8Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::RefreshCw => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M3.5 12a8.5 8.5 0 0 1 14.5-6L20.5 8.5M20.5 3.5v5h-5M20.5 12a8.5 8.5 0 0 1-14.5 6L3.5 15.5M3.5 20.5v-5h5",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Copy => {
+                    painter.rect_stroke(
+                        vp.rect_xywh(8.5_f32, 8.5_f32, 13.0_f32, 13.0_f32),
+                        vp.len(2.0_f32),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M4.5 15.5h-1a1 1 0 0 1-1-1V4a1.5 1.5 0 0 1 1.5-1.5h10A1.5 1.5 0 0 1 15.5 4v1",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::ExternalLink => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Trash2 => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M3.5 6h17M8 6V4a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 16 4v2M18.5 6v13.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V6M10 11v6M14 11v6",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Check => {
+                    paint_svg_path(painter, vp, "M20 6 9 17l-5-5", stroke, true);
+                }
+                Icon::ScreenShare => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M13 3.5H4.5a2 2 0 0 0-2 2v9.5a2 2 0 0 0 2 2h15a2 2 0 0 0 2-2v-3M8 21h8M12 17v4M16.5 8.5l5-5M16.5 3.5h5v5",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::SlidersHorizontal => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M10 5H3M21 5h-7M14 3v4M8 12H3M21 12h-9M8 10v4M12 19H3M21 19h-5M16 17v4",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Bell => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M10.3 20.5a2 2 0 0 0 3.4 0M3.5 15.5A1 1 0 0 0 4.2 17h15.6a1 1 0 0 0 .7-1.5C19.2 14 18 12.5 18 8.5a6 6 0 0 0-12 0c0 4-1.2 5.5-2.5 7Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::FolderPlus => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M12 10.5v5M9.5 13h5M3 19.5V5.5a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2v11.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::ChevronsDownUp => {
+                    paint_svg_path(painter, vp, "M7 20l5-5 5 5M7 4l5 5 5-5", stroke, true);
+                }
+                Icon::Maximize2 => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M15 3h6v6M21 3l-7 7M3 21l7-7M9 21H3v-6",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Minimize2 => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M14 10l7-7M20 10h-6V4M3 21l7-7M4 14h6v6",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Pencil => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M20.5 7a2.1 2.1 0 0 0-3-3L4.5 17l-1.5 4 4-1.5ZM15 5.5l3.5 3.5",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::ShieldCheck => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M20 13c0 4.8-3.4 7.2-7.7 8.5-.2.1-.4.1-.6 0C7.4 20.2 4 17.8 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.1 6.2-2.5a1.2 1.2 0 0 1 1.6 0C14.5 3.9 17 5 19 5a1 1 0 0 1 1 1ZM9 12l2 2 4-4",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::UserX => {
+                    painter.circle_stroke(vp.pt(9.0_f32, 7.0_f32), vp.len(3.8_f32), stroke);
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M15.5 21v-2a4 4 0 0 0-4-4h-5a4 4 0 0 0-4 4v2M17 8.5l4.5 4.5M21.5 8.5L17 13",
+                        stroke,
+                        true,
+                    );
+                }
+                _ => {}
+            }
+        }
     }
+}
+
+/// Paints a smoothly rotating `LoaderCircle` arc (`angle_rad` in radians).
+pub fn paint_spinner(painter: &Painter, rect: Rect, color: Color32, angle_rad: f32) {
+    let Some(vp) = Viewport::new(rect, 24.0_f32) else {
+        return;
+    };
+    let stroke = Stroke::new(vp.len(2.0_f32), color);
+    let r = vp.len(9.0_f32);
+    let center = vp.pt(12.0_f32, 12.0_f32);
+    let sweep = std::f32::consts::TAU * 0.72_f32;
+    let steps = 18usize;
+    let mut pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let a = angle_rad + sweep * (i as f32 / steps as f32);
+        let (s, c) = a.sin_cos();
+        pts.push(Pos2::new(center.x + r * c, center.y + r * s));
+    }
+    painter.add(Shape::Path(egui::epaint::PathShape::line(pts, stroke)));
 }
 
 // --- Pure-Rust SVG path (`M/L/H/V/C/S/A/Z`) parser & tessellator --------------------

@@ -42,6 +42,13 @@ impl Backend {
             Self::Native(_) => None,
         }
     }
+    pub fn process_id(&self) -> Option<u32> {
+        match self {
+            Self::Local(local) => local.process_id(),
+            #[cfg(windows)]
+            Self::Native(_) => None,
+        }
+    }
     pub fn exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
         match self {
             Self::Local(local) => local.exit_status(),

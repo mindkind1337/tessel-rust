@@ -748,6 +748,15 @@ impl Chat {
             _ => {}
         }
     }
+    pub fn waiting_for_user(&self) -> bool {
+        !self.approvals.is_empty() || !self.questions.is_empty()
+    }
+    pub fn working(&self) -> bool {
+        !self.waiting_for_user() && (self.turn.is_some() || self.starting_turn)
+    }
+    pub fn process_id(&self) -> Option<u32> {
+        self.rpc.as_ref().map(|r| r.child.id())
+    }
     pub fn poll(&mut self) {
         for _ in 0..128 {
             let event = self.rpc.as_ref().and_then(|r| r.reader.try_recv().ok());

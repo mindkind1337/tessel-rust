@@ -44,6 +44,7 @@ pub struct Browser {
     clip: crate::browser_clip::NativeClip,
     viewport: Option<(egui::Rect, f32)>,
     webview_had_focus: bool,
+    auto_start_pending: bool,
 }
 
 impl Default for Browser {
@@ -71,6 +72,7 @@ impl Default for Browser {
             clip: Default::default(),
             viewport: None,
             webview_had_focus: false,
+            auto_start_pending: false,
         }
     }
 }
@@ -382,8 +384,22 @@ impl Browser {
             }
         }
     }
+    pub fn open_url(&mut self, url: &str) {
+        self.address = url.to_owned();
+        if self.view.is_some() {
+            self.navigate();
+        } else {
+            self.auto_start_pending = true;
+        }
+    }
     pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         self.poll();
+        if self.view.is_none() && self.auto_start_pending {
+            self.auto_start_pending = false;
+            if let Err(e) = self.create(frame) {
+                self.error = e;
+            }
+        }
         if self.view.is_none() {
             ui.label(tr("Private browser profile for this Rust app. No cookies or passwords are imported from Tessel."));
             if ui.button(tr("Start browser")).clicked()

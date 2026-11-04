@@ -439,6 +439,9 @@ pub struct Tessel {
     claude_chats: Vec<crate::claude::Chat>,
     share: crate::share_panel::SharePanel,
     remote: crate::remote_panel::RemotePanel,
+    status_bar: crate::status_strip::StatusBarState,
+    status_telemetry: crate::status_metrics::StatusTelemetry,
+    keep_awake: crate::status_metrics::KeepAwakeController,
     #[cfg(windows)]
     browser: crate::browser::Browser,
     #[cfg(windows)]
@@ -549,6 +552,12 @@ impl Tessel {
             claude_chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
             remote: crate::remote_panel::RemotePanel::default(),
+            status_bar: Default::default(),
+            status_telemetry: crate::status_metrics::StatusTelemetry::spawn({
+                let ctx = cc.egui_ctx.clone();
+                move || ctx.request_repaint()
+            }),
+            keep_awake: Default::default(),
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
             #[cfg(windows)]
@@ -3344,7 +3353,7 @@ impl Tessel {
                 terminal_font_size: self.state.font_size,
             },
         );
-        let changed = match action {
+        let mut changed = match action {
             Some(AppearanceAction::Theme(theme)) if self.state.theme != Some(theme) => {
                 self.state.theme = Some(theme);
                 crate::theme::apply(ui.ctx(), self.state.dark, self.state.theme);
@@ -3369,8 +3378,434 @@ impl Tessel {
             }
             _ => false,
         };
+        ui.add_space(16.0);
+        let spec = crate::theme::active(ui.ctx()).spec();
+        egui::Frame::new()
+            .fill(spec.ui.surface)
+            .stroke(egui::Stroke::new(1.0_f32, spec.ui.border))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(680.0));
+                if ui
+                    .checkbox(&mut self.state.status_bar.visible, tr("Show status bar"))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.add_space(2.0);
+                ui.small(tr("Show or hide the bottom status bar."));
+            });
         if changed {
             self.save();
+        }
+    }
+
+    fn render_status_bar(&mut self, ctx: &egui::Context) {
+        use crate::native_host_manager::Failure;
+        use crate::sidebar_model::TerminalMeta;
+        use crate::status_metrics::{
+            TelemetryRequest, TerminalPidProbe, WorkspacePortProbe, should_keep_awake,
+        };
+        use crate::status_strip::{
+            RemoteHostRowInput, RemoteHostStatusKind, StatusBarAction, StatusBarInput,
+            StatusBarItemId, Target,
+        };
+        use tessel_host_client::ConnectionState;
+
+        let french = self.state.language == crate::i18n::Language::French;
+        let mut any_agent_working = false;
+        let mut active_pane_count = 0usize;
+        let mut active_working_count = 0usize;
+        let mut active_waiting_count = 0usize;
+
+        for s in &self.sessions {
+            let is_agent = matches!(
+                s.launch,
+                Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+            );
+            let is_working = match &s.launch {
+                Launch::CodexChat => self.chats.iter().any(|c| c.pane == s.id && c.working()),
+                Launch::ClaudeChat => self
+                    .claude_chats
+                    .iter()
+                    .any(|c| c.pane == s.id && c.working()),
+                Launch::Agent(_) => {
+                    s.loading.is_some()
+                        || s.restarting.is_some()
+                        || s.terminal.as_ref().is_some_and(|t| {
+                            !t.exited() && t.active_within(Duration::from_millis(2500))
+                        })
+                }
+                _ => false,
+            };
+            let is_waiting = match &s.launch {
+                Launch::CodexChat => self
+                    .chats
+                    .iter()
+                    .any(|c| c.pane == s.id && c.waiting_for_user()),
+                Launch::ClaudeChat => self
+                    .claude_chats
+                    .iter()
+                    .any(|c| c.pane == s.id && c.waiting_for_user()),
+                _ => false,
+            };
+            if is_agent && is_working {
+                any_agent_working = true;
+            }
+            if s.project == self.state.active_project {
+                active_pane_count += 1;
+                if is_working {
+                    active_working_count += 1;
+                }
+                if is_waiting {
+                    active_waiting_count += 1;
+                }
+            }
+        }
+
+        let keep_awake_mode = self.state.status_bar.keep_awake.into_mode();
+        let keep_awake_active = self
+            .keep_awake
+            .sync(should_keep_awake(keep_awake_mode, any_agent_working));
+
+        if !self.state.status_bar.visible {
+            self.status_bar.close_popovers();
+            return;
+        }
+
+        let ws_meta =
+            |project_id: Option<u64>, projects: &[workspace::Project]| -> (String, String) {
+                if let Some(pid) = project_id
+                    && let Some(p) = projects.iter().find(|p| p.id == pid)
+                {
+                    return (format!("project:{pid}"), p.name.clone());
+                }
+                (
+                    "__scratch__".to_owned(),
+                    if french {
+                        "Terminaux".to_owned()
+                    } else {
+                        "Terminals".to_owned()
+                    },
+                )
+            };
+
+        let mut terminals = Vec::with_capacity(self.sessions.len() + 1);
+        let mut bound_terminals = std::collections::HashSet::with_capacity(self.sessions.len() + 1);
+        let mut pid_probes = Vec::with_capacity(self.sessions.len() + 1);
+
+        for s in &self.sessions {
+            let (ws_key, ws_name) = ws_meta(s.project, &self.state.projects);
+            let pid = match &s.launch {
+                Launch::CodexChat => self
+                    .chats
+                    .iter()
+                    .find(|c| c.pane == s.id)
+                    .and_then(crate::chat::Chat::process_id),
+                Launch::ClaudeChat => self
+                    .claude_chats
+                    .iter()
+                    .find(|c| c.pane == s.id)
+                    .and_then(crate::claude::Chat::process_id),
+                _ => s
+                    .terminal
+                    .as_ref()
+                    .and_then(|t| (!t.exited()).then(|| t.process_id()).flatten()),
+            };
+            let sid = s.id.to_string();
+            if s.project == self.state.active_project {
+                bound_terminals.insert(sid.clone());
+            }
+            let is_agent = matches!(
+                s.launch,
+                Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+            );
+            terminals.push(TerminalMeta {
+                id: sid.clone(),
+                workspace_id: ws_key.clone(),
+                workspace_name: ws_name,
+                name: s.label().to_owned(),
+                is_agent,
+            });
+            pid_probes.push(TerminalPidProbe {
+                id: sid,
+                workspace_key: ws_key,
+                pid,
+            });
+        }
+
+        if let Some(fpid) = self.floating.process_id() {
+            let (f_key, f_name) = ws_meta(self.state.active_project, &self.state.projects);
+            bound_terminals.insert("floating".to_owned());
+            terminals.push(TerminalMeta {
+                id: "floating".to_owned(),
+                workspace_id: f_key.clone(),
+                workspace_name: f_name,
+                name: if french {
+                    "Terminal flottant".to_owned()
+                } else {
+                    "Floating Terminal".to_owned()
+                },
+                is_agent: false,
+            });
+            pid_probes.push(TerminalPidProbe {
+                id: "floating".to_owned(),
+                workspace_key: f_key,
+                pid: Some(fpid),
+            });
+        }
+
+        let ws_probes: Vec<WorkspacePortProbe> = self
+            .state
+            .projects
+            .iter()
+            .map(|p| {
+                let key = format!("project:{}", p.id);
+                let pids = pid_probes
+                    .iter()
+                    .filter(|tp| tp.workspace_key == key)
+                    .filter_map(|tp| tp.pid)
+                    .collect();
+                WorkspacePortProbe {
+                    key,
+                    name: p.name.clone(),
+                    path: p.path.clone(),
+                    pids,
+                }
+            })
+            .collect();
+
+        let (window_focused, window_minimized) =
+            ctx.input(|i| (i.focused, i.viewport().minimized.unwrap_or(false)));
+        let telemetry = self.status_telemetry.sync_and_read(&TelemetryRequest {
+            window_focused,
+            window_minimized,
+            show_resources: self.state.status_bar.show_resources,
+            resources_popover_open: self.status_bar.is_resources_open(),
+            show_ports: self.state.status_bar.show_ports,
+            ports_popover_open: self.status_bar.is_ports_open(),
+            terminals: pid_probes,
+            workspaces: ws_probes,
+        });
+
+        let mut seen_aliases = std::collections::HashSet::new();
+        let mut remote_hosts = Vec::with_capacity(self.state.hosts.len());
+        let mut push_alias = |alias: &str| {
+            if alias.is_empty() || !seen_aliases.insert(alias.to_owned()) {
+                return;
+            }
+            let status = if self.native_hosts.pending(alias) {
+                RemoteHostStatusKind::Connecting
+            } else if let Some(conn) = self.native_hosts.connection(alias) {
+                match conn.state() {
+                    ConnectionState::Connected { .. } | ConnectionState::Restarted { .. } => {
+                        RemoteHostStatusKind::Connected
+                    }
+                    ConnectionState::Reconnecting { .. } => RemoteHostStatusKind::Reconnecting,
+                    ConnectionState::Closed => RemoteHostStatusKind::Disconnected,
+                }
+            } else {
+                match self.native_hosts.failure(alias) {
+                    None | Some(Failure::Cancelled) => RemoteHostStatusKind::Disconnected,
+                    Some(Failure::Connect) => RemoteHostStatusKind::AuthFailed,
+                    Some(_) => RemoteHostStatusKind::Error,
+                }
+            };
+            remote_hosts.push(RemoteHostRowInput {
+                alias: alias.to_owned(),
+                label: alias.to_owned(),
+                status,
+            });
+        };
+        for h in &self.state.hosts {
+            push_alias(&h.alias);
+        }
+        let extra_aliases: Vec<String> = self.native_hosts.aliases().map(str::to_owned).collect();
+        for alias in &extra_aliases {
+            push_alias(alias);
+        }
+
+        let target_label = if self.view == View::Work {
+            self.sessions
+                .iter()
+                .find(|s| {
+                    Some(s.id) == self.active_session && s.project == self.state.active_project
+                })
+                .map_or("", Session::label)
+        } else {
+            ""
+        };
+        let target = if self.state.broadcast {
+            Target::Broadcast(
+                self.sessions
+                    .iter()
+                    .filter(|s| {
+                        s.project == self.state.active_project
+                            && s.broadcast
+                            && s.launch.native_chat().is_none()
+                    })
+                    .count(),
+            )
+        } else if target_label.is_empty() {
+            Target::None
+        } else {
+            Target::Input(target_label)
+        };
+        let project_path = self
+            .state
+            .active()
+            .map(|p| p.path.display().to_string())
+            .unwrap_or_default();
+        let spec = crate::theme::active(ctx).spec();
+        let error_banner = if !self.error.is_empty() {
+            self.error.clone()
+        } else {
+            telemetry.last_stop_feedback.clone().unwrap_or_default()
+        };
+
+        let mut bar_action = None;
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(24.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::chrome(ctx))
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show(ctx, |ui| {
+                let room = ui.available_rect_before_wrap();
+                ui.painter().hline(
+                    egui::Rangef::new(room.left() - 12.0, room.right() + 12.0),
+                    room.top(),
+                    ui.visuals().window_stroke,
+                );
+                bar_action = crate::status_strip::show_full(
+                    ui,
+                    &mut self.status_bar,
+                    &StatusBarInput {
+                        ui_colors: &spec.ui,
+                        french,
+                        target,
+                        pane_count: active_pane_count,
+                        working_count: active_working_count,
+                        waiting_count: active_waiting_count,
+                        project_path: &project_path,
+                        keep_awake_mode,
+                        keep_awake_active,
+                        show_ssh: self.state.status_bar.show_ssh,
+                        show_resources: self.state.status_bar.show_resources,
+                        show_ports: self.state.status_bar.show_ports,
+                        terminals: &terminals,
+                        bound_terminals: &bound_terminals,
+                        telemetry: &telemetry,
+                        remote_hosts: &remote_hosts,
+                        agent_updating: &[],
+                        error_banner: &error_banner,
+                        persistence_unavailable: self.store.is_none(),
+                    },
+                );
+            });
+
+        if let Some(act) = bar_action {
+            match act {
+                StatusBarAction::SetKeepAwake(mode) => {
+                    self.state.status_bar.keep_awake = workspace::KeepAwakeSetting::from_mode(mode);
+                    self.save();
+                }
+                StatusBarAction::ToggleItem(item) => {
+                    match item {
+                        StatusBarItemId::Ssh => {
+                            self.state.status_bar.show_ssh = !self.state.status_bar.show_ssh;
+                        }
+                        StatusBarItemId::Resources => {
+                            self.state.status_bar.show_resources =
+                                !self.state.status_bar.show_resources;
+                        }
+                        StatusBarItemId::Ports => {
+                            self.state.status_bar.show_ports = !self.state.status_bar.show_ports;
+                        }
+                    }
+                    self.save();
+                }
+                StatusBarAction::FocusSession(sid) => {
+                    if sid == "floating" {
+                        if !self.floating.ui.is_open() {
+                            self.toggle_floating(ctx);
+                        }
+                    } else if let Ok(id) = sid.parse::<u64>()
+                        && let Some(proj) =
+                            self.sessions.iter().find(|s| s.id == id).map(|s| s.project)
+                    {
+                        if proj != self.state.active_project {
+                            self.state.active_project = proj;
+                            self.refresh_project();
+                        }
+                        self.active_session = Some(id);
+                        self.view = View::Work;
+                        self.save();
+                    }
+                }
+                StatusBarAction::ActivateWorkspace(ws_key) => {
+                    if let Some(raw_id) = ws_key.strip_prefix("project:")
+                        && let Ok(pid) = raw_id.parse::<u64>()
+                        && self.state.projects.iter().any(|p| p.id == pid)
+                        && self.state.active_project != Some(pid)
+                    {
+                        self.state.active_project = Some(pid);
+                        self.refresh_project();
+                        self.save();
+                    }
+                }
+                StatusBarAction::OpenPortInBrowser { url, .. } => {
+                    #[cfg(windows)]
+                    {
+                        self.browser.open_url(&url);
+                        self.show_agent_browser = false;
+                        self.view = View::Browser;
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let _ = url;
+                    }
+                }
+                StatusBarAction::CopyPortAddress { address, .. } => {
+                    ctx.copy_text(address);
+                }
+                StatusBarAction::StopPort(port) => {
+                    self.status_telemetry.request_stop_port(port);
+                }
+                StatusBarAction::RefreshPorts => {
+                    self.status_telemetry.refresh_ports_now();
+                }
+                StatusBarAction::ConnectRemoteHost(alias) => {
+                    if self.native_hosts.failure(&alias).is_some()
+                        || self
+                            .native_hosts
+                            .connection(&alias)
+                            .is_some_and(|c| matches!(c.state(), ConnectionState::Closed))
+                    {
+                        self.native_hosts.cancel(&alias);
+                    }
+                    if let Err(err) = self.native_hosts.start(&alias) {
+                        self.host_notice = Some((format!("{err:?}"), true));
+                    }
+                }
+                StatusBarAction::DisconnectRemoteHost(alias) => {
+                    self.native_hosts.cancel(&alias);
+                }
+                StatusBarAction::ManageRemoteHosts => {
+                    self.overlay = Some(Overlay::Settings);
+                    self.settings_section = SettingsSection::Hosts;
+                }
+                StatusBarAction::OpenAgentUpdates => {
+                    self.overlay = Some(Overlay::Settings);
+                    self.settings_section = SettingsSection::Agents;
+                }
+                StatusBarAction::DismissError => {
+                    self.error.clear();
+                    self.status_telemetry.clear_stop_feedback();
+                }
+            }
         }
     }
     fn host_settings(&mut self, ui: &mut egui::Ui) {
@@ -4612,10 +5047,20 @@ impl eframe::App for Tessel {
                 session.model_picker.close();
             }
         }
+        if self.overlay.is_some() || self.command_palette.open || confirmation_open {
+            self.status_bar.close_popovers();
+        }
         let picker_escape = self.sessions.iter_mut().fold(false, |consumed, session| {
             session.model_picker.handle_escape(ctx) | consumed
         });
+        let status_bar_escape = self.status_bar.has_open_popover()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if status_bar_escape {
+            self.status_bar.close_popovers();
+        }
         let keyboard_free = !picker_escape
+            && !status_bar_escape
+            && !self.status_bar.has_open_popover()
             && (!ctx.wants_keyboard_input() || terminal_focused)
             && !self.sessions.iter().any(|s| s.model_picker.is_open());
         if !confirmation_open
@@ -4944,93 +5389,7 @@ impl eframe::App for Tessel {
                     crate::layout_broadcast_ui::show_broadcast_banner(ui, &spec.ui, french);
                 });
         }
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(24.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(crate::theme::chrome(ctx))
-                    .inner_margin(egui::Margin::symmetric(12, 0)),
-            )
-            .show(ctx, |ui| {
-                let room = ui.available_rect_before_wrap();
-                ui.painter()
-                    .hline(room.x_range(), room.top(), ui.visuals().window_stroke);
-                if self.store.is_some() && self.error.is_empty() {
-                    let target_label = if self.view == View::Work {
-                        self.sessions
-                            .iter()
-                            .find(|s| {
-                                Some(s.id) == self.active_session
-                                    && s.project == self.state.active_project
-                            })
-                            .map_or("", Session::label)
-                    } else {
-                        ""
-                    };
-                    let count = self
-                        .sessions
-                        .iter()
-                        .filter(|s| s.project == self.state.active_project)
-                        .count();
-                    let path = self
-                        .state
-                        .active()
-                        .map(|p| p.path.display().to_string())
-                        .unwrap_or_default();
-                    let build = egui::Rect::from_min_max(
-                        egui::pos2((room.right() - 120.0).max(room.left()), room.top()),
-                        room.max,
-                    );
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(build), |ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.small(env!("TESSEL_BUILD"))
-                                .on_hover_text(tr("Rust native · development"));
-                        });
-                    });
-                    let left = egui::Rect::from_min_max(
-                        room.min,
-                        egui::pos2((build.left() - 12.0).max(room.left()), room.bottom()),
-                    );
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
-                        crate::status_strip::show(
-                            ui,
-                            if self.state.broadcast {
-                                crate::status_strip::Target::Broadcast(
-                                    self.sessions
-                                        .iter()
-                                        .filter(|s| {
-                                            s.project == self.state.active_project
-                                                && s.broadcast
-                                                && s.launch.native_chat().is_none()
-                                        })
-                                        .count(),
-                                )
-                            } else if target_label.is_empty() {
-                                crate::status_strip::Target::None
-                            } else {
-                                crate::status_strip::Target::Input(target_label)
-                            },
-                            count,
-                            &path,
-                            self.state.language == crate::i18n::Language::French,
-                        );
-                    });
-                    return;
-                }
-                ui.horizontal(|ui| {
-                    ui.small(tr("Rust native · development"));
-                    ui.small(env!("TESSEL_BUILD"));
-                    if self.store.is_none() {
-                        ui.colored_label(egui::Color32::YELLOW, "Persistence unavailable");
-                    }
-                    if !self.error.is_empty() {
-                        ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
-                        if ui.small_button(tr("Dismiss")).clicked() {
-                            self.error.clear();
-                        }
-                    }
-                });
-            });
+        self.render_status_bar(ctx);
         self.sidebar(ctx);
         self.right_panel(ctx);
         #[cfg(windows)]
@@ -5042,6 +5401,7 @@ impl eframe::App for Tessel {
             if self.native_modal_open()
                 || self.finder.is_open()
                 || self.toolbar_menu_open
+                || self.status_bar.has_open_popover()
                 || self.command_palette.open
                 || self.overlay.is_some()
                 || self.pending_exit
@@ -5066,6 +5426,7 @@ impl eframe::App for Tessel {
                         && !self.command_palette.open
                         && self.overlay.is_none()
                         && !self.toolbar_menu_open
+                        && !self.status_bar.has_open_popover()
                         && !self.finder.is_open()
                     {
                         ui.horizontal(|ui| {
@@ -5146,6 +5507,7 @@ impl eframe::App for Tessel {
                 && !self.command_palette.open
                 && self.overlay.is_none()
                 && !self.toolbar_menu_open
+                && !self.status_bar.has_open_popover()
                 && !self.finder.is_open()
                 && !egui::Popup::is_any_open(ctx);
             let reclaim_parent_focus = (!had_floating_keyboard && self.floating.ui.has_keyboard())

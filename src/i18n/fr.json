@@ -400,5 +400,7 @@
   "New native terminal": "Nouveau terminal natif",
   "Existing native terminals": "Terminaux natifs existants",
   "There are unsaved files or sessions. Local sessions end; native remote terminals remain on the host.": "Des fichiers ou des sessions ne sont pas sauvegard\u00e9s. Les sessions locales se terminent; les terminaux natifs distants restent sur l\u2019h\u00f4te.",
-  "Close a pane before opening another terminal": "Fermez un volet avant d\u2019ouvrir un autre terminal"
+  "Close a pane before opening another terminal": "Fermez un volet avant d\u2019ouvrir un autre terminal",
+  "Show status bar": "Afficher la barre d\u2019\u00e9tat",
+  "Show or hide the bottom status bar.": "Afficher ou masquer la barre d\u2019\u00e9tat en bas."
 }

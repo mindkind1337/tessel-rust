@@ -33,6 +33,9 @@ pub(super) struct Transport {
     job: Option<Job>,
 }
 impl Transport {
+    pub fn child_id(&self) -> u32 {
+        self.child.id()
+    }
     pub fn start(
         cwd: &Path,
         session: &str,

@@ -40,6 +40,7 @@ pub struct Terminal {
     model_runtime: crate::pane_model_runtime::Runtime,
     model_screen_present: bool,
     output_revision: u64,
+    last_output_at: Option<std::time::Instant>,
     size: (u16, u16),
     status: String,
     exited: bool,
@@ -122,6 +123,12 @@ impl Terminal {
     }
     pub fn exited(&self) -> bool {
         self.exited
+    }
+    pub fn process_id(&self) -> Option<u32> {
+        (!self.exited).then(|| self.backend.process_id()).flatten()
+    }
+    pub fn active_within(&self, window: std::time::Duration) -> bool {
+        !self.exited && self.last_output_at.is_some_and(|at| at.elapsed() <= window)
     }
     #[cfg(windows)]
     pub fn take_native_action(&mut self) -> Option<crate::host_terminal_panel::HostTerminalAction> {
@@ -496,6 +503,7 @@ impl Terminal {
             model_runtime: crate::pane_model_runtime::Runtime::default(),
             model_screen_present: false,
             output_revision: 0,
+            last_output_at: None,
             size: (30, 100),
             status: String::new(),
             exited: false,
@@ -522,6 +530,7 @@ impl Terminal {
             self.selection = None;
             self.model_dirty = true;
             self.output_revision = self.output_revision.wrapping_add(1);
+            self.last_output_at = Some(std::time::Instant::now());
         }
         if let Some(error) = host_emulator::apply(
             &mut self.parser,
@@ -547,6 +556,7 @@ impl Terminal {
                 }
                 self.model_dirty = true;
                 self.output_revision = self.output_revision.wrapping_add(1);
+                self.last_output_at = Some(std::time::Instant::now());
             }
             self.size = self.parser.screen().size();
             self.exited = native

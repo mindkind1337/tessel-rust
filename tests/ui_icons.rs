@@ -5,7 +5,7 @@ mod icons;
 mod theme_palettes;
 
 use eframe::egui::{self, Color32, LayerId, Order, Pos2, Rect, Shape, Vec2};
-use icons::{Icon, paint, paint_brand};
+use icons::{Icon, paint, paint_brand, paint_spinner};
 use theme_palettes::ThemeId;
 
 fn capture_shapes(draw: impl Fn(&egui::Painter)) -> Vec<Shape> {
@@ -229,4 +229,14 @@ fn brand_logo_paints_exact_six_tiles_and_switches_release_vs_dev_palette() {
 
     let empty = Rect::from_min_size(Pos2::ZERO, Vec2::ZERO);
     assert!(capture_shapes(|p| paint_brand(p, empty, false)).is_empty());
+    assert!(capture_shapes(|p| paint_spinner(p, empty, Color32::WHITE, 0.0_f32)).is_empty());
+
+    let spin_rect = Rect::from_min_size(Pos2::new(8.0_f32, 8.0_f32), Vec2::splat(16.0_f32));
+    let spin_shapes = capture_shapes(|p| paint_spinner(p, spin_rect, Color32::WHITE, 1.2_f32));
+    assert_eq!(spin_shapes.len(), 1);
+    assert!(
+        spin_rect
+            .expand(0.25_f32)
+            .contains_rect(spin_shapes[0].visual_bounding_rect())
+    );
 }
