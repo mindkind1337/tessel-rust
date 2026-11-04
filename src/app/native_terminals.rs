@@ -555,6 +555,7 @@ impl Tessel {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id,
             project: self.state.active_project,
             title: format!("SSH · {alias}"),

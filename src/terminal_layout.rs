@@ -154,6 +154,25 @@ impl TerminalLayout {
         self.rebuild(leaves, &counts);
     }
 
+    pub fn rebuild_ordered(&mut self, ordered_ids: &[u64], row_counts: &[usize]) {
+        let existing: std::collections::HashMap<String, PaneLeaf> =
+            pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+                .into_iter()
+                .map(|leaf| (leaf.id.clone(), leaf.clone()))
+                .collect();
+        let leaves: Vec<PaneLeaf> = ordered_ids
+            .iter()
+            .map(|id| {
+                let key = id.to_string();
+                existing
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| PaneLeaf::new(key, LeafKind::Shell))
+            })
+            .collect();
+        self.rebuild(leaves, row_counts);
+    }
+
     pub fn split(&mut self, target: u64, new: u64, dir: SplitDir) -> bool {
         self.split_with_order(target, new, dir, false)
     }

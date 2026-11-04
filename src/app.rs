@@ -36,6 +36,7 @@ struct Session {
     launch_fingerprint: Option<String>,
     session_options: Option<serde_json::Value>,
     pane_name: Option<String>,
+    broadcast: bool,
     id: u64,
     project: Option<u64>,
     title: String,
@@ -579,6 +580,7 @@ impl Tessel {
                     saved.session_options.clone()
                 },
                 pane_name: saved.pane_name.clone(),
+                broadcast: saved.broadcast,
                 id: saved.id,
                 project: saved.project,
                 title: saved.title.clone(),
@@ -774,6 +776,7 @@ impl Tessel {
                         launch_fingerprint: None,
                         session_options: None,
                         pane_name: None,
+                        broadcast: true,
                         id,
                         project: app.state.active_project,
                         title: "Terminal rendering fixture".into(),
@@ -861,6 +864,7 @@ impl Tessel {
                     launch_fingerprint: None,
                     session_options: None,
                     pane_name: None,
+                    broadcast: true,
                     id,
                     project: app.state.active_project,
                     title: format!("Terminal {id}"),
@@ -942,6 +946,7 @@ impl Tessel {
                     None
                 },
                 pane_name: s.pane_name.clone(),
+                broadcast: s.broadcast,
                 id: s.id,
                 project: s.project,
                 title: s.title.clone(),
@@ -1296,6 +1301,7 @@ impl Tessel {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id,
             project: self.state.active_project,
             title,
@@ -1577,6 +1583,73 @@ impl Tessel {
             }
         })
         .collect();
+        let french = self.state.language == crate::i18n::Language::French;
+        let pane_count = self
+            .sessions
+            .iter()
+            .filter(|s| s.project == self.state.active_project)
+            .count();
+        let has_active_pane = self.active_project_work_pane().is_some();
+        let can_apply_grid = pane_count > 0 || self.sessions.len() < 100;
+        commands.push(
+            PaletteCommand::new(
+                "broadcast",
+                "Tessel",
+                crate::layout_broadcast_ui::broadcast_command_title(french, self.state.broadcast),
+            )
+            .with_shortcut("Ctrl+Shift+B"),
+        );
+        let layout_group = crate::layout_broadcast_ui::layout_toolbar_label(french);
+        if has_active_pane {
+            commands.push(
+                PaletteCommand::new(
+                    "layout:split-right",
+                    layout_group,
+                    crate::layout_broadcast_ui::split_right_label(french),
+                )
+                .with_shortcut("Ctrl+Shift+E"),
+            );
+            commands.push(
+                PaletteCommand::new(
+                    "layout:split-down",
+                    layout_group,
+                    crate::layout_broadcast_ui::split_down_label(french),
+                )
+                .with_shortcut("Ctrl+Shift+O"),
+            );
+        }
+        if pane_count > 1 {
+            commands.push(
+                PaletteCommand::new(
+                    "layout:arrange",
+                    layout_group,
+                    crate::layout_broadcast_ui::arrange_grid_label(french),
+                )
+                .with_hint(crate::layout_broadcast_ui::arrange_grid_hint(french)),
+            );
+        }
+        if can_apply_grid {
+            for preset in crate::pane_grid::GridPreset::ALL {
+                commands.push(PaletteCommand::new(
+                    format!(
+                        "layout:preset:{}",
+                        crate::layout_broadcast_ui::preset_display_label(preset)
+                    ),
+                    layout_group,
+                    crate::layout_broadcast_ui::even_grid_command_title(french, preset),
+                ));
+            }
+        }
+        if has_active_pane {
+            commands.push(
+                PaletteCommand::new(
+                    "layout:close-active",
+                    layout_group,
+                    crate::layout_broadcast_ui::close_active_command_title(french),
+                )
+                .with_shortcut("Ctrl+Shift+W"),
+            );
+        }
         commands.extend(self.state.projects.iter().map(|project| {
             PaletteCommand::new(
                 format!("project:{}", project.id),
@@ -1639,6 +1712,40 @@ impl Tessel {
                 "help" => self.open_help(),
                 "remote" => self.view = View::Remote,
                 "share" => self.overlay = Some(Overlay::Share),
+                "broadcast" => {
+                    self.state.broadcast = !self.state.broadcast;
+                    self.save();
+                }
+                "layout:split-right" => {
+                    self.apply_layout_action(
+                        crate::layout_broadcast_ui::LayoutMenuAction::SplitRight,
+                    );
+                }
+                "layout:split-down" => {
+                    self.apply_layout_action(
+                        crate::layout_broadcast_ui::LayoutMenuAction::SplitDown,
+                    );
+                }
+                "layout:arrange" => {
+                    self.apply_layout_action(
+                        crate::layout_broadcast_ui::LayoutMenuAction::ArrangeGrid,
+                    );
+                }
+                "layout:close-active" => {
+                    self.apply_layout_action(
+                        crate::layout_broadcast_ui::LayoutMenuAction::CloseActive,
+                    );
+                }
+                id_str if id_str.starts_with("layout:preset:") => {
+                    if let Some(preset) = crate::pane_grid::GridPreset::ALL.into_iter().find(|p| {
+                        format!(
+                            "layout:preset:{}",
+                            crate::layout_broadcast_ui::preset_display_label(*p)
+                        ) == id_str
+                    }) {
+                        self.apply_grid_preset(preset);
+                    }
+                }
                 #[cfg(windows)]
                 "browser" => self.view = View::Browser,
                 #[cfg(windows)]
@@ -1968,6 +2075,132 @@ impl Tessel {
                 }
             });
     }
+    fn active_project_work_pane(&self) -> Option<u64> {
+        self.active_session
+            .filter(|id| {
+                self.sessions
+                    .iter()
+                    .any(|s| s.id == *id && s.project == self.state.active_project)
+            })
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|s| s.project == self.state.active_project)
+                    .map(|s| s.id)
+            })
+    }
+    fn apply_layout_action(&mut self, action: crate::layout_broadcast_ui::LayoutMenuAction) {
+        use crate::layout_broadcast_ui::LayoutMenuAction;
+        match action {
+            LayoutMenuAction::SplitRight => {
+                if let Some(target) = self.active_project_work_pane() {
+                    self.new_session_placed(
+                        Launch::Shell,
+                        Some((target, crate::pane_grid::SplitDir::Row)),
+                    );
+                }
+            }
+            LayoutMenuAction::SplitDown => {
+                if let Some(target) = self.active_project_work_pane() {
+                    self.new_session_placed(
+                        Launch::Shell,
+                        Some((target, crate::pane_grid::SplitDir::Col)),
+                    );
+                }
+            }
+            LayoutMenuAction::ArrangeGrid => {
+                self.view = View::Work;
+                self.tile_sessions(None);
+            }
+            LayoutMenuAction::ApplyPreset(preset) => {
+                self.apply_grid_preset(preset);
+            }
+            LayoutMenuAction::CloseActive => {
+                if let Some(id) = self.active_project_work_pane() {
+                    self.close_session(id);
+                }
+            }
+        }
+    }
+    fn apply_grid_preset(&mut self, preset: crate::pane_grid::GridPreset) {
+        let session_ids: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|s| s.project == self.state.active_project)
+            .map(|s| s.id)
+            .collect();
+        let key = crate::terminal_layout::project_key(self.state.active_project);
+        let existing_ids: Vec<u64> = {
+            let layout = self.state.terminal_layouts.entry(key.clone()).or_default();
+            layout.sync(&session_ids, self.grid_room);
+            crate::pane_grid::tree_leaves(layout.tree.as_ref(), |_| true)
+                .into_iter()
+                .filter_map(|leaf| leaf.id.parse::<u64>().ok())
+                .filter(|id| session_ids.contains(id))
+                .collect()
+        };
+        let available_slots = 100usize.saturating_sub(self.sessions.len());
+        let plan =
+            crate::layout_broadcast_ui::plan_preset_grid(preset, &existing_ids, available_slots);
+        let cwd = self
+            .state
+            .active()
+            .map(|p| p.path.clone())
+            .unwrap_or_else(launch::default_directory);
+        let mut spawned_ids = Vec::with_capacity(plan.shells_to_spawn);
+        for _ in 0..plan.shells_to_spawn {
+            if self.sessions.len() >= 100 {
+                self.error = "Session limit: 100".into();
+                break;
+            }
+            let id = self.next_session;
+            let Some(next) = self.next_session.checked_add(1) else {
+                self.error = "Session identifiers exhausted".into();
+                break;
+            };
+            self.next_session = next;
+            let mut s = Session {
+                native_host: None,
+                restarting: None,
+                codex_discovery: None,
+                codex_restore: None,
+                model_picker: Default::default(),
+                last_model: None,
+                model_save_attempt: None,
+                settings_changed: false,
+                codex_seed: None,
+                conversation_id: None,
+                launch_fingerprint: None,
+                session_options: None,
+                pane_name: None,
+                broadcast: true,
+                id,
+                project: self.state.active_project,
+                title: "Terminal".into(),
+                launch: Launch::Shell,
+                cwd: cwd.clone(),
+                terminal: None,
+                loading: None,
+                error: String::new(),
+            };
+            s.start(None);
+            self.sessions.push(s);
+            spawned_ids.push(id);
+        }
+        let fin = plan.finalize(&spawned_ids, self.active_session);
+        if fin.ordered_ids.is_empty() {
+            return;
+        }
+        self.state
+            .terminal_layouts
+            .entry(key)
+            .or_default()
+            .rebuild_ordered(&fin.ordered_ids, &fin.row_counts);
+        self.active_session = fin.active_id;
+        self.view = View::Work;
+        self.grid_dirty = false;
+        self.save();
+    }
     fn tile_sessions(&mut self, columns: Option<usize>) {
         let key = crate::terminal_layout::project_key(self.state.active_project);
         if let Some(layout) = self.state.terminal_layouts.get_mut(&key) {
@@ -2186,6 +2419,10 @@ impl Tessel {
         let mut native_options_changed = false;
         #[cfg(windows)]
         let mut native_wake = None;
+        let french = self.state.language == crate::i18n::Language::French;
+        let spec = crate::theme::active(ui.ctx()).spec();
+        let mut broadcast_membership_changed = false;
+        let mut broadcast_batches: Vec<(u64, Vec<crate::terminal::BroadcastInput>)> = Vec::new();
         let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
@@ -2219,6 +2456,15 @@ impl Tessel {
             } else {
                 ui.visuals().widgets.noninteractive.bg_stroke.color
             };
+            let color = crate::layout_broadcast_ui::pane_active_stroke_color(
+                &spec.ui,
+                active,
+                self.state.broadcast,
+                session.broadcast,
+                session.launch.native_chat().is_none(),
+                color,
+                color,
+            );
             let clip = ui.clip_rect().intersect(rect);
             ui.scope_builder(
                 egui::UiBuilder::new()
@@ -2317,7 +2563,15 @@ impl Tessel {
                                 let native_tag = session.terminal.as_ref().and_then(Terminal::native_header_tag)
                                     .filter(|tag| ui.available_width() > 164.0 + crate::host_terminal_panel::header_tag_width(ui, *tag, crate::i18n::is_french()));
                                 let native_tag_width = native_tag.map(|tag| crate::host_terminal_panel::header_tag_width(ui, tag, crate::i18n::is_french()) + 4.0).unwrap_or(0.0);
-                                let title_width = (ui.available_width() - 84.0 - chip_width - native_tag_width).max(0.0);
+                                let write_toggle_width = if self.state.broadcast
+                                    && session.launch.native_chat().is_none()
+                                {
+                                    crate::layout_broadcast_ui::pane_broadcast_toggle_width(french)
+                                        + 4.0
+                                } else {
+                                    0.0
+                                };
+                                let title_width = (ui.available_width() - 84.0 - chip_width - native_tag_width - write_toggle_width).max(0.0);
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(title_width, 22.0),
                                     egui::Layout::left_to_right(egui::Align::Center),
@@ -2393,6 +2647,19 @@ impl Tessel {
                                     if chip.clicked && let Some(rect) = chip.rect {
                                         session.model_picker.toggle_at_chip(ui.ctx(), rect, chip.id);
                                     }
+                                }
+                                if self.state.broadcast
+                                    && session.launch.native_chat().is_none()
+                                    && crate::layout_broadcast_ui::show_pane_broadcast_toggle(
+                                        ui,
+                                        &spec.ui,
+                                        ("pane-broadcast-write", id),
+                                        french,
+                                        &mut session.broadcast,
+                                    )
+                                    .changed()
+                                {
+                                    broadcast_membership_changed = true;
                                 }
                                 let more = crate::pane_header::button(
                                     ui,
@@ -2547,6 +2814,14 @@ impl Tessel {
                                     });
                             } else if let Some(terminal) = &mut session.terminal {
                                 ui.add_enabled_ui(!picker_was_open && !session.model_picker.is_open(), |ui| terminal.show(ui, self.state.font_size));
+                                let batch = terminal.take_broadcast_inputs();
+                                if self.state.broadcast
+                                    && session.broadcast
+                                    && session.launch.native_chat().is_none()
+                                    && !batch.is_empty()
+                                {
+                                    broadcast_batches.push((id, batch));
+                                }
                             } else if session.restarting.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Stopping terminal processes…"));
@@ -2587,6 +2862,22 @@ impl Tessel {
         #[cfg(windows)]
         if let Some(id) = native_wake {
             self.wake_native_terminal(id, ui.ctx());
+        }
+        if self.state.broadcast && !broadcast_batches.is_empty() {
+            for (source_id, batch) in &broadcast_batches {
+                for peer in &mut self.sessions {
+                    if peer.project == self.state.active_project
+                        && peer.id != *source_id
+                        && peer.broadcast
+                        && peer.launch.native_chat().is_none()
+                        && let Some(target_terminal) = &mut peer.terminal
+                    {
+                        for item in batch {
+                            target_terminal.send_broadcast(item);
+                        }
+                    }
+                }
+            }
         }
         if maximized.is_none() {
             for divider in &geometry.dividers {
@@ -2695,7 +2986,7 @@ impl Tessel {
         if let Some(id) = close {
             self.close_session(id);
         }
-        if native_options_changed {
+        if native_options_changed || broadcast_membership_changed {
             self.save();
         }
         if let Some((id, option, value)) = model_choice {
@@ -2965,6 +3256,7 @@ impl Tessel {
                     saved.session_options.clone()
                 },
                 pane_name: saved.pane_name.clone(),
+                broadcast: saved.broadcast,
                 id: saved.id,
                 project: saved.project,
                 title: saved.title.clone(),
@@ -3685,6 +3977,8 @@ impl Tessel {
                         "Ctrl+`",
                         "Ctrl+Shift+T",
                         "Ctrl+Shift+W",
+                        "Ctrl+Shift+R",
+                        "Ctrl+Shift+B",
                         "Ctrl+Shift+Space",
                         "Ctrl+Shift+P",
                         "Ctrl+Shift+J",
@@ -4440,6 +4734,19 @@ impl eframe::App for Tessel {
             };
             session.restart(prefs);
         }
+        if take_fresh_shortcut(
+            ctx,
+            keyboard_free
+                && !confirmation_open
+                && !self.command_palette.open
+                && self.overlay.is_none()
+                && !self.floating.ui.has_keyboard(),
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::B,
+        ) {
+            self.state.broadcast = !self.state.broadcast;
+            self.save();
+        }
         if take_close_pane_shortcut(
             ctx,
             keyboard_free
@@ -4542,29 +4849,64 @@ impl eframe::App for Tessel {
                 {
                     self.overlay = Some(Overlay::Share);
                 }
-                let layout = chrome::icon_button(ui, Icon::Layout, tr("Layout"), false, false);
-                let popup = egui::Popup::menu(&layout);
+                let toolbar_french = self.state.language == crate::i18n::Language::French;
+                let toolbar_spec = crate::theme::active(ui.ctx()).spec();
+                if crate::layout_broadcast_ui::paint_broadcast_toolbar_button(
+                    ui,
+                    &toolbar_spec.ui,
+                    toolbar_spec.radius_px,
+                    toolbar_french,
+                    self.state.broadcast,
+                )
+                .clicked()
+                {
+                    self.state.broadcast = !self.state.broadcast;
+                    self.save();
+                }
+                let layout_popup_id = egui::Id::new("toolbar-layout-menu");
+                let layout_menu_open = egui::Popup::is_id_open(ui.ctx(), layout_popup_id);
+                let layout = crate::layout_broadcast_ui::paint_layout_toolbar_button(
+                    ui,
+                    &toolbar_spec.ui,
+                    toolbar_spec.radius_px,
+                    toolbar_french,
+                    layout_menu_open,
+                );
+                let pane_count = self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project == self.state.active_project)
+                    .count();
+                let layout_input = crate::layout_broadcast_ui::LayoutMenuInput {
+                    french: toolbar_french,
+                    has_active_pane: self.active_project_work_pane().is_some(),
+                    pane_count,
+                    can_apply_grid: pane_count > 0 || self.sessions.len() < 100,
+                };
+                let mut layout_action = None;
+                let popup = egui::Popup::menu(&layout)
+                    .id(layout_popup_id)
+                    .align(egui::RectAlign::BOTTOM_END)
+                    .gap(6.0)
+                    .frame(
+                        crate::layout_broadcast_ui::layout_menu_frame(&toolbar_spec.ui)
+                            .shadow(ui.visuals().popup_shadow),
+                    );
                 let shown = popup.show(|ui| {
-                    ui.checkbox(&mut self.state.panels.left_open, tr("Projects"));
-                    ui.checkbox(&mut self.state.panels.right_open, tr("Side panel"));
-                    if ui.button(tr("Arrange panes automatically")).clicked() {
-                        self.tile_sessions(None);
+                    if let Some(action) = crate::layout_broadcast_ui::show_layout_menu_contents(
+                        ui,
+                        &toolbar_spec.ui,
+                        layout_input,
+                    ) {
+                        layout_action = Some(action);
                         ui.close();
-                    }
-                    for columns in 1..=3 {
-                        if ui
-                            .selectable_value(
-                                &mut self.state.columns,
-                                columns,
-                                format!("{columns} col"),
-                            )
-                            .changed()
-                        {
-                            self.tile_sessions(Some(columns));
-                        }
                     }
                 });
                 self.toolbar_menu_open |= shown.is_some();
+                if let Some(action) = layout_action {
+                    self.apply_layout_action(action);
+                }
+                self.floating_toolbar(ui);
                 let left_icon = if self.state.panels.left_open {
                     Icon::PanelLeftOpen
                 } else {
@@ -4588,8 +4930,17 @@ impl eframe::App for Tessel {
                 if chrome::icon_button(ui, Icon::Settings, tr("Settings"), false, false).clicked() {
                     self.overlay = Some(Overlay::Settings);
                 }
-                self.floating_toolbar(ui);
             });
+        if self.state.broadcast {
+            let french = self.state.language == crate::i18n::Language::French;
+            let spec = crate::theme::active(ctx).spec();
+            egui::TopBottomPanel::top("broadcast-banner")
+                .exact_height(crate::layout_broadcast_ui::BROADCAST_BANNER_HEIGHT)
+                .frame(egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    crate::layout_broadcast_ui::show_broadcast_banner(ui, &spec.ui, french);
+                });
+        }
         egui::TopBottomPanel::bottom("status")
             .exact_height(24.0)
             .frame(
@@ -4602,7 +4953,7 @@ impl eframe::App for Tessel {
                 ui.painter()
                     .hline(room.x_range(), room.top(), ui.visuals().window_stroke);
                 if self.store.is_some() && self.error.is_empty() {
-                    let target = if self.view == View::Work {
+                    let target_label = if self.view == View::Work {
                         self.sessions
                             .iter()
                             .find(|s| {
@@ -4640,7 +4991,22 @@ impl eframe::App for Tessel {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                         crate::status_strip::show(
                             ui,
-                            target,
+                            if self.state.broadcast {
+                                crate::status_strip::Target::Broadcast(
+                                    self.sessions
+                                        .iter()
+                                        .filter(|s| {
+                                            s.project == self.state.active_project
+                                                && s.broadcast
+                                                && s.launch.native_chat().is_none()
+                                        })
+                                        .count(),
+                                )
+                            } else if target_label.is_empty() {
+                                crate::status_strip::Target::None
+                            } else {
+                                crate::status_strip::Target::Input(target_label)
+                            },
                             count,
                             &path,
                             self.state.language == crate::i18n::Language::French,
@@ -4933,6 +5299,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic failure".into(),
@@ -5007,6 +5374,7 @@ $lock.Dispose()
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic".into(),
@@ -5190,6 +5558,7 @@ $lock.Dispose()
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic agent metadata".into(),
@@ -5244,6 +5613,7 @@ $lock.Dispose()
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
+                broadcast: true,
                 id: 1,
                 project: Some(1),
                 title: "Native".into(),
@@ -5300,6 +5670,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic Codex".into(),
@@ -5440,6 +5811,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic Claude".into(),
@@ -5493,6 +5865,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: Some(1),
             title: "Fixture".into(),
@@ -5533,6 +5906,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
+            broadcast: true,
             id,
             project: Some(1),
             title: "Provider".into(),
@@ -5557,5 +5931,68 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         normalize_session_names(&mut sessions);
         assert_eq!(sessions[0].label(), "Bohr");
         assert_eq!(sessions[2].label(), "Ada");
+    }
+
+    #[test]
+    fn preset_grid_rebuild_survives_workspace_sync_and_preserves_shape() {
+        let mut ws = workspace::Workspace {
+            active_project: Some(1),
+            ..Default::default()
+        };
+        for id in [10_u64, 20] {
+            ws.sessions.push(workspace::SavedSession {
+                native_host: None,
+                last_model: None,
+                codex_seed: None,
+                conversation_id: None,
+                launch_fingerprint: None,
+                session_options: None,
+                native_options: None,
+                pane_name: None,
+                broadcast: true,
+                id,
+                project: Some(1),
+                title: format!("Pane {id}"),
+                launch: Launch::Shell,
+                cwd: PathBuf::from("."),
+            });
+        }
+        let key = crate::terminal_layout::project_key(Some(1));
+        ws.terminal_layouts
+            .entry(key.clone())
+            .or_default()
+            .sync(&[10, 20], [1200.0, 800.0]);
+
+        // Apply `1 x 2` (1 column, 2 stacked rows) over two existing panes; wide room `[1200, 800]`
+        // would pick `2 x 1` if `sync_terminal_layouts` overwrote the rebuilt tree.
+        let plan = crate::layout_broadcast_ui::plan_preset_grid(
+            crate::pane_grid::GridPreset::OneByTwo,
+            &[10, 20],
+            98,
+        );
+        assert_eq!(plan.shells_to_spawn, 0);
+        let fin = plan.finalize(&[], Some(20));
+        assert_eq!(fin.ordered_ids, vec![10, 20]);
+        assert_eq!(fin.row_counts, vec![1, 1]);
+        assert_eq!(fin.active_id, Some(20));
+
+        ws.terminal_layouts
+            .entry(key.clone())
+            .or_default()
+            .rebuild_ordered(&fin.ordered_ids, &fin.row_counts);
+        ws.sync_terminal_layouts([1200.0, 800.0]);
+
+        let tree = ws.terminal_layouts[&key]
+            .tree
+            .as_ref()
+            .expect("preset tree");
+        let geom = crate::pane_grid::grid_layout(Some(tree));
+        assert_eq!(geom.tiles.len(), 2);
+        let top = geom.tiles[0].rect.to_px(1200.0, 800.0, 4.0);
+        let bottom = geom.tiles[1].rect.to_px(1200.0, 800.0, 4.0);
+        assert!(
+            (top.width - 1200.0).abs() < 1.0 && bottom.top > top.top,
+            "1 x 2 preset must stay stacked vertically across workspace sync: top={top:?}, bottom={bottom:?}"
+        );
     }
 }

@@ -22,6 +22,13 @@ use portable_pty::CommandBuilder;
 #[cfg(test)]
 use std::sync::mpsc;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BroadcastInput {
+    Raw(Vec<u8>),
+    Paste(String),
+    CursorKey(u8),
+}
+
 pub struct Terminal {
     backend: backend::Backend,
     parser: vt100::Parser,
@@ -42,6 +49,7 @@ pub struct Terminal {
     composing: bool,
     mouse: mouse::Mouse,
     widget_id: Option<egui::Id>,
+    broadcast_outbox: Vec<BroadcastInput>,
     #[cfg(windows)]
     native_panel: crate::host_terminal_panel::HostTerminalPanel,
     #[cfg(windows)]
@@ -58,6 +66,59 @@ impl Terminal {
         self.backend.stop_for_restart()?;
         self.exited = true;
         Ok(())
+    }
+    pub fn take_broadcast_inputs(&mut self) -> Vec<BroadcastInput> {
+        std::mem::take(&mut self.broadcast_outbox)
+    }
+
+    pub fn accepts_broadcast_input(&self) -> bool {
+        #[cfg(windows)]
+        if matches!(self.backend, backend::Backend::Native(_))
+            && self.native_panel.blocks_terminal_focus()
+        {
+            return false;
+        }
+        self.backend.writable() && !self.exited && !self.viewing_archive()
+    }
+
+    pub fn send_broadcast(&mut self, input: &BroadcastInput) {
+        if !self.accepts_broadcast_input() {
+            return;
+        }
+        let bytes = match input {
+            BroadcastInput::Raw(raw) => {
+                if raw.is_empty() || crate::layout_broadcast_ui::is_terminal_reply(raw) {
+                    return;
+                }
+                raw.clone()
+            }
+            BroadcastInput::Paste(text) => {
+                if text.is_empty()
+                    || text.len() > 65536
+                    || crate::layout_broadcast_ui::is_terminal_reply(text.as_bytes())
+                {
+                    return;
+                }
+                if self.parser.screen().bracketed_paste() {
+                    format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                } else {
+                    text.as_bytes().to_vec()
+                }
+            }
+            BroadcastInput::CursorKey(final_byte) => {
+                let prefix = if self.parser.screen().application_cursor() {
+                    b'O'
+                } else {
+                    b'['
+                };
+                vec![27, prefix, *final_byte]
+            }
+        };
+        self.selection = None;
+        self.back_to_live();
+        if let Err(error) = self.send(bytes) {
+            self.status = error;
+        }
     }
     pub fn exited(&self) -> bool {
         self.exited
@@ -444,6 +505,7 @@ impl Terminal {
             composing: false,
             mouse: Default::default(),
             widget_id: None,
+            broadcast_outbox: Vec::new(),
             #[cfg(windows)]
             native_panel: Default::default(),
             #[cfg(windows)]
@@ -513,6 +575,7 @@ impl Terminal {
         self.show_with_id(ui, font_size, None);
     }
     pub fn show_with_id(&mut self, ui: &mut egui::Ui, font_size: f32, id: Option<egui::Id>) {
+        self.broadcast_outbox.clear();
         if !self.status.is_empty() && matches!(self.backend, backend::Backend::Local(_)) {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
         }
@@ -870,6 +933,7 @@ impl Terminal {
                     }
                     continue;
                 }
+                let mut bcast_item: Option<BroadcastInput> = None;
                 let bytes = match event {
                     egui::Event::Text(text) if !self.composing => text.into_bytes(),
                     egui::Event::Ime(event) => match event {
@@ -910,6 +974,9 @@ impl Terminal {
                         }
                     }
                     egui::Event::Paste(text) => {
+                        if text.len() <= 65536 && !text.is_empty() {
+                            bcast_item = Some(BroadcastInput::Paste(text.clone()));
+                        }
                         if text.len() > 65536 {
                             self.status = "Paste limit: 64 KiB".into();
                             Vec::new()
@@ -940,6 +1007,13 @@ impl Terminal {
                             continue;
                         }
                         let mut bytes = key_bytes(key, modifiers);
+                        if bytes.len() == 3
+                            && bytes[0] == 27
+                            && bytes[1] == b'['
+                            && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                        {
+                            bcast_item = Some(BroadcastInput::CursorKey(bytes[2]));
+                        }
                         if self.parser.screen().application_cursor()
                             && bytes.len() == 3
                             && bytes[0] == 27
@@ -959,7 +1033,26 @@ impl Terminal {
                 }
                 if accepts_input
                     && !bytes.is_empty()
-                    && let Err(error) = self.send(bytes)
+                    && let Err(error) = {
+                        let candidate =
+                            bcast_item.unwrap_or_else(|| BroadcastInput::Raw(bytes.clone()));
+                        let skip = match &candidate {
+                            BroadcastInput::Raw(raw) => {
+                                raw.is_empty() || crate::layout_broadcast_ui::is_terminal_reply(raw)
+                            }
+                            BroadcastInput::Paste(text) => {
+                                text.is_empty()
+                                    || crate::layout_broadcast_ui::is_terminal_reply(
+                                        text.as_bytes(),
+                                    )
+                            }
+                            BroadcastInput::CursorKey(_) => false,
+                        };
+                        if !skip {
+                            self.broadcast_outbox.push(candidate);
+                        }
+                        self.send(bytes)
+                    }
                 {
                     self.status = error.to_string();
                 }
@@ -1461,6 +1554,121 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
         assert!(receiver.try_recv().is_err());
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("settings-text-field")));
         assert!(!terminal.has_focus(&ctx));
+    }
+    #[test]
+    fn broadcast_captures_user_input_skips_mouse_and_adapts_target_modes() {
+        let mut source = Terminal::spawn().unwrap();
+        let (src_tx, src_rx) = mpsc::sync_channel(32);
+        source.backend.replace_input(src_tx);
+        // Source has SGR mouse tracking, bracketed paste, and application cursor keys enabled.
+        source.process_output(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?1h");
+
+        let mut plain_target = Terminal::spawn().unwrap();
+        let (plain_tx, plain_rx) = mpsc::sync_channel(32);
+        plain_target.backend.replace_input(plain_tx);
+
+        let mut app_target = Terminal::spawn().unwrap();
+        let (app_tx, app_rx) = mpsc::sync_channel(32);
+        app_target.backend.replace_input(app_tx);
+        app_target.process_output(b"\x1b[?2004h\x1b[?1h");
+
+        let mut exited_target = Terminal::spawn().unwrap();
+        let (exit_tx, exit_rx) = mpsc::sync_channel(32);
+        exited_target.backend.replace_input(exit_tx);
+        exited_target.exited = true;
+
+        let ctx = egui::Context::default();
+        let mut step = |events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    events,
+                    focused: true,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        source.show(ui, 14.0);
+                    });
+                },
+            );
+            source.take_broadcast_inputs()
+        };
+
+        // Warm up layout once so egui hit-testing knows the terminal widget rect.
+        let _ = step(vec![]);
+        // 1. Focus click sends mouse report ONLY to source, never to broadcast outbox.
+        let pos = egui::pos2(50.0, 50.0);
+        let out_click = step(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert!(out_click.is_empty(), "mouse reports must never broadcast");
+        assert!(src_rx.try_iter().any(|p| p.starts_with(b"\x1b[<")));
+
+        // 2. Typing, Paste, ArrowUp, and a synthetic DSR reply string:
+        //    DSR reply is filtered; Paste and ArrowUp adapt per target terminal mode!
+        let out_typing = step(vec![
+            egui::Event::Text("echo hi".into()),
+            egui::Event::Paste("line1\n".into()),
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: Some(egui::Key::ArrowUp),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Text("\x1b[24;80R".into()),
+        ]);
+        assert_eq!(
+            out_typing,
+            vec![
+                BroadcastInput::Raw(b"echo hi".to_vec()),
+                BroadcastInput::Paste("line1\n".into()),
+                BroadcastInput::CursorKey(b'A'),
+            ]
+        );
+
+        for item in &out_typing {
+            plain_target.send_broadcast(item);
+            app_target.send_broadcast(item);
+            exited_target.send_broadcast(item);
+        }
+
+        let plain_packets: Vec<Vec<u8>> = plain_rx.try_iter().collect();
+        assert_eq!(
+            plain_packets,
+            vec![b"echo hi".to_vec(), b"line1\n".to_vec(), b"\x1b[A".to_vec(),]
+        );
+
+        let app_packets: Vec<Vec<u8>> = app_rx.try_iter().collect();
+        assert_eq!(
+            app_packets,
+            vec![
+                b"echo hi".to_vec(),
+                b"\x1b[200~line1\n\x1b[201~".to_vec(),
+                b"\x1bOA".to_vec(),
+            ]
+        );
+
+        assert!(
+            exit_rx.try_recv().is_err(),
+            "exited terminal must not receive broadcast"
+        );
     }
     #[test]
     fn interrupt_and_navigation_are_terminal_sequences() {

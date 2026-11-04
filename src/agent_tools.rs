@@ -170,6 +170,7 @@ mod tests {
                 session_options: None,
                 native_options: None,
                 pane_name: Some(format!("Agent {id}")),
+                broadcast: true,
                 id,
                 project: Some(project),
                 title: "PRIVATE title".into(),

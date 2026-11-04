@@ -61,7 +61,7 @@ pub fn side_tab(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> R
 }
 
 pub fn regions(room: Rect) -> ToolbarRegions {
-    let actions_width = 264.0_f32.min(room.width() * 0.6);
+    let actions_width = 300.0_f32.min(room.width() * 0.6);
     let brand_width = 160.0_f32.min((room.width() - actions_width).max(0.0));
     let brand = Rect::from_min_size(room.min, Vec2::new(brand_width, room.height()));
     let actions = Rect::from_min_max(egui::pos2(room.max.x - actions_width, room.min.y), room.max);

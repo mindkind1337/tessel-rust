@@ -483,3 +483,19 @@ hit-testing against a synthetic isolated browser profile before enabling this.
 The [Win32 contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowrgn)
 transfers region ownership to Windows only on success; coordinates are relative
 to the window corner, and a null region restores the ordinary window shape.
+
+Toolbar Layout menu and Broadcast multi-write integration: the toolbar right
+cluster now exposes Broadcast (`Ctrl+Shift+B`), the 290-pixel Layout menu, the
+floating terminal toggle, both sidebar toggles and Settings in source order.
+Layout exposes Split right (`Ctrl+Shift+E`), Split down (`Ctrl+Shift+O`),
+conditional Arrange panes in a grid (`> 1` pane), `1 x 2..3 x 3` Even grid
+presets that retain open panes in leaf order and spawn default shells only for
+empty slots without letting workspace layout sync overwrite the preset split
+tree, and Close active pane (`Ctrl+Shift+W`). Broadcast persists workspace and
+per-pane `write` / `écrire` membership across restarts and portable backups,
+renders the 24-pixel workspace banner below the toolbar, adapts bracketed paste
+and application cursor mode per target terminal, excludes device/cursor/focus/OSC
+replies and mouse reports, and updates the status bar's active target count.
+Validation: 7 UI/AccessKit/7-theme EN/FR suites and targeted workspace, layout,
+status-bar, toolbar and terminal broadcast unit tests pass, with strict
+all-target/all-feature Clippy and formatting clean.

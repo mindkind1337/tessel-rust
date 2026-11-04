@@ -9,6 +9,10 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, String>;
 
+const fn default_pane_broadcast() -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SideTab {
@@ -110,6 +114,8 @@ pub struct SavedSession {
     pub native_options: Option<serde_json::Value>,
     #[serde(default)]
     pub pane_name: Option<String>,
+    #[serde(default = "default_pane_broadcast")]
+    pub broadcast: bool,
     pub id: u64,
     pub project: Option<u64>,
     pub title: String,
@@ -150,6 +156,7 @@ pub struct Workspace {
     pub theme: Option<crate::theme_palettes::ThemeId>,
     pub language: crate::i18n::Language,
     pub columns: usize,
+    pub broadcast: bool,
     pub panels: Panels,
     pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
@@ -176,6 +183,7 @@ impl Default for Workspace {
             theme: None,
             language: Default::default(),
             columns: 1,
+            broadcast: false,
             panels: Default::default(),
             floating: Default::default(),
             terminal_layouts: Default::default(),
@@ -675,6 +683,7 @@ mod tests {
             session_options: None,
             native_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Synthetic".into(),
@@ -750,6 +759,7 @@ mod tests {
                 session_options: Some(options),
                 native_options: None,
                 pane_name: None,
+                broadcast: true,
                 id,
                 project: None,
                 title: "Codex".into(),
@@ -923,6 +933,7 @@ mod tests {
                 session_options: None,
                 native_options: Some(serde_json::json!({"effort":"high"})),
                 pane_name: None,
+                broadcast: true,
                 id,
                 project: Some(project),
                 title: launch.native_chat().unwrap().into(),
@@ -983,6 +994,7 @@ mod tests {
                 session_options: None,
                 native_options: None,
                 pane_name: None,
+                broadcast: true,
                 id,
                 project: None,
                 title: format!("Sleeping {id}"),
@@ -1021,6 +1033,7 @@ mod tests {
             session_options: None,
             native_options: None,
             pane_name: None,
+            broadcast: true,
             id: 1,
             project: None,
             title: "Sleeping".into(),
@@ -1049,6 +1062,7 @@ mod tests {
                 session_options: None,
                 native_options: None,
                 pane_name: None,
+                broadcast: true,
                 id,
                 project: Some(project),
                 title: format!("Codex {id}"),
@@ -1065,6 +1079,7 @@ mod tests {
             session_options: None,
             native_options: None,
             pane_name: None,
+            broadcast: true,
             id: 12,
             project: Some(project),
             title: "Claude".into(),
@@ -1131,6 +1146,7 @@ mod tests {
             session_options: None,
             native_options: None,
             pane_name: None,
+            broadcast: true,
             id: 11,
             project: Some(project),
             title: "Shell".into(),
@@ -1167,6 +1183,7 @@ mod tests {
                 session_options: None,
                 native_options: None,
                 pane_name: name.map(str::to_owned),
+                broadcast: true,
                 project: None,
                 title: format!("Program {id}"),
                 launch,
@@ -1193,5 +1210,31 @@ mod tests {
         );
         assert_eq!(reopened.sessions[2].pane_name.as_deref(), Some("Bohr"));
         assert_eq!(reopened.sessions[1].title, "Program 2");
+    }
+    #[test]
+    fn broadcast_flags_default_safely_for_legacy_json_and_persist_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_session: SavedSession = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "project": null,
+            "title": "Shell",
+            "launch": "Shell",
+            "cwd": dir.path(),
+        }))
+        .unwrap();
+        assert!(legacy_session.broadcast);
+        let legacy_workspace: Workspace = serde_json::from_str(r#"{"schema":1}"#).unwrap();
+        assert!(!legacy_workspace.broadcast);
+
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state.broadcast = true;
+        let mut unchecked = legacy_session;
+        unchecked.broadcast = false;
+        state.sessions.push(unchecked);
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, reopened) = Store::open(dir.path()).unwrap();
+        assert!(reopened.broadcast);
+        assert!(!reopened.sessions[0].broadcast);
     }
 }

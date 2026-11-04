@@ -338,6 +338,7 @@ mod tests {
             session_options: None,
             native_options: None,
             pane_name: Some("Existing pane".into()),
+            broadcast: true,
             id: 1,
             project: None,
             title: "codex".into(),
