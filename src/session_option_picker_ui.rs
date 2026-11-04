@@ -616,6 +616,8 @@ impl PickerCloseReason {
 
 /// Frame input for [`SessionOptionPickerUi::show_inline`] and [`SessionOptionPickerUi::show_popover`].
 pub struct SessionPickerInput<'a> {
+    /// Native chats accept protocol model/effort fields, never PTY commands.
+    pub native_chat: bool,
     pub agent_id: &'a str,
     pub is_agent: bool,
     pub detected: bool,
@@ -645,6 +647,7 @@ impl<'a> SessionPickerInput<'a> {
     #[must_use]
     pub fn new(agent_id: &'a str, persisted_defaults: &'a BTreeMap<String, Defaults>) -> Self {
         Self {
+            native_chat: false,
             agent_id,
             is_agent: true,
             detected: false,
@@ -1615,12 +1618,26 @@ fn resolve_picker_view(input: &SessionPickerInput<'_>) -> Option<ResolvedPickerV
         None => &[],
     };
 
-    let note = capability_gated_menu_note(
-        input.agent_id,
-        input.pane_running,
-        input.capabilities,
-        input.french,
-    )
+    let note = if input.native_chat {
+        if input.agent_id == "claude" {
+            if input.french {
+                "Choix pour la prochaine connexion Claude."
+            } else {
+                "Choice for the next Claude connection."
+            }
+        } else if input.french {
+            "Choix pour le prochain tour Codex."
+        } else {
+            "Choice for the next Codex turn."
+        }
+    } else {
+        capability_gated_menu_note(
+            input.agent_id,
+            input.pane_running,
+            input.capabilities,
+            input.french,
+        )
+    }
     .to_owned();
 
     let disabled_reason =
@@ -1719,6 +1736,9 @@ fn resolve_picker_view(input: &SessionPickerInput<'_>) -> Option<ResolvedPickerV
     let has_grouped_variants = active_model_row.is_some_and(|m| m["variants"].is_array());
 
     for opt in raw_options {
+        if input.native_chat && opt["id"].as_str() != Some("effort") {
+            continue;
+        }
         let mode = option_row_mode(input.agent_id, opt, input.pane_running, input.capabilities);
         if mode == OptionRowMode::Hidden {
             continue;

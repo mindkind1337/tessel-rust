@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "artifacts": [
+    {
+      "arch": "x86_64",
+      "target": "x86_64-unknown-linux-musl",
+      "file": "tessel-host-x86_64-unknown-linux-musl",
+      "size": 1631048,
+      "sha256": "7e92fef4fb3758e87b39266350a44057604524915baf74db1c8672866e6a378b"
+    },
+    {
+      "arch": "aarch64",
+      "target": "aarch64-unknown-linux-musl",
+      "file": "tessel-host-aarch64-unknown-linux-musl",
+      "size": 1406104,
+      "sha256": "28e80eae8a7c3c1afb4a45b4f04412a6fc018a9e241b1dfcc041ef25e6b74ea7"
+    }
+  ]
+}

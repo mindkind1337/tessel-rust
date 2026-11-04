@@ -257,3 +257,5 @@ Native-chat review fixes: save only on field validation/selection/Connect/Send, 
 
 The installed Codex app-server schema describes reasoning effort as a nonempty advertised string. The embedded source catalogue includes Max and Ultra, so those remain available for Codex; the obsolete fixed-effort assumption from review was rejected using that local evidence. No real model turn was used for schema or native-option validation.
 `cargo fmt --check` and all-target/all-feature Clippy with warnings denied passed on the final native-chat batch.
+
+Native chat pane menus now use the model/effort catalogue with independent Settings fallback and transactional override saves. Codex applies choices on the next turn, Claude on the next connection. Protocol-observed active model chips and live Claude switching remain pending.

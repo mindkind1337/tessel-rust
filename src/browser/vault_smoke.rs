@@ -24,6 +24,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 _directory: dir,
                 stage: 0,
                 pending: false,
+                fill_pending: None,
                 started: Instant::now(),
                 sender,
                 receiver,
@@ -44,6 +45,7 @@ struct Check {
     _directory: tempfile::TempDir,
     stage: u8,
     pending: bool,
+    fill_pending: Option<(crate::browser::FillReply, String, bool)>,
     started: Instant,
     sender: mpsc::Sender<String>,
     receiver: mpsc::Receiver<String>,
@@ -68,6 +70,16 @@ impl Check {
             })
             .map_err(|_| "Script evaluation failed".into())
     }
+    fn fill_check(&mut self, account: &crate::vault::Account, script: &str) -> Result<(), String> {
+        let rx = self.browser.fill_account(account)?;
+        self.pending = true;
+        self.fill_pending = Some((
+            rx,
+            script.to_owned(),
+            matches!(self.stage, 1 | 13 | 19 | 23 | 35),
+        ));
+        Ok(())
+    }
     fn next(&mut self) -> Result<(), String> {
         let account = crate::vault::Account {
             origin: ORIGIN.into(),
@@ -79,11 +91,46 @@ impl Check {
             1=>{
                 let wrong=crate::vault::Account{origin:"https://different.example.test".into(),username:"unused".into(),password:"unused".into()};
                 if self.browser.fill_account(&wrong).is_ok(){return Err("Wrong-origin fill was accepted".into());}
-                self.browser.fill_account(&account)?;
-                self.evaluate("document.getElementById('user').value==='synthetic@example.test' && document.getElementById('pass').value==='synthetic-only-secret' && window.submissions===0")
+                self.fill_check(&account,"document.getElementById('user').value==='synthetic@example.test' && document.getElementById('pass').value==='synthetic-only-secret' && window.submissions===0")
             }
             2=>self.evaluate("(() => { document.getElementById('user').value=''; document.getElementById('pass').value='';const extra=document.createElement('input');extra.type='password';document.querySelector('form').appendChild(extra);return true; })()"),
-            3=>{self.browser.fill_account(&account)?;self.evaluate("[...document.querySelectorAll('input')].every(el=>el.value==='') && window.submissions===0")}
+            3=>{self.fill_check(&account,"[...document.querySelectorAll('input')].every(el=>el.value==='') && window.submissions===0")}
+            4=>self.evaluate("(() => { const f=document.querySelector('form'); f.lastElementChild.remove(); f.setAttribute('action','https://different.example.test/receive'); return true; })()"),
+            5=>{self.fill_check(&account,"document.getElementById('pass').value==='' && document.getElementById('user').value==='' && window.submissions===0")}
+            6=>self.evaluate("(() => { const f=document.querySelector('form'); f.removeAttribute('action'); f.id='login'; const b=document.createElement('button'); b.type='submit'; b.setAttribute('form','login'); b.setAttribute('formaction','https://different.example.test/receive'); b.id='outside'; document.body.appendChild(b); return true; })()"),
+            7=>{self.fill_check(&account,"document.getElementById('pass').value==='' && document.getElementById('user').value==='' && window.submissions===0")}
+            8=>self.evaluate("(() => { document.getElementById('outside').remove(); document.getElementById('user').addEventListener('input',()=>{ const f=document.createElement('form'); f.action='https://different.example.test/receive';document.body.appendChild(f);f.appendChild(document.getElementById('pass')); }, {once:true}); return true; })()"),
+            9=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            10=>self.evaluate("(() => { const f=document.getElementById('login'); f.appendChild(document.getElementById('pass'));document.getElementById('user').value=''; const base=document.createElement('base');base.href='https://different.example.test/';document.head.appendChild(base);f.setAttribute('action','relative-login'); return true; })()"),
+            11=>{self.fill_check(&account,"document.getElementById('pass').value==='' && document.getElementById('user').value==='' && window.submissions===0")}
+            12=>self.evaluate("(() => { document.querySelector('base').remove(); return true; })()"),
+            13=>{self.fill_check(&account,"document.getElementById('pass').value==='synthetic-only-secret' && document.getElementById('user').value==='synthetic@example.test' && window.submissions===0")}
+            14=>self.evaluate("(() => { const f=document.getElementById('login');document.getElementById('user').value='';document.getElementById('pass').value='';const shadow=document.createElement('input');shadow.type='hidden';shadow.name='action';shadow.value=location.href;f.appendChild(shadow);f.setAttribute('action','https://different.example.test/receive');return true; })()"),
+            15=>{self.fill_check(&account,"document.getElementById('pass').value==='' && document.getElementById('user').value==='' && window.submissions===0")}
+            16=>self.evaluate("(() => { const f=document.getElementById('login');f.setAttribute('action','');f.querySelector('button').setAttribute('formaction','javascript:void(0)');return true; })()"),
+            17=>{self.fill_check(&account,"document.getElementById('pass').value==='' && document.getElementById('user').value==='' && window.submissions===0")}
+            18=>self.evaluate("(() => { document.getElementById('login').querySelector('button').setAttribute('formaction','relative-login');return true; })()"),
+            19=>{self.fill_check(&account,"document.getElementById('pass').value==='synthetic-only-secret' && document.getElementById('user').value==='synthetic@example.test' && window.submissions===0")}
+            20=>self.evaluate("(() => { document.getElementById('user').value='';document.getElementById('pass').value='';document.getElementById('login').setAttribute('action','https://different.example.test/receive');window.hooks=0; const original=Object.getOwnPropertyDescriptor;Object.getOwnPropertyDescriptor=function(...args){window.hooks++; return original(...args);};window.URL=function(){this.origin=location.origin;};return true; })()"),
+            21=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.hooks===0 && window.submissions===0")}
+            22=>self.evaluate("(() => { document.getElementById('login').setAttribute('action','');return true; })()"),
+            23=>{self.fill_check(&account,"document.getElementById('pass').value==='synthetic-only-secret' && window.hooks===0 && window.submissions===0")}
+            24=>self.evaluate("(() => { document.getElementById('user').value='';document.getElementById('pass').value='';document.getElementById('pass').autocomplete='new-password';return true; })()"),
+            25=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            26=>self.evaluate("(() => { document.getElementById('pass').autocomplete='current-password';document.getElementById('pass').style.visibility='collapse';return true; })()"),
+            27=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            28=>self.evaluate("(() => {document.getElementById('pass').style.visibility='visible';document.getElementById('login').querySelector('button').setAttribute('formaction','https://different.example.test/receive');return true;})()"),
+            29=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            30=>self.evaluate("(() => {document.getElementById('login').querySelector('button').removeAttribute('formaction');document.getElementById('user').addEventListener('input',()=>document.getElementById('login').setAttribute('action','https://different.example.test/receive'),{once:true});return true;})()"),
+            31=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            32=>self.evaluate("(() => {document.getElementById('login').setAttribute('action','');document.getElementById('user').addEventListener('input',()=>document.getElementById('login').querySelector('button').setAttribute('formaction','https://different.example.test/receive'),{once:true});return true;})()"),
+            33=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
+            34=>self.evaluate("(() => {document.getElementById('login').querySelector('button').removeAttribute('formaction');document.getElementById('user').value='';const other=document.createElement('form');other.id='other';document.body.appendChild(other);document.getElementById('user').setAttribute('form','other');return true;})()"),
+            35=>{self.fill_check(&account,"document.getElementById('user').value==='' && document.getElementById('pass').value==='synthetic-only-secret' && window.hooks===0 && window.submissions===0")}
+            36=>self.evaluate("(() => {document.getElementById('pass').value='';document.getElementById('user').removeAttribute('form');return true;})()"),
+            37=>{drop(self.browser.fill_account(&account)?);self.evaluate("document.getElementById('user').value==='' && document.getElementById('pass').value==='' && window.submissions===0")}
+            38=>self.evaluate("(() => {document.getElementById('login').setAttribute('action','javascript:void(0)');return true;})()"),
+            39=>{self.fill_check(&account,"document.getElementById('pass').value==='' && window.submissions===0")}
             _=>Ok(()),
         }
     }
@@ -114,6 +161,31 @@ impl eframe::App for Check {
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| self.browser.show(ui, frame));
+        if let Some((rx, script, expected)) = self.fill_pending.take() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    if result.is_ok() != expected {
+                        self.finish(
+                            ctx,
+                            Err(format!(
+                                "Private fill outcome mismatch at stage {}",
+                                self.stage
+                            )),
+                        );
+                        return;
+                    }
+                    if let Err(error) = self.evaluate(&script) {
+                        self.finish(ctx, Err(error));
+                        return;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => self.fill_pending = Some((rx, script, expected)),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.finish(ctx, Err("Private fill reply disconnected".into()));
+                    return;
+                }
+            }
+        }
         if let Ok(value) = self.receiver.try_recv() {
             self.pending = false;
             if value == "true" {
@@ -129,7 +201,7 @@ impl eframe::App for Check {
                 return;
             }
         }
-        if self.stage == 4 {
+        if self.stage == 40 {
             self.finish(ctx, Ok(()));
             return;
         }

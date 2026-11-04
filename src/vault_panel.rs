@@ -8,9 +8,31 @@ pub struct VaultPanel {
     pending: Option<Receiver<Result<(Vault, String), String>>>,
     status: String,
     remove: Option<usize>,
+    fill: Option<(std::time::Instant, crate::browser::FillReply)>,
 }
 impl VaultPanel {
     pub fn show(&mut self, ui: &mut egui::Ui, browser: &mut crate::browser::Browser) {
+        if let Some((started, rx)) = &self.fill {
+            let result = match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "Private fill could not be confirmed; check the login fields.".into(),
+                )),
+                Err(mpsc::TryRecvError::Empty) if started.elapsed().as_secs() >= 10 => Some(Err(
+                    "Private fill timed out; fields may have been filled.".into(),
+                )),
+                Err(mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result {
+                self.fill = None;
+                self.status = result
+                    .map(|_| "Login fields filled; no form was submitted.".into())
+                    .unwrap_or_else(|e| e);
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
         if let Some(rx) = &self.pending
             && let Ok(result) = rx.try_recv()
         {
@@ -64,6 +86,7 @@ impl VaultPanel {
                 if ui.button(tr("Lock vault")).clicked() {
                     self.vault = None;
                     self.remove = None;
+                    self.fill = None;
                     self.status = "Locked".into();
                 }
             });
@@ -74,14 +97,29 @@ impl VaultPanel {
                 ui.label(tr("The CSV contains readable passwords. Remove it after importing when no longer needed. Passkeys and verification codes are not imported."));
             });
             if let Some(vault) = &self.vault {
-                egui::ScrollArea::vertical().show(ui,|ui| {
-                    for (index,account) in vault.accounts.iter().enumerate() {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (index, account) in vault.accounts.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.label(&account.origin);ui.label(&account.username);
-                            if ui.button(tr("Fill in private browser")).clicked() {
-                                self.status=match browser.fill_account(account) {Ok(())=>"Fill requested for the matching page. Check the form in Browser; no login was submitted.".into(),Err(e)=>e};
+                            ui.label(&account.origin);
+                            ui.label(&account.username);
+                            if ui
+                                .add_enabled(
+                                    self.fill.is_none(),
+                                    egui::Button::new(tr("Fill in private browser")),
+                                )
+                                .clicked()
+                            {
+                                self.status = match browser.fill_account(account) {
+                                    Ok(rx) => {
+                                        self.fill = Some((std::time::Instant::now(), rx));
+                                        "Checking the private login form…".into()
+                                    }
+                                    Err(e) => e,
+                                };
                             }
-                            if ui.button(tr("Remove…")).clicked() {self.remove=Some(index);}
+                            if ui.button(tr("Remove…")).clicked() {
+                                self.remove = Some(index);
+                            }
                         });
                     }
                 });
@@ -104,6 +142,6 @@ impl VaultPanel {
                 });
             }
         }
-        ui.label(&self.status);
+        ui.label(tr(&self.status));
     }
 }

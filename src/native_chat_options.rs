@@ -2,6 +2,52 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Save only the explicit native override, preserving independent global fallback.
+/// The caller updates its live chat only after this transaction succeeds.
+pub fn save_choice(
+    state: &mut crate::workspace::Workspace,
+    store: &crate::workspace::Store,
+    pane: u64,
+    option: &str,
+    value: Option<&Value>,
+) -> Result<Option<Value>, String> {
+    let session = state
+        .sessions
+        .iter()
+        .find(|s| s.id == pane)
+        .ok_or("Pane no longer exists.")?;
+    let provider = match session.launch {
+        crate::launch::Launch::CodexChat => "codex",
+        crate::launch::Launch::ClaudeChat => "claude",
+        _ => return Err("This pane is not a native chat.".into()),
+    };
+    let mut options = Options::from_value(session.native_options.as_ref());
+    let selected = match value {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        _ => return Err("Invalid native chat choice.".into()),
+    };
+    match option {
+        "model" => options.model = selected,
+        "effort" => options.effort = selected,
+        _ => return Err("Unsupported native chat option.".into()),
+    }
+    options.normalize();
+    if !options.valid_for(provider) {
+        return Err("Invalid native chat choice.".into());
+    }
+    let values = options.value();
+    let mut next = state.clone();
+    next.sessions
+        .iter_mut()
+        .find(|s| s.id == pane)
+        .expect("validated pane")
+        .native_options = values.clone();
+    store.save(&next)?;
+    state.sessions = next.sessions;
+    Ok(values)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Options {
@@ -65,6 +111,54 @@ impl Options {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn transactional_picker_preserves_fallback_scope_and_failed_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state.active().unwrap().path.clone();
+        for (id, launch) in [(1, "CodexChat"), (2, "ClaudeChat"), (3, "Shell")] {
+            state.sessions.push(
+                serde_json::from_value(
+                    json!({"id":id,"project":project,"title":launch,"launch":launch,"cwd":cwd}),
+                )
+                .unwrap(),
+            );
+        }
+        let high = json!("high");
+        assert_eq!(
+            save_choice(&mut state, &store, 1, "effort", Some(&high)).unwrap(),
+            Some(json!({"model":"","effort":"high"}))
+        );
+        assert!(state.sessions[0].session_options.is_none());
+        assert!(state.sessions[1].native_options.is_none());
+        assert!(state.agent_model_defaults.is_empty());
+        save_choice(&mut state, &store, 1, "model", Some(&json!("gpt-custom"))).unwrap();
+        let cleared = save_choice(&mut state, &store, 1, "model", None).unwrap();
+        assert_eq!(
+            Options::from_value(cleared.as_ref()).effective(Some(&json!({"model":"global"}))),
+            Options {
+                model: "global".into(),
+                effort: "high".into()
+            }
+        );
+        for (id, key, value) in [
+            (1, "permissions", json!("yolo")),
+            (2, "effort", json!("ultra")),
+            (3, "model", json!("x")),
+            (1, "model", json!(true)),
+            (1, "model", json!("--unsafe")),
+        ] {
+            let before = serde_json::to_value(&state).unwrap();
+            assert!(save_choice(&mut state, &store, id, key, Some(&value)).is_err());
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        }
+        let before = serde_json::to_value(&state).unwrap();
+        std::fs::remove_file(dir.path().join("workspace.json")).unwrap();
+        std::fs::create_dir(dir.path().join("workspace.json")).unwrap();
+        assert!(save_choice(&mut state, &store, 1, "model", Some(&json!("different"))).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    }
     #[test]
     fn independent_fallback_and_clearing_follow_current_defaults() {
         let defaults = json!({"model":"global", "effort":"high", "permissions":"yolo"});

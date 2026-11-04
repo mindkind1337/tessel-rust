@@ -40,8 +40,18 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn model_agent(&self) -> Option<&str> {
+        match &self.launch {
+            Launch::Agent(agent) if crate::agent_model_catalog::find(agent).is_some() => {
+                Some(agent)
+            }
+            Launch::CodexChat => Some("codex"),
+            Launch::ClaudeChat => Some("claude"),
+            _ => None,
+        }
+    }
     fn has_model_choice(&self) -> bool {
-        matches!(&self.launch, Launch::Agent(agent) if crate::agent_model_catalog::find(agent).is_some())
+        self.model_agent().is_some()
     }
     fn can_pick_model(&self) -> bool {
         self.loading.is_none()
@@ -909,11 +919,33 @@ impl Tessel {
         else {
             return;
         };
-        let Launch::Agent(agent) = &session.launch else {
-            return;
-        };
         let Some(store) = &self.store else {
             self.error = "Workspace storage is unavailable.".into();
+            return;
+        };
+        if session.launch.native_chat().is_some() {
+            match crate::native_chat_options::save_choice(&mut self.state, store, id, option, value)
+            {
+                Ok(values) => {
+                    if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+                        session.session_options = values.clone();
+                    }
+                    if let Some(chat) = self.chats.iter_mut().find(|c| c.pane == id) {
+                        chat.options =
+                            crate::native_chat_options::Options::from_value(values.as_ref());
+                        chat.options_commit = false;
+                    }
+                    if let Some(chat) = self.claude_chats.iter_mut().find(|c| c.pane == id) {
+                        chat.options =
+                            crate::native_chat_options::Options::from_value(values.as_ref());
+                        chat.options_commit = false;
+                    }
+                }
+                Err(error) => self.error = error,
+            }
+            return;
+        }
+        let Launch::Agent(agent) = &session.launch else {
             return;
         };
         let discovered = self.model_discovery.as_ref().and_then(|d| d.models(agent));
@@ -2183,6 +2215,13 @@ impl Tessel {
                                             let values = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
                                             Some(crate::agent_model_defaults_ui::session_pill_label(&pane_models, values.as_ref(), self.state.language == crate::i18n::Language::French))
                                         }
+                                        Launch::CodexChat | Launch::ClaudeChat => {
+                                            let agent = session.model_agent().expect("native provider");
+                                            let defaults = self.state.agent_model_defaults.get(agent).and_then(crate::agent_model_defaults::Defaults::values);
+                                            let values = crate::native_chat_options::Options::from_value(session.session_options.as_ref()).effective(defaults.as_ref()).value();
+                                            let models = crate::agent_model_catalog::models_for(agent, self.model_discovery.as_ref().and_then(|d| d.models(agent)));
+                                            Some(crate::agent_model_defaults_ui::session_pill_label(&models, values.as_ref(), self.state.language == crate::i18n::Language::French))
+                                        }
                                         _ => None,
                                     },
                                     can_restart: session.can_restart(pane_prefs.as_ref()),
@@ -2363,17 +2402,23 @@ impl Tessel {
                             if !ui.is_enabled() || !session.can_pick_model() {
                                 session.model_picker.close();
                             } else if session.model_picker.is_open()
-                                && let Launch::Agent(agent) = &session.launch
+                                && let Some(agent) = session.model_agent().map(str::to_owned)
                             {
+                                let agent = agent.as_str();
+                                let native_chat = session.launch.native_chat().is_some();
                                 let mut input = crate::session_option_picker_ui::SessionPickerInput::new(agent, &self.state.agent_model_defaults);
                                 // This surface currently edits the next launch. Its option
                                 // rows must follow that launch's inherited model, not an
                                 // unrelated first catalogue row when no pane override exists.
-                                let configured = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
+                                let configured = if native_chat {
+                                    let defaults = self.state.agent_model_defaults.get(agent).and_then(crate::agent_model_defaults::Defaults::values);
+                                    crate::native_chat_options::Options::from_value(session.session_options.as_ref()).effective(defaults.as_ref()).value()
+                                } else { crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent) };
                                 let settings_model = configured.as_ref().and_then(|values| values.get("model")).and_then(serde_json::Value::as_str).map(|model| crate::pane_session_model::ShownAgentModel {
                                     model: model.into(), name: None, effort: None, chosen_effort: None,
                                     source: crate::pane_session_model::ModelSource::Settings, at: None,
                                 });
+                                input.native_chat = native_chat;
                                 input.agent_model = settings_model.as_ref();
                                 input.pane_running = session.terminal.as_ref().is_some_and(|terminal| !terminal.exited());
                                 input.session_options = session.session_options.as_ref();

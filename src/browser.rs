@@ -3,6 +3,8 @@ use crate::i18n::tr;
 mod capture;
 mod control;
 mod downloads;
+mod private_fill;
+pub use private_fill::Reply as FillReply;
 pub mod smoke;
 pub mod vault_smoke;
 use eframe::egui;
@@ -122,7 +124,13 @@ impl Browser {
         self.navigate();
     }
 
-    pub fn fill_account(&self, account: &crate::vault::Account) -> Result<(), String> {
+    pub fn fill_account(&self, account: &crate::vault::Account) -> Result<FillReply, String> {
+        if account.origin.len() > 8192
+            || account.username.len() > 1024
+            || account.password.len() > 8192
+        {
+            return Err("Credential exceeds private fill limits".into());
+        }
         if self.agent_root.is_some() {
             return Err("The owner vault is unavailable to agent browsers".into());
         }
@@ -134,29 +142,42 @@ impl Browser {
         if crate::vault::origin(&current)? != account.origin {
             return Err("The browser must be on this account's exact HTTPS site".into());
         }
-        let payload = zeroize::Zeroizing::new(
-            serde_json::to_string(account).map_err(|_| "Cannot prepare fill")?,
-        );
-        let script = zeroize::Zeroizing::new(format!(
-            r#"(() => {{
-            const account = {};
-            if (location.origin !== account.origin || window !== window.top) return;
-            const visible = el => !el.disabled && !el.readOnly && el.getClientRects().length > 0;
-            const fields = [...document.querySelectorAll('input[type=password]')].filter(visible);
-            if (fields.length !== 1) return;
+        let capacity =
+            (account.origin.len() + account.username.len() + account.password.len()) * 6 + 128;
+        let mut payload = zeroize::Zeroizing::new(Vec::with_capacity(capacity));
+        serde_json::to_writer(&mut *payload, account).map_err(|_| "Cannot prepare fill")?;
+        let payload = std::str::from_utf8(&payload).map_err(|_| "Cannot encode fill")?;
+        const CODE: &str = r#"(() => {
+            'use strict';
+            const account = __ACCOUNT__;
+            if (location.origin !== account.origin || window !== window.top) return 'wrong-site';
+            const visible = el => el.isConnected && !el.disabled && !el.readOnly && el.getClientRects().length > 0 && getComputedStyle(el).visibility === 'visible';
+            const fields = [...document.querySelectorAll('input[type=password]')].filter(el => visible(el) && el.autocomplete !== 'new-password');
+            if (fields.length !== 1) return fields.length ? 'ambiguous-form' : 'no-login-form';
             const password = fields[0];
             const form = password.form;
-            if (!form) return;
-            const users = [...form.querySelectorAll('input[type=email],input[type=text],input:not([type])')].filter(visible);
-            if (users.length > 1) return;
-            const set = (el,value) => {{ Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value); el.dispatchEvent(new Event('input',{{bubbles:true}})); el.dispatchEvent(new Event('change',{{bubbles:true}})); }};
+            const sameOrigin = raw => { try { return new URL(raw || location.href, document.baseURI).origin === account.origin; } catch { return false; } };
+            const destinationsOk = f => {
+                if (!f || !f.isConnected || f.ownerDocument !== document || !sameOrigin(f.getAttribute('action'))) return false;
+                return [...document.querySelectorAll('button,input')].filter(el => el.form === f && ['submit','image'].includes(el.type) && el.hasAttribute('formaction')).every(el => sameOrigin(el.getAttribute('formaction')));
+            };
+            if (!destinationsOk(form)) return 'unsafe-form';
+            const users = [...form.querySelectorAll('input[type=email],input[type=text],input:not([type])')].filter(el => visible(el) && el.form === form);
+            if (users.length > 1) return 'ambiguous-form';
+            const set = (el,value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); };
             if (users.length === 1) set(users[0],account.username);
+            if (location.origin !== account.origin || !visible(password) || password.type !== 'password' || password.autocomplete === 'new-password' || password.form !== form || !destinationsOk(form)) return 'unsafe-form';
             set(password,account.password);
-        }})()"#,
-            payload.as_str()
+            return 'ok';
+        })()"#;
+        let (prefix, suffix) = CODE.split_once("__ACCOUNT__").expect("credential slot");
+        let mut script = zeroize::Zeroizing::new(String::with_capacity(
+            prefix.len() + payload.len() + suffix.len(),
         ));
-        view.evaluate_script(&script)
-            .map_err(|_| "Browser refused the fill request".into())
+        script.push_str(prefix);
+        script.push_str(payload);
+        script.push_str(suffix);
+        private_fill::start(view, account.origin.clone(), script)
     }
 
     pub fn visible(&self, visible: bool) {

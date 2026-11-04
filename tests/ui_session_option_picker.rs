@@ -4,6 +4,36 @@
 //! `user_typing` protection, Unicode UTF-8 safety, `4px` viewport clamping across all 7 dark
 //! themes + light mode, keyboard navigation, and 1-step `Escape` isolation).
 
+#[test]
+fn native_chat_picker_explains_application_boundary_and_hides_terminal_options() {
+    let defaults = std::collections::BTreeMap::new();
+    for (agent, phrase) in [
+        ("codex", "next Codex turn"),
+        ("claude", "next Claude connection"),
+    ] {
+        let ctx = egui::Context::default();
+        let mut picker = session_option_picker_ui::SessionOptionPickerUi::default();
+        let mut input = session_option_picker_ui::SessionPickerInput::new(agent, &defaults);
+        input.native_chat = true;
+        input.capabilities.can_open_picker = true;
+        let mut result = session_option_picker_ui::SessionPickerOutput::default();
+        let full = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                result = picker.show_inline(ui, &input);
+            });
+        });
+        assert!(result.supported && !result.disabled);
+        assert!(result.note.contains(phrase));
+        let text = painted_texts(&full)
+            .into_iter()
+            .map(|v| v.0)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("Choose in agent picker"));
+        assert!(!text.contains("/fast"));
+    }
+}
+
 #[allow(dead_code)]
 #[path = "../src/agent_env.rs"]
 mod agent_env;
