@@ -251,3 +251,5 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 ## Tessel host release resources
 
 `resources/host/v0.1.0/` contains the unmodified Linux x86_64 and aarch64 release binaries from `mindkind1337/tessel-host`, tag `v0.1.0` (commit `4354459b450368f6f8d28058e95c872dd921b6ef`). The accompanying MIT license is preserved in `resources/host/v0.1.0/LICENSE` (Copyright (c) 2026 Jean-Claude Trottier); the manifest, SHA256SUMS and SOURCE.json record the verified release inputs. These resources are staged for native host integration, not yet installed by the desktop.
+
+`src/browser_passwords_model.rs` and its synthetic reference generator/fixtures adapt the Tessel browser-password dialog and main-process validation rules under the existing Orca MIT attribution (Copyright (c) 2026 Lovecast Inc.). No browser profile or real credential data is included.

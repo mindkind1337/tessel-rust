@@ -259,3 +259,5 @@ The installed Codex app-server schema describes reasoning effort as a nonempty a
 `cargo fmt --check` and all-target/all-feature Clippy with warnings denied passed on the final native-chat batch.
 
 Native chat pane menus now use the model/effort catalogue with independent Settings fallback and transactional override saves. Codex applies choices on the next turn, Claude on the next connection. Protocol-observed active model chips and live Claude switching remain pending.
+
+Password dialog groundwork: the pure metadata/import/DOM-decision model and source-derived synthetic fixtures are present, including streaming CSV column limits, bounded batches and duplicate IDs, independent HTTPS proof construction and Live Share decisions. This model is not yet connected to a new vault worker or dialog; the owner-only runtime retains its independently validated isolated-world fill.
