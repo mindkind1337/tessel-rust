@@ -71,20 +71,29 @@ impl Control {
     }
 }
 
-struct Slot;
-impl Slot {
-    fn acquire() -> Option<Self> {
-        WORKERS
+/// Reserve before any remote create/attach RPC. Moving this permit into the
+/// command worker keeps opening and running terminals under the same limit.
+/// Dropping a cancelled or failed opening releases capacity automatically.
+#[must_use]
+pub struct Permit {
+    count: &'static AtomicUsize,
+}
+impl Permit {
+    pub fn acquire() -> Option<Self> {
+        Self::reserve(&WORKERS)
+    }
+    fn reserve(count: &'static AtomicUsize) -> Option<Self> {
+        count
             .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_WORKERS).then_some(count + 1)
             })
             .ok()
-            .map(|_| Self)
+            .map(|_| Self { count })
     }
 }
-impl Drop for Slot {
+impl Drop for Permit {
     fn drop(&mut self) {
-        WORKERS.fetch_sub(1, Ordering::AcqRel);
+        self.count.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -132,9 +141,15 @@ impl Driver for HostDriver {
 
 /// Call on the opening worker after creating or attaching a terminal. Its event
 /// receiver remains with the UI. Dropping Control detaches, never terminates.
-pub fn start(client: Client, terminal: Terminal, epoch: Epoch) -> Result<Control, &'static str> {
+pub fn start(
+    permit: Permit,
+    client: Client,
+    terminal: Terminal,
+    epoch: Epoch,
+) -> Result<Control, &'static str> {
     let connection = Some((client.clone(), epoch.clone()));
     spawn(
+        permit,
         HostDriver {
             client,
             terminal,
@@ -145,10 +160,10 @@ pub fn start(client: Client, terminal: Terminal, epoch: Epoch) -> Result<Control
 }
 
 fn spawn(
+    permit: Permit,
     mut driver: impl Driver,
     connection: Option<(Client, Epoch)>,
 ) -> Result<Control, &'static str> {
-    let slot = Slot::acquire().ok_or("Too many remote terminal workers")?;
     let state = Arc::new(AtomicU8::new(driver.authority()));
     let worker_state = state.clone();
     let (commands, worker) = host_commands::channel();
@@ -156,7 +171,7 @@ fn spawn(
     std::thread::Builder::new()
         .name("host-terminal".into())
         .spawn(move || {
-            let _slot = slot;
+            let _permit = permit;
             let mut previous = driver.authority();
             while !worker.closed() {
                 let authority = driver.authority();
@@ -312,9 +327,24 @@ mod tests {
         }
     }
     #[test]
+    fn openings_reserve_capacity_before_network_and_release_on_cancellation() {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let mut pending: Vec<_> = (0..MAX_WORKERS)
+            .map(|_| Permit::reserve(&COUNT).unwrap())
+            .collect();
+        assert!(Permit::reserve(&COUNT).is_none());
+        drop(pending.pop());
+        let replacement = Permit::reserve(&COUNT).unwrap();
+        assert!(Permit::reserve(&COUNT).is_none());
+        drop(pending);
+        drop(replacement);
+        assert_eq!(COUNT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
     fn commands_execute_in_order_and_termination_stops_the_worker() {
         let (driver, calls, ended) = fake(ONLINE | WRITER);
-        let control = spawn(driver, None).unwrap();
+        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
         control.input(b"fixture").unwrap();
         control.resize(30, 80).unwrap();
         control.terminate().unwrap();
@@ -332,7 +362,7 @@ mod tests {
     #[test]
     fn observer_can_request_control_but_cannot_type_resize_or_terminate() {
         let (driver, calls, ended) = fake(ONLINE);
-        let control = spawn(driver, None).unwrap();
+        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
         assert_eq!(control.input(b"fixture"), Err(Refused::Closed));
         assert_eq!(control.resize(30, 80), Err(Refused::Closed));
         assert_eq!(control.terminate(), Err(Refused::Closed));
@@ -351,7 +381,7 @@ mod tests {
         let (mut driver, calls, ended) = fake(ONLINE | WRITER);
         let (release, block) = mpsc::channel();
         driver.block_input = Some(block);
-        let control = spawn(driver, None).unwrap();
+        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
         control.input(b"fixture").unwrap();
         assert_eq!(calls.recv_timeout(Duration::from_secs(3)).unwrap(), "input");
         control.terminate().unwrap();
@@ -366,7 +396,7 @@ mod tests {
         let (release, block) = mpsc::channel();
         driver.block_input = Some(block);
         driver.fail_input.store(true, Ordering::Release);
-        let control = spawn(driver, None).unwrap();
+        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
         control.input(b"first").unwrap();
         assert_eq!(calls.recv_timeout(Duration::from_secs(3)).unwrap(), "input");
         control.input(b"queued").unwrap();

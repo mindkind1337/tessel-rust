@@ -21,6 +21,9 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
         prefs.env.clear();
     }
     for pane in &mut portable.sessions {
+        if let Some(native) = &mut pane.native_host {
+            native.identity = None;
+        }
         pane.codex_seed = None;
         pane.launch_fingerprint = None;
     }
@@ -63,6 +66,9 @@ pub fn import(path: &Path) -> Result<Workspace> {
         prefs.reset();
     }
     for pane in &mut backup.workspace.sessions {
+        if let Some(native) = &mut pane.native_host {
+            native.identity = None;
+        }
         pane.codex_seed = None;
         pane.launch_fingerprint = None;
     }
@@ -72,6 +78,56 @@ pub fn import(path: &Path) -> Result<Workspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_host_backups_keep_an_inert_marker_without_resumable_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.json");
+        let identity = serde_json::json!({
+            "epoch": tessel_host_protocol::Epoch::from_bytes([1; 16]),
+            "terminal": tessel_host_protocol::TerminalId::from_bytes([2; 16]),
+        });
+        let mut state = Workspace::default();
+        state.sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "project": null, "title": "Native fixture", "cwd": dir.path(),
+                "launch": {"Ssh": {"alias": "fixture", "folder": ""}},
+                "native_host": {"identity": identity.clone()},
+            }))
+            .unwrap(),
+        );
+        state.validate().unwrap();
+        export(&path, &state).unwrap();
+        assert!(
+            state.sessions[0]
+                .native_host
+                .as_ref()
+                .unwrap()
+                .identity
+                .is_some()
+        );
+        let mut backup: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(backup["workspace"]["sessions"][0]["native_host"]["identity"].is_null());
+        backup["workspace"]["sessions"][0]["native_host"]["identity"] = identity;
+        std::fs::write(&path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        let restored = import(&path).unwrap();
+        assert!(
+            restored.sessions[0]
+                .native_host
+                .as_ref()
+                .unwrap()
+                .identity
+                .is_none()
+        );
+        assert!(
+            serde_json::from_value::<crate::workspace::SavedHostTerminal>(
+                serde_json::json!({"identity": null, "lease": "must-not-be-accepted"})
+            )
+            .is_err()
+        );
+        state.sessions[0].launch = crate::launch::Launch::Shell;
+        assert!(state.validate().is_err());
+    }
     #[test]
     fn export_omits_environment_and_import_cannot_introduce_launch_overrides() {
         let dir = tempfile::tempdir().unwrap();
@@ -113,6 +169,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: None,
@@ -153,6 +210,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: None,

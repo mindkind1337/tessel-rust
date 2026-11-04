@@ -74,6 +74,10 @@ pub struct NativeThread {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
+    /// An explicit native marker suppresses the legacy SSH launch path. It is
+    /// inert on restore/import; terminal authority is never stored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_host: Option<SavedHostTerminal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_model: Option<crate::pane_session_model::SavedPaneModel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,19 @@ pub struct SavedSession {
     pub title: String,
     pub launch: crate::launch::Launch,
     pub cwd: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SavedHostTerminal {
+    pub identity: Option<SavedHostTerminalIdentity>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedHostTerminalIdentity {
+    pub epoch: tessel_host_protocol::Epoch,
+    pub terminal: tessel_host_protocol::TerminalId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -226,6 +243,11 @@ impl Workspace {
             }
         }
         for session in &self.sessions {
+            if session.native_host.is_some()
+                && !matches!(session.launch, crate::launch::Launch::Ssh(_))
+            {
+                return Err("Native host metadata requires an SSH pane.".into());
+            }
             if let Some(model) = &session.last_model {
                 let value =
                     serde_json::to_value(model).map_err(|_| "Invalid saved model metadata.")?;
@@ -619,6 +641,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         let id = crate::claude::uuid().unwrap();
         state.sessions.push(SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: Some(id.clone()),
@@ -693,6 +716,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                native_host: None,
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
@@ -845,6 +869,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                native_host: None,
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
@@ -904,6 +929,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                native_host: None,
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
@@ -941,6 +967,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: None,
@@ -968,6 +995,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                native_host: None,
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
@@ -983,6 +1011,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: None,
@@ -1048,6 +1077,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            native_host: None,
             last_model: None,
             codex_seed: None,
             conversation_id: None,
@@ -1082,6 +1112,7 @@ mod tests {
             (4, Some("Old shell label"), crate::launch::Launch::Shell),
         ] {
             state.sessions.push(SavedSession {
+                native_host: None,
                 last_model: None,
                 id,
                 codex_seed: None,

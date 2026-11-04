@@ -18,6 +18,7 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    native_host: Option<workspace::SavedHostTerminal>,
     last_model: Option<crate::pane_session_model::SavedPaneModel>,
     model_save_attempt: Option<std::time::Instant>,
     model_picker: crate::session_option_picker_ui::SessionOptionPickerUi,
@@ -164,7 +165,8 @@ impl Session {
         self.pane_name.as_deref().unwrap_or(&self.title)
     }
     fn start(&mut self, prefs: Option<crate::agent_preferences::Preferences>) {
-        if self.codex_restore.is_some()
+        if self.native_host.is_some()
+            || self.codex_restore.is_some()
             || self.restarting.is_some()
             || self.launch.native_chat().is_some()
             || self.terminal.is_some()
@@ -548,6 +550,7 @@ impl Tessel {
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
+                native_host: saved.native_host.clone(),
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
@@ -746,6 +749,7 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        native_host: None,
                         restarting: None,
                         codex_discovery: None,
                         codex_restore: None,
@@ -832,6 +836,7 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    native_host: None,
                     restarting: None,
                     codex_discovery: None,
                     codex_restore: None,
@@ -905,6 +910,7 @@ impl Tessel {
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                native_host: s.native_host.clone(),
                 last_model: s.last_model.clone(),
                 codex_seed: s.codex_seed.clone(),
                 conversation_id: s.conversation_id.clone(),
@@ -1261,6 +1267,7 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            native_host: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
@@ -2887,6 +2894,7 @@ impl Tessel {
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                native_host: saved.native_host.clone(),
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
@@ -4704,6 +4712,7 @@ mod tests {
         let terminal = Terminal::spawn().unwrap();
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            native_host: None,
             restarting: Some(Restart {
                 result: receiver,
                 preferences: None,
@@ -4780,6 +4789,7 @@ $lock.Dispose()
             ..Default::default()
         };
         let mut session = Session {
+            native_host: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
@@ -4962,6 +4972,7 @@ $lock.Dispose()
     fn restart_status_requires_a_running_known_launch_and_tracks_effective_changes() {
         let prefs = crate::agent_preferences::Preferences::default();
         let mut session = Session {
+            native_host: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
@@ -5003,8 +5014,19 @@ $lock.Dispose()
     }
     #[test]
     fn native_panes_cannot_start_pty_workers() {
-        for launch in [Launch::CodexChat, Launch::ClaudeChat] {
+        for (launch, native_host) in [
+            (Launch::CodexChat, None),
+            (Launch::ClaudeChat, None),
+            (
+                Launch::Ssh(Host {
+                    alias: "fixture".into(),
+                    folder: String::new(),
+                }),
+                Some(workspace::SavedHostTerminal::default()),
+            ),
+        ] {
             let mut session = Session {
+                native_host,
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
@@ -5060,6 +5082,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             ..Default::default()
         };
         let mut session = Session {
+            native_host: None,
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
@@ -5199,6 +5222,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             ..Default::default()
         };
         let mut session = Session {
+            native_host: None,
             codex_seed: None,
             conversation_id: None,
             restarting: None,
@@ -5251,6 +5275,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            native_host: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
@@ -5290,6 +5315,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
     #[test]
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
+            native_host: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
