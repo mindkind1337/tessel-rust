@@ -18,9 +18,9 @@ use eframe::egui::{self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, S
 use host_terminal_panel::{
     HostHeaderTag, HostTerminalAction, HostTerminalCapabilities, HostTerminalInput,
     HostTerminalPanel, HostTerminalPhase, LostReason, MAX_EPOCH_CHARS, MAX_HOST_LABEL_CHARS,
-    MAX_NOTE_CHARS, MAX_RAW_SCAN_CHARS, PersistenceWarningInput, ReadOnlyReason, SkippedOutput,
-    SkippedOutputInput, StreamRejectReason, SurvivesLogout, header_tag_width, sanitize_host_text,
-    show_header_tag,
+    MAX_NOTE_CHARS, MAX_RAW_SCAN_CHARS, OpeningFailureReason, PersistenceWarningInput,
+    ReadOnlyReason, SkippedOutput, SkippedOutputInput, StreamRejectReason, SurvivesLogout,
+    header_tag_width, sanitize_host_text, show_header_tag,
 };
 use theme_palettes::THEMES;
 
@@ -318,6 +318,9 @@ fn full_caps() -> HostTerminalCapabilities {
         can_take_control: true,
         can_reconnect: true,
         can_restart: true,
+        can_retry_opening: true,
+        can_browse_existing: true,
+        can_retry_save_lease: true,
     }
 }
 
@@ -337,6 +340,7 @@ fn focus_and_held_escape_isolation_never_leaks_to_live_terminal_and_respects_ope
         phase: &live,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -578,6 +582,7 @@ fn readonly_suppresses_input_and_resize_throttles_flash_and_emits_take_control()
             ..Default::default()
         },
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -708,6 +713,7 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
             phase: &live,
             capabilities: full_caps(),
             terminal_focused: true,
+            unsaved_lease: false,
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: 0,
@@ -822,28 +828,81 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
         };
         let in_stream_closed = HostTerminalInput {
             phase: &stream_closed,
+            unsaved_lease: true,
             ..in0
         };
         let m_stream_closed = settle_pane(&ctx, &mut panel, &in_stream_closed, viewport, 4.5);
+        assert_eq!(panel.overlay_rects().len(), 2);
+        let unsaved_top_rect = panel.overlay_rects()[0];
+        let closed_rect = panel.overlay_rects()[1];
+        for r in [unsaved_top_rect, closed_rect] {
+            assert!(
+                r.left() >= m_stream_closed.terminal_rect.left() - 0.5
+                    && r.right() <= m_stream_closed.terminal_rect.right() + 0.5
+                    && r.top() >= m_stream_closed.terminal_rect.top() - 0.5
+                    && r.bottom() <= m_stream_closed.terminal_rect.bottom() + 0.5,
+                "unsaved+closed overlays overflowed terminal_rect at {viewport:?}: {r:?} vs {:?}",
+                m_stream_closed.terminal_rect
+            );
+        }
+        if viewport.y >= 450.0 {
+            assert!(
+                unsaved_top_rect.bottom() + 8.0 <= closed_rect.top(),
+                "top unsaved banner and bottom closed card overlapped at {viewport:?}"
+            );
+        }
+
+        // 4 stacked top banners (`ReadOnly` + `unsaved_lease` + `Persistence` + `SkippedOutput`)
+        let in4 = HostTerminalInput {
+            unsaved_lease: true,
+            ..in3
+        };
+        let m4 = settle_pane(&ctx, &mut panel, &in4, viewport, 4.6);
+        let rects_4 = panel.overlay_rects().to_vec();
+        assert_eq!(rects_4.len(), 4);
+        for (idx, r) in rects_4.iter().enumerate() {
+            assert!(
+                r.left() >= m4.terminal_rect.left() - 0.5
+                    && r.right() <= m4.terminal_rect.right() + 0.5,
+                "4-banner stack {idx} overflowed horizontally at {viewport:?}: {r:?}"
+            );
+            if idx > 0 {
+                assert!(
+                    r.top() >= rects_4[idx - 1].bottom() + 7.5,
+                    "4-banner stack {idx} overlapped {} at {viewport:?}",
+                    idx - 1
+                );
+            }
+        }
+
+        let open_failed = HostTerminalPhase::OpeningFailed {
+            reason: OpeningFailureReason::Ambiguous,
+        };
+        let in_open_failed = HostTerminalInput {
+            phase: &open_failed,
+            ..in0
+        };
+        let m_open_failed = settle_pane(&ctx, &mut panel, &in_open_failed, viewport, 4.7);
         assert_eq!(panel.overlay_rects().len(), 1);
-        let closed_rect = panel.overlay_rects()[0];
+        let open_failed_rect = panel.overlay_rects()[0];
         assert!(
-            closed_rect.left() >= m_stream_closed.terminal_rect.left() - 0.5
-                && closed_rect.right() <= m_stream_closed.terminal_rect.right() + 0.5
-                && closed_rect.top() >= m_stream_closed.terminal_rect.top() - 0.5
-                && closed_rect.bottom() <= m_stream_closed.terminal_rect.bottom() + 0.5,
-            "stream-closed overlay overflowed terminal_rect at {viewport:?}: {closed_rect:?} vs {:?}",
-            m_stream_closed.terminal_rect
+            open_failed_rect.left() >= m_open_failed.terminal_rect.left() - 0.5
+                && open_failed_rect.right() <= m_open_failed.terminal_rect.right() + 0.5
+                && open_failed_rect.top() >= m_open_failed.terminal_rect.top() - 0.5
+                && open_failed_rect.bottom() <= m_open_failed.terminal_rect.bottom() + 0.5,
+            "opening-failed overlay overflowed terminal_rect at {viewport:?}: {open_failed_rect:?}"
         );
 
         // `terminal_rect`, `(rows, cols)`, `ui.min_rect()`, and `ui.cursor()` must be 100% invariant!
         for other in [
             &m1,
             &m3,
+            &m4,
             &m_lost,
             &m_rejected,
             &m_rejected_confirm,
             &m_stream_closed,
+            &m_open_failed,
         ] {
             assert_eq!(other.terminal_rect, m0.terminal_rect);
             assert_eq!(other.grid_rows_cols, m0.grid_rows_cols);
@@ -942,6 +1001,7 @@ fn sanitizes_control_c1_and_bidi_characters_in_host_notes_details_and_epochs() {
         phase: &phase,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -988,6 +1048,7 @@ fn lost_and_epoch_change_never_resume_old_process_only_explicit_restart_new() {
         phase: &lost_unavail,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1274,6 +1335,7 @@ fn terminate_requires_capability_and_live_or_readonly_and_opening_cancel_is_hone
         phase: &opening,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1406,8 +1468,19 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
         }),
         Some(HostHeaderTag::StreamClosed)
     );
+    assert_eq!(
+        HostTerminalPanel::header_tag(&HostTerminalPhase::OpeningFailed {
+            reason: OpeningFailureReason::Ambiguous,
+        }),
+        Some(HostHeaderTag::OpeningFailed)
+    );
     for (tag, en, fr) in [
         (HostHeaderTag::Opening, "Connecting…", "Connexion…"),
+        (
+            HostHeaderTag::OpeningFailed,
+            "Open failed",
+            "Échec d'ouverture",
+        ),
         (HostHeaderTag::ReadOnly, "Read-only", "Lecture seule"),
         (HostHeaderTag::Reconnecting, "Reconnecting…", "Reconnexion…"),
         (
@@ -1444,6 +1517,7 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
                 phase: &live,
                 capabilities: full_caps(),
                 terminal_focused: true,
+                unsaved_lease: false,
                 persistence_warning: Some(PersistenceWarningInput::new("ep-i18n", survives)),
                 skipped_output: None,
                 scrollback_lines: 0,
@@ -1468,6 +1542,7 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
         phase: &live,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: Some(SkippedOutputInput::bytes("ep-skip", 0)),
         scrollback_lines: 0,
@@ -1660,6 +1735,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
                 phase: &phase,
                 capabilities: full_caps(),
                 terminal_focused: true,
+                unsaved_lease: false,
                 persistence_warning: Some(PersistenceWarningInput::new(
                     "ep-rej-1",
                     SurvivesLogout::No,
@@ -1798,6 +1874,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
             phase: &rejected,
             capabilities: no_auth_caps,
             terminal_focused: true,
+            unsaved_lease: false,
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: 0,
@@ -1820,6 +1897,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
         phase: &rejected,
         capabilities: full_caps(),
         terminal_focused: true,
+        unsaved_lease: false,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1966,5 +2044,479 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
         let (second_act, _) = click_pane(&ctx, &mut panel, &extra_in, vp, next_time(), confirm_btn);
         assert_eq!(second_act, Some(HostTerminalAction::Terminate));
         assert!(!panel.has_pending_close_choice());
+    }
+}
+
+#[test]
+fn opening_failed_covers_all_reasons_blocks_implicit_restart_and_confirms_terminate() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx, true, Some(theme_palettes::ThemeId::Classic));
+
+    let mut panel = HostTerminalPanel::new();
+    let vp = Vec2::new(860.0, 520.0);
+    let mut clock = 1.0_f64;
+    let mut next_time = || {
+        let current = clock;
+        clock += 0.1;
+        current
+    };
+
+    let cases = [
+        (
+            OpeningFailureReason::Capacity,
+            true,
+            false,
+            "Too many remote terminals are open locally — close another terminal pane, then retry.",
+            "Trop de terminaux distants sont ouverts localement — fermez un autre volet de terminal puis réessayez.",
+        ),
+        (
+            OpeningFailureReason::DeferredRetry,
+            true,
+            false,
+            "Too many remote terminals are open locally — close another pane to retry this pending terminal safely.",
+            "Trop de terminaux distants sont ouverts localement — fermez un autre volet pour réessayer ce terminal en attente sans doublon.",
+        ),
+        (
+            OpeningFailureReason::NotConnected,
+            true,
+            false,
+            "Could not reach host-open to open this terminal — an existing remote session may still be running.",
+            "Impossible de joindre host-open pour ouvrir ce terminal — une session distante existante est peut-être toujours active.",
+        ),
+        (
+            OpeningFailureReason::StoreUnavailable,
+            true,
+            false,
+            "Local encrypted terminal storage is unavailable — terminal request was not sent.",
+            "Le stockage chiffré local des terminaux est indisponible — la demande n'a pas été envoyée.",
+        ),
+        (
+            OpeningFailureReason::Ambiguous,
+            true,
+            false,
+            "Opening terminal on host-open was interrupted before confirmation — the remote program may have started; retry safely or check existing terminals.",
+            "L'ouverture du terminal sur host-open a été interrompue avant confirmation — le programme distant a peut-être démarré ; réessayez sans doublon ou vérifiez les terminaux existants.",
+        ),
+        (
+            OpeningFailureReason::RetryExpired,
+            false,
+            false,
+            "Safe retry window expired for the unconfirmed terminal on host-open — check existing terminals to avoid starting a duplicate.",
+            "Le délai de réessai sûr a expiré pour le terminal non confirmé sur host-open — vérifiez les terminaux existants pour éviter un doublon.",
+        ),
+        (
+            OpeningFailureReason::Detached,
+            false,
+            true,
+            "Terminal on host-open was not adopted in time and was detached — the remote program may still be running.",
+            "Le terminal sur host-open n'a pas été rattaché à temps et a été détaché — le programme distant est peut-être toujours actif.",
+        ),
+        (
+            OpeningFailureReason::CancelNotConfirmed,
+            false,
+            true,
+            "Stopping the new terminal on host-open could not be confirmed — the remote program may still be running.",
+            "L'arrêt du nouveau terminal sur host-open n'a pas pu être confirmé — le programme distant est peut-être toujours actif.",
+        ),
+        (
+            OpeningFailureReason::Stopped,
+            false,
+            false,
+            "Terminal opening worker stopped unexpectedly for host-open — outcome is unknown; check existing terminals before opening another.",
+            "L'ouverture du terminal pour host-open s'est interrompue de façon inattendue — résultat inconnu ; vérifiez les terminaux existants avant d'en ouvrir un autre.",
+        ),
+    ];
+
+    for (reason, allows_retry, may_run_process, expected_en, expected_fr) in cases {
+        let phase = HostTerminalPhase::OpeningFailed { reason };
+        assert!(!panel.accepts_input(&phase));
+        assert!(!panel.accepts_resize(&phase));
+        assert_eq!(
+            HostTerminalPanel::header_tag(&phase),
+            Some(HostHeaderTag::OpeningFailed)
+        );
+
+        for (fr, expected_msg, retry_lbl, browse_lbl, term_lbl, close_lbl) in [
+            (
+                false,
+                expected_en,
+                "Retry",
+                "Existing terminals…",
+                "Terminate process",
+                "Close pane",
+            ),
+            (
+                true,
+                expected_fr,
+                "Réessayer",
+                "Terminaux existants…",
+                "Terminer le processus",
+                "Fermer le volet",
+            ),
+        ] {
+            let inp = HostTerminalInput {
+                id_salt: Id::new("pane-open-failed"),
+                host_label: "host-open",
+                epoch: Some("ep-open-failed"),
+                phase: &phase,
+                capabilities: full_caps(),
+                terminal_focused: true,
+                unsaved_lease: false,
+                persistence_warning: None,
+                skipped_output: None,
+                scrollback_lines: 0,
+                french: fr,
+            };
+            let out = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            assert_eq!(panel.overlay_rects().len(), 1);
+            assert!(has_painted_text(&out.output.shapes, expected_msg));
+            assert!(
+                painted_texts(&out.output.shapes).iter().any(|(txt, _, _)| {
+                    txt == expected_msg && !txt.chars().any(|c| c.is_ascii_digit())
+                }),
+                "OpeningFailed message must never invent numbers ({reason:?})"
+            );
+
+            // Never offer blind `Start new session` or `Take control` on `OpeningFailed`.
+            for forbidden_btn in [
+                "Start new session",
+                "Nouvelle session",
+                "Take control",
+                "Prendre le contrôle",
+                "Detach",
+                "Détacher",
+            ] {
+                assert!(
+                    find_accesskit_button_center(&out.output, forbidden_btn).is_none(),
+                    "OpeningFailed ({reason:?}) must not offer `{forbidden_btn}`"
+                );
+            }
+
+            if reason == OpeningFailureReason::NotConnected {
+                for false_claim in [
+                    "nothing was sent",
+                    "not sent",
+                    "n'a pas été envoyée",
+                    "rien",
+                ] {
+                    assert!(
+                        !has_painted_substring(&out.output.shapes, false_claim),
+                        "NotConnected must never claim nothing was sent ({false_claim})"
+                    );
+                }
+            }
+            if reason == OpeningFailureReason::StoreUnavailable {
+                for leak in ["DPAPI", "CryptProtect", "AppData", ".json"] {
+                    assert!(
+                        !has_painted_substring(&out.output.shapes, leak),
+                        "StoreUnavailable must never leak platform/path detail ({leak})"
+                    );
+                }
+            }
+
+            if allows_retry {
+                let retry_pos = require_accesskit_button_center(&out.output, retry_lbl);
+                let (act, _) = click_pane(&ctx, &mut panel, &inp, vp, next_time(), retry_pos);
+                assert_eq!(act, Some(HostTerminalAction::RetryOpening));
+            } else {
+                assert!(
+                    find_accesskit_button_center(&out.output, retry_lbl).is_none(),
+                    "{reason:?} must block RetryOpening even when can_retry_opening is true"
+                );
+            }
+
+            let f_browse = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            let browse_pos = require_accesskit_button_center(&f_browse.output, browse_lbl);
+            let (browse_act, _) = click_pane(&ctx, &mut panel, &inp, vp, next_time(), browse_pos);
+            assert_eq!(
+                browse_act,
+                Some(HostTerminalAction::BrowseExistingTerminals)
+            );
+
+            let f_close = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            let close_pos = require_accesskit_button_center(&f_close.output, close_lbl);
+            let (close_act, _) = click_pane(&ctx, &mut panel, &inp, vp, next_time(), close_pos);
+            assert_eq!(close_act, Some(HostTerminalAction::ClosePane));
+
+            let f_check = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            if may_run_process {
+                require_accesskit_button_center(&f_check.output, term_lbl);
+            } else {
+                assert!(
+                    find_accesskit_button_center(&f_check.output, term_lbl).is_none(),
+                    "{reason:?} without Unended process must not offer Terminate"
+                );
+                assert_eq!(
+                    panel.request_close(&phase, inp.capabilities),
+                    Some(HostTerminalAction::ClosePane)
+                );
+            }
+
+            // Pressing Enter in `OpeningFailed` is strictly inert (never restarts or retries).
+            let t_key = next_time();
+            let key_frame = step_pane_frame(
+                &ctx,
+                &mut panel,
+                &inp,
+                vp,
+                t_key,
+                vec![
+                    key_ev(Key::Enter, true, false, Modifiers::NONE),
+                    key_ev(Key::Enter, false, false, Modifiers::NONE),
+                    Event::Text("whoami".to_owned()),
+                    key_ev(Key::Escape, true, false, Modifiers::NONE),
+                    key_ev(Key::Escape, false, false, Modifiers::NONE),
+                ],
+                false,
+            );
+            assert_eq!(key_frame.action, None);
+            assert_eq!(key_frame.forwarded_escape_count, 0);
+            assert!(!panel.is_readonly_flash_active(t_key + 0.05));
+        }
+    }
+
+    // `Detached` vs `CancelNotConfirmed`: verify two-step confirmation via both `×` and overlay
+    // button, safe `Enter` default (`Leave running` -> `ClosePane`), and `ClosePane` without auth.
+    for reason in [
+        OpeningFailureReason::Detached,
+        OpeningFailureReason::CancelNotConfirmed,
+    ] {
+        let phase = HostTerminalPhase::OpeningFailed { reason };
+        assert_eq!(
+            panel.request_close(&phase, HostTerminalCapabilities::default()),
+            Some(HostTerminalAction::ClosePane)
+        );
+
+        let auth_en = HostTerminalInput {
+            id_salt: Id::new("pane-open-unended"),
+            host_label: "host-open",
+            epoch: Some("ep-open-unended"),
+            phase: &phase,
+            capabilities: full_caps(),
+            terminal_focused: true,
+            unsaved_lease: false,
+            persistence_warning: None,
+            skipped_output: None,
+            scrollback_lines: 0,
+            french: false,
+        };
+        let _ = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+        assert_eq!(panel.request_close(&phase, auth_en.capabilities), None);
+        assert!(panel.has_pending_close_choice());
+        assert!(panel.blocks_terminal_focus());
+
+        let f_confirm = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+        assert!(has_painted_text(
+            &f_confirm.output.shapes,
+            "Remote program on host-open may still be running — close pane and leave it running, or terminate its process?"
+        ));
+        require_accesskit_button_center(&f_confirm.output, "Leave running");
+        require_accesskit_button_center(&f_confirm.output, "Terminate process");
+        require_accesskit_button_center(&f_confirm.output, "Cancel");
+
+        // Enter activates focused safe `Leave running` -> `ClosePane` (never `Terminate`).
+        let enter_safe = step_pane_frame(
+            &ctx,
+            &mut panel,
+            &auth_en,
+            vp,
+            next_time(),
+            vec![
+                key_ev(Key::Enter, true, false, Modifiers::NONE),
+                key_ev(Key::Enter, false, false, Modifiers::NONE),
+            ],
+            false,
+        );
+        assert_eq!(enter_safe.action, Some(HostTerminalAction::ClosePane));
+        assert!(!panel.has_pending_close_choice());
+
+        // French confirmation + 2-step `Terminer le processus` flow.
+        let auth_fr = HostTerminalInput {
+            french: true,
+            ..auth_en
+        };
+        let f_initial_fr = settle_pane(&ctx, &mut panel, &auth_fr, vp, next_time());
+        let step1_pos =
+            require_accesskit_button_center(&f_initial_fr.output, "Terminer le processus");
+        let (step1_act, _) = click_pane(&ctx, &mut panel, &auth_fr, vp, next_time(), step1_pos);
+        assert_eq!(step1_act, None);
+        assert!(panel.has_pending_close_choice());
+
+        let f_step2_fr = settle_pane(&ctx, &mut panel, &auth_fr, vp, next_time());
+        assert!(has_painted_text(
+            &f_step2_fr.output.shapes,
+            "Le programme distant sur host-open est peut-être toujours actif — fermer le volet en le laissant tourner, ou terminer son processus ?"
+        ));
+        require_accesskit_button_center(&f_step2_fr.output, "Laisser tourner");
+        require_accesskit_button_center(&f_step2_fr.output, "Annuler");
+        let step2_pos =
+            require_accesskit_button_center(&f_step2_fr.output, "Terminer le processus");
+        let (step2_act, _) = click_pane(&ctx, &mut panel, &auth_fr, vp, next_time(), step2_pos);
+        assert_eq!(step2_act, Some(HostTerminalAction::Terminate));
+        assert!(!panel.has_pending_close_choice());
+    }
+
+    // Minimal capabilities (`default()`) show only `Close pane`.
+    let min_phase = HostTerminalPhase::OpeningFailed {
+        reason: OpeningFailureReason::Ambiguous,
+    };
+    let min_in = HostTerminalInput {
+        id_salt: Id::new("pane-open-min"),
+        host_label: "host-open",
+        epoch: None,
+        phase: &min_phase,
+        capabilities: HostTerminalCapabilities::default(),
+        terminal_focused: true,
+        unsaved_lease: false,
+        persistence_warning: None,
+        skipped_output: None,
+        scrollback_lines: 0,
+        french: false,
+    };
+    let f_min = settle_pane(&ctx, &mut panel, &min_in, vp, next_time());
+    assert!(find_accesskit_button_center(&f_min.output, "Retry").is_none());
+    assert!(find_accesskit_button_center(&f_min.output, "Existing terminals…").is_none());
+    require_accesskit_button_center(&f_min.output, "Close pane");
+}
+
+#[test]
+fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx, true, Some(theme_palettes::ThemeId::Classic));
+
+    let mut panel = HostTerminalPanel::new();
+    let vp = Vec2::new(860.0, 520.0);
+    let mut clock = 1.0_f64;
+    let mut next_time = || {
+        let current = clock;
+        clock += 0.1;
+        current
+    };
+
+    let expected_en = "Terminal access is not saved on this computer — save it before closing Tessel to keep recovery or termination access after a restart.";
+    let expected_fr = "L'accès à ce terminal n'est pas enregistré sur cet ordinateur — enregistrez-le avant de quitter Tessel pour conserver sa reprise ou son arrêt après redémarrage.";
+
+    let retry_save_only_caps = HostTerminalCapabilities {
+        can_retry_save_lease: true,
+        ..Default::default()
+    };
+
+    let eligible_phases = [
+        HostTerminalPhase::Live,
+        HostTerminalPhase::ReadOnly {
+            reason: ReadOnlyReason::ControlledElsewhere,
+        },
+        HostTerminalPhase::Reconnecting {
+            attempt: 2,
+            max_attempts: Some(4),
+        },
+        HostTerminalPhase::StreamRejected {
+            reason: StreamRejectReason::InvalidData,
+        },
+        HostTerminalPhase::OpeningFailed {
+            reason: OpeningFailureReason::Detached,
+        },
+    ];
+
+    for (idx, phase) in eligible_phases.iter().enumerate() {
+        for (fr, expected_msg, btn_lbl) in [
+            (false, expected_en, "Retry save"),
+            (true, expected_fr, "Réessayer l'enregistrement"),
+        ] {
+            let inp = HostTerminalInput {
+                id_salt: Id::new(("pane-unsaved", idx)),
+                host_label: "gpu-lease",
+                epoch: Some("ep-unsaved-1"),
+                phase,
+                capabilities: retry_save_only_caps,
+                terminal_focused: true,
+                unsaved_lease: true,
+                persistence_warning: None,
+                skipped_output: None,
+                scrollback_lines: 0,
+                french: fr,
+            };
+            let out = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            assert!(has_painted_text(&out.output.shapes, expected_msg));
+
+            // Non-dismissible: no dismiss button exists on `unsaved-lease-banner`.
+            for dismiss_lbl in [
+                "Dismiss persistence notice",
+                "Dismiss output notice",
+                "Fermer l'avis de persistance",
+                "Fermer l'avis de sortie",
+            ] {
+                assert!(find_accesskit_button_center(&out.output, dismiss_lbl).is_none());
+            }
+
+            let save_pos = require_accesskit_button_center(&out.output, btn_lbl);
+            let (save_act, _) = click_pane(&ctx, &mut panel, &inp, vp, next_time(), save_pos);
+            assert_eq!(save_act, Some(HostTerminalAction::RetrySaveLease));
+
+            // Authority separation: `unsaved_lease: true` NEVER grants input, resize, or terminate!
+            if !matches!(phase, HostTerminalPhase::Live) {
+                assert!(!panel.accepts_input(phase));
+                assert!(!panel.accepts_resize(phase));
+            }
+            assert!(find_accesskit_button_center(&out.output, "Terminate process").is_none());
+            assert!(find_accesskit_button_center(&out.output, "Terminer le processus").is_none());
+            let close_res = panel.request_close(phase, retry_save_only_caps);
+            assert!(
+                close_res.is_some() && !panel.has_pending_close_choice(),
+                "unsaved_lease without can_terminate must never open terminate confirmation"
+            );
+        }
+    }
+
+    // When `can_retry_save_lease == false`, warning text remains visible without `Retry save`.
+    let live = HostTerminalPhase::Live;
+    let warn_only_in = HostTerminalInput {
+        id_salt: Id::new("pane-unsaved-nobtn"),
+        host_label: "gpu-lease",
+        epoch: Some("ep-unsaved-1"),
+        phase: &live,
+        capabilities: HostTerminalCapabilities::default(),
+        terminal_focused: true,
+        unsaved_lease: true,
+        persistence_warning: None,
+        skipped_output: None,
+        scrollback_lines: 0,
+        french: false,
+    };
+    let f_warn_only = settle_pane(&ctx, &mut panel, &warn_only_in, vp, next_time());
+    assert!(has_painted_text(&f_warn_only.output.shapes, expected_en));
+    assert!(find_accesskit_button_center(&f_warn_only.output, "Retry save").is_none());
+
+    // Once saved (`unsaved_lease == false`), the banner disappears immediately.
+    let saved_in = HostTerminalInput {
+        unsaved_lease: false,
+        ..warn_only_in
+    };
+    let f_saved = settle_pane(&ctx, &mut panel, &saved_in, vp, next_time());
+    assert!(!has_painted_text(&f_saved.output.shapes, expected_en));
+    assert!(panel.overlay_rects().is_empty());
+
+    // `Opening`, `Lost`, and `Exited` suppress stale `unsaved_lease` flags.
+    for inactive_phase in [
+        HostTerminalPhase::Opening { note: None },
+        HostTerminalPhase::Lost {
+            reason: LostReason::SessionGone,
+        },
+        HostTerminalPhase::Exited {
+            exit_code: Some(0),
+            signal: None,
+        },
+    ] {
+        let inactive_in = HostTerminalInput {
+            phase: &inactive_phase,
+            unsaved_lease: true,
+            capabilities: retry_save_only_caps,
+            ..warn_only_in
+        };
+        let f_inactive = settle_pane(&ctx, &mut panel, &inactive_in, vp, next_time());
+        assert!(!has_painted_text(&f_inactive.output.shapes, expected_en));
+        assert!(find_accesskit_button_center(&f_inactive.output, "Retry save").is_none());
     }
 }

@@ -338,17 +338,18 @@ impl LeaseStore {
                 .position(|p| p.id == id && p.alias == slot.alias && p.epoch == slot.epoch.as_str())
                 .ok_or(LeaseStoreError::MissingPending)?;
             records.pending.remove(position);
+            // A delayed creation result must not replace a lease saved by a
+            // later takeover of this same terminal. Retire the intent atomically.
+            if records.entries.iter().any(|entry| entry.matches(slot)) {
+                return Ok(((), true));
+            }
             let stored = Stored {
                 alias: slot.alias.clone(),
                 epoch: slot.epoch.as_str().to_owned(),
                 terminal: slot.terminal.as_str().to_owned(),
                 lease: Secret(lease.as_str().to_owned()),
             };
-            if let Some(entry) = records.entries.iter_mut().find(|e| e.matches(slot)) {
-                *entry = stored;
-            } else {
-                records.entries.push(stored);
-            }
+            records.entries.push(stored);
             Ok(((), true))
         })
     }
@@ -599,6 +600,19 @@ mod tests {
     //! Every test works in a temporary directory with synthetic leases; nothing here can reach
     //! the user's store (`open_default` is never called).
     use super::*;
+
+    #[test]
+    fn delayed_creation_promotion_preserves_an_already_saved_takeover() {
+        let (_dir, store) = store();
+        let here = slot("fixture", 1, 1);
+        let token = store.reserve_pending("fixture", &here.epoch).unwrap();
+        store.put(&here, &lease(2)).unwrap();
+        store
+            .complete_pending(&token.info().id, &here, &lease(1))
+            .unwrap();
+        assert_eq!(store.get(&here).unwrap(), Some(lease(2)));
+        assert!(store.list_pending("fixture").unwrap().is_empty());
+    }
 
     #[test]
     fn pending_promotes_atomically_and_restore_exposes_only_metadata() {

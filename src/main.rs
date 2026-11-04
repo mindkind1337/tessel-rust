@@ -64,6 +64,7 @@ mod host_actions;
 pub mod host_lease_store;
 #[cfg(windows)]
 pub mod host_opening_adapter;
+pub mod host_terminal_panel;
 mod i18n;
 pub mod icons;
 mod launch;

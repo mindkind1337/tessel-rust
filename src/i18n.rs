@@ -25,6 +25,9 @@ fn catalog() -> &'static HashMap<String, String> {
 pub fn set_language(language: Language) {
     FRENCH.store(language == Language::French, Ordering::Relaxed);
 }
+pub fn is_french() -> bool {
+    FRENCH.load(Ordering::Relaxed)
+}
 pub fn translate(language: Language, text: &str) -> &str {
     if language == Language::French {
         catalog().get(text).map(String::as_str).unwrap_or(text)

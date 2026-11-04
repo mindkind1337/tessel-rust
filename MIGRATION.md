@@ -297,3 +297,17 @@ Gate 7B opening and event integration (2026-11-04): production bindings now comp
 Validation of this lot: 12 event/application/history cases, 39 opening/handoff/worker cases, 16 command/worker/window cases and 8 panel suites pass (shared helper tests overlap across targets). Strict all-target/all-feature Clippy passes. The expanded Windows encrypted-store suite passed 18 cases on the preceding compatible client pin.
 
 Gate 7B lease keeper and resynchronization follow-up: synthetic tests pass for 41 keeper cases, 20 worker cases, 43 opening cases, 17 event/emulator/history cases and 2 emulator cases (shared helper tests overlap). This covers same-terminal takeover serialization, a granted lease arriving after pane closure, retained failure retries, no resurrection by stale saves, queue reservations surviving keeper shutdown, snapshot-awaiting input gates, repaint budgets and cursor-query reset across snapshot replacement. Workspace routing, pending-create promotion, global report handling and native rendering acceptance remain unfinished. Strict Clippy passes for the production binary and these five integration targets.
+
+Gate 7B follow-up validation: 47 opening cases, 48 keeper cases, 20 worker cases,
+19 event cases, 3 emulator cases and 10 panel suites pass (shared helpers overlap).
+Pending-create promotion now retains its original intent across failed writes and
+explicit retries. Cancellation after UI adoption uses the same off-thread cleanup
+rules as cancellation during opening. Opening failures and unsaved-access warnings
+have distinct English/French UI states without granting input or termination authority.
+The native facade compiles, but workspace activation remains pending: app-owned
+retention of unsaved access after pane closure, global persistence reports and actual
+native-pane rendering acceptance are not yet complete. No real user host was used.
+The expanded store suite passes 17 cases, and 15 filtered local-terminal/profile
+cases pass, including real synthetic PTY execution and descendant cleanup.
+Created terminals start from their requested dimensions and sequence zero, so a
+silent program can receive input; existing attachments still await their snapshot.

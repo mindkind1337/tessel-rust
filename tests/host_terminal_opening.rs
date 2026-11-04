@@ -896,3 +896,110 @@ fn an_existing_terminal_is_never_ended_by_a_cancel_and_a_new_epoch_attaches_noth
     assert!(matches!(failed(&pending), Failure::EpochChanged));
     assert_eq!(host.state().attached_with.len(), 1, "only the first attach");
 }
+
+// ---- Cancelling an adopted terminal -----------------------------------------------------
+
+/// `cancel_adopted`, with a `ready` the test hears.
+fn cancel_adopted(
+    opened: Opened<FakeHost>,
+    store: &Arc<FakeStore>,
+) -> (Receiver<Failure<FakeHost, FakeStore>>, Receiver<()>) {
+    let (ready, heard) = mpsc::channel();
+    let ready = Mutex::new(ready);
+    let answers = host_opening::cancel_adopted(opened, store.clone(), move || {
+        let _ = ready.lock().unwrap().send(());
+    })
+    .unwrap_or_else(|_| panic!("no worker for the cancel"));
+    (answers, heard)
+}
+
+#[test]
+fn cancelling_an_adopted_new_terminal_ends_it_off_the_ui_and_forgets_it() {
+    let _serial = serial();
+    let (host, store) = (FakeHost::connected(), Arc::new(FakeStore::default()));
+    let (pending, _) = open_new(&host, &store, Duration::from_secs(5));
+    let opened = opened(&pending);
+    drop(pending);
+    let slot = slot_of(&opened);
+    let (answers, ready) = cancel_adopted(opened, &store);
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The answer is there before `ready` is called.
+    assert!(matches!(answers.try_recv(), Ok(Failure::Cancelled)));
+    assert_eq!(
+        host.state().closed,
+        [(slot.terminal.clone(), LeaseKey::from_bytes([0x81; 16]))],
+        "ended with the lease the create granted"
+    );
+    assert!(store.lease(&slot).is_none() && store.state().pending.is_empty());
+}
+
+#[test]
+fn cancelling_an_adopted_existing_terminal_only_detaches_it() {
+    let _serial = serial();
+    for resume in [true, false] {
+        let (host, store) = (FakeHost::connected(), Arc::new(FakeStore::default()));
+        let kept = LeaseKey::from_bytes([0x55; 16]);
+        store.put(&existing_slot(), &kept).unwrap();
+        let pending = host_opening::open(host.clone(), store.clone(), existing(resume), || {})
+            .unwrap_or_else(|failure| panic!("{}", failure.code()));
+        let opened = opened(&pending);
+        drop(pending);
+        let (answers, ready) = cancel_adopted(opened, &store);
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(answers.try_recv(), Ok(Failure::Cancelled)));
+        assert_eq!(
+            host.state().closes,
+            0,
+            "an existing terminal is never ended"
+        );
+        assert_eq!(store.lease(&existing_slot()), Some(kept), "its lease stays");
+    }
+}
+
+#[test]
+fn an_unconfirmed_end_of_an_adopted_terminal_keeps_it_with_its_lease() {
+    let _serial = serial();
+    for saved_on_cancel in [false, true] {
+        let (host, store) = (FakeHost::connected(), Arc::new(FakeStore::default()));
+        host.state().close = Some(Err(HostError::Ambiguous));
+        store.state().fail_complete = true;
+        let (pending, _) = open_new(&host, &store, Duration::from_secs(5));
+        let opened = opened(&pending);
+        drop(pending);
+        assert!(!opened.saved);
+        let slot = slot_of(&opened);
+        store.state().fail_complete = !saved_on_cancel;
+        let (answers, ready) = cancel_adopted(opened, &store);
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let Ok(Failure::CancelNotConfirmed(unended)) = answers.try_recv() else {
+            panic!("expected an unconfirmed end");
+        };
+        assert_eq!(host.state().closes, 1);
+        let granted = LeaseKey::from_bytes([0x81; 16]);
+        if saved_on_cancel {
+            // Saved now: the store holds it, nothing to hand back.
+            assert!(unended.saved && unended.lease.is_none() && unended.pending.is_none());
+            assert_eq!(store.lease(&slot), Some(granted));
+        } else {
+            assert!(!unended.saved);
+            assert_eq!(unended.lease, Some(granted), "never lost");
+            assert_eq!(unended.pending.as_deref(), Some("pending-1"));
+            assert_eq!(store.state().pending.len(), 1, "its record stays");
+        }
+    }
+}
+
+#[test]
+fn a_cancel_nobody_waits_for_still_cleans_up() {
+    let _serial = serial();
+    let (host, store) = (FakeHost::connected(), Arc::new(FakeStore::default()));
+    let (pending, _) = open_new(&host, &store, Duration::from_secs(5));
+    let opened = opened(&pending);
+    drop(pending);
+    let slot = slot_of(&opened);
+    let answers = host_opening::cancel_adopted(opened, store.clone(), || {})
+        .unwrap_or_else(|_| panic!("no worker for the cancel"));
+    drop(answers); // the pane went
+    eventually("the program to be ended", || host.state().closes == 1);
+    eventually("its lease to be forgotten", || store.lease(&slot).is_none());
+}

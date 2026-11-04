@@ -8,11 +8,25 @@ pub fn apply(
     can_reply: bool,
     mut reply: impl FnMut(Vec<u8>) -> Result<(), String>,
 ) -> Option<String> {
+    if !can_reply {
+        parser.process(bytes);
+        if bytes.len() >= 4 {
+            query_tail.clear();
+            query_tail.extend_from_slice(&bytes[bytes.len() - 4..]);
+        } else {
+            query_tail.extend_from_slice(bytes);
+            let excess = query_tail.len().saturating_sub(4);
+            query_tail.drain(..excess);
+        }
+        return None;
+    }
     let mut error = None;
-    for &byte in bytes {
-        parser.process(&[byte]);
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
         query_tail.push(byte);
-        if can_reply && query_tail.ends_with(b"\x1b[6n") {
+        if query_tail.ends_with(b"\x1b[6n") {
+            parser.process(&bytes[start..=index]);
+            start = index + 1;
             let (row, col) = parser.screen().cursor_position();
             if let Err(failure) = reply(format!("\x1b[{};{}R", row + 1, col + 1).into_bytes()) {
                 error = Some(failure);
@@ -22,6 +36,7 @@ pub fn apply(
             query_tail.remove(0);
         }
     }
+    parser.process(&bytes[start..]);
     error
 }
 
@@ -45,6 +60,25 @@ mod tests {
         }
         assert_eq!(replies, [b"\x1b[3;5R".to_vec()]);
         assert!(tail.len() <= 4);
+    }
+
+    #[test]
+    fn bulk_parsing_stops_at_each_query_before_reporting_its_cursor() {
+        let mut parser = vt100::Parser::new(10, 20, 0);
+        let mut tail = Vec::new();
+        let mut replies = Vec::new();
+        apply(
+            &mut parser,
+            &mut tail,
+            "é\x1b[6n\r\nX\x1b[6nend".as_bytes(),
+            true,
+            |bytes| {
+                replies.push(bytes);
+                Ok(())
+            },
+        );
+        assert_eq!(replies, [b"\x1b[1;2R".to_vec(), b"\x1b[2;2R".to_vec()]);
+        assert_eq!(parser.screen().contents(), "é\nXend");
     }
 
     #[test]

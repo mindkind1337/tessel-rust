@@ -275,6 +275,14 @@ fn spawn(
                         }
                     }
                 };
+                if outcome == Some(Outcome::ControlTaken) {
+                    worker.invalidate();
+                    previous = driver.authority();
+                    worker_state.store(previous, Ordering::Release);
+                } else if outcome == Some(Outcome::Terminated) {
+                    worker.invalidate();
+                    worker_state.store(0, Ordering::Release);
+                }
                 if let Some(outcome) = outcome
                     && !send_outcome(&sender, &worker, outcome)
                 {
@@ -414,6 +422,15 @@ mod tests {
         }
     }
     impl LeaseWriter for Written {
+        fn complete(
+            &self,
+            _pending: &str,
+            _slot: &Slot,
+            lease: &LeaseKey,
+        ) -> Result<(), LocalError> {
+            self.0.lock().unwrap().push(Op::Put(lease.clone()));
+            Ok(())
+        }
         fn put(&self, _slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
             self.0.lock().unwrap().push(Op::Put(lease.clone()));
             Ok(())
@@ -476,7 +493,10 @@ mod tests {
             );
         }
         wait(|| control.outcome() == Some(Outcome::Terminated));
-        wait(|| !control.writable());
+        assert!(
+            !control.writable(),
+            "termination is published before its outcome"
+        );
         // The confirmed close forgets the saved lease.
         wait(|| written.ops() == [Op::Remove]);
         drop(control);
@@ -496,7 +516,10 @@ mod tests {
             "control"
         );
         wait(|| control.outcome() == Some(Outcome::ControlTaken));
-        wait(|| control.writable());
+        assert!(
+            control.writable(),
+            "authority is published before its outcome"
+        );
         // The lease the takeover returned is saved.
         wait(|| written.ops() == [Op::Put(LeaseKey::from_bytes([7; 16]))]);
         drop(control);

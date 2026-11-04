@@ -19,6 +19,11 @@
 //! Failures are never silent: a save or a removal that failed is reported with a token to try
 //! it again explicitly (`NotKept`, `NotForgotten`). Those reports are kept until read; at most
 //! one per slot, so at most `MAX_SLOTS`. Informational reports are capped.
+//!
+//! A created terminal whose lease the opening could not save still has its pending record:
+//! `promote` replaces that record by the lease in one write (`LeaseWriter::complete`), with
+//! the same ordering as a save. A promote skipped for a newer request never touches the
+//! pending record: it stays until an explicit cleanup.
 use super::host_opening::{LocalError, Slot};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -35,6 +40,9 @@ pub const MAX_INFO_REPORTS: usize = 64;
 pub trait LeaseWriter: Send + Sync + 'static {
     fn put(&self, slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError>;
     fn remove(&self, slot: &Slot) -> Result<(), LocalError>;
+    /// Replaces the pending record `pending` by the slot's lease, in one write
+    /// (`host_opening::Store::complete`).
+    fn complete(&self, pending: &str, slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError>;
 }
 
 /// The proof a program ended: nothing else forgets its lease.
@@ -67,10 +75,12 @@ pub enum Refusal {
 pub struct KeeperError;
 
 /// A lease that could not be saved, to save again with `Keeper::retry_save`. No Debug, no
-/// Clone. Dropped unused, it lets its slot go.
+/// Clone. Dropped unused, it lets its slot go (a pending record it would have replaced stays).
 pub struct RetrySave {
-    token: Option<TokenInner>,
+    token: Option<Box<TokenInner>>,
     lease: Option<LeaseKey>,
+    /// From a promote: the pending record the retry replaces.
+    pending: Option<String>,
 }
 
 /// A lease that could not be forgotten, to try again with `Keeper::retry_forget`. Its program
@@ -196,7 +206,7 @@ impl Report {
     /// A failure report's slot and revision.
     fn failure(&self) -> Option<(&Slot, u64)> {
         let token = match self {
-            Self::NotKept(retry) => retry.token.as_ref(),
+            Self::NotKept(retry) => retry.token.as_deref(),
             Self::NotForgotten(retry) => retry.token.as_ref(),
             _ => None,
         }?;
@@ -214,6 +224,7 @@ pub enum RetryRefused<T> {
 
 enum Work {
     Keep(LeaseKey),
+    Promote { pending: Box<str>, lease: LeaseKey },
     Forget,
 }
 
@@ -333,7 +344,35 @@ impl Keeper {
         match self.admit(slot, None, Work::Keep(lease)) {
             Ok(()) => Ok(()),
             Err((refusal, slot, Work::Keep(lease))) => Err((refusal, slot, lease)),
-            Err((_, _, Work::Forget)) => unreachable!("handed back as given"),
+            Err(_) => unreachable!("handed back as given"),
+        }
+    }
+
+    /// Saves the lease a create granted when the opening could not save it (`Opened::saved`
+    /// false with `pending`): replaces that pending record by the lease, in one write. Admit
+    /// it before the terminal's commands start (`host_worker::start`): a promote accepted
+    /// after a takeover would be the newer request and put the creation lease back over the
+    /// takeover's. Skipped for a newer request (`Superseded`): the pending record is left as
+    /// it is. Refused: everything is handed back, nothing changed.
+    pub fn promote(
+        &self,
+        slot: Slot,
+        pending: String,
+        lease: LeaseKey,
+    ) -> Result<(), Box<(Refusal, Slot, String, LeaseKey)>> {
+        match self.admit(
+            slot,
+            None,
+            Work::Promote {
+                pending: pending.into_boxed_str(),
+                lease,
+            },
+        ) {
+            Ok(()) => Ok(()),
+            Err((refusal, slot, Work::Promote { pending, lease })) => {
+                Err(Box::new((refusal, slot, pending.into_string(), lease)))
+            }
+            Err(_) => unreachable!("handed back as given"),
         }
     }
 
@@ -354,7 +393,15 @@ impl Keeper {
             (token.slot.clone(), token.revision)
         };
         let lease = retry.lease.take().expect("a live token");
-        match self.admit(slot, Some(revision), Work::Keep(lease)) {
+        // A failed promote is retried as a promote: its pending record still stands.
+        let work = match retry.pending.take() {
+            Some(pending) => Work::Promote {
+                pending: pending.into_boxed_str(),
+                lease,
+            },
+            None => Work::Keep(lease),
+        };
+        match self.admit(slot, Some(revision), work) {
             Ok(()) => {
                 // Its revision now belongs to the queued retry: its drop must not let it go.
                 if let Some(token) = retry.token.as_mut() {
@@ -363,8 +410,13 @@ impl Keeper {
                 Ok(())
             }
             Err((refusal, _, work)) => {
-                if let Work::Keep(lease) = work {
-                    retry.lease = Some(lease);
+                match work {
+                    Work::Keep(lease) => retry.lease = Some(lease),
+                    Work::Promote { pending, lease } => {
+                        retry.lease = Some(lease);
+                        retry.pending = Some(pending.into_string());
+                    }
+                    Work::Forget => {}
                 }
                 Err(match refusal {
                     Refusal::Superseded => RetryRefused::Superseded,
@@ -495,6 +547,7 @@ fn run(shared: &Arc<Shared>, writer: &dyn LeaseWriter) {
         } else {
             let done = match &job.work {
                 Work::Keep(lease) => writer.put(&job.slot, lease),
+                Work::Promote { pending, lease } => writer.complete(pending, &job.slot, lease),
                 Work::Forget => writer.remove(&job.slot),
             };
             let mut state = shared.state.lock().unwrap();
@@ -507,7 +560,7 @@ fn run(shared: &Arc<Shared>, writer: &dyn LeaseWriter) {
                     }
                     drop(state);
                     match work {
-                        Work::Keep(_) => Report::Kept(job.slot),
+                        Work::Keep(_) | Work::Promote { .. } => Report::Kept(job.slot),
                         Work::Forget => Report::Forgotten(job.slot),
                     }
                 }
@@ -519,12 +572,25 @@ fn run(shared: &Arc<Shared>, writer: &dyn LeaseWriter) {
                 (Err(_), Work::Keep(lease)) => {
                     drop(state);
                     Report::NotKept(RetrySave {
-                        token: Some(TokenInner {
+                        token: Some(Box::new(TokenInner {
                             slot: job.slot,
                             revision: job.revision,
                             shared: Arc::downgrade(shared),
-                        }),
+                        })),
                         lease: Some(lease),
+                        pending: None,
+                    })
+                }
+                (Err(_), Work::Promote { pending, lease }) => {
+                    drop(state);
+                    Report::NotKept(RetrySave {
+                        token: Some(Box::new(TokenInner {
+                            slot: job.slot,
+                            revision: job.revision,
+                            shared: Arc::downgrade(shared),
+                        })),
+                        lease: Some(lease),
+                        pending: Some(pending.into_string()),
                     })
                 }
                 (Err(_), Work::Forget) => {

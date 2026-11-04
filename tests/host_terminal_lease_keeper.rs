@@ -31,6 +31,7 @@ use tessel_host_protocol::{Epoch, LeaseKey, TerminalId};
 enum Op {
     Put(TerminalId, LeaseKey),
     Remove(TerminalId),
+    Complete(String, TerminalId, LeaseKey),
 }
 
 #[derive(Default)]
@@ -103,6 +104,14 @@ impl LeaseWriter for FakeWriter {
 
     fn remove(&self, slot: &Slot) -> Result<(), LocalError> {
         self.write(Op::Remove(slot.terminal.clone()))
+    }
+
+    fn complete(&self, pending: &str, slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+        self.write(Op::Complete(
+            pending.to_owned(),
+            slot.terminal.clone(),
+            lease.clone(),
+        ))
     }
 }
 
@@ -599,4 +608,162 @@ fn a_newer_failed_end_still_decides_once_its_retry_is_dropped() {
         writer.ops().is_empty(),
         "an ended terminal's lease is not saved"
     );
+}
+
+// ---- Promotes ---------------------------------------------------------------------------
+
+fn complete(pending: &str, n: u16, lease_n: u8) -> Op {
+    Op::Complete(pending.to_owned(), slot(n).terminal, lease(lease_n))
+}
+
+#[test]
+fn a_promote_replaces_the_pending_record_by_the_lease() {
+    let (writer, keeper) = keeper();
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    assert!(matches!(next(&keeper), Report::Kept(s) if s == slot(1)));
+    assert_eq!(writer.ops(), [complete("pending-1", 1, 1)]);
+}
+
+#[test]
+fn a_failed_promote_is_retried_as_a_promote() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(1);
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    let Report::NotKept(retry) = next(&keeper) else {
+        panic!("expected not kept");
+    };
+    assert!(keeper.retry_save(retry).is_ok());
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    assert_eq!(writer.ops(), [complete("pending-1", 1, 1)]);
+}
+
+#[test]
+fn a_refused_promote_hands_everything_back() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(0), lease(0)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    for n in 1..=MAX_QUEUE as u16 {
+        keeper.keep(slot(n), lease(1)).ok().unwrap();
+    }
+    let Err(refused) = keeper.promote(slot(500), "pending-500".into(), lease(7)) else {
+        panic!("expected busy");
+    };
+    let (reason, back_slot, back_pending, back_lease) = *refused;
+    assert_eq!(reason, Refusal::Busy);
+    assert_eq!(
+        (back_slot, back_pending.as_str(), back_lease),
+        (slot(500), "pending-500", lease(7))
+    );
+    writer.release();
+}
+
+#[test]
+fn a_promote_skipped_for_a_newer_save_leaves_its_pending_record() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(9), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    writer.release();
+    let reports: Vec<&str> = (0..3).map(|_| name(&next(&keeper))).collect();
+    assert_eq!(reports, ["kept", "superseded", "kept"]);
+    // Nothing touched the pending record: no complete, and no other write for it.
+    assert_eq!(
+        writer.ops(),
+        [
+            Op::Put(slot(9).terminal, lease(9)),
+            Op::Put(slot(1).terminal, lease(2))
+        ]
+    );
+}
+
+#[test]
+fn an_older_failed_promote_is_refused_after_a_newer_save() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(1);
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    let Report::NotKept(old) = next(&keeper) else {
+        panic!("expected not kept");
+    };
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    assert!(matches!(
+        keeper.retry_save(old),
+        Err(RetryRefused::Superseded)
+    ));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(writer.ops(), [Op::Put(slot(1).terminal, lease(2))]);
+}
+
+#[test]
+fn a_confirmed_end_after_a_promote_is_never_undone() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(9), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    keeper.forget_ended(slot(1), Ended::ExitReceived).unwrap();
+    writer.release();
+    let reports: Vec<&str> = (0..3).map(|_| name(&next(&keeper))).collect();
+    assert_eq!(reports, ["kept", "superseded", "forgotten"]);
+    assert_eq!(
+        writer.ops(),
+        [
+            Op::Put(slot(9).terminal, lease(9)),
+            Op::Remove(slot(1).terminal)
+        ]
+    );
+}
+
+#[test]
+fn a_busy_promote_retry_keeps_its_pending_record() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(1);
+    keeper
+        .promote(slot(1), "pending-1".into(), lease(1))
+        .ok()
+        .unwrap();
+    let Report::NotKept(retry) = next(&keeper) else {
+        panic!("expected not kept");
+    };
+    // Fill the queue behind a blocked write, so the retry is refused and handed back.
+    let entered = writer.block();
+    keeper.keep(slot(900), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    for n in 10..(10 + MAX_QUEUE as u16) {
+        keeper.keep(slot(n), lease(1)).ok().unwrap();
+    }
+    let Err(RetryRefused::Busy(retry)) = keeper.retry_save(retry) else {
+        panic!("expected busy");
+    };
+    writer.release();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while writer.ops().len() < 1 + MAX_QUEUE {
+        assert!(Instant::now() < deadline, "the queue did not drain");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Handed back whole: the retry still completes the same pending record.
+    assert!(keeper.retry_save(retry).is_ok());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !writer.ops().contains(&complete("pending-1", 1, 1)) {
+        assert!(Instant::now() < deadline, "the promote was not retried");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }

@@ -15,7 +15,7 @@ use super::host_handoff::{self, Unclaimed};
 use super::host_worker::Permit;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tessel_host_client::terminal::TerminalEvent;
@@ -28,6 +28,7 @@ pub const ADOPT_TIMEOUT: Duration = Duration::from_secs(10);
 pub type Events = Receiver<TerminalEvent>;
 
 /// What to start on the host.
+#[derive(Clone)]
 pub struct Spec {
     pub alias: String,
     pub argv: Vec<String>,
@@ -36,6 +37,7 @@ pub struct Spec {
     pub size: Size,
 }
 
+#[derive(Clone)]
 pub enum Target {
     New(Spec),
     /// A terminal known from before. `resume`: type with the lease kept in the store (read
@@ -503,6 +505,54 @@ fn unclaimed<H: Host, S: Store>(
         // A dropped pane, or an existing terminal: detach only (the terminal goes with
         // `opened`), the lease stays saved.
         _ => (reason == Unclaimed::Cancelled).then_some(Failure::Cancelled),
+    }
+}
+
+/// Cancels a terminal the UI adopted (`Poll::Ready`) but whose commands it never started (the
+/// lease keeper had no room before `host_worker::start`), with the same cleanup as a cancel
+/// before adoption: a program this opening created is ended (`Host::close_known`) and, once
+/// that is confirmed, its lease and pending record are forgotten; unconfirmed, it is kept with
+/// its lease (`CancelNotConfirmed`: saved now if it can be, else handed back). An existing
+/// terminal is only detached. It may send an RPC and write the store, so it runs on a worker of
+/// its own; the permit stays held until the cleanup is done.
+///
+/// Only while nothing for this terminal was handed to the lease keeper: the cleanup writes
+/// the store directly.
+///
+/// One answer comes on the returned receiver, then `ready` is called. If nobody waits for it
+/// any more, the answer is dropped and the cleanup still runs to its end. If no worker can
+/// start, nothing is done and the terminal comes back whole (`Err`), with its lease.
+pub fn cancel_adopted<H: Host, S: Store>(
+    opened: Opened<H>,
+    store: Arc<S>,
+    ready: impl Fn() + Send + 'static,
+) -> Result<Receiver<Failure<H, S>>, Box<Opened<H>>> {
+    let (answer, answers) = sync_channel(1);
+    // Handed over through a shared place: a worker that cannot start drops its closure, and
+    // the terminal is then taken back from here instead of being lost with it.
+    let handover = Arc::new(Mutex::new(Some(opened)));
+    let worker = handover.clone();
+    let spawned = std::thread::Builder::new()
+        .name("host-opening-cancel".into())
+        .spawn(move || {
+            let Some(opened) = worker.lock().unwrap().take() else {
+                return;
+            };
+            let pending = opened.pending.clone();
+            let failure = unclaimed(Unclaimed::Cancelled, opened, Some((store, pending)))
+                .unwrap_or(Failure::Cancelled);
+            let _ = answer.send(failure);
+            ready();
+        });
+    match spawned {
+        Ok(_) => Ok(answers),
+        Err(_) => Err(Box::new(
+            handover
+                .lock()
+                .unwrap()
+                .take()
+                .expect("a worker that never started never took it"),
+        )),
     }
 }
 

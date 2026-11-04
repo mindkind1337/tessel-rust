@@ -189,11 +189,47 @@ pub enum StreamRejectReason {
     Closed,
 }
 
+/// Fixed reason why a remote terminal opening attempt (`create` or `attach`) ended without
+/// yielding a live attached terminal (`host_opening::Failure`).
+///
+/// Note: `Failure::EpochChanged` and `Failure::Gone` map to [`HostTerminalPhase::Lost`]
+/// (`EpochChanged` / `SessionGone`), and `Failure::Cancelled` closes the pane cleanly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpeningFailureReason {
+    /// Local host-terminal capacity limit reached before sending any request (`Failure::Capacity`).
+    Capacity,
+    /// Local capacity stayed full while holding a pending retry token (`Failure::Deferred`).
+    DeferredRetry,
+    /// Host client was not connected or `attach` ended ambiguously (`Failure::NotConnected`):
+    /// never claims nothing was sent, because an existing remote session may still be running.
+    NotConnected,
+    /// Local encrypted lease storage failed before sending any request (`Failure::StoreUnavailable`).
+    StoreUnavailable,
+    /// `create_keyed` lost transport before confirmation (`Failure::Ambiguous`): remote program
+    /// may have started; safe deduplicated `RetryOpening` or `BrowseExistingTerminals` is offered.
+    Ambiguous,
+    /// Deduplication retry window expired (`Failure::Expired`): blind retry is blocked so a
+    /// duplicate process is never spawned silently.
+    RetryExpired,
+    /// Terminal opened on the host, was not adopted by the pane in time, and was detached while
+    /// still running (`Failure::Detached`).
+    Detached,
+    /// Cancellation was requested after the terminal started, and the remote stop RPC could not
+    /// confirm termination (`Failure::CancelNotConfirmed`).
+    CancelNotConfirmed,
+    /// Opening worker stopped unexpectedly (`Failure::Stopped`): remote outcome is unknown,
+    /// automatic relaunch is forbidden, and `BrowseExistingTerminals` is offered.
+    Stopped,
+}
+
 /// Lifecycle phase of a remote `tessel-host` terminal pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostTerminalPhase {
     /// Connecting/provisioning/attaching before a live PTY lease exists.
     Opening { note: Option<String> },
+    /// Opening failed before a live PTY stream could be attached (`host_opening::Failure`):
+    /// input/resize/DSR/`Enter` are suppressed and only explicit safe recovery actions are shown.
+    OpeningFailed { reason: OpeningFailureReason },
     /// Controlling live PTY session (`accepts_input` and `accepts_resize` when unblocked).
     Live,
     /// Observing live PTY output without a write lease (`accepts_input == false`).
@@ -285,8 +321,9 @@ impl<'a> SkippedOutputInput<'a> {
 pub struct HostTerminalCapabilities {
     /// True only when the pane holds a real capability/lease permitting remote process termination.
     /// UI additionally restricts `Terminate` to [`HostTerminalPhase::Live`],
-    /// [`HostTerminalPhase::ReadOnly`], and [`HostTerminalPhase::StreamRejected`] (always after
-    /// explicit confirmation).
+    /// [`HostTerminalPhase::ReadOnly`], [`HostTerminalPhase::StreamRejected`], and
+    /// [`HostTerminalPhase::OpeningFailed`] (`Detached` / `CancelNotConfirmed`) — always after
+    /// explicit confirmation.
     pub can_terminate: bool,
     /// True when the pane can detach cleanly (leaving a live PTY running or cancelling attach).
     pub can_detach: bool,
@@ -296,6 +333,13 @@ pub struct HostTerminalCapabilities {
     pub can_reconnect: bool,
     /// True when starting a brand-new session (`RestartNew`) is allowed in `Lost` or `Exited`.
     pub can_restart: bool,
+    /// True when [`HostTerminalPhase::OpeningFailed`] holds a valid retry path (additionally gated
+    /// by the UI so `RetryExpired`, `Detached`, `CancelNotConfirmed`, and `Stopped` never retry).
+    pub can_retry_opening: bool,
+    /// True when the caller can open the existing remote terminals picker for this host.
+    pub can_browse_existing: bool,
+    /// True when the caller can retry persisting an unsaved terminal lease locally.
+    pub can_retry_save_lease: bool,
 }
 
 /// Borrowed frame input for [`HostTerminalPanel`].
@@ -311,6 +355,11 @@ pub struct HostTerminalInput<'a> {
     /// owns keyboard focus. Gates `Enter` -> `RestartNew` in `Exited` and write-attempt flashes in
     /// `ReadOnly` so unfocused split panes never steal keys or react to typing elsewhere.
     pub terminal_focused: bool,
+    /// Pure local persistence-status flag (`true` while an in-memory lease for this terminal has
+    /// not yet been saved to local encrypted storage). Shown across `Live`, `ReadOnly`,
+    /// `Reconnecting`, `StreamRejected`, and `OpeningFailed`; **never** implies write or terminate
+    /// authority (authority comes strictly from `capabilities`).
+    pub unsaved_lease: bool,
     pub persistence_warning: Option<PersistenceWarningInput<'a>>,
     pub skipped_output: Option<SkippedOutputInput<'a>>,
     pub scrollback_lines: usize,
@@ -321,6 +370,7 @@ pub struct HostTerminalInput<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostHeaderTag {
     Opening,
+    OpeningFailed,
     ReadOnly,
     Reconnecting,
     StreamRejected,
@@ -335,6 +385,8 @@ impl HostHeaderTag {
         match (self, french) {
             (Self::Opening, false) => "Connecting…",
             (Self::Opening, true) => "Connexion…",
+            (Self::OpeningFailed, false) => "Open failed",
+            (Self::OpeningFailed, true) => "Échec d'ouverture",
             (Self::ReadOnly, false) => "Read-only",
             (Self::ReadOnly, true) => "Lecture seule",
             (Self::Reconnecting, false) => "Reconnecting…",
@@ -383,7 +435,10 @@ pub fn show_header_tag(ui: &mut Ui, tag: HostHeaderTag, french: bool) -> Respons
             with_alpha(pal.warn, 0.18),
             if dark { WARN_TEXT_DARK } else { pal.warn },
         ),
-        HostHeaderTag::StreamRejected | HostHeaderTag::StreamClosed | HostHeaderTag::Lost => (
+        HostHeaderTag::OpeningFailed
+        | HostHeaderTag::StreamRejected
+        | HostHeaderTag::StreamClosed
+        | HostHeaderTag::Lost => (
             with_alpha(pal.danger, 0.22),
             if dark { DANGER_TEXT_DARK } else { pal.danger },
         ),
@@ -423,14 +478,24 @@ pub enum HostTerminalAction {
     Reconnect,
     /// Request write-lease takeover from [`HostTerminalPhase::ReadOnly`].
     TakeControl,
+    /// Explicitly retry a failed terminal opening when [`HostTerminalPhase::OpeningFailed`] allows
+    /// safe retry (`Ambiguous`, `DeferredRetry`, `Capacity`, `NotConnected`, `StoreUnavailable`).
+    RetryOpening,
+    /// Open the existing remote terminals picker for this host so the user can inspect or attach
+    /// without risking a duplicate process.
+    BrowseExistingTerminals,
+    /// Retry persisting an unsaved in-memory terminal lease to local encrypted storage.
+    RetrySaveLease,
     /// Explicitly start a brand-new remote PTY after [`HostTerminalPhase::Lost`] or `Exited`.
     RestartNew,
     /// Detach this local pane without killing the remote PTY (or cancel `Opening` attach).
     Detach,
     /// Kill the remote PTY process and close this pane (only when `can_terminate` &
-    /// `Live | ReadOnly | StreamRejected`, after explicit user confirmation).
+    /// `Live | ReadOnly | StreamRejected | OpeningFailed(Detached | CancelNotConfirmed)`, after
+    /// explicit user confirmation).
     Terminate,
-    /// Close this local pane after `Lost`, `Exited`, or when no remote process lease applies.
+    /// Close this local pane after `Lost`, `Exited`, `OpeningFailed`, or when no remote process
+    /// lease applies.
     ClosePane,
     /// Scroll the terminal buffer back to live output (`scrollback = 0`).
     BackToLiveOutput,
@@ -549,6 +614,7 @@ impl HostTerminalPanel {
         match phase {
             HostTerminalPhase::Live => None,
             HostTerminalPhase::Opening { .. } => Some(HostHeaderTag::Opening),
+            HostTerminalPhase::OpeningFailed { .. } => Some(HostHeaderTag::OpeningFailed),
             HostTerminalPhase::ReadOnly { .. } => Some(HostHeaderTag::ReadOnly),
             HostTerminalPhase::Reconnecting { .. } => Some(HostHeaderTag::Reconnecting),
             HostTerminalPhase::StreamRejected {
@@ -646,8 +712,8 @@ impl HostTerminalPanel {
     ///   `Ctrl+C`).
     /// - When `input.terminal_focused` is `true`, allows `Enter` to trigger
     ///   [`HostTerminalAction::RestartNew`] **only** in [`HostTerminalPhase::Exited`] (never in
-    ///   [`HostTerminalPhase::Lost`], and never consuming `Enter` when another split pane or text
-    ///   field holds focus).
+    ///   [`HostTerminalPhase::Lost`] or [`HostTerminalPhase::OpeningFailed`], and never consuming
+    ///   `Enter` when another split pane or text field holds focus).
     pub fn intercept_key(
         &mut self,
         ctx: &egui::Context,
@@ -660,6 +726,7 @@ impl HostTerminalPanel {
         match input.phase {
             HostTerminalPhase::Live
             | HostTerminalPhase::Opening { .. }
+            | HostTerminalPhase::OpeningFailed { .. }
             | HostTerminalPhase::Reconnecting { .. }
             | HostTerminalPhase::StreamRejected { .. }
             | HostTerminalPhase::Lost { .. } => None,
@@ -709,6 +776,10 @@ impl HostTerminalPanel {
     /// Handles a pane-close request (`×` button or close shortcut):
     /// - In [`HostTerminalPhase::Opening`], never claims a remote process exists and never offers
     ///   `Terminate` — immediately returns `Detach` (if `can_detach`) or `ClosePane`.
+    /// - In [`HostTerminalPhase::OpeningFailed`]:
+    ///   - For `Detached` or `CancelNotConfirmed` when `can_terminate` authority is held, opens
+    ///     the explicit `Leave running / Terminate / Cancel` confirmation (`None`).
+    ///   - Otherwise immediately returns `ClosePane`.
     /// - In `Live` or `ReadOnly`:
     ///   - Opens the explicit close-choice card (`None`) when `can_terminate` is available
     ///     (alongside `Detach` if `can_detach`), so the user never kills a remote PTY by accident.
@@ -731,6 +802,16 @@ impl HostTerminalPanel {
                 if capabilities.can_detach {
                     Some(HostTerminalAction::Detach)
                 } else {
+                    Some(HostTerminalAction::ClosePane)
+                }
+            }
+            HostTerminalPhase::OpeningFailed { .. } => {
+                if can_offer_terminate(phase, capabilities) {
+                    self.confirm_close_open = true;
+                    self.confirm_close_focus_pending = true;
+                    None
+                } else {
+                    self.cancel_close_choice();
                     Some(HostTerminalAction::ClosePane)
                 }
             }
@@ -901,7 +982,7 @@ impl HostTerminalPanel {
     ) -> Vec<TopBannerSpec> {
         let fr = input.french;
         let caps = input.capabilities;
-        let mut out = Vec::with_capacity(3);
+        let mut out = Vec::with_capacity(4);
 
         match input.phase {
             HostTerminalPhase::Opening { note } => {
@@ -1055,9 +1136,50 @@ impl HostTerminalPanel {
                 });
             }
             HostTerminalPhase::Live
+            | HostTerminalPhase::OpeningFailed { .. }
             | HostTerminalPhase::StreamRejected { .. }
             | HostTerminalPhase::Lost { .. }
             | HostTerminalPhase::Exited { .. } => {}
+        }
+
+        let show_unsaved_lease = input.unsaved_lease
+            && !matches!(
+                input.phase,
+                HostTerminalPhase::Opening { .. }
+                    | HostTerminalPhase::Lost { .. }
+                    | HostTerminalPhase::Exited { .. }
+            );
+        if show_unsaved_lease {
+            let text = if fr {
+                "L'accès à ce terminal n'est pas enregistré sur cet ordinateur — enregistrez-le avant de quitter Tessel pour conserver sa reprise ou son arrêt après redémarrage."
+            } else {
+                "Terminal access is not saved on this computer — save it before closing Tessel to keep recovery or termination access after a restart."
+            }
+            .to_owned();
+            let mut buttons = Vec::new();
+            if caps.can_retry_save_lease {
+                buttons.push(ButtonSpec {
+                    id_key: "unsaved-lease-retry-save",
+                    label: if fr {
+                        "Réessayer l'enregistrement"
+                    } else {
+                        "Retry save"
+                    }
+                    .to_owned(),
+                    style: OverlayButtonStyle::SmallPrimary,
+                    action: Some(HostTerminalAction::RetrySaveLease),
+                    close_confirm: false,
+                    open_confirm: false,
+                    request_initial_focus: false,
+                });
+            }
+            out.push(TopBannerSpec {
+                id_key: "unsaved-lease-banner",
+                text,
+                tone: BannerTone::Warn,
+                buttons,
+                dismiss: None,
+            });
         }
 
         let session_active = matches!(
@@ -1170,6 +1292,62 @@ impl HostTerminalPanel {
         let caps = input.capabilities;
 
         if self.confirm_close_open && can_offer_terminate(input.phase, caps) {
+            if matches!(input.phase, HostTerminalPhase::OpeningFailed { .. }) {
+                let text = if fr {
+                    format!(
+                        "Le programme distant sur {host} est peut-être toujours actif — fermer le volet en le laissant tourner, ou terminer son processus ?"
+                    )
+                } else {
+                    format!(
+                        "Remote program on {host} may still be running — close pane and leave it running, or terminate its process?"
+                    )
+                };
+                let buttons = vec![
+                    ButtonSpec {
+                        id_key: "confirm-leave-running",
+                        label: if fr {
+                            "Laisser tourner"
+                        } else {
+                            "Leave running"
+                        }
+                        .to_owned(),
+                        style: OverlayButtonStyle::Primary,
+                        action: Some(HostTerminalAction::ClosePane),
+                        close_confirm: true,
+                        open_confirm: false,
+                        request_initial_focus: true,
+                    },
+                    ButtonSpec {
+                        id_key: "confirm-terminate",
+                        label: if fr {
+                            "Terminer le processus"
+                        } else {
+                            "Terminate process"
+                        }
+                        .to_owned(),
+                        style: OverlayButtonStyle::Danger,
+                        action: Some(HostTerminalAction::Terminate),
+                        close_confirm: true,
+                        open_confirm: false,
+                        request_initial_focus: false,
+                    },
+                    ButtonSpec {
+                        id_key: "confirm-cancel",
+                        label: if fr { "Annuler" } else { "Cancel" }.to_owned(),
+                        style: OverlayButtonStyle::Standard,
+                        action: None,
+                        close_confirm: true,
+                        open_confirm: false,
+                        request_initial_focus: false,
+                    },
+                ];
+                return Some(BottomOverlaySpec {
+                    id_key: "close-choice-overlay",
+                    text,
+                    danger_border: true,
+                    buttons,
+                });
+            }
             let is_rejected = matches!(input.phase, HostTerminalPhase::StreamRejected { .. });
             let offer_detach = caps.can_detach || is_rejected;
             let text = match (is_rejected, offer_detach, fr) {
@@ -1234,6 +1412,74 @@ impl HostTerminalPanel {
         }
 
         match input.phase {
+            HostTerminalPhase::OpeningFailed { reason } => {
+                let text = format_opening_failed_message(*reason, host, fr);
+                let offer_retry = caps.can_retry_opening && opening_failure_allows_retry(*reason);
+                let mut buttons = Vec::with_capacity(4);
+                if offer_retry {
+                    buttons.push(ButtonSpec {
+                        id_key: "opening-failed-retry",
+                        label: if fr { "Réessayer" } else { "Retry" }.to_owned(),
+                        style: OverlayButtonStyle::Primary,
+                        action: Some(HostTerminalAction::RetryOpening),
+                        close_confirm: false,
+                        open_confirm: false,
+                        request_initial_focus: false,
+                    });
+                }
+                if caps.can_browse_existing {
+                    let browse_style = if offer_retry {
+                        OverlayButtonStyle::Standard
+                    } else {
+                        OverlayButtonStyle::Primary
+                    };
+                    buttons.push(ButtonSpec {
+                        id_key: "opening-failed-browse-existing",
+                        label: if fr {
+                            "Terminaux existants…"
+                        } else {
+                            "Existing terminals…"
+                        }
+                        .to_owned(),
+                        style: browse_style,
+                        action: Some(HostTerminalAction::BrowseExistingTerminals),
+                        close_confirm: false,
+                        open_confirm: false,
+                        request_initial_focus: false,
+                    });
+                }
+                if opening_failure_may_run_process(*reason) && caps.can_terminate {
+                    buttons.push(ButtonSpec {
+                        id_key: "opening-failed-terminate",
+                        label: if fr {
+                            "Terminer le processus"
+                        } else {
+                            "Terminate process"
+                        }
+                        .to_owned(),
+                        style: OverlayButtonStyle::Danger,
+                        action: None,
+                        close_confirm: false,
+                        open_confirm: true,
+                        request_initial_focus: false,
+                    });
+                }
+                buttons.push(ButtonSpec {
+                    id_key: "opening-failed-close",
+                    label: if fr { "Fermer le volet" } else { "Close pane" }.to_owned(),
+                    style: OverlayButtonStyle::Standard,
+                    action: Some(HostTerminalAction::ClosePane),
+                    close_confirm: false,
+                    open_confirm: false,
+                    request_initial_focus: false,
+                });
+                Some(BottomOverlaySpec {
+                    id_key: "opening-failed-overlay",
+                    text,
+                    danger_border: true,
+                    buttons,
+                })
+            }
             HostTerminalPhase::StreamRejected { reason } => {
                 let text = format_stream_rejected_message(*reason, host, fr);
                 let mut buttons = vec![ButtonSpec {
@@ -1346,14 +1592,103 @@ impl HostTerminalPanel {
     }
 }
 
+const fn opening_failure_allows_retry(reason: OpeningFailureReason) -> bool {
+    matches!(
+        reason,
+        OpeningFailureReason::Capacity
+            | OpeningFailureReason::DeferredRetry
+            | OpeningFailureReason::NotConnected
+            | OpeningFailureReason::StoreUnavailable
+            | OpeningFailureReason::Ambiguous
+    )
+}
+
+const fn opening_failure_may_run_process(reason: OpeningFailureReason) -> bool {
+    matches!(
+        reason,
+        OpeningFailureReason::Detached | OpeningFailureReason::CancelNotConfirmed
+    )
+}
+
 const fn can_offer_terminate(phase: &HostTerminalPhase, caps: HostTerminalCapabilities) -> bool {
-    caps.can_terminate
-        && matches!(
-            phase,
-            HostTerminalPhase::Live
-                | HostTerminalPhase::ReadOnly { .. }
-                | HostTerminalPhase::StreamRejected { .. }
-        )
+    if !caps.can_terminate {
+        return false;
+    }
+    match phase {
+        HostTerminalPhase::Live
+        | HostTerminalPhase::ReadOnly { .. }
+        | HostTerminalPhase::StreamRejected { .. } => true,
+        HostTerminalPhase::OpeningFailed { reason } => opening_failure_may_run_process(*reason),
+        HostTerminalPhase::Opening { .. }
+        | HostTerminalPhase::Reconnecting { .. }
+        | HostTerminalPhase::Lost { .. }
+        | HostTerminalPhase::Exited { .. } => false,
+    }
+}
+
+fn format_opening_failed_message(reason: OpeningFailureReason, host: &str, fr: bool) -> String {
+    match (reason, fr) {
+        (OpeningFailureReason::Capacity, false) => {
+            "Too many remote terminals are open locally — close another terminal pane, then retry."
+                .to_owned()
+        }
+        (OpeningFailureReason::Capacity, true) => {
+            "Trop de terminaux distants sont ouverts localement — fermez un autre volet de terminal puis réessayez."
+                .to_owned()
+        }
+        (OpeningFailureReason::DeferredRetry, false) => {
+            "Too many remote terminals are open locally — close another pane to retry this pending terminal safely."
+                .to_owned()
+        }
+        (OpeningFailureReason::DeferredRetry, true) => {
+            "Trop de terminaux distants sont ouverts localement — fermez un autre volet pour réessayer ce terminal en attente sans doublon."
+                .to_owned()
+        }
+        (OpeningFailureReason::NotConnected, false) => format!(
+            "Could not reach {host} to open this terminal — an existing remote session may still be running."
+        ),
+        (OpeningFailureReason::NotConnected, true) => format!(
+            "Impossible de joindre {host} pour ouvrir ce terminal — une session distante existante est peut-être toujours active."
+        ),
+        (OpeningFailureReason::StoreUnavailable, false) => {
+            "Local encrypted terminal storage is unavailable — terminal request was not sent."
+                .to_owned()
+        }
+        (OpeningFailureReason::StoreUnavailable, true) => {
+            "Le stockage chiffré local des terminaux est indisponible — la demande n'a pas été envoyée."
+                .to_owned()
+        }
+        (OpeningFailureReason::Ambiguous, false) => format!(
+            "Opening terminal on {host} was interrupted before confirmation — the remote program may have started; retry safely or check existing terminals."
+        ),
+        (OpeningFailureReason::Ambiguous, true) => format!(
+            "L'ouverture du terminal sur {host} a été interrompue avant confirmation — le programme distant a peut-être démarré ; réessayez sans doublon ou vérifiez les terminaux existants."
+        ),
+        (OpeningFailureReason::RetryExpired, false) => format!(
+            "Safe retry window expired for the unconfirmed terminal on {host} — check existing terminals to avoid starting a duplicate."
+        ),
+        (OpeningFailureReason::RetryExpired, true) => format!(
+            "Le délai de réessai sûr a expiré pour le terminal non confirmé sur {host} — vérifiez les terminaux existants pour éviter un doublon."
+        ),
+        (OpeningFailureReason::Detached, false) => format!(
+            "Terminal on {host} was not adopted in time and was detached — the remote program may still be running."
+        ),
+        (OpeningFailureReason::Detached, true) => format!(
+            "Le terminal sur {host} n'a pas été rattaché à temps et a été détaché — le programme distant est peut-être toujours actif."
+        ),
+        (OpeningFailureReason::CancelNotConfirmed, false) => format!(
+            "Stopping the new terminal on {host} could not be confirmed — the remote program may still be running."
+        ),
+        (OpeningFailureReason::CancelNotConfirmed, true) => format!(
+            "L'arrêt du nouveau terminal sur {host} n'a pas pu être confirmé — le programme distant est peut-être toujours actif."
+        ),
+        (OpeningFailureReason::Stopped, false) => format!(
+            "Terminal opening worker stopped unexpectedly for {host} — outcome is unknown; check existing terminals before opening another."
+        ),
+        (OpeningFailureReason::Stopped, true) => format!(
+            "L'ouverture du terminal pour {host} s'est interrompue de façon inattendue — résultat inconnu ; vérifiez les terminaux existants avant d'en ouvrir un autre."
+        ),
+    }
 }
 
 fn format_stream_rejected_message(reason: StreamRejectReason, host: &str, french: bool) -> String {

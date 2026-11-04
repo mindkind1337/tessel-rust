@@ -16,6 +16,32 @@ use tessel_host_client::terminal::{StreamRejection, TerminalEvent};
 use tessel_host_protocol::pty::{AttachMode, Exit, Size};
 
 #[test]
+fn a_silent_new_program_can_receive_input_but_an_existing_attach_waits() {
+    let (sender, receiver) = mpsc::channel();
+    let mut feed = Feed::new_created(receiver, true);
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    feed.poll(&mut parser, true, |_, _, _, _| panic!("silent program"));
+    assert!(feed.screen_ready());
+    assert_eq!(feed.applied, Some(0));
+    assert_eq!(parser.screen().size(), (24, 80));
+    sender
+        .send(TerminalEvent::Output {
+            seq: 1,
+            data: b"first".to_vec(),
+        })
+        .unwrap();
+    feed.poll(&mut parser, true, |parser, bytes, can_reply, reset| {
+        assert!(can_reply);
+        assert!(reset);
+        parser.process(bytes);
+    });
+    assert_eq!(parser.screen().contents(), "first");
+    assert_eq!(feed.applied, Some(1));
+    let (_sender, receiver) = mpsc::channel();
+    assert!(!Feed::new(receiver, true).screen_ready());
+}
+
+#[test]
 fn a_snapshot_discards_a_partial_live_cursor_query() {
     let (sender, receiver) = mpsc::channel();
     let mut feed = Feed::new(receiver, true);

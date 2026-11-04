@@ -1,3 +1,4 @@
+mod backend;
 pub mod host_apply;
 pub mod host_commands;
 pub mod host_emulator;
@@ -9,6 +10,8 @@ pub mod host_opening;
 pub mod host_worker;
 mod local;
 mod mouse;
+#[cfg(windows)]
+mod native;
 use crate::i18n::tr;
 use eframe::egui;
 use portable_pty::CommandBuilder;
@@ -16,7 +19,7 @@ use portable_pty::CommandBuilder;
 use std::sync::mpsc;
 
 pub struct Terminal {
-    backend: local::LocalPty,
+    backend: backend::Backend,
     parser: vt100::Parser,
     model_dirty: bool,
     observed_model: Option<crate::pane_session_model::ShownAgentModel>,
@@ -35,6 +38,10 @@ pub struct Terminal {
     composing: bool,
     mouse: mouse::Mouse,
     widget_id: Option<egui::Id>,
+    #[cfg(windows)]
+    native_panel: crate::host_terminal_panel::HostTerminalPanel,
+    #[cfg(windows)]
+    native_action: Option<crate::host_terminal_panel::HostTerminalAction>,
     #[cfg(feature = "visual-test")]
     fixture: bool,
     #[cfg(feature = "visual-test")]
@@ -50,6 +57,69 @@ impl Terminal {
     }
     pub fn exited(&self) -> bool {
         self.exited
+    }
+    #[cfg(windows)]
+    pub fn take_native_action(&mut self) -> Option<crate::host_terminal_panel::HostTerminalAction> {
+        self.native_action.take()
+    }
+
+    #[cfg(windows)]
+    fn native_overlays(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        response: &egui::Response,
+    ) -> bool {
+        use crate::host_terminal_panel::{HostTerminalAction as Action, HostTerminalInput};
+        let backend::Backend::Native(native) = &mut self.backend else {
+            return true;
+        };
+        let phase = native.phase();
+        let epoch = native.host.client.epoch();
+        let input = HostTerminalInput {
+            id_salt: response.id.with("host-overlay"),
+            host_label: &native.alias,
+            epoch: epoch.as_ref().map(|e| e.as_str()),
+            phase: &phase,
+            capabilities: native.capabilities(),
+            terminal_focused: response.has_focus() && ui.is_enabled(),
+            unsaved_lease: !native.saved,
+            persistence_warning: None,
+            skipped_output: None,
+            scrollback_lines: self.parser.screen().scrollback(),
+            french: crate::i18n::is_french(),
+        };
+        let mut overlay = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(response.id.with("host-overlay-ui"))
+                .layer_id(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    response.id.with("host-overlay-layer"),
+                ))
+                .max_rect(rect),
+        );
+        let action = self
+            .native_panel
+            .intercept_key(ui.ctx(), &input)
+            .or_else(|| self.native_panel.show_overlays(&mut overlay, rect, &input));
+        let allows = ui.is_enabled() && self.native_panel.accepts_input(&phase);
+        native.allow_replies = allows;
+        match action {
+            Some(Action::RetryOpening) => {
+                native.retry_opening();
+            }
+            Some(Action::RetrySaveLease) => native.retry_save(),
+            Some(Action::TakeControl) => {
+                if let Some(control) = &native.control {
+                    let _ = control.take_control();
+                }
+            }
+            Some(Action::Detach) if native.cancel_opening(&mut self.status) => {}
+            Some(Action::BackToLiveOutput) => self.parser.set_scrollback(0),
+            Some(action) => self.native_action = Some(action),
+            None => {}
+        }
+        allows
     }
     pub fn output(&self) -> String {
         self.parser.screen().contents()
@@ -175,8 +245,25 @@ impl Terminal {
     }
 
     pub fn spawn_command(command: CommandBuilder) -> Result<Self, Box<dyn std::error::Error>> {
-        let backend = local::LocalPty::spawn(command)?;
-        Ok(Self {
+        Ok(Self::with_backend(backend::Backend::Local(
+            local::LocalPty::spawn(command)?,
+        )))
+    }
+
+    #[cfg(windows)]
+    pub fn spawn_native(
+        host: crate::host_opening_adapter::HostConnection,
+        target: host_opening::Target,
+        keeper: std::sync::Arc<host_lease_keeper::Keeper>,
+        context: egui::Context,
+    ) -> Self {
+        Self::with_backend(backend::Backend::Native(Box::new(native::Native::open(
+            host, target, keeper, context,
+        ))))
+    }
+
+    fn with_backend(backend: backend::Backend) -> Self {
+        Self {
             backend,
             parser: vt100::Parser::new(30, 100, 1000),
             model_dirty: true,
@@ -196,11 +283,15 @@ impl Terminal {
             composing: false,
             mouse: Default::default(),
             widget_id: None,
+            #[cfg(windows)]
+            native_panel: Default::default(),
+            #[cfg(windows)]
+            native_action: None,
             #[cfg(feature = "visual-test")]
             fixture: false,
             #[cfg(feature = "visual-test")]
             model_fixture: false,
-        })
+        }
     }
 
     fn process_output(&mut self, bytes: &[u8]) {
@@ -225,6 +316,20 @@ impl Terminal {
     }
 
     pub fn poll(&mut self) {
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &mut self.backend {
+            if native.poll(&mut self.parser, &mut self.query_tail, &mut self.status) {
+                self.selection = None;
+                self.model_dirty = true;
+                self.output_revision = self.output_revision.wrapping_add(1);
+            }
+            self.size = self.parser.screen().size();
+            self.exited = native
+                .feed
+                .as_ref()
+                .is_some_and(|feed| matches!(feed.state, host_events::State::Exited { .. }));
+            return;
+        }
         #[cfg(feature = "visual-test")]
         if self.fixture {
             return;
@@ -251,7 +356,19 @@ impl Terminal {
         let available = ui.available_size();
         let cols = ((available.x / cell_width) as u16).clamp(20, 300);
         let rows = ((available.y / line_height) as u16).clamp(5, 150);
-        if self.size != (rows, cols) && self.backend.resize(rows, cols).is_ok() {
+        #[cfg(windows)]
+        let accepts_resize = match &self.backend {
+            backend::Backend::Native(native) => {
+                ui.is_enabled() && self.native_panel.accepts_resize(&native.phase())
+            }
+            backend::Backend::Local(_) => true,
+        };
+        #[cfg(not(windows))]
+        let accepts_resize = true;
+        if accepts_resize
+            && self.size != (rows, cols)
+            && matches!(self.backend.resize(rows, cols), Ok(true))
+        {
             self.selection = None;
             self.parser.set_size(rows, cols);
             self.model_dirty = true;
@@ -261,9 +378,30 @@ impl Terminal {
                 self.enable_model_fixture();
             }
         }
+        let (rows, cols) = self.size;
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
         self.widget_id = Some(response.id);
+        #[cfg(windows)]
+        let accepts_input = self.native_overlays(ui, rect, &response) && self.backend.writable();
+        #[cfg(not(windows))]
+        let accepts_input = ui.is_enabled() && self.backend.writable();
+        #[cfg(windows)]
+        let overlay_pointer = matches!(self.backend, backend::Backend::Native(_))
+            && ui.input(|i| {
+                i.pointer
+                    .hover_pos()
+                    .is_some_and(|p| self.native_panel.pointer_over_overlay(p))
+            });
+        #[cfg(not(windows))]
+        let overlay_pointer = false;
+        #[cfg(windows)]
+        let focus_blocked = matches!(self.backend, backend::Backend::Native(_))
+            && self.native_panel.blocks_terminal_focus();
+        #[cfg(not(windows))]
+        let focus_blocked = false;
         if ui.is_enabled()
+            && !overlay_pointer
+            && !focus_blocked
             && (response.clicked()
                 || response.drag_started()
                 || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))
@@ -294,7 +432,7 @@ impl Terminal {
             self.composition.clear();
             self.composing = false;
         }
-        let mode = if self.parser.screen().scrollback() == 0 {
+        let mode = if accepts_input && !overlay_pointer && self.parser.screen().scrollback() == 0 {
             self.parser.screen().mouse_protocol_mode()
         } else {
             vt100::MouseProtocolMode::None
@@ -321,7 +459,7 @@ impl Terminal {
                 )
             })
         };
-        if !mouse_bytes.is_empty() {
+        if accepts_input && !overlay_pointer && !mouse_bytes.is_empty() {
             self.selection = None;
             if let Err(e) = self.send(mouse_bytes) {
                 self.status = e;
@@ -337,14 +475,18 @@ impl Terminal {
                     .clamp(0.0, f32::from(cols)) as u16,
             )
         };
-        if (!tracking || shift)
+        if !overlay_pointer
+            && !focus_blocked
+            && (!tracking || shift)
             && response.drag_started_by(egui::PointerButton::Primary)
             && let Some(pos) = ui.input(|i| i.pointer.press_origin())
         {
             let start = cell_at(pos);
             self.selection = Some(Selection { start, end: start });
         }
-        if (!tracking || shift)
+        if !overlay_pointer
+            && !focus_blocked
+            && (!tracking || shift)
             && (response.dragged_by(egui::PointerButton::Primary)
                 || response.drag_stopped_by(egui::PointerButton::Primary))
             && let (Some(selection), Some(pos)) =
@@ -352,16 +494,17 @@ impl Terminal {
         {
             selection.end = cell_at(pos);
         }
-        if response.clicked() {
+        if !overlay_pointer && !focus_blocked && response.clicked() {
             self.selection = None;
         }
-        if (!tracking || shift) && response.hovered() {
+        if !overlay_pointer && !focus_blocked && (!tracking || shift) && response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta != 0.0 {
                 let release = self
                     .mouse
                     .release(self.parser.screen().mouse_protocol_encoding());
-                if !release.is_empty()
+                if accepts_input
+                    && !release.is_empty()
                     && let Err(e) = self.send(release)
                 {
                     self.status = e;
@@ -372,7 +515,7 @@ impl Terminal {
                 self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
             }
         }
-        if !tracking || shift {
+        if !overlay_pointer && !focus_blocked && (!tracking || shift) {
             response.context_menu(|ui| {
                 if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
                     if let Some(selection) = self.selection {
@@ -486,7 +629,7 @@ impl Terminal {
         }
         if response.has_focus() && ui.is_enabled() {
             let (row, col) = screen.cursor_position();
-            if !screen.hide_cursor() && screen.scrollback() == 0 {
+            if accepts_input && !screen.hide_cursor() && screen.scrollback() == 0 {
                 let pos = rect.min
                     + egui::vec2(
                         col as f32 * cell_width,
@@ -501,12 +644,14 @@ impl Terminal {
                 rect.min + egui::vec2(f32::from(col) * cell_width, f32::from(row) * line_height),
                 egui::vec2(cell_width, line_height),
             );
-            ui.output_mut(|o| {
-                o.ime = Some(egui::output::IMEOutput {
-                    rect,
-                    cursor_rect: cursor,
-                })
-            });
+            if accepts_input {
+                ui.output_mut(|o| {
+                    o.ime = Some(egui::output::IMEOutput {
+                        rect,
+                        cursor_rect: cursor,
+                    })
+                });
+            }
             if !self.composition.is_empty() {
                 let text =
                     painter.layout_no_wrap(self.composition.clone(), font.clone(), palette.cursor);
@@ -518,6 +663,12 @@ impl Terminal {
                 painter.galley(cursor.min, text, palette.cursor);
             }
             for event in ui.input(|i| i.events.clone()) {
+                // Read-only panes still allow selecting and copying their visible text.
+                let copying = matches!(&event, egui::Event::Copy)
+                    || matches!(&event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.ctrl);
+                if !accepts_input && !copying {
+                    continue;
+                }
                 let bytes = match event {
                     egui::Event::Text(text) if !self.composing => text.into_bytes(),
                     egui::Event::Ime(event) => match event {
@@ -599,11 +750,12 @@ impl Terminal {
                     }
                     _ => Vec::new(),
                 };
-                if !bytes.is_empty() {
+                if accepts_input && !bytes.is_empty() {
                     self.selection = None;
                     self.parser.set_scrollback(0);
                 }
-                if !bytes.is_empty()
+                if accepts_input
+                    && !bytes.is_empty()
                     && let Err(error) = self.send(bytes)
                 {
                     self.status = error.to_string();

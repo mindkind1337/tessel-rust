@@ -46,6 +46,15 @@ pub struct Feed {
     reset_live_parser: bool,
 }
 impl Feed {
+    /// A newly created terminal replays from sequence zero. Its empty screen is
+    /// already valid even when the program waits for input without printing.
+    /// Existing attachments must use `new` and await their initial snapshot.
+    pub fn new_created(receiver: Receiver<TerminalEvent>, lease: bool) -> Self {
+        let mut feed = Self::new(receiver, lease);
+        feed.initialized = true;
+        feed.applied = Some(0);
+        feed
+    }
     pub fn new(receiver: Receiver<TerminalEvent>, lease: bool) -> Self {
         Self {
             receiver: Some(receiver),
@@ -58,7 +67,7 @@ impl Feed {
             initialized: false,
             awaiting_snapshot: false,
             budget_exhausted: false,
-            reset_live_parser: false,
+            reset_live_parser: true,
         }
     }
     pub fn screen_ready(&self) -> bool {

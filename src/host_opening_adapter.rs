@@ -84,6 +84,9 @@ impl Host for HostConnection {
 /// project or imported workspace. No configurable path can redirect authority.
 pub struct OwnerStore;
 impl crate::terminal::host_lease_keeper::LeaseWriter for OwnerStore {
+    fn complete(&self, pending: &str, value: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+        Store::complete(self, pending, value, lease)
+    }
     fn put(&self, value: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
         Store::put(self, value, lease)
     }
