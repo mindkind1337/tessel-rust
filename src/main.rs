@@ -37,6 +37,7 @@ pub mod appearance_panel;
 mod backup;
 #[cfg(windows)]
 mod browser;
+pub mod browser_clip;
 pub mod browser_passwords_model;
 pub mod browser_passwords_panel;
 mod chat;

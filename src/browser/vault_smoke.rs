@@ -153,14 +153,19 @@ impl eframe::App for Check {
                     .with_devtools(false)
                     .build_as_child(frame);
             match result {
-                Ok(view) => self.browser.view = Some(view),
+                Ok(view) => {
+                    self.browser.clip.reset();
+                    self.browser.view = Some(view);
+                }
                 Err(_) => {
                     self.finish(ctx, Err("Cannot create test browser".into()));
                     return;
                 }
             }
         }
+        self.browser.begin_frame();
         egui::CentralPanel::default().show(ctx, |ui| self.browser.show(ui, frame));
+        let _ = self.browser.sync_presentation(true, None, false);
         if let Some((rx, script, expected)) = self.fill_pending.take() {
             match rx.try_recv() {
                 Ok(result) => {

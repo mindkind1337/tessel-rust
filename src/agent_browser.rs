@@ -88,12 +88,33 @@ impl AgentBrowsers {
     pub fn cancel_pane(&mut self, pane: u64) {
         self.pending.retain(|_, pending| pending.pane != pane);
     }
-    pub fn hide_all(&self) {
-        for b in self.browsers.values() {
-            b.visible(false);
+    pub fn begin_frame(&mut self) {
+        for b in self.browsers.values_mut() {
+            b.begin_frame();
         }
     }
+    pub fn sync_presentation(
+        &mut self,
+        active_project: Option<u64>,
+        overlay: Option<egui::Rect>,
+        reclaim_parent_focus: bool,
+    ) -> bool {
+        let mut took_focus = false;
+        for (&id, browser) in &mut self.browsers {
+            if Some(id) == active_project {
+                took_focus |= browser.sync_presentation(true, overlay, reclaim_parent_focus);
+            } else {
+                browser.visible(false);
+            }
+        }
+        took_focus
+    }
     pub fn retain(&mut self, projects: &[crate::workspace::Project]) {
+        for (id, browser) in &mut self.browsers {
+            if !projects.iter().any(|p| p.id == *id) {
+                browser.visible(false);
+            }
+        }
         self.browsers
             .retain(|id, _| projects.iter().any(|p| p.id == *id));
         self.pending
@@ -120,7 +141,11 @@ impl AgentBrowsers {
         } else {
             ui.horizontal(|ui|{
                 ui.label(tr("Agent access enabled for this project · isolated session · downloads require preparation"));
-                if ui.button(tr("Stop browser and revoke access")).clicked(){self.browsers.remove(&project);}
+                if ui.button(tr("Stop browser and revoke access")).clicked()
+                    && let Some(mut old) = self.browsers.remove(&project)
+                {
+                    old.visible(false);
+                }
             });
             if let Some(b) = self.browsers.get_mut(&project) {
                 b.show(ui, frame);

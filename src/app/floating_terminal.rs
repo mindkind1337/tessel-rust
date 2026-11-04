@@ -316,7 +316,11 @@ impl Tessel {
         };
         self.floating_action(ctx, action);
     }
-    pub(super) fn show_floating(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+    pub(super) fn show_floating(
+        &mut self,
+        ctx: &egui::Context,
+        rect: egui::Rect,
+    ) -> Option<egui::Rect> {
         let blocked = self.overlay.is_some()
             || self.command_palette.open
             || self.finder.is_open()
@@ -379,5 +383,6 @@ impl Tessel {
             self.state.floating = saved;
             self.save();
         }
+        output.panel_rect
     }
 }

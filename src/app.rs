@@ -3223,6 +3223,7 @@ impl Tessel {
         self.remote = Default::default();
         #[cfg(windows)]
         {
+            let _ = self.agent_browsers.sync_presentation(None, None, false);
             self.agent_browsers = Default::default();
             self.show_agent_browser = false;
         }
@@ -4572,6 +4573,8 @@ impl eframe::App for Tessel {
             }
         }
         let previous_panels = self.state.panels;
+        #[cfg(windows)]
+        let had_floating_keyboard = self.floating.ui.has_keyboard();
         let terminal_focused = self.floating.terminal_focused(ctx)
             || self.view == View::Work
                 && self.sessions.iter().any(|session| {
@@ -5031,21 +5034,10 @@ impl eframe::App for Tessel {
         self.sidebar(ctx);
         self.right_panel(ctx);
         #[cfg(windows)]
-        self.agent_browsers.hide_all();
-        #[cfg(windows)]
-        self.browser.visible(
-            !self.native_modal_open()
-                && !self.show_agent_browser
-                && !self.floating.ui.is_open()
-                && self.view == View::Browser
-                && !self.pending_exit
-                && self.pending_close.is_none()
-                && self.file_action.is_none()
-                && !self.command_palette.open
-                && self.overlay.is_none()
-                && !self.toolbar_menu_open
-                && !self.finder.is_open(),
-        );
+        {
+            self.browser.begin_frame();
+            self.agent_browsers.begin_frame();
+        }
         let central = egui::CentralPanel::default().show(ctx, |ui| {
             if self.native_modal_open()
                 || self.finder.is_open()
@@ -5055,6 +5047,7 @@ impl eframe::App for Tessel {
                 || self.pending_exit
                 || self.pending_close.is_some()
                 || self.file_action.is_some()
+                || self.restore_preview.is_some()
             {
                 ui.disable();
             }
@@ -5066,10 +5059,10 @@ impl eframe::App for Tessel {
                 #[cfg(windows)]
                 View::Browser => {
                     if !self.native_modal_open()
-                        && !self.floating.ui.is_open()
                         && !self.pending_exit
                         && self.pending_close.is_none()
                         && self.file_action.is_none()
+                        && self.restore_preview.is_none()
                         && !self.command_palette.open
                         && self.overlay.is_none()
                         && !self.toolbar_menu_open
@@ -5088,7 +5081,6 @@ impl eframe::App for Tessel {
                             );
                         });
                         if self.show_agent_browser {
-                            self.browser.visible(false);
                             if let Some(project) = self.state.active() {
                                 self.agent_browsers
                                     .show(ui, frame, project.id, &project.path);
@@ -5102,7 +5094,8 @@ impl eframe::App for Tessel {
                 }
             }
         });
-        self.show_floating(ctx, central.response.rect);
+        #[cfg_attr(not(windows), allow(unused_variables))]
+        let floating_rect = self.show_floating(ctx, central.response.rect);
         if let Some(path) = self
             .finder
             .show(ctx, self.state.active().map(|p| p.path.as_path()))
@@ -5144,6 +5137,41 @@ impl eframe::App for Tessel {
             self.dispatch_native_actions(ctx);
             self.show_native_picker(ctx);
             self.show_native_drain(ctx);
+            let browser_unblocked = self.view == View::Browser
+                && !self.native_modal_open()
+                && !self.pending_exit
+                && self.pending_close.is_none()
+                && self.file_action.is_none()
+                && self.restore_preview.is_none()
+                && !self.command_palette.open
+                && self.overlay.is_none()
+                && !self.toolbar_menu_open
+                && !self.finder.is_open()
+                && !egui::Popup::is_any_open(ctx);
+            let reclaim_parent_focus = (!had_floating_keyboard && self.floating.ui.has_keyboard())
+                || ctx.input(|i| i.pointer.any_pressed());
+            let owner_took_focus = self.browser.sync_presentation(
+                browser_unblocked && !self.show_agent_browser,
+                floating_rect,
+                reclaim_parent_focus,
+            );
+            let active_agent_project = self
+                .state
+                .active()
+                .map(|p| p.id)
+                .filter(|_| browser_unblocked && self.show_agent_browser);
+            let agent_took_focus = self.agent_browsers.sync_presentation(
+                active_agent_project,
+                floating_rect,
+                reclaim_parent_focus,
+            );
+            if (owner_took_focus || agent_took_focus) && self.floating.ui.has_keyboard() {
+                self.floating.ui.keyboard = false;
+                let floating_focus = egui::Id::new("floating-terminal-content");
+                if ctx.memory(|m| m.focused()) == Some(floating_focus) {
+                    ctx.memory_mut(|m| m.surrender_focus(floating_focus));
+                }
+            }
         }
         #[cfg(windows)]
         if self.overlay != Some(Overlay::Settings)

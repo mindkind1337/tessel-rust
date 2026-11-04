@@ -41,6 +41,9 @@ pub struct Browser {
     agent_root: Option<PathBuf>,
     agent_profile: Option<tempfile::TempDir>,
     planned_download: Arc<Mutex<Option<(PathBuf, std::time::Instant)>>>,
+    clip: crate::browser_clip::NativeClip,
+    viewport: Option<(egui::Rect, f32)>,
+    webview_had_focus: bool,
 }
 
 impl Default for Browser {
@@ -65,6 +68,9 @@ impl Default for Browser {
             agent_root: None,
             agent_profile: None,
             planned_download: Default::default(),
+            clip: Default::default(),
+            viewport: None,
+            webview_had_focus: false,
         }
     }
 }
@@ -190,10 +196,70 @@ impl Browser {
         private_fill::start(view, account.origin.clone(), script)
     }
 
-    pub fn visible(&self, visible: bool) {
-        if let Some(view) = &self.view {
-            let _ = view.set_visible(visible);
+    pub fn begin_frame(&mut self) {
+        self.viewport = None;
+    }
+
+    pub fn visible(&mut self, visible: bool) {
+        if !visible {
+            self.clip.reset();
+            self.viewport = None;
+            if let Some(view) = &self.view {
+                if webview_owns_focus(wry::WebViewExtWindows::hwnd(view)) {
+                    let _ = view.focus_parent();
+                }
+                let _ = view.set_visible(false);
+            }
+            self.webview_had_focus = false;
+        } else if let Some(view) = &self.view {
+            let _ = view.set_visible(true);
         }
+    }
+
+    /// Synchronizes the child WebView's Win32 clipping region, visibility, and parent focus
+    /// after all overlays, popups, and dialogs for the current frame have been evaluated.
+    ///
+    /// Returns `true` when the WebView newly acquired Win32 keyboard focus on a frame where
+    /// `reclaim_parent_focus` was `false` (the user clicked inside the live webpage).
+    pub fn sync_presentation(
+        &mut self,
+        can_show: bool,
+        overlay: Option<egui::Rect>,
+        reclaim_parent_focus: bool,
+    ) -> bool {
+        use wry::WebViewExtWindows;
+        let Some((browser_rect, scale)) = self.viewport.filter(|_| can_show) else {
+            self.visible(false);
+            return false;
+        };
+        let Some(view) = &self.view else {
+            self.clip.reset();
+            self.webview_had_focus = false;
+            return false;
+        };
+        let hwnd = view.hwnd();
+        let cutout = match crate::browser_clip::cutout(browser_rect, overlay, scale) {
+            Ok(cutout) => cutout,
+            Err(_) => {
+                self.visible(false);
+                return false;
+            }
+        };
+        if self.clip.apply(hwnd, cutout).is_err() {
+            self.visible(false);
+            return false;
+        }
+        let mut has_focus = webview_owns_focus(hwnd);
+        let mut webview_took_focus = false;
+        if reclaim_parent_focus && has_focus {
+            let _ = view.focus_parent();
+            has_focus = false;
+        } else if has_focus && !self.webview_had_focus {
+            webview_took_focus = true;
+        }
+        self.webview_had_focus = has_focus;
+        let _ = view.set_visible(true);
+        webview_took_focus
     }
     fn create(&mut self, frame: &eframe::Frame) -> Result<(), String> {
         let dirs = directories::ProjectDirs::from("com", "Tessel", "TesselRust")
@@ -276,6 +342,9 @@ impl Browser {
             },
             start,
         )?;
+        self.clip.reset();
+        self.viewport = None;
+        self.webview_had_focus = false;
         self.view = Some(view);
         Ok(())
     }
@@ -426,6 +495,7 @@ impl Browser {
         }
         let rect = ui.available_rect_before_wrap();
         let scale = ui.ctx().pixels_per_point();
+        self.viewport = Some((rect, scale));
         if let Some(view) = &self.view {
             let _ = view.set_bounds(wry::Rect {
                 position: wry::dpi::PhysicalPosition::new(
@@ -439,9 +509,23 @@ impl Browser {
                 )
                 .into(),
             });
-            let _ = view.set_visible(true);
         }
     }
+}
+
+fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetGUIThreadInfo, IsChild};
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetGUIThreadInfo(0, &mut info) }.is_err() || info.hwndFocus.0.is_null() {
+        return false;
+    }
+    info.hwndFocus == hwnd || unsafe { IsChild(hwnd, info.hwndFocus) }.as_bool()
 }
 #[cfg(test)]
 mod tests {

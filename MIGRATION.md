@@ -499,3 +499,16 @@ replies and mouse reports, and updates the status bar's active target count.
 Validation: 7 UI/AccessKit/7-theme EN/FR suites and targeted workspace, layout,
 status-bar, toolbar and terminal broadcast unit tests pass, with strict
 all-target/all-feature Clippy and formatting clean.
+
+WebView2 floating-drawer clipping integration: `browser_clip` computes physical
+`SetWindowRgn` cutouts with outward fractional-DPI rounding, 27-bit GDI region
+coordinate bounds, cached `(HWND, Option<Cutout>)` reuse, RAII `HRGN` cleanup,
+and fail-closed cache invalidation on error. Both owner and project-agent
+`Browser` instances defer visibility to end-of-frame `sync_presentation` after
+`FloatingTerminal`, popups (`egui::Popup::is_any_open`), command palette and
+modals are evaluated, hiding fail-closed on any popup/modal or clipping error
+and coordinating Win32 parent/child focus (`focus_parent` vs webpage clicks).
+Validation: 6 `browser_clip` tests pass, including 1px region boundaries,
+full-window `NULLREGION` occlusion, cache-hit proof, 200-iteration GDI handle
+leak check, and isolated real WebView2 child-container `ChildWindowFromPointEx`
+hit-testing, with strict all-target/all-feature Clippy and formatting clean.

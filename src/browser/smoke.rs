@@ -217,7 +217,9 @@ impl eframe::App for Smoke {
             self.browser.address = self.address.clone();
             self.browser.navigate();
         }
+        self.browser.begin_frame();
         egui::CentralPanel::default().show(ctx, |ui| self.browser.show(ui, frame));
+        let _ = self.browser.sync_presentation(true, None, false);
         let completed: Vec<_> = self
             .browser
             .downloads
