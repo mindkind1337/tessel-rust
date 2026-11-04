@@ -32,7 +32,8 @@ jobs:
           $keyText = $env:TESSEL_HOST_DEPLOY_KEY.Replace("`r`n", "`n").TrimEnd() + "`n"
           [IO.File]::WriteAllText($keyPath, $keyText, [Text.UTF8Encoding]::new($false))
           $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          icacls $keyPath /inheritance:r /grant:r ('*' + $owner + ':R') | Out-Null
+          # Only the runner owns the file; include DELETE so always() cleanup succeeds.
+          icacls $keyPath /inheritance:r /grant:r ('*' + $owner + ':F') | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict the CI dependency key.' }
           $meta = Invoke-RestMethod https://api.github.com/meta -Headers @{'User-Agent'='Tessel-Rust-CI'}
           [IO.File]::WriteAllLines($knownHosts, @($meta.ssh_keys | ForEach-Object { 'github.com ' + $_ }), [Text.UTF8Encoding]::new($false))
