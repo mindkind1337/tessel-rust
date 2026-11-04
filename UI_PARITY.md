@@ -339,3 +339,8 @@ Terminal base colors (`themes.js:39-64`, `themePalettes.js:10,16,22,28,34`):
 - `src/agent_model_cursor.rs` ports source variant decomposition, effort/Fast/Thinking grouping, explicit-medium separation, default selection, label cleanup, family/version order and composed-model options. Hopper replaced the initial approximate label comparator with cached ICU4X Unicode collation and added accented/composed/decomposed/punctuation reference cases.
 - `scripts/cursor-model-fixture.cjs` records source hashes and regenerates 34 ID cases, 13 grouping suites and the 246-row reference listing (39 grouped models). `tests/agent_model_cursor.rs` exercises parsing, sanitizing, grouping, authoritative catalogue merging, all listed-variant round trips and 3,159 model/effort/Fast/Thinking combinations.
 - Discovery dispatch now supplies grouped Cursor metadata to the existing cache/picker/launch pipeline. The isolated model-picker capture script accepts `-Cursor` to display a synthetic cached variant group without starting any provider.
+
+### Per-pane model picker runtime integration
+- Native terminal Model menu opens the English/French picker, with transactional per-pane launch choices, Settings inheritance, disabled startup/recovery actions and manual CLI precedence.
+- Arrow keys move one row; Escape closes only the picker and retains trigger focus during key repeat. Disabled parent controls cannot emit actions.
+- Evidence: 18 standalone picker tests, 234 integrated binary tests (three ignored), strict Clippy, and isolated native French normal/compact captures. Live command switching, observed-model header chips and native-chat integration remain outstanding.

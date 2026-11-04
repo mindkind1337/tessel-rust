@@ -18,6 +18,7 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    model_picker: crate::session_option_picker_ui::SessionOptionPickerUi,
     codex_seed: Option<crate::codex_terminal::Seed>,
     codex_restore: Option<crate::agent_preferences::Preferences>,
     codex_discovery: Option<crate::codex_terminal::Discovery>,
@@ -37,6 +38,15 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn has_model_choice(&self) -> bool {
+        matches!(&self.launch, Launch::Agent(agent) if crate::agent_model_catalog::find(agent).is_some())
+    }
+    fn can_pick_model(&self) -> bool {
+        self.loading.is_none()
+            && self.restarting.is_none()
+            && self.codex_restore.is_none()
+            && self.has_model_choice()
+    }
     fn poll_conversation(&mut self, claimed: &mut std::collections::HashSet<String>) -> bool {
         if (self.terminal.is_none() && self.codex_restore.is_none()) || self.restarting.is_some() {
             return false;
@@ -515,6 +525,7 @@ impl Tessel {
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
+                model_picker: Default::default(),
                 settings_changed: false,
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
@@ -687,6 +698,7 @@ impl Tessel {
                         restarting: None,
                         codex_discovery: None,
                         codex_restore: None,
+                        model_picker: Default::default(),
                         settings_changed: false,
                         codex_seed: None,
                         conversation_id: None,
@@ -720,6 +732,17 @@ impl Tessel {
                         );
                         session.settings_changed = true;
                     }
+                    if std::env::args().any(|arg| arg == "--pane-model-fixture") {
+                        app.overlay = None;
+                        let session = app.sessions.last_mut().expect("synthetic terminal");
+                        session.launch = Launch::Agent("codex".into());
+                        session.title = "Synthetic Codex".into();
+                        session.model_picker.open_at_point(
+                            &cc.egui_ctx,
+                            egui::pos2(430.0, 110.0),
+                            None,
+                        );
+                    }
                 }
                 Err(e) => app.error = e.to_string(),
             }
@@ -733,6 +756,7 @@ impl Tessel {
                     restarting: None,
                     codex_discovery: None,
                     codex_restore: None,
+                    model_picker: Default::default(),
                     settings_changed: false,
                     codex_seed: None,
                     conversation_id: None,
@@ -817,6 +841,39 @@ impl Tessel {
             && let Err(e) = s.save(&self.state)
         {
             self.error = e;
+        }
+    }
+    fn save_pane_model_choice(&mut self, id: u64, option: &str, value: Option<&serde_json::Value>) {
+        let Some(session) = self
+            .sessions
+            .iter()
+            .find(|s| s.id == id && s.can_pick_model())
+        else {
+            return;
+        };
+        let Launch::Agent(agent) = &session.launch else {
+            return;
+        };
+        let Some(store) = &self.store else {
+            self.error = "Workspace storage is unavailable.".into();
+            return;
+        };
+        let discovered = self.model_discovery.as_ref().and_then(|d| d.models(agent));
+        match crate::pane_model_settings::save(
+            &mut self.state,
+            store,
+            id,
+            discovered,
+            option,
+            value,
+        ) {
+            Ok(values) => {
+                if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+                    session.session_options = values;
+                }
+                self.refresh_launch_status();
+            }
+            Err(error) => self.error = error,
         }
     }
     fn detect_agents(&mut self) {
@@ -1094,6 +1151,7 @@ impl Tessel {
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -1959,6 +2017,8 @@ impl Tessel {
         let mut split = None;
         let mut maximize = None;
         let mut arrange = false;
+        let mut model_choice = None;
+        let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
                 continue;
@@ -2028,6 +2088,17 @@ impl Tessel {
                                     _ => None,
                                 };
                                 let menu = crate::pane_header::MenuState {
+                                    model_choice: session.has_model_choice(),
+                                    model_pending: !session.can_pick_model(),
+                                    model_manual: session.session_options.is_some(),
+                                    model_text: match &session.launch {
+                                        Launch::Agent(agent) => {
+                                            let models = crate::agent_model_catalog::models_for(agent, self.model_discovery.as_ref().and_then(|d| d.models(agent)));
+                                            let values = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
+                                            Some(crate::agent_model_defaults_ui::session_pill_label(&models, values.as_ref(), self.state.language == crate::i18n::Language::French))
+                                        }
+                                        _ => None,
+                                    },
                                     can_restart: session.can_restart(pane_prefs.as_ref()),
                                     launch_stale: session.needs_restart(),
                                     session_id: conversation_id.as_deref(),
@@ -2133,6 +2204,9 @@ impl Tessel {
                                 if let Some(action) = action {
                                     use crate::pane_menu_model::PaneMenuAction;
                                     match action {
+                                        PaneMenuAction::ChooseModel if session.can_pick_model() => {
+                                            session.model_picker.open_at_point(ui.ctx(), more.rect.left_bottom(), Some(more.id));
+                                        }
                                         PaneMenuAction::Restart
                                         | PaneMenuAction::RestartApplySettings => {
                                             session.restart(pane_prefs);
@@ -2185,6 +2259,34 @@ impl Tessel {
                                     close = Some(id);
                                 }
                             });
+                            if !ui.is_enabled() || !session.can_pick_model() {
+                                session.model_picker.close();
+                            } else if session.model_picker.is_open()
+                                && let Launch::Agent(agent) = &session.launch
+                            {
+                                let mut input = crate::session_option_picker_ui::SessionPickerInput::new(agent, &self.state.agent_model_defaults);
+                                // This surface currently edits the next launch. Its option
+                                // rows must follow that launch's inherited model, not an
+                                // unrelated first catalogue row when no pane override exists.
+                                let configured = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
+                                let settings_model = configured.as_ref().and_then(|values| values.get("model")).and_then(serde_json::Value::as_str).map(|model| crate::pane_session_model::ShownAgentModel {
+                                    model: model.into(), name: None, effort: None, chosen_effort: None,
+                                    source: crate::pane_session_model::ModelSource::Settings, at: None,
+                                });
+                                input.agent_model = settings_model.as_ref();
+                                input.pane_running = session.terminal.as_ref().is_some_and(|terminal| !terminal.exited());
+                                input.session_options = session.session_options.as_ref();
+                                input.discovered_models = self.model_discovery.as_ref().and_then(|d| d.models(agent));
+                                input.french = self.state.language == crate::i18n::Language::French;
+                                input.capabilities = crate::session_option_picker_ui::SessionPickerCapabilities {
+                                    can_open_picker: true,
+                                    ..Default::default()
+                                };
+                                let result = session.model_picker.show_popover(ui.ctx(), egui::Id::new(("pane-model-picker", id)), &input);
+                                if let Some(crate::session_option_picker_ui::SessionPickerEvent::Set { option_id, value }) = result.event {
+                                    model_choice = Some((id, option_id, value));
+                                }
+                            }
                             if !session.error.is_empty() {
                                 ui.colored_label(egui::Color32::LIGHT_RED, &session.error);
                             }
@@ -2215,7 +2317,7 @@ impl Tessel {
                                         }
                                     });
                             } else if let Some(terminal) = &mut session.terminal {
-                                terminal.show(ui, self.state.font_size);
+                                ui.add_enabled_ui(!picker_was_open && !session.model_picker.is_open(), |ui| terminal.show(ui, self.state.font_size));
                             } else if session.restarting.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Stopping terminal processes…"));
@@ -2357,6 +2459,9 @@ impl Tessel {
         }
         if let Some(id) = close {
             self.close_session(id);
+        }
+        if let Some((id, option, value)) = model_choice {
+            self.save_pane_model_choice(id, &option, value.as_ref());
         }
         if let Some(placement) = split {
             self.new_session_placed(Launch::Shell, Some(placement));
@@ -2588,6 +2693,7 @@ impl Tessel {
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
+                model_picker: Default::default(),
                 settings_changed: false,
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
@@ -3800,7 +3906,22 @@ impl eframe::App for Tessel {
             || self.pending_exit
             || self.file_action.is_some()
             || self.restore_preview.is_some();
-        let keyboard_free = !ctx.wants_keyboard_input() || terminal_focused;
+        for session in &mut self.sessions {
+            if self.overlay.is_some()
+                || self.command_palette.open
+                || confirmation_open
+                || self.view != View::Work
+                || session.project != self.state.active_project
+            {
+                session.model_picker.close();
+            }
+        }
+        let picker_escape = self.sessions.iter_mut().fold(false, |consumed, session| {
+            session.model_picker.handle_escape(ctx) | consumed
+        });
+        let keyboard_free = !picker_escape
+            && (!ctx.wants_keyboard_input() || terminal_focused)
+            && !self.sessions.iter().any(|s| s.model_picker.is_open());
         if !confirmation_open
             && !self.command_palette.open
             && matches!(self.overlay, None | Some(Overlay::Help))
@@ -4207,6 +4328,10 @@ impl eframe::App for Tessel {
                     ui,
                     &crate::pane_header::MenuState {
                         title: "Terminal",
+                        model_choice: true,
+                        model_pending: false,
+                        model_manual: true,
+                        model_text: Some("synthetic-model".into()),
                         session_id: Some("12345678-1234-4234-8234-123456789abc"),
                         can_restart: true,
                         launch_stale: true,
@@ -4360,6 +4485,7 @@ mod tests {
             }),
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             codex_seed: None,
             conversation_id: None,
             settings_changed: false,
@@ -4430,6 +4556,7 @@ $lock.Dispose()
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             codex_seed: None,
             conversation_id: None,
             settings_changed: false,
@@ -4609,6 +4736,7 @@ $lock.Dispose()
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -4649,6 +4777,7 @@ $lock.Dispose()
                 restarting: None,
                 codex_discovery: None,
                 codex_restore: None,
+                model_picker: Default::default(),
                 settings_changed: false,
                 codex_seed: None,
                 conversation_id: None,
@@ -4700,6 +4829,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         let mut session = Session {
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             restarting: None,
             codex_seed: None,
             conversation_id: None,
@@ -4839,6 +4969,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -4886,6 +5017,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -4922,6 +5054,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
+            model_picker: Default::default(),
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,

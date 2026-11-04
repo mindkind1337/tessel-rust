@@ -35,6 +35,10 @@ pub fn button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui:
 }
 
 pub struct MenuState<'a> {
+    pub model_choice: bool,
+    pub model_pending: bool,
+    pub model_manual: bool,
+    pub model_text: Option<String>,
     pub title: &'a str,
     pub session_id: Option<&'a str>,
     pub can_restart: bool,
@@ -54,6 +58,25 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
             launch_stale: state.can_restart && state.launch_stale,
             is_maximized: state.maximized,
             can_arrange_panes: state.multiple_panes,
+            has_model_choice: state.model_choice,
+            model_text: state.model_text.clone(),
+            disabled_reasons: if state.model_pending {
+                [(
+                    "menuModel".into(),
+                    match state.language {
+                        PaneMenuLang::Fr => {
+                            "Le volet démarre ou redémarre. Attendez la fin de l'opération."
+                        }
+                        PaneMenuLang::En => {
+                            "The pane is starting or restarting. Wait for it to finish."
+                        }
+                    }
+                    .into(),
+                )]
+                .into()
+            } else {
+                Default::default()
+            },
             ..Default::default()
         },
         state.language,
@@ -66,6 +89,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
             PaneMenuAction::Restart | PaneMenuAction::RestartApplySettings => state.can_restart,
             PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
             PaneMenuAction::Rename => state.can_rename,
+            PaneMenuAction::ChooseModel => state.model_choice,
             PaneMenuAction::ToggleMaximize
             | PaneMenuAction::ArrangeGrid
             | PaneMenuAction::SplitRight
@@ -89,7 +113,7 @@ pub fn show(ui: &mut egui::Ui, state: &MenuState<'_>) -> Option<PaneMenuAction> 
             enabled,
             danger,
             shortcut,
-            ..
+            tooltip,
         } = entry
         {
             if danger {
@@ -102,9 +126,38 @@ pub fn show(ui: &mut egui::Ui, state: &MenuState<'_>) -> Option<PaneMenuAction> 
             };
             let mut button = egui::Button::new(text);
             if let Some(shortcut) = shortcut {
-                button = button.shortcut_text(shortcut);
+                if action == PaneMenuAction::ChooseModel {
+                    let mut job = egui::text::LayoutJob::single_section(
+                        shortcut,
+                        egui::TextFormat {
+                            font_id: egui::FontId::proportional(11.0),
+                            color: ui.visuals().weak_text_color(),
+                            italics: state.model_manual,
+                            ..Default::default()
+                        },
+                    );
+                    job.wrap = egui::text::TextWrapping {
+                        max_width: 150.0,
+                        max_rows: 1,
+                        break_anywhere: true,
+                        overflow_character: Some('…'),
+                    };
+                    button = button.shortcut_text(ui.fonts_mut(|fonts| fonts.layout_job(job)));
+                } else {
+                    button = button.shortcut_text(shortcut);
+                }
             }
-            if ui.add_enabled(enabled, button).clicked() {
+            let response = ui.add_enabled(enabled, button);
+            let response = if let Some(tooltip) = tooltip {
+                if enabled {
+                    response.on_hover_text(tooltip)
+                } else {
+                    response.on_disabled_hover_text(tooltip)
+                }
+            } else {
+                response
+            };
+            if response.clicked() {
                 selected = Some(action);
                 ui.close();
             }
@@ -119,6 +172,10 @@ mod tests {
     #[test]
     fn native_menu_only_exposes_actions_supported_by_the_pane() {
         let mut state = MenuState {
+            model_choice: false,
+            model_pending: false,
+            model_manual: false,
+            model_text: None,
             title: "Chat",
             session_id: None,
             can_restart: false,
@@ -164,5 +221,17 @@ mod tests {
         state.launch_stale = true;
         assert!(actions(&state).contains(&PaneMenuAction::Restart));
         assert!(actions(&state).contains(&PaneMenuAction::RestartApplySettings));
+        state.model_choice = true;
+        state.model_text = Some("synthetic-model".into());
+        assert!(entries(&state).iter().any(|entry| matches!(entry, PaneMenuEntry::Item { action: PaneMenuAction::ChooseModel, label, shortcut: Some(shortcut), .. } if label == "Modèle…" && shortcut == "synthetic-model")));
+        state.model_pending = true;
+        assert!(entries(&state).iter().any(|entry| matches!(
+            entry,
+            PaneMenuEntry::Item {
+                action: PaneMenuAction::ChooseModel,
+                enabled: false,
+                ..
+            }
+        )));
     }
 }

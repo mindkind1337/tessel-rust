@@ -27,6 +27,9 @@ Tessel's `agentSessionOptions.js`, `agentPrefs.js`, `paneLastModel.js`, model an
 session-option labels, `claudeModelSwitch.js`, terminal screen model readers and
 `TerminalPane.vue`, including the Orca-derived option catalog and CLI mappings.
 The reference generator records source-file hashes and only synthetic inputs.
+The native per-pane picker in `src/session_option_picker_ui.rs` adapts
+`SessionOptionPicker.vue`, `TerminalPane.vue`, `PaneActionsMenu.vue` and their
+option labels and geometry under the same Tessel/Orca attribution.
 
 The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
