@@ -135,8 +135,10 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 - Explicit CSV import from Chrome, Edge or Firefox exports, stored with Windows user-bound DPAPI encryption outside project folders.
 - Atomic saves, exclusive vault lock, duplicate-account updates, account removal and manual locking. Invalid input retains existing records.
+- The English/French password panel offers metadata search, sorting, loading 200 accounts at a time, removal confirmations and browser-specific CSV export instructions. A dedicated worker owns the unlocked vault; the interface receives only account metadata. Imports and removals reject outdated actions, and leaving the password settings locks the vault. The CSV picker is attached to the app window and does not hold the decrypted vault.
 - Manual fill in the private browser only, restricted to the account's exact HTTPS origin; no automatic form submission. An isolated JavaScript context checks form ownership and all submit destinations again after username events. Registration, invisible and ambiguous password fields are refused. The vault reports a fixed success/refusal result; locking cancels pending checks. Page scripts cannot replace the isolated validation functions.
 - No vault tools are available to agents or guests. Existing browser password databases and Tessel credentials are not accessed automatically.
+- Direct browser-database import and agent-access grants are not implemented in this native version; these controls remain unavailable. CSV import and manual private-browser fill are available.
 
 ### Private Tessel account
 

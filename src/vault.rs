@@ -98,7 +98,7 @@ impl Vault {
             .ok_or("No private data directory")?;
         Self::open(dirs.data_local_dir())
     }
-    fn open(dir: &Path) -> Result<Self, String> {
+    pub(crate) fn open(dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|_| "Cannot create private vault directory")?;
         let lock = OpenOptions::new()
             .read(true)

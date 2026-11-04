@@ -37,6 +37,8 @@ pub mod appearance_panel;
 mod backup;
 #[cfg(windows)]
 mod browser;
+pub mod browser_passwords_model;
+pub mod browser_passwords_panel;
 mod chat;
 mod chrome;
 mod claude;
@@ -115,6 +117,8 @@ pub mod theme_palettes;
 mod vault;
 #[cfg(windows)]
 mod vault_panel;
+#[cfg(windows)]
+mod vault_worker;
 mod view_tabs;
 pub mod view_tabs_browser_model;
 #[cfg(windows)]

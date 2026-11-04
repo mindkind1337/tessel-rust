@@ -119,6 +119,16 @@ fn download_key(path: PathBuf) -> PathBuf {
     })
 }
 impl Browser {
+    pub fn private_login_origin(&self) -> Result<String, String> {
+        if self.agent_root.is_some() {
+            return Err("The owner vault is unavailable to agent browsers".into());
+        }
+        let view = self
+            .view
+            .as_ref()
+            .ok_or("Start the private browser and open the login page first")?;
+        crate::vault::origin(&view.url().map_err(|_| "Cannot read browser location")?)
+    }
     pub fn open_address(&mut self, address: String) {
         self.address = address;
         self.navigate();

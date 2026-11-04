@@ -358,7 +358,7 @@ Native-chat model options now apply independently per field: an explicit pane mo
 
 Native chat pane menus now open the shared model/effort picker. Native choices use a separate transactional save path, preserve independent per-field inheritance, and never invoke terminal slash commands. The EN/FR note distinguishes the next Codex turn from the next Claude connection; terminal-only options are hidden. The configured menu label is not a protocol observation: verified native-chat header telemetry and live Claude switching are still pending.
 
-Password dialog A1: browser_passwords_model.rs and its TypeScript reference fixture cover metadata-only views, search/pagination, confirmations, CSV/import reconciliation and owner/guest/page/form boundaries. The source fixture was regenerated against Vue b1803 after the form-destination fixes. A2 egui dialog and worker integration remain pending.
+Password dialog A1/A2: browser_passwords_model.rs and its TypeScript reference fixture cover metadata-only views, search/pagination, confirmations, CSV/import reconciliation and owner/guest/page/form boundaries. The source fixture was regenerated against Vue b1803 after the form-destination fixes. The egui panel now uses a revisioned worker for owner-only CSV import, deletion and private-browser fill; the existing encrypted vault format is preserved. Search, sorting, pagination, confirmations and CSV export help are implemented. Direct browser-database import and agent permission grants remain unavailable until their native backends are implemented. Full source parity is not claimed.
 
 
 ### Native host connection preview

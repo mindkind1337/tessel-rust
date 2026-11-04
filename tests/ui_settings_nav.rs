@@ -769,3 +769,25 @@ fn narrow_200px_rail_truncates_long_titles_and_headers_within_clip_bounds() {
         );
     }
 }
+
+#[test]
+fn focus_ownership_distinguishes_settings_search_from_page_body() {
+    let ctx = egui::Context::default();
+    let mut nav = SettingsNav::new();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = nav.show(
+                ui,
+                SettingsNavInput {
+                    entries: &[],
+                    selected: "",
+                    lang: SettingsLang::En,
+                },
+            );
+            nav.focus_search(ctx);
+            assert!(nav.owns_focus(ctx));
+            ctx.memory_mut(|m| m.request_focus(egui::Id::new("page-body-search")));
+            assert!(!nav.owns_focus(ctx));
+        });
+    });
+}

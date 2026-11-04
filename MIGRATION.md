@@ -260,7 +260,7 @@ The installed Codex app-server schema describes reasoning effort as a nonempty a
 
 Native chat pane menus now use the model/effort catalogue with independent Settings fallback and transactional override saves. Codex applies choices on the next turn, Claude on the next connection. Protocol-observed active model chips and live Claude switching remain pending.
 
-Password dialog groundwork: the pure metadata/import/DOM-decision model and source-derived synthetic fixtures are present, including streaming CSV column limits, bounded batches and duplicate IDs, independent HTTPS proof construction and Live Share decisions. This model is not yet connected to a new vault worker or dialog; the owner-only runtime retains its independently validated isolated-world fill.
+Password dialog: the pure metadata/import/DOM-decision model and source-derived synthetic fixtures are present, including streaming CSV column limits, bounded batches and duplicate IDs, independent HTTPS proof construction and Live Share decisions. The egui panel is connected to a revisioned worker for explicit CSV imports, removal and owner-only isolated-world fill. Metadata snapshots contain no passwords; transient fill payloads are dropped immediately after submission to the private browser bridge. Save failures retain the existing records and revision. Closing password settings drops the worker and cancels pending fill checks. Direct browser import and persistent agent-consent controls remain pending and unavailable in the runtime panel.
 
 
 ## Native host gate 7A integration
@@ -285,3 +285,5 @@ nonzero exit. Strict all-target/all-feature Clippy with warnings denied and form
 Native French screenshots pass at normal and compact window sizes using an empty
 isolated profile and the synthetic `--native-host-fixture`; no SSH connection is
 started by that fixture. Screenshots were inspected for wrapping and visible controls.
+
+Password panel A2 acceptance (Windows): 8 vault/worker/controller tests, 8 headless password-panel UI tests and 7 Settings-navigation tests pass. Coverage includes save-failure rollback, stale revisions, exact-origin fill tickets, metadata-only snapshots, profile identity, pagination, disabled capabilities, native-popup/held-Escape routing and focus isolation. Strict all-target/all-feature Clippy passes. Native synthetic French captures were inspected at normal and compact sizes and with the full CSV export guide. Only fake accounts in a temporary vault were used; direct browser-database import and agent vault grants remain unavailable.

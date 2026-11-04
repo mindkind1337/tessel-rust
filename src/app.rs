@@ -541,7 +541,7 @@ impl Tessel {
             #[cfg(windows)]
             show_agent_browser: false,
             #[cfg(windows)]
-            vault: crate::vault_panel::VaultPanel::default(),
+            vault: crate::vault_panel::VaultPanel::with_parent(cc),
             #[cfg(windows)]
             account: Default::default(),
         };
@@ -648,6 +648,12 @@ impl Tessel {
                 }];
                 app.native_host_panel = crate::native_host_panel::Panel::fixture();
             }
+            #[cfg(windows)]
+            if std::env::args().any(|a| a == "--vault-panel-fixture") {
+                app.overlay = Some(Overlay::Settings);
+                app.settings_section = SettingsSection::Passwords;
+                app.vault.load_fixture();
+            }
             if std::env::args().any(|a| a == "--help-fixture") {
                 app.open_help();
             }
@@ -661,7 +667,9 @@ impl Tessel {
         let models_fixture = false;
         let native_host_fixture =
             cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--native-host-fixture");
-        if !models_fixture && !native_host_fixture {
+        let vault_fixture =
+            cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--vault-panel-fixture");
+        if !models_fixture && !native_host_fixture && !vault_fixture {
             app.detect_agents();
         }
         #[cfg(feature = "visual-test")]
@@ -3707,6 +3715,14 @@ impl Tessel {
         let agents_escape_consumed = self.settings_section == SettingsSection::Agents
             && self.restore_preview.is_none()
             && self.agents_panel.handle_escape(ctx);
+        #[cfg(windows)]
+        let vault_escape_consumed = self.settings_section == SettingsSection::Passwords
+            && self.restore_preview.is_none()
+            && self
+                .vault
+                .handle_escape(ctx, self.settings_nav.owns_focus(ctx));
+        #[cfg(not(windows))]
+        let vault_escape_consumed = false;
         let mut close = false;
         let response = crate::settings_surface::show(ctx, |ui, nav_width| {
             let height = ui.available_height();
@@ -3767,7 +3783,11 @@ impl Tessel {
                             SettingsSection::Agents => self.agent_settings(ui),
                             SettingsSection::Backup => self.backup_controls(ui),
                             #[cfg(windows)]
-                            SettingsSection::Passwords => self.vault.show(ui, &mut self.browser),
+                            SettingsSection::Passwords => self.vault.show(
+                                ui,
+                                &mut self.browser,
+                                self.state.language == crate::i18n::Language::French,
+                            ),
                             #[cfg(windows)]
                             SettingsSection::Account => self.account.show(ui),
                         })
@@ -3778,6 +3798,7 @@ impl Tessel {
         if self.restore_preview.is_none()
             && !host_dialog_open
             && !agents_escape_consumed
+            && !vault_escape_consumed
             && (close || response.should_close())
         {
             if self.settings_section == SettingsSection::Agents {
@@ -4547,6 +4568,12 @@ impl eframe::App for Tessel {
             });
         }
         self.confirmations(ctx);
+        #[cfg(windows)]
+        if self.overlay != Some(Overlay::Settings)
+            || self.settings_section != SettingsSection::Passwords
+        {
+            self.vault.suspend();
+        }
         if previous_panels != self.state.panels {
             self.save();
         }

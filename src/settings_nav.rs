@@ -202,6 +202,7 @@ fn paint_single_line_ellipsis(
 /// Native `egui` Settings navigation rail (`SettingsDialog.vue` `.set-side` parity).
 #[derive(Debug, Default, Clone)]
 pub struct SettingsNav {
+    nav_id: Option<Id>,
     query: String,
     focused_entry_id: Option<String>,
     last_visible_ids: Vec<String>,
@@ -252,6 +253,17 @@ impl SettingsNav {
             ctx.memory_mut(|m| m.request_focus(id));
         }
         ctx.request_repaint();
+    }
+    pub fn owns_focus(&self, ctx: &egui::Context) -> bool {
+        let Some(id) = self.nav_id else {
+            return false;
+        };
+        ctx.memory(|m| match m.focused() {
+            Some(focused) => Self::classify_focus(Some(focused), id, true, true).is_some(),
+            None => ["back", "search-input", "search-clear", "list"]
+                .iter()
+                .any(|suffix| m.had_focus_last_frame(id.with(*suffix))),
+        })
     }
 
     fn ordered_visible_indices(entries: &[SettingsNavEntry], words: &[String]) -> Vec<usize> {
@@ -375,6 +387,7 @@ impl SettingsNav {
                 return Some(SettingsNavAction::Back);
             }
             self.query.clear();
+            self.focus_search_requested = true;
             self.focused_entry_id = None;
         }
 
@@ -504,6 +517,7 @@ impl SettingsNav {
         self.update_key_releases(ui);
 
         let nav_id = ui.id().with("tessel-settings-nav");
+        self.nav_id = Some(nav_id);
         let back_id = nav_id.with("back");
         let search_id = nav_id.with("search-input");
         let clear_id = nav_id.with("search-clear");

@@ -339,5 +339,22 @@
   "The host program could not be put in place or started": "Le programme h\u00f4te n\u2019a pas pu \u00eatre install\u00e9 ou d\u00e9marr\u00e9",
   "The installed host program is not the expected version": "Le programme h\u00f4te install\u00e9 n\u2019est pas de la version attendue",
   "Cancelling": "Annulation en cours",
-  "Disconnect closes this connection; the service continues on the host.": "La d\u00e9connexion ferme cette connexion; le service continue sur l\u2019h\u00f4te."
+  "Disconnect closes this connection; the service continues on the host.": "La d\u00e9connexion ferme cette connexion; le service continue sur l\u2019h\u00f4te.",
+  "Agent access is not available in this version; saved passwords remain owner-only.": "L\u2019acc\u00e8s des agents n\u2019est pas disponible dans cette version; les mots de passe restent r\u00e9serv\u00e9s au propri\u00e9taire.",
+  "Cannot start private vault worker": "Impossible de d\u00e9marrer la t\u00e2che du coffre priv\u00e9",
+  "Vault request counter exhausted": "La limite des requ\u00eates du coffre a \u00e9t\u00e9 atteinte",
+  "Vault worker is busy or closed": "La t\u00e2che du coffre est occup\u00e9e ou ferm\u00e9e",
+  "Private vault worker stopped": "La t\u00e2che du coffre priv\u00e9 s\u2019est arr\u00eat\u00e9e",
+  "Vault changed; repeat the action using the refreshed list": "Le coffre a chang\u00e9; recommencez l\u2019action avec la liste actualis\u00e9e",
+  "Vault revision counter exhausted": "La limite des r\u00e9visions du coffre a \u00e9t\u00e9 atteinte",
+  "Unknown vault account": "Compte du coffre inconnu",
+  "Vault contains duplicate login identities; original retained": "Le coffre contient des identifiants de connexion en double; le fichier original est conserv\u00e9",
+  "Imported records:": "Comptes import\u00e9s :",
+  "Choose a local password CSV file": "Choisissez un fichier CSV local de mots de passe",
+  "Choose a regular CSV file no larger than 5 MiB": "Choisissez un fichier CSV r\u00e9gulier de 5 Mio ou moins",
+  "Cannot open CSV picker": "Impossible d\u2019ouvrir le s\u00e9lecteur de fichier CSV",
+  "Unlocked": "D\u00e9verrouill\u00e9",
+  "Locked": "Verrouill\u00e9",
+  "Import cancelled": "Import annul\u00e9",
+  "Removed": "Supprim\u00e9"
 }
