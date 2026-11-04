@@ -1,1 +1,0 @@
-{"version":1,"request_id":1,"message":{"kind":"hello","body":{"versions":[1],"capabilities":["tree","git","future.optional"],"budgets":{"frame_bytes":1048576,"terminal_ring_bytes":2097152,"total_ring_bytes":16777216,"stream_window_bytes":2097152,"in_flight":32}}}}

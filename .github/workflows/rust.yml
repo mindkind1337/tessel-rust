@@ -9,6 +9,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Authenticate the private host protocol dependency
+        env:
+          TESSEL_HOST_DEPLOY_KEY: ${{ secrets.TESSEL_HOST_DEPLOY_KEY }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TESSEL_HOST_DEPLOY_KEY)) {
+            throw 'Configure TESSEL_HOST_DEPLOY_KEY as a read-only tessel-host deploy key. See HOST_PROTOCOL_PLAN.md.'
+          }
+          $keyPath = Join-Path $env:RUNNER_TEMP 'tessel-host-ci-key'
+          $knownHosts = Join-Path $env:RUNNER_TEMP 'tessel-host-known-hosts'
+          $keyText = $env:TESSEL_HOST_DEPLOY_KEY.Replace("`r`n", "`n").TrimEnd() + "`n"
+          [IO.File]::WriteAllText($keyPath, $keyText, [Text.UTF8Encoding]::new($false))
+          $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          icacls $keyPath /inheritance:r /grant:r ('*' + $owner + ':R') | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict the CI dependency key.' }
+          $meta = Invoke-RestMethod https://api.github.com/meta -Headers @{'User-Agent'='Tessel-Rust-CI'}
+          [IO.File]::WriteAllLines($knownHosts, @($meta.ssh_keys | ForEach-Object { 'github.com ' + $_ }), [Text.UTF8Encoding]::new($false))
+          $ssh = (Join-Path $env:WINDIR 'System32/OpenSSH/ssh.exe').Replace('\', '/')
+          $sshCommand = '"' + $ssh + '" -i "' + $keyPath.Replace('\', '/') + '" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="' + $knownHosts.Replace('\', '/') + '"'
+          "GIT_SSH_COMMAND=$sshCommand" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          git config --global url.'git@github.com:mindkind1337/tessel-host'.insteadOf 'https://github.com/mindkind1337/tessel-host'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot configure the private dependency URL.' }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -16,11 +38,10 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            ~/.cargo/git
             target/debug
             target/release
-          key: windows-rust-v1-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: windows-rust-v1-
+          key: windows-rust-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: windows-rust-v2-
       - run: cargo fmt --check
       - run: cargo test --locked -j 2
       - run: cargo clippy --locked -j 2 --all-targets --all-features -- -D warnings
@@ -35,3 +56,9 @@ jobs:
           path: |
             target/packages/*.zip
             target/packages/*.sha256
+      - name: Remove the dependency key
+        if: always()
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'tessel-host-ci-key'
+          if (Test-Path -LiteralPath $keyPath) { Remove-Item -LiteralPath $keyPath -Force }

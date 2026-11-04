@@ -1,1 +1,0 @@
-{"version":1,"reply_to":1,"ok":{"kind":"hello_ok","body":{"version":1,"capabilities":["tree","git"],"budgets":{"frame_bytes":1048576,"terminal_ring_bytes":2097152,"total_ring_bytes":16777216,"stream_window_bytes":2097152,"in_flight":32},"host_epoch":"0123456789abcdef0123456789abcdef"}}}

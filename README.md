@@ -179,9 +179,12 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 
 ## Validation and remaining migration
 
-The remote-host work is specified in [HOST_PROTOCOL_PLAN.md](HOST_PROTOCOL_PLAN.md).
-Its isolated `tessel-host-protocol` crate provides the version 1 wire contract
-([PROTOCOL.md](crates/host-protocol/PROTOCOL.md)): bounded frames, negotiation,
+The remote-host daemon, installer and protocol now live in the separate private
+[tessel-host repository](https://github.com/mindkind1337/tessel-host).
+This desktop pins `tessel-host-protocol` to commit `35f41cd68849e60d42bca14b3449222fad1e7ace`;
+[HOST_PROTOCOL_PLAN.md](HOST_PROTOCOL_PLAN.md) links the live plan and explains local/CI access.
+The version 1 wire contract
+([PROTOCOL.md](https://github.com/mindkind1337/tessel-host/blob/35f41cd68849e60d42bca14b3449222fad1e7ace/crates/host-protocol/PROTOCOL.md)) provides bounded frames, negotiation,
 structured errors, cancellation, stream acknowledgments and deduplication, with
 golden fixtures and a deterministic fuzzer. It is not yet connected
 to the desktop and does not yet replace remote shells, tmux or the JavaScript helper.

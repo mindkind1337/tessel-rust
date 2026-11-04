@@ -5418,32 +5418,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "tessel-host"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "tessel-host-protocol",
-]
-
-[[package]]
 name = "tessel-host-protocol"
 version = "0.1.0"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=35f41cd68849e60d42bca14b3449222fad1e7ace#35f41cd68849e60d42bca14b3449222fad1e7ace"
 dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "tessel-host-xtask"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "tessel-host",
- "tessel-host-protocol",
 ]
 
 [[package]]
@@ -5479,6 +5460,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+ "tessel-host-protocol",
  "tokio",
  "url",
  "vt100",

@@ -6,7 +6,7 @@ license = "MIT"
 description = "Native Rust Tessel prototype"
 
 [workspace]
-members = ["crates/host-protocol", "crates/host", "crates/host-xtask"]
+members = []
 default-members = ["."]
 resolver = "3"
 
@@ -17,6 +17,7 @@ visual-test = ["eframe/__screenshot"]
 portable-pty = { path = "vendor/portable-pty" }
 
 [dependencies]
+tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", rev = "35f41cd68849e60d42bca14b3449222fad1e7ace" }
 eframe = "=0.33.0"
 portable-pty = "=0.9.0"
 vt100 = "=0.15.2"
