@@ -1,0 +1,22 @@
+{
+  "artifacts": [
+    {
+      "arch": "x86_64",
+      "file": "tessel-host-x86_64-unknown-linux-musl",
+      "sha256": "101d6a87194c4ef288739e85e999c1707e4161e964b508d84c37129194efe2b3",
+      "size": 1631048,
+      "target": "x86_64-unknown-linux-musl"
+    },
+    {
+      "arch": "aarch64",
+      "file": "tessel-host-aarch64-unknown-linux-musl",
+      "sha256": "de0210c7cec09b33812a16e84ec3e59d601aaa3c39837ac72d0c71e325048c06",
+      "size": 1406808,
+      "target": "aarch64-unknown-linux-musl"
+    }
+  ],
+  "commit": "3c459afab6d200035865fbf1e3a803d209fcd79b",
+  "repository": "github.com/mindkind1337/tessel-host",
+  "tag": "v0.1.1",
+  "version": "0.1.1"
+}

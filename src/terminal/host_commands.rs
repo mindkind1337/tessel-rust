@@ -1,16 +1,18 @@
 //! Bounded, ordered commands for the remote-terminal worker.
-//! No network calls or terminal contents are logged here. The worker must
-//! revalidate the connection and lease immediately before executing a command.
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+//! The mutex protects only this small queue, never any network operation.
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Condvar, Mutex,
+        mpsc::{RecvTimeoutError, TryRecvError},
+    },
+    time::Duration,
 };
 use zeroize::Zeroizing;
 
 pub const CAPACITY: usize = 32;
-// Match the renderer's 64 KiB paste limit plus both bracketed-paste markers.
-pub const MAX_INPUT_BYTES: usize = 64 * 1024 + 12;
+// One protocol input, including any bracketed-paste markers. Never split a paste.
+pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
 // Deliberately no Debug: terminal input can include passwords.
 pub enum Command {
@@ -19,7 +21,6 @@ pub enum Command {
     TakeControl,
     Terminate,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused {
     Closed,
@@ -27,39 +28,31 @@ pub enum Refused {
     TooLarge,
     InvalidSize,
 }
-
-struct Shared {
-    generation: AtomicU64,
-    closed: AtomicBool,
+#[derive(Default)]
+struct Queue {
+    commands: VecDeque<Command>,
+    closed: bool,
 }
-struct Envelope {
-    generation: u64,
-    command: Command,
+#[derive(Default)]
+struct Shared {
+    queue: Mutex<Queue>,
+    wake: Condvar,
 }
 pub struct Sender {
     shared: Arc<Shared>,
-    sender: SyncSender<Envelope>,
 }
 pub struct Worker {
     shared: Arc<Shared>,
-    receiver: Receiver<Envelope>,
 }
-
 pub fn channel() -> (Sender, Worker) {
-    let shared = Arc::new(Shared {
-        generation: AtomicU64::new(0),
-        closed: AtomicBool::new(false),
-    });
-    let (sender, receiver) = mpsc::sync_channel(CAPACITY);
+    let shared = Arc::new(Shared::default());
     (
         Sender {
             shared: shared.clone(),
-            sender,
         },
-        Worker { shared, receiver },
+        Worker { shared },
     )
 }
-
 impl Sender {
     /// Reject an oversize paste as a whole: never enqueue only a prefix.
     pub fn input(&self, bytes: &[u8]) -> Result<(), Refused> {
@@ -72,7 +65,6 @@ impl Sender {
         if !(1..=150).contains(&rows) || !(1..=300).contains(&cols) {
             return Err(Refused::InvalidSize);
         }
-        // Do not coalesce across input: resize and typing must stay ordered.
         self.send(Command::Resize { rows, cols })
     }
     pub fn take_control(&self) -> Result<(), Refused> {
@@ -82,49 +74,112 @@ impl Sender {
         self.send(Command::Terminate)
     }
     fn send(&self, command: Command) -> Result<(), Refused> {
-        if self.shared.closed.load(Ordering::Acquire) {
+        let mut queue = self.shared.queue.lock().unwrap();
+        if queue.closed {
             return Err(Refused::Closed);
         }
-        let envelope = Envelope {
-            generation: self.shared.generation.load(Ordering::Acquire),
-            command,
-        };
-        self.sender.try_send(envelope).map_err(|error| match error {
-            TrySendError::Full(_) => Refused::Full,
-            TrySendError::Disconnected(_) => Refused::Closed,
-        })
+        // Replace only an immediately adjacent resize; never overtake input.
+        if matches!(command, Command::Resize { .. })
+            && let Some(last @ Command::Resize { .. }) = queue.commands.back_mut()
+        {
+            *last = command;
+            return Ok(());
+        }
+        if queue.commands.len() == CAPACITY {
+            return Err(Refused::Full);
+        }
+        queue.commands.push_back(command);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+}
+impl Shared {
+    fn close(&self) {
+        let mut queue = self.queue.lock().unwrap();
+        queue.closed = true;
+        queue.commands.clear();
+        self.wake.notify_one();
     }
 }
 impl Drop for Sender {
     fn drop(&mut self) {
-        self.shared.closed.store(true, Ordering::Release);
+        self.shared.close();
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.shared.close();
     }
 }
 impl Worker {
-    /// Connection/authority changes invalidate unsent commands. A call already
-    /// in flight cannot be recalled: report uncertain delivery, never resend it.
+    /// Atomically discard unsent work on an observed connection/lease change.
+    /// An RPC already in flight cannot be recalled or resubmitted with a new ID.
     pub fn invalidate(&self) {
-        self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        self.shared.queue.lock().unwrap().commands.clear();
     }
     pub fn closed(&self) -> bool {
-        self.shared.closed.load(Ordering::Acquire)
+        self.shared.queue.lock().unwrap().closed
     }
     pub fn next(&self) -> Result<Command, TryRecvError> {
-        loop {
-            if self.closed() {
-                return Err(TryRecvError::Disconnected);
-            }
-            let envelope = self.receiver.try_recv()?;
-            if envelope.generation == self.shared.generation.load(Ordering::Acquire) {
-                return Ok(envelope.command);
-            }
+        let mut queue = self.shared.queue.lock().unwrap();
+        if queue.closed {
+            return Err(TryRecvError::Disconnected);
         }
+        queue.commands.pop_front().ok_or(TryRecvError::Empty)
+    }
+    /// Wakes immediately on input or close; timeout only refreshes authority.
+    pub fn wait(&self, timeout: Duration) -> Result<Command, RecvTimeoutError> {
+        let queue = self.shared.queue.lock().unwrap();
+        let (mut queue, _) = self
+            .shared
+            .wake
+            .wait_timeout_while(queue, timeout, |queue| {
+                !queue.closed && queue.commands.is_empty()
+            })
+            .unwrap();
+        if queue.closed {
+            return Err(RecvTimeoutError::Disconnected);
+        }
+        queue.commands.pop_front().ok_or(RecvTimeoutError::Timeout)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adjacent_resizes_coalesce_without_crossing_input() {
+        let (sender, worker) = channel();
+        for cols in 20..100 {
+            sender.resize(30, cols).unwrap();
+        }
+        sender.input(b"x").unwrap();
+        for cols in 100..200 {
+            sender.resize(40, cols).unwrap();
+        }
+        assert!(matches!(
+            worker.next(),
+            Ok(Command::Resize { rows: 30, cols: 99 })
+        ));
+        assert!(matches!(worker.next(), Ok(Command::Input(_))));
+        assert!(matches!(
+            worker.next(),
+            Ok(Command::Resize {
+                rows: 40,
+                cols: 199
+            })
+        ));
+        assert!(matches!(
+            worker.wait(Duration::ZERO),
+            Err(RecvTimeoutError::Timeout)
+        ));
+        drop(sender);
+        assert!(matches!(
+            worker.wait(Duration::from_secs(30)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
+    }
 
     #[test]
     fn resize_never_overtakes_typed_input() {

@@ -402,7 +402,7 @@ fn a_program_that_says_another_version_is_not_connected_to() {
 
 #[test]
 fn a_damaged_bundle_is_refused_before_anything_is_sent() {
-    let manifest = include_str!("../resources/host/v0.1.0/manifest.json");
+    let manifest = include_str!("../resources/host/v0.1.1/manifest.json");
     let good = Bundle::embedded().unwrap();
     let x86 = good.program(Arch::X86_64).unwrap().1;
     let mut damaged = x86.to_vec();
@@ -417,7 +417,7 @@ fn a_damaged_bundle_is_refused_before_anything_is_sent() {
     assert!(!host.steps.contains(&Step::Upload));
 
     // A manifest of another version, or not a manifest, is refused at once.
-    assert!(Bundle::from_parts(&manifest.replace("\"0.1.0\"", "\"0.1.1\""), x86, aarch64).is_err());
+    assert!(Bundle::from_parts(&manifest.replace("\"0.1.1\"", "\"0.1.0\""), x86, aarch64).is_err());
     assert!(Bundle::from_parts("{}", x86, aarch64).is_err());
 }
 

@@ -1,8 +1,8 @@
 # Native host integration (gate 7)
 
 Status: approved by Darwin. The client, installer commands and release assets are now
-published as host `v0.1.0` (`4354459`), following accepted gates 1–6 (`7358969`).
-The desktop pins the client, installer and protocol at 8293994. Gate 7A now has an explicit preview connection; terminal/editor/tree/Git adapters remain pending.
+published as host `v0.1.1` (`3c459af`), following accepted gates 1–6 (`7358969`).
+The desktop pins the client, installer and protocol at 3c459af. Gate 7A now has an explicit preview connection; terminal/editor/tree/Git adapters remain pending.
 No real user server is part of unattended validation.
 
 ## 7A — One verified connection per host
@@ -20,7 +20,7 @@ No real user server is part of unattended validation.
   tagged host release; `cargo xtask host-sync <tag>` verifies it before resources are
   reviewed and committed under `resources/host/<tag>/`. Include both binaries,
   manifest, checksums and LICENSE. The desktop never downloads them or holds a
-  GitHub token. Release v0.1.0 is available for the first verified import.
+  GitHub token. The verified v0.1.1 bundle includes persistent input numbering, fresh snapshots and non-resuming detach.
 - Use the published installer's `Plan.version` / `Plan.connect`, or
   `install::commands(version, arch)` without an upload. Pass the returned command as
   one SSH argument. Its fixed double-quoted path expands `$HOME` on the host; the
@@ -77,4 +77,8 @@ Desktop integration constraints from the client review:
   artifacts. Update README capabilities/limitations and report the pushed build.
 - A real user-server acceptance run remains a separate, explicitly authorized step.
 
-7B preparation in progress: bounded commands are in `src/terminal/host_commands.rs` (32 slots, whole-paste admission, preserved input/resize order, generation invalidation, zeroizing input). `src/terminal/host_history.rs` retains display cells separately (1000 rows / 300,000 cells) and creates a fresh parser for a replacement screen. These modules are not yet connected to the terminal UI; dedicated tests accompany them. The native remote path remains disabled until the worker, lease store, rendering and compatible 0.1.1 bundle are integrated and validated together.
+7B preparation in progress: bounded commands are in `src/terminal/host_commands.rs` (32 slots, whole-paste admission, preserved input/resize order, adjacent resize coalescing, queue invalidation, zeroizing input). `src/terminal/host_history.rs` retains display cells separately (1000 rows / 300,000 cells) and creates a fresh parser for a replacement screen. These modules are not yet connected to the terminal UI; dedicated tests accompany them. The native remote path remains disabled until the worker, lease store, rendering and compatible 0.1.1 bundle are integrated and validated together.
+
+The 0.1.1 release bundle has been verified by `host-sync` (tag commit `3c459afab6d200035865fbf1e3a803d209fcd79b`); both bundled architectures match their published sizes and SHA-256 hashes. The installer and protocol/client dependency use that same release. `host_lease_store.rs` supplies separate Windows DPAPI transactions for terminal authority, with bounded reads/writes, file locking and retained corrupt files. The terminal worker is still being integrated; these changes do not enable remote PTY panes by themselves.
+
+Pane integration boundary (next implementation step): keep existing `Launch::Ssh`/tmux behavior intact and add explicit native-session metadata to saved panes. A native marker must suppress the legacy SSH auto-start path, including when an imported backup has no resumable terminal descriptor. Restoring or importing such metadata must not install/connect/take a lease automatically. Opening and attaching run on a worker with a reserved bounded slot before creating a server process; save a new lease before returning a ready pane. The live pane applies `Output`, `Resized` and `Snapshot` in stream order and advances its applied sequence only afterward. A worker's successful terminate acknowledgment changes input availability, but the UI continues draining output/Exit until the bounded grace period ends. Remote resize only changes the emulator once its ordered `Resized` event arrives. The prior-screen cell history is a display-only view and never replays escape sequences into the live parser.

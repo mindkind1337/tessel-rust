@@ -60,6 +60,8 @@ mod git;
 mod git_result;
 pub mod help_panel;
 mod host_actions;
+#[cfg(windows)]
+pub mod host_lease_store;
 mod i18n;
 pub mod icons;
 mod launch;

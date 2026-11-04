@@ -1,0 +1,658 @@
+//! Terminal leases kept across restarts of the desktop, encrypted for this Windows user (DPAPI,
+//! through `crate::vault::protect`). A lease is the right to type into a terminal on a host:
+//! it lives here only, never in the workspace, a backup, Live Share or a log. The directory is
+//! the user's local application data, the same whatever `--data-dir` or project is open.
+//!
+//! Each call is one transaction under a file lock: read (bounded), decrypt, check every entry,
+//! change, encrypt, replace atomically. A file that does not read back exactly is `Corrupt`
+//! and is never written over: only the explicit `reset_keeping_original` sets it aside.
+//! Call from a worker thread, never an egui frame (DPAPI and the disk can take time).
+//!
+//! When to call (terminal worker): `put` after `create`, `take_lease`, or an attachment that
+//! returns a lease; `get` before `attach_fresh` at start; `remove` only once an ending is
+//! confirmed (`Exit` received, `close` answered, or the terminal reported gone for another
+//! epoch), never on a mere disconnection or an ambiguous failure, so the lease can still be
+//! used to recover; `retain_epoch` when the host answers with a new epoch.
+//! Windows only, like `crate::vault`.
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+use tessel_host_protocol::{Epoch, LeaseKey, TerminalId};
+use zeroize::{Zeroize, Zeroizing};
+
+/// Most leases kept.
+pub const MAX_ENTRIES: usize = 256;
+/// Largest encrypted file read.
+const MAX_FILE: u64 = 256 * 1024;
+/// Largest plaintext accepted after decryption, and produced before encryption.
+const MAX_PLAIN: usize = 128 * 1024;
+/// Archives `reset_keeping_original` may create (`host-leases.corrupt-1.dat` …).
+const MAX_ARCHIVES: u32 = 16;
+/// How long a transaction waits for another instance's lock.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+const VERSION: u32 = 1;
+
+/// Where a lease applies. Holds no secret.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseSlot {
+    /// The validated OpenSSH alias of the host.
+    pub alias: String,
+    pub epoch: Epoch,
+    pub terminal: TerminalId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaseStoreError {
+    InvalidSlot,
+    Locked,
+    Corrupt,
+    Full,
+    TooManyArchives,
+    Io,
+    Protect,
+}
+
+impl LeaseStoreError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::InvalidSlot => "Invalid SSH host for a saved terminal",
+            Self::Locked => "Saved terminal access is in use by another Tessel window",
+            Self::Corrupt => {
+                "Saved terminal access cannot be read; it was kept as is and nothing was changed"
+            }
+            Self::Full => "Too many saved terminals; close some before keeping more",
+            Self::TooManyArchives => {
+                "Too many unreadable copies of saved terminal access are already kept"
+            }
+            Self::Io => "Cannot read or write saved terminal access",
+            Self::Protect => "Windows could not protect saved terminal access",
+        }
+    }
+}
+
+impl std::fmt::Display for LeaseStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for LeaseStoreError {}
+
+/// A lease as text, wiped when dropped. Its own type, so a lease parsed before a later field
+/// makes the entry fail (a duplicate, an unknown field) is wiped too: serde drops the fields it
+/// already built, and a struct-level `Drop` would never run for an entry never built.
+struct Secret(String);
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl Serialize for Secret {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Secret)
+    }
+}
+
+/// One stored lease.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+    alias: String,
+    epoch: String,
+    terminal: String,
+    lease: Secret,
+}
+
+/// Collects serialized bytes into a buffer allocated once at `limit`, and refuses a write that
+/// would go beyond it before extending: the buffer never grows, so no copy of a lease is left
+/// in a freed smaller one.
+struct Bounded<'a> {
+    buffer: &'a mut Vec<u8>,
+    limit: usize,
+}
+
+impl Write for Bounded<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.buffer.len() + bytes.len() > self.limit {
+            return Err(std::io::Error::other("beyond the limit"));
+        }
+        self.buffer.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Stored {
+    fn matches(&self, slot: &LeaseSlot) -> bool {
+        self.alias == slot.alias
+            && self.epoch == slot.epoch.as_str()
+            && self.terminal == slot.terminal.as_str()
+    }
+
+    fn valid(&self) -> bool {
+        crate::workspace::validate_host(&self.alias).is_ok()
+            && Epoch::parse(&self.epoch).is_some()
+            && TerminalId::parse(&self.terminal).is_some()
+            && LeaseKey::parse(&self.lease.0).is_some()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFile {
+    version: u32,
+    entries: Vec<Stored>,
+}
+
+/// A handle on the store; it keeps nothing between calls.
+pub struct LeaseStore {
+    dir: PathBuf,
+}
+
+impl LeaseStore {
+    /// The user's local application data (`…\AppData\Local\Tessel\TesselRust\data\host-leases`),
+    /// whatever data directory or project the window uses.
+    pub fn open_default() -> Result<Self, LeaseStoreError> {
+        let dirs = directories::ProjectDirs::from("com", "Tessel", "TesselRust")
+            .ok_or(LeaseStoreError::Io)?;
+        Self::at(&dirs.data_local_dir().join("host-leases"))
+    }
+
+    pub(crate) fn at(dir: &Path) -> Result<Self, LeaseStoreError> {
+        std::fs::create_dir_all(dir).map_err(|_| LeaseStoreError::Io)?;
+        Ok(Self {
+            dir: dir.to_owned(),
+        })
+    }
+
+    fn data(&self) -> PathBuf {
+        self.dir.join("host-leases.dat")
+    }
+
+    fn archive(&self, n: u32) -> PathBuf {
+        self.dir.join(format!("host-leases.corrupt-{n}.dat"))
+    }
+
+    pub fn get(&self, slot: &LeaseSlot) -> Result<Option<LeaseKey>, LeaseStoreError> {
+        check(slot)?;
+        self.transaction(|entries| {
+            let lease = entries
+                .iter()
+                .find(|e| e.matches(slot))
+                .and_then(|e| LeaseKey::parse(&e.lease.0));
+            Ok((lease, false))
+        })
+    }
+
+    /// Keeps `lease` for `slot`, replacing the one it had. A new slot beyond `MAX_ENTRIES` is
+    /// `Full`.
+    pub fn put(&self, slot: &LeaseSlot, lease: &LeaseKey) -> Result<(), LeaseStoreError> {
+        check(slot)?;
+        self.transaction(|entries| {
+            let stored = Stored {
+                alias: slot.alias.clone(),
+                epoch: slot.epoch.as_str().to_owned(),
+                terminal: slot.terminal.as_str().to_owned(),
+                lease: Secret(lease.as_str().to_owned()),
+            };
+            let full = entries.len() >= MAX_ENTRIES;
+            match entries.iter_mut().find(|e| e.matches(slot)) {
+                Some(entry) if entry.lease.0 == stored.lease.0 => Ok(((), false)),
+                // The replaced entry is dropped, which wipes its lease.
+                Some(entry) => {
+                    *entry = stored;
+                    Ok(((), true))
+                }
+                None if full => Err(LeaseStoreError::Full),
+                None => {
+                    entries.push(stored);
+                    Ok(((), true))
+                }
+            }
+        })
+    }
+
+    /// Forgets the lease of `slot`, if any. Call only once the terminal's end is confirmed.
+    pub fn remove(&self, slot: &LeaseSlot) -> Result<(), LeaseStoreError> {
+        check(slot)?;
+        self.transaction(|entries| {
+            let before = entries.len();
+            entries.retain(|e| !e.matches(slot));
+            Ok(((), entries.len() != before))
+        })
+    }
+
+    /// The host `alias` answered with epoch `current`: its terminals of other epochs are gone,
+    /// so are their leases. Returns how many were forgotten.
+    pub fn retain_epoch(&self, alias: &str, current: &Epoch) -> Result<usize, LeaseStoreError> {
+        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        self.transaction(|entries| {
+            let before = entries.len();
+            entries.retain(|e| e.alias != alias || e.epoch == current.as_str());
+            let removed = before - entries.len();
+            Ok((removed, removed > 0))
+        })
+    }
+
+    /// Only on the person's explicit request after `Corrupt`: moves the unreadable file aside
+    /// as `host-leases.corrupt-<n>.dat` (never over an existing one) and starts empty.
+    pub fn reset_keeping_original(&self) -> Result<(), LeaseStoreError> {
+        let _lock = self.lock()?;
+        let data = self.data();
+        if !data.exists() {
+            return Ok(());
+        }
+        let archive = (1..=MAX_ARCHIVES)
+            .map(|n| self.archive(n))
+            .find(|path| !path.exists())
+            .ok_or(LeaseStoreError::TooManyArchives)?;
+        // Under the lock nothing else writes here, so the free name stays free.
+        std::fs::rename(&data, &archive).map_err(|_| LeaseStoreError::Io)
+    }
+
+    fn lock(&self) -> Result<File, LeaseStoreError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.dir.join("host-leases.lock"))
+            .map_err(|_| LeaseStoreError::Io)?;
+        let deadline = Instant::now() + LOCK_WAIT;
+        loop {
+            if fs2::FileExt::try_lock_exclusive(&file).is_ok() {
+                return Ok(file);
+            }
+            if Instant::now() >= deadline {
+                return Err(LeaseStoreError::Locked);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Lock, read, change, and write back only when `change` says so.
+    fn transaction<T>(
+        &self,
+        change: impl FnOnce(&mut Vec<Stored>) -> Result<(T, bool), LeaseStoreError>,
+    ) -> Result<T, LeaseStoreError> {
+        let _lock = self.lock()?;
+        let mut entries = self.load()?;
+        let (value, write) = change(&mut entries)?;
+        if write {
+            self.save(&entries)?;
+        }
+        Ok(value)
+    }
+
+    fn load(&self) -> Result<Vec<Stored>, LeaseStoreError> {
+        let file = match File::open(self.data()) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(_) => return Err(LeaseStoreError::Io),
+        };
+        let mut encrypted = Zeroizing::new(Vec::new());
+        file.take(MAX_FILE + 1)
+            .read_to_end(&mut encrypted)
+            .map_err(|_| LeaseStoreError::Io)?;
+        if encrypted.len() as u64 > MAX_FILE {
+            return Err(LeaseStoreError::Corrupt);
+        }
+        // Whatever fails from here, the file is kept as it is.
+        let plain =
+            crate::vault::protect(&encrypted, false).map_err(|_| LeaseStoreError::Corrupt)?;
+        if plain.len() > MAX_PLAIN {
+            return Err(LeaseStoreError::Corrupt);
+        }
+        // A parse error is never shown: it could quote the file.
+        let parsed: StoredFile =
+            serde_json::from_slice(&plain).map_err(|_| LeaseStoreError::Corrupt)?;
+        if parsed.version != VERSION
+            || parsed.entries.len() > MAX_ENTRIES
+            || !parsed.entries.iter().all(Stored::valid)
+        {
+            return Err(LeaseStoreError::Corrupt);
+        }
+        let entries = parsed.entries;
+        let duplicate = entries.iter().enumerate().any(|(i, a)| {
+            entries[..i]
+                .iter()
+                .any(|b| a.alias == b.alias && a.epoch == b.epoch && a.terminal == b.terminal)
+        });
+        if duplicate {
+            return Err(LeaseStoreError::Corrupt);
+        }
+        Ok(entries)
+    }
+
+    fn save(&self, entries: &[Stored]) -> Result<(), LeaseStoreError> {
+        let plain = serialize(entries, MAX_PLAIN)?;
+        let encrypted =
+            crate::vault::protect(&plain, true).map_err(|_| LeaseStoreError::Protect)?;
+        let mut temp =
+            tempfile::NamedTempFile::new_in(&self.dir).map_err(|_| LeaseStoreError::Io)?;
+        temp.write_all(&encrypted)
+            .and_then(|()| temp.as_file().sync_all())
+            .map_err(|_| LeaseStoreError::Io)?;
+        temp.persist(self.data()).map_err(|_| LeaseStoreError::Io)?;
+        Ok(())
+    }
+}
+
+/// The file's plaintext, in a buffer allocated once at `limit` that never grows (`Bounded`):
+/// beyond `limit` it is `Full`, and nothing was written to disk.
+fn serialize(entries: &[Stored], limit: usize) -> Result<Zeroizing<Vec<u8>>, LeaseStoreError> {
+    #[derive(Serialize)]
+    struct Out<'a> {
+        version: u32,
+        entries: &'a [Stored],
+    }
+    let mut plain = Zeroizing::new(Vec::with_capacity(limit));
+    serde_json::to_writer(
+        Bounded {
+            buffer: &mut plain,
+            limit,
+        },
+        &Out {
+            version: VERSION,
+            entries,
+        },
+    )
+    .map_err(|_| LeaseStoreError::Full)?;
+    Ok(plain)
+}
+
+fn check(slot: &LeaseSlot) -> Result<(), LeaseStoreError> {
+    crate::workspace::validate_host(&slot.alias).map_err(|_| LeaseStoreError::InvalidSlot)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    //! Every test works in a temporary directory with synthetic leases; nothing here can reach
+    //! the user's store (`open_default` is never called).
+    use super::*;
+
+    fn store() -> (tempfile::TempDir, LeaseStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LeaseStore::at(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    fn slot(alias: &str, epoch: u8, terminal: u8) -> LeaseSlot {
+        LeaseSlot {
+            alias: alias.into(),
+            epoch: Epoch::from_bytes([epoch; 16]),
+            terminal: TerminalId::from_bytes([terminal; 16]),
+        }
+    }
+
+    fn lease(n: u8) -> LeaseKey {
+        LeaseKey::from_bytes([n; 16])
+    }
+
+    /// Writes `json` encrypted as the store's file.
+    fn write_plain(store: &LeaseStore, json: &str) {
+        let encrypted = crate::vault::protect(json.as_bytes(), true).unwrap();
+        std::fs::write(store.data(), &*encrypted).unwrap();
+    }
+
+    #[test]
+    fn a_lease_kept_comes_back_and_is_never_in_the_clear_on_disk() {
+        let (_dir, store) = store();
+        let here = slot("owner@fixture", 1, 2);
+        assert_eq!(store.get(&here).unwrap(), None);
+        store.put(&here, &lease(0xab)).unwrap();
+        assert_eq!(store.get(&here).unwrap(), Some(lease(0xab)));
+        let bytes = std::fs::read(store.data()).unwrap();
+        let secret = lease(0xab).as_str().to_owned();
+        assert!(
+            !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "the lease is encrypted on disk"
+        );
+        // Replacing keeps one entry.
+        store.put(&here, &lease(0xcd)).unwrap();
+        assert_eq!(store.get(&here).unwrap(), Some(lease(0xcd)));
+    }
+
+    #[test]
+    fn removing_is_idempotent_and_only_touches_its_slot() {
+        let (_dir, store) = store();
+        let (one, two) = (slot("one", 1, 1), slot("two", 1, 1));
+        store.put(&one, &lease(1)).unwrap();
+        store.put(&two, &lease(2)).unwrap();
+        store.remove(&one).unwrap();
+        store.remove(&one).unwrap();
+        assert_eq!(store.get(&one).unwrap(), None);
+        assert_eq!(store.get(&two).unwrap(), Some(lease(2)));
+    }
+
+    #[test]
+    fn failed_atomic_replacement_keeps_the_previous_encrypted_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (_dir, store) = store();
+        let here = slot("fixture", 1, 1);
+        store.put(&here, &lease(1)).unwrap();
+        let before = std::fs::read(store.data()).unwrap();
+        // Allow loading the old file but deny deletion/replacement until released.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .open(store.data())
+            .unwrap();
+        assert_eq!(store.put(&here, &lease(2)), Err(LeaseStoreError::Io));
+        assert_eq!(std::fs::read(store.data()).unwrap(), before);
+        drop(held);
+        assert_eq!(store.get(&here).unwrap(), Some(lease(1)));
+    }
+
+    #[test]
+    fn beyond_the_limit_a_new_slot_is_refused_but_a_kept_one_still_changes() {
+        let (_dir, store) = store();
+        let numbered = |n: usize| {
+            let mut bytes = [9u8; 16];
+            bytes[0] = (n % 256) as u8;
+            bytes[1] = (n / 256) as u8;
+            LeaseSlot {
+                terminal: TerminalId::from_bytes(bytes),
+                ..slot("fixture", 1, 0)
+            }
+        };
+        for n in 0..MAX_ENTRIES {
+            store.put(&numbered(n), &lease(1)).unwrap();
+        }
+        assert_eq!(
+            store.put(&slot("fixture", 2, 2), &lease(1)),
+            Err(LeaseStoreError::Full)
+        );
+        store.put(&numbered(0), &lease(2)).unwrap();
+        assert_eq!(store.get(&numbered(0)).unwrap(), Some(lease(2)));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_kept_and_changes_nothing_until_set_aside() {
+        let (_dir, store) = store();
+        std::fs::write(store.data(), b"not protected data").unwrap();
+        let here = slot("fixture", 1, 1);
+        assert_eq!(store.get(&here), Err(LeaseStoreError::Corrupt));
+        assert_eq!(store.put(&here, &lease(1)), Err(LeaseStoreError::Corrupt));
+        assert_eq!(store.remove(&here), Err(LeaseStoreError::Corrupt));
+        assert_eq!(std::fs::read(store.data()).unwrap(), b"not protected data");
+
+        store.reset_keeping_original().unwrap();
+        assert_eq!(
+            std::fs::read(store.archive(1)).unwrap(),
+            b"not protected data"
+        );
+        assert_eq!(store.get(&here).unwrap(), None);
+
+        // A second one never replaces the first archive.
+        std::fs::write(store.data(), b"another bad file").unwrap();
+        store.reset_keeping_original().unwrap();
+        assert_eq!(
+            std::fs::read(store.archive(1)).unwrap(),
+            b"not protected data"
+        );
+        assert_eq!(
+            std::fs::read(store.archive(2)).unwrap(),
+            b"another bad file"
+        );
+    }
+
+    #[test]
+    fn archives_are_bounded() {
+        let (_dir, store) = store();
+        for n in 1..=MAX_ARCHIVES {
+            std::fs::write(store.archive(n), b"old").unwrap();
+        }
+        std::fs::write(store.data(), b"bad").unwrap();
+        assert_eq!(
+            store.reset_keeping_original(),
+            Err(LeaseStoreError::TooManyArchives)
+        );
+        assert_eq!(std::fs::read(store.data()).unwrap(), b"bad");
+    }
+
+    #[test]
+    fn decrypted_contents_that_do_not_read_back_exactly_are_corrupt() {
+        let (_dir, store) = store();
+        let here = slot("fixture", 1, 1);
+        let good = format!(
+            r#"{{"alias":"fixture","epoch":"{}","terminal":"{}","lease":"{}"}}"#,
+            here.epoch.as_str(),
+            here.terminal.as_str(),
+            lease(1).as_str()
+        );
+        for json in [
+            format!(r#"{{"version":2,"entries":[{good}]}}"#),
+            format!(r#"{{"version":1,"entries":[{good}],"extra":1}}"#),
+            format!(r#"{{"version":1,"entries":[{good},{good}]}}"#),
+            format!(
+                r#"{{"version":1,"entries":[{}]}}"#,
+                good.replace("fixture", "-oProxyCommand=x")
+            ),
+            format!(
+                r#"{{"version":1,"entries":[{}]}}"#,
+                good.replace(lease(1).as_str(), "short")
+            ),
+            format!(
+                r#"{{"version":1,"entries":[{}]}}"#,
+                vec![good.clone(); MAX_ENTRIES + 1].join(",")
+            ),
+            format!(
+                r#"{{"version":1,"entries":[],"pad":"{}"}}"#,
+                "x".repeat(MAX_PLAIN)
+            ),
+        ] {
+            write_plain(&store, &json);
+            assert_eq!(
+                store.get(&here),
+                Err(LeaseStoreError::Corrupt),
+                "{}",
+                &json[..60.min(json.len())]
+            );
+        }
+        write_plain(&store, &format!(r#"{{"version":1,"entries":[{good}]}}"#));
+        assert_eq!(store.get(&here).unwrap(), Some(lease(1)));
+    }
+
+    #[test]
+    fn an_invalid_alias_is_refused_before_touching_the_file() {
+        let (_dir, store) = store();
+        for alias in ["", "-oProxyCommand=x", "host name", "host;rm"] {
+            assert_eq!(
+                store.put(&slot(alias, 1, 1), &lease(1)),
+                Err(LeaseStoreError::InvalidSlot)
+            );
+        }
+        assert!(!store.data().exists());
+    }
+
+    #[test]
+    fn a_new_epoch_forgets_only_that_hosts_older_leases() {
+        let (_dir, store) = store();
+        store.put(&slot("alpha", 1, 1), &lease(1)).unwrap();
+        store.put(&slot("alpha", 2, 2), &lease(2)).unwrap();
+        store.put(&slot("beta", 1, 3), &lease(3)).unwrap();
+        assert_eq!(
+            store
+                .retain_epoch("alpha", &Epoch::from_bytes([2; 16]))
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.get(&slot("alpha", 1, 1)).unwrap(), None);
+        assert_eq!(store.get(&slot("alpha", 2, 2)).unwrap(), Some(lease(2)));
+        assert_eq!(store.get(&slot("beta", 1, 3)).unwrap(), Some(lease(3)));
+    }
+
+    #[test]
+    fn the_serializer_refuses_beyond_its_limit_without_growing_its_buffer() {
+        let mut buffer = Vec::with_capacity(16);
+        let (start, capacity) = (buffer.as_ptr(), buffer.capacity());
+        let mut writer = Bounded {
+            buffer: &mut buffer,
+            limit: 16,
+        };
+        writer.write_all(b"0123456789").unwrap();
+        assert!(writer.write_all(b"0123456789").is_err());
+        assert_eq!(buffer, b"0123456789");
+        assert_eq!((buffer.as_ptr(), buffer.capacity()), (start, capacity));
+
+        let entries = vec![Stored {
+            alias: "fixture".into(),
+            epoch: Epoch::from_bytes([1; 16]).as_str().into(),
+            terminal: TerminalId::from_bytes([1; 16]).as_str().into(),
+            lease: Secret(lease(1).as_str().into()),
+        }];
+        assert!(matches!(
+            serialize(&entries, 32),
+            Err(LeaseStoreError::Full)
+        ));
+        assert!(serialize(&entries, MAX_PLAIN).is_ok());
+    }
+
+    #[test]
+    fn every_slot_with_the_longest_alias_fits_the_limit() {
+        let entries: Vec<Stored> = (0..MAX_ENTRIES)
+            .map(|n| {
+                let alias = format!("{n:03}{}", "a".repeat(250));
+                assert!(crate::workspace::validate_host(&alias).is_ok());
+                Stored {
+                    alias,
+                    epoch: Epoch::from_bytes([n as u8; 16]).as_str().into(),
+                    terminal: TerminalId::from_bytes([n as u8; 16]).as_str().into(),
+                    lease: Secret(lease(n as u8).as_str().into()),
+                }
+            })
+            .collect();
+        let plain = serialize(&entries, MAX_PLAIN).unwrap();
+        assert!(plain.len() < MAX_PLAIN, "{} bytes", plain.len());
+    }
+
+    #[test]
+    fn another_holder_of_the_lock_makes_it_wait_then_refuse() {
+        let (_dir, store) = store();
+        let held = store.lock().unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            store.put(&slot("fixture", 1, 1), &lease(1)),
+            Err(LeaseStoreError::Locked)
+        );
+        assert!(started.elapsed() >= LOCK_WAIT);
+        drop(held);
+        store.put(&slot("fixture", 1, 1), &lease(1)).unwrap();
+    }
+}

@@ -1,5 +1,5 @@
 //! Putting tessel-host on an SSH host from the desktop. The programs are the release carried in
-//! `resources/host/v0.1.0` (never downloaded at run time); the commands, paths and checks all
+//! `resources/host/v0.1.1` (never downloaded at run time); the commands, paths and checks all
 //! come from `tessel_host::install`, run one by one over a transport the caller provides (one
 //! exec channel per command). Nothing a host prints is relayed: errors are fixed codes.
 //!
@@ -10,16 +10,16 @@
 use tessel_host::install::{self, Arch, Artifact, Manifest};
 
 /// The tessel-host release this desktop carries.
-pub const HOST_VERSION: &str = "0.1.0";
+pub const HOST_VERSION: &str = "0.1.1";
 
 /// Most standard output read from one command: a version line, a digest line, `uname -m`.
 pub const MAX_STDOUT: usize = 4096;
 
-const MANIFEST: &str = include_str!("../resources/host/v0.1.0/manifest.json");
+const MANIFEST: &str = include_str!("../resources/host/v0.1.1/manifest.json");
 const X86_64: &[u8] =
-    include_bytes!("../resources/host/v0.1.0/tessel-host-x86_64-unknown-linux-musl");
+    include_bytes!("../resources/host/v0.1.1/tessel-host-x86_64-unknown-linux-musl");
 const AARCH64: &[u8] =
-    include_bytes!("../resources/host/v0.1.0/tessel-host-aarch64-unknown-linux-musl");
+    include_bytes!("../resources/host/v0.1.1/tessel-host-aarch64-unknown-linux-musl");
 
 /// What one command did: its exit status and at most `MAX_STDOUT` bytes of standard output.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -132,7 +132,7 @@ pub struct Bundle<'a> {
 }
 
 impl Bundle<'static> {
-    /// The release carried in `resources/host/v0.1.0`.
+    /// The release carried in `resources/host/v0.1.1`.
     pub fn embedded() -> Result<Self, InstallError> {
         Bundle::from_parts(MANIFEST, X86_64, AARCH64)
     }
