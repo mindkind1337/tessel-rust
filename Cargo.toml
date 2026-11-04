@@ -18,9 +18,9 @@ visual-test = ["eframe/__screenshot"]
 portable-pty = { path = "vendor/portable-pty" }
 
 [dependencies]
-tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", rev = "3c459afab6d200035865fbf1e3a803d209fcd79b" }
-tessel-host-client = { git = "https://github.com/mindkind1337/tessel-host", rev = "3c459afab6d200035865fbf1e3a803d209fcd79b" }
-tessel-host = { git = "https://github.com/mindkind1337/tessel-host", rev = "3c459afab6d200035865fbf1e3a803d209fcd79b" }
+tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }
+tessel-host-client = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }
+tessel-host = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }
 eframe = "=0.33.0"
 portable-pty = "=0.9.0"
 vt100 = "=0.15.2"

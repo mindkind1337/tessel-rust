@@ -21,8 +21,11 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use tessel_host_protocol::{Epoch, LeaseKey, TerminalId};
+use tessel_host_protocol::{DedupKey, Epoch, LeaseKey, TerminalId};
 use zeroize::{Zeroize, Zeroizing};
+
+#[path = "terminal/host_create_window.rs"]
+mod create_window;
 
 /// Most leases kept.
 pub const MAX_ENTRIES: usize = 256;
@@ -54,6 +57,8 @@ pub enum LeaseStoreError {
     TooManyArchives,
     Io,
     Protect,
+    Random,
+    MissingPending,
 }
 
 impl LeaseStoreError {
@@ -70,6 +75,8 @@ impl LeaseStoreError {
             }
             Self::Io => "Cannot read or write saved terminal access",
             Self::Protect => "Windows could not protect saved terminal access",
+            Self::Random => "Cannot create a private terminal request identifier",
+            Self::MissingPending => "The pending terminal request no longer exists",
         }
     }
 }
@@ -157,6 +164,63 @@ impl Stored {
 struct StoredFile {
     version: u32,
     entries: Vec<Stored>,
+    #[serde(default, deserialize_with = "present_pending")]
+    pending: Option<Vec<StoredPending>>,
+}
+
+fn present_pending<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<StoredPending>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPending {
+    id: String,
+    alias: String,
+    epoch: String,
+    dedup: Secret,
+}
+
+#[derive(Default)]
+struct Records {
+    entries: Vec<Stored>,
+    pending: Vec<StoredPending>,
+}
+
+/// Metadata only: listing after a restart never exposes a reusable creation key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingInfo {
+    pub id: String,
+    pub alias: String,
+    pub epoch: Epoch,
+}
+
+/// Exists only in the process that reserved the request. No Deserialize, Clone or Debug.
+pub struct CreateToken {
+    info: PendingInfo,
+    dedup: Secret,
+    attempt: Option<create_window::Attempt>,
+}
+impl CreateToken {
+    pub fn info(&self) -> &PendingInfo {
+        &self.info
+    }
+    pub fn key_for_attempt(
+        &mut self,
+        epoch: &Epoch,
+        now: Instant,
+        request_timeout: Duration,
+    ) -> Result<DedupKey, &'static str> {
+        let attempt = self
+            .attempt
+            .get_or_insert_with(|| create_window::Attempt::begin(self.info.epoch.clone(), now));
+        attempt.check(epoch, now, request_timeout).map_err(
+            |_| "Creation retry is no longer safe; inspect the host's existing terminals",
+        )?;
+        DedupKey::parse(&self.dedup.0).ok_or("Invalid private terminal request identifier")
+    }
 }
 
 /// A handle on the store; it keeps nothing between calls.
@@ -188,9 +252,122 @@ impl LeaseStore {
         self.dir.join(format!("host-leases.corrupt-{n}.dat"))
     }
 
+    /// Persist before sending create. A pending request reserves a lease slot.
+    pub fn reserve_pending(
+        &self,
+        alias: &str,
+        epoch: &Epoch,
+    ) -> Result<CreateToken, LeaseStoreError> {
+        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        getrandom::fill(bytes.as_mut()).map_err(|_| LeaseStoreError::Random)?;
+        let id = TerminalId::from_bytes(bytes[..16].try_into().unwrap())
+            .as_str()
+            .to_owned();
+        let dedup = Secret(
+            DedupKey::from_bytes(bytes[16..].try_into().unwrap())
+                .as_str()
+                .to_owned(),
+        );
+        self.transaction(|records| {
+            if records.entries.len() + records.pending.len() >= MAX_ENTRIES {
+                return Err(LeaseStoreError::Full);
+            }
+            if records
+                .pending
+                .iter()
+                .any(|p| p.id == id || p.dedup.0 == dedup.0)
+            {
+                return Err(LeaseStoreError::Random);
+            }
+            records.pending.push(StoredPending {
+                id: id.clone(),
+                alias: alias.to_owned(),
+                epoch: epoch.as_str().to_owned(),
+                dedup: Secret(dedup.0.clone()),
+            });
+            Ok((
+                CreateToken {
+                    info: PendingInfo {
+                        id,
+                        alias: alias.to_owned(),
+                        epoch: epoch.clone(),
+                    },
+                    dedup,
+                    attempt: None,
+                },
+                true,
+            ))
+        })
+    }
+
+    pub fn list_pending(&self, alias: &str) -> Result<Vec<PendingInfo>, LeaseStoreError> {
+        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        self.transaction(|records| {
+            Ok((
+                records
+                    .pending
+                    .iter()
+                    .filter(|p| p.alias == alias)
+                    .map(|p| PendingInfo {
+                        id: p.id.clone(),
+                        alias: p.alias.clone(),
+                        epoch: Epoch::parse(&p.epoch).expect("validated epoch"),
+                    })
+                    .collect(),
+                false,
+            ))
+        })
+    }
+
+    /// One atomic write replaces the pending capability with the terminal lease.
+    /// Disk failure leaves the pending record intact for same-run recovery.
+    /// After a desktop restart, use only for a terminal found independently by
+    /// listing and explicit attachment/control; never replay the saved create key.
+    pub fn complete_pending(
+        &self,
+        id: &str,
+        slot: &LeaseSlot,
+        lease: &LeaseKey,
+    ) -> Result<(), LeaseStoreError> {
+        check(slot)?;
+        self.transaction(|records| {
+            let position = records
+                .pending
+                .iter()
+                .position(|p| p.id == id && p.alias == slot.alias && p.epoch == slot.epoch.as_str())
+                .ok_or(LeaseStoreError::MissingPending)?;
+            records.pending.remove(position);
+            let stored = Stored {
+                alias: slot.alias.clone(),
+                epoch: slot.epoch.as_str().to_owned(),
+                terminal: slot.terminal.as_str().to_owned(),
+                lease: Secret(lease.as_str().to_owned()),
+            };
+            if let Some(entry) = records.entries.iter_mut().find(|e| e.matches(slot)) {
+                *entry = stored;
+            } else {
+                records.entries.push(stored);
+            }
+            Ok(((), true))
+        })
+    }
+
+    /// Only before the first send, after confirmed non-creation, or explicit
+    /// forgetting. A timeout/disconnection is not evidence of non-creation.
+    /// A confirmed daemon epoch change also proves the old program cannot survive.
+    pub fn remove_pending_confirmed(&self, id: &str) -> Result<(), LeaseStoreError> {
+        self.transaction(|records| {
+            let before = records.pending.len();
+            records.pending.retain(|p| p.id != id);
+            Ok(((), before != records.pending.len()))
+        })
+    }
+
     pub fn get(&self, slot: &LeaseSlot) -> Result<Option<LeaseKey>, LeaseStoreError> {
         check(slot)?;
-        self.transaction(|entries| {
+        self.transaction(|records| {
+            let entries = &mut records.entries;
             let lease = entries
                 .iter()
                 .find(|e| e.matches(slot))
@@ -203,14 +380,15 @@ impl LeaseStore {
     /// `Full`.
     pub fn put(&self, slot: &LeaseSlot, lease: &LeaseKey) -> Result<(), LeaseStoreError> {
         check(slot)?;
-        self.transaction(|entries| {
+        self.transaction(|records| {
+            let entries = &mut records.entries;
             let stored = Stored {
                 alias: slot.alias.clone(),
                 epoch: slot.epoch.as_str().to_owned(),
                 terminal: slot.terminal.as_str().to_owned(),
                 lease: Secret(lease.as_str().to_owned()),
             };
-            let full = entries.len() >= MAX_ENTRIES;
+            let full = entries.len() + records.pending.len() >= MAX_ENTRIES;
             match entries.iter_mut().find(|e| e.matches(slot)) {
                 Some(entry) if entry.lease.0 == stored.lease.0 => Ok(((), false)),
                 // The replaced entry is dropped, which wipes its lease.
@@ -230,7 +408,8 @@ impl LeaseStore {
     /// Forgets the lease of `slot`, if any. Call only once the terminal's end is confirmed.
     pub fn remove(&self, slot: &LeaseSlot) -> Result<(), LeaseStoreError> {
         check(slot)?;
-        self.transaction(|entries| {
+        self.transaction(|records| {
+            let entries = &mut records.entries;
             let before = entries.len();
             entries.retain(|e| !e.matches(slot));
             Ok(((), entries.len() != before))
@@ -241,10 +420,15 @@ impl LeaseStore {
     /// so are their leases. Returns how many were forgotten.
     pub fn retain_epoch(&self, alias: &str, current: &Epoch) -> Result<usize, LeaseStoreError> {
         crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
-        self.transaction(|entries| {
+        self.transaction(|records| {
+            let entries = &mut records.entries;
             let before = entries.len();
             entries.retain(|e| e.alias != alias || e.epoch == current.as_str());
-            let removed = before - entries.len();
+            let old_pending = records.pending.len();
+            records
+                .pending
+                .retain(|p| p.alias != alias || p.epoch == current.as_str());
+            let removed = before - entries.len() + old_pending - records.pending.len();
             Ok((removed, removed > 0))
         })
     }
@@ -288,7 +472,7 @@ impl LeaseStore {
     /// Lock, read, change, and write back only when `change` says so.
     fn transaction<T>(
         &self,
-        change: impl FnOnce(&mut Vec<Stored>) -> Result<(T, bool), LeaseStoreError>,
+        change: impl FnOnce(&mut Records) -> Result<(T, bool), LeaseStoreError>,
     ) -> Result<T, LeaseStoreError> {
         let _lock = self.lock()?;
         let mut entries = self.load()?;
@@ -299,10 +483,10 @@ impl LeaseStore {
         Ok(value)
     }
 
-    fn load(&self) -> Result<Vec<Stored>, LeaseStoreError> {
+    fn load(&self) -> Result<Records, LeaseStoreError> {
         let file = match File::open(self.data()) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Records::default()),
             Err(_) => return Err(LeaseStoreError::Io),
         };
         let mut encrypted = Zeroizing::new(Vec::new());
@@ -321,8 +505,10 @@ impl LeaseStore {
         // A parse error is never shown: it could quote the file.
         let parsed: StoredFile =
             serde_json::from_slice(&plain).map_err(|_| LeaseStoreError::Corrupt)?;
-        if parsed.version != VERSION
-            || parsed.entries.len() > MAX_ENTRIES
+        if !matches!(
+            (parsed.version, parsed.pending.is_some()),
+            (1, false) | (2, true)
+        ) || parsed.entries.len() + parsed.pending.as_ref().map_or(0, Vec::len) > MAX_ENTRIES
             || !parsed.entries.iter().all(Stored::valid)
         {
             return Err(LeaseStoreError::Corrupt);
@@ -336,11 +522,27 @@ impl LeaseStore {
         if duplicate {
             return Err(LeaseStoreError::Corrupt);
         }
-        Ok(entries)
+        let pending = parsed.pending.unwrap_or_default();
+        for (i, item) in pending.iter().enumerate() {
+            if crate::workspace::validate_host(&item.alias).is_err()
+                || Epoch::parse(&item.epoch).is_none()
+                || TerminalId::parse(&item.id).is_none()
+                || DedupKey::parse(&item.dedup.0).is_none()
+                || pending[..i].iter().any(|prior| {
+                    prior.id == item.id
+                        || (prior.alias == item.alias
+                            && prior.epoch == item.epoch
+                            && prior.dedup.0 == item.dedup.0)
+                })
+            {
+                return Err(LeaseStoreError::Corrupt);
+            }
+        }
+        Ok(Records { entries, pending })
     }
 
-    fn save(&self, entries: &[Stored]) -> Result<(), LeaseStoreError> {
-        let plain = serialize(entries, MAX_PLAIN)?;
+    fn save(&self, records: &Records) -> Result<(), LeaseStoreError> {
+        let plain = serialize_records(&records.entries, &records.pending, MAX_PLAIN)?;
         let encrypted =
             crate::vault::protect(&plain, true).map_err(|_| LeaseStoreError::Protect)?;
         let mut temp =
@@ -355,11 +557,22 @@ impl LeaseStore {
 
 /// The file's plaintext, in a buffer allocated once at `limit` that never grows (`Bounded`):
 /// beyond `limit` it is `Full`, and nothing was written to disk.
+#[cfg(test)]
 fn serialize(entries: &[Stored], limit: usize) -> Result<Zeroizing<Vec<u8>>, LeaseStoreError> {
+    serialize_records(entries, &[], limit)
+}
+
+fn serialize_records(
+    entries: &[Stored],
+    pending: &[StoredPending],
+    limit: usize,
+) -> Result<Zeroizing<Vec<u8>>, LeaseStoreError> {
     #[derive(Serialize)]
     struct Out<'a> {
         version: u32,
         entries: &'a [Stored],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pending: Option<&'a [StoredPending]>,
     }
     let mut plain = Zeroizing::new(Vec::with_capacity(limit));
     serde_json::to_writer(
@@ -368,8 +581,9 @@ fn serialize(entries: &[Stored], limit: usize) -> Result<Zeroizing<Vec<u8>>, Lea
             limit,
         },
         &Out {
-            version: VERSION,
+            version: if pending.is_empty() { VERSION } else { 2 },
             entries,
+            pending: (!pending.is_empty()).then_some(pending),
         },
     )
     .map_err(|_| LeaseStoreError::Full)?;
@@ -385,6 +599,162 @@ mod tests {
     //! Every test works in a temporary directory with synthetic leases; nothing here can reach
     //! the user's store (`open_default` is never called).
     use super::*;
+
+    #[test]
+    fn pending_promotes_atomically_and_restore_exposes_only_metadata() {
+        let (_dir, store) = store();
+        let here = slot("fixture", 1, 1);
+        store.put(&here, &lease(1)).unwrap();
+        let mut token = store.reserve_pending("fixture", &here.epoch).unwrap();
+        let start = Instant::now();
+        let key = token
+            .key_for_attempt(&here.epoch, start, Duration::from_secs(15))
+            .unwrap();
+        let cipher = std::fs::read(store.data()).unwrap();
+        assert!(
+            !cipher
+                .windows(key.as_str().len())
+                .any(|w| w == key.as_str().as_bytes())
+        );
+        assert_eq!(store.get(&here).unwrap(), Some(lease(1)));
+        let metadata = store.list_pending("fixture").unwrap();
+        assert_eq!(metadata, vec![token.info().clone()]);
+        assert!(
+            token
+                .key_for_attempt(
+                    &here.epoch,
+                    start + Duration::from_secs(480),
+                    Duration::from_secs(15)
+                )
+                .is_err()
+        );
+        let restored = LeaseStore::at(&store.dir).unwrap();
+        let target = slot("fixture", 1, 2);
+        assert_eq!(
+            restored.complete_pending(&metadata[0].id, &slot("other", 1, 2), &lease(2)),
+            Err(LeaseStoreError::MissingPending)
+        );
+        assert_eq!(restored.list_pending("fixture").unwrap().len(), 1);
+        restored
+            .complete_pending(&metadata[0].id, &target, &lease(2))
+            .unwrap();
+        assert!(restored.list_pending("fixture").unwrap().is_empty());
+        assert_eq!(restored.get(&target).unwrap(), Some(lease(2)));
+        let plain = crate::vault::protect(&std::fs::read(store.data()).unwrap(), false).unwrap();
+        assert!(
+            std::str::from_utf8(&plain)
+                .unwrap()
+                .contains("\"version\":1")
+        );
+    }
+
+    #[test]
+    fn pending_and_leases_share_capacity_and_epoch_cleanup() {
+        let (_dir, store) = store();
+        let first = store
+            .reserve_pending("fixture", &Epoch::from_bytes([1; 16]))
+            .unwrap();
+        store
+            .transaction(|records| {
+                for n in 0..MAX_ENTRIES - 1 {
+                    records.entries.push(Stored {
+                        alias: "fixture".into(),
+                        epoch: Epoch::from_bytes([1; 16]).as_str().into(),
+                        terminal: TerminalId::from_bytes((n as u128).to_le_bytes())
+                            .as_str()
+                            .into(),
+                        lease: Secret(lease(1).as_str().into()),
+                    });
+                }
+                Ok(((), true))
+            })
+            .unwrap();
+        assert!(matches!(
+            store.reserve_pending("fixture", &Epoch::from_bytes([1; 16])),
+            Err(LeaseStoreError::Full)
+        ));
+        let target = slot("fixture", 1, 255);
+        store
+            .complete_pending(&first.info().id, &target, &lease(2))
+            .unwrap();
+        assert_eq!(store.get(&target).unwrap(), Some(lease(2)));
+        assert_eq!(
+            store
+                .retain_epoch("fixture", &Epoch::from_bytes([2; 16]))
+                .unwrap(),
+            MAX_ENTRIES
+        );
+        let token = store
+            .reserve_pending("fixture", &Epoch::from_bytes([2; 16]))
+            .unwrap();
+        assert_eq!(
+            store
+                .retain_epoch("fixture", &Epoch::from_bytes([3; 16]))
+                .unwrap(),
+            1
+        );
+        assert!(store.list_pending("fixture").unwrap().is_empty());
+        store.remove_pending_confirmed(&token.info().id).unwrap();
+    }
+
+    #[test]
+    fn failed_promotion_keeps_pending_and_can_be_retried_without_recreation() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (_dir, store) = store();
+        let here = slot("fixture", 1, 1);
+        let token = store.reserve_pending("fixture", &here.epoch).unwrap();
+        let before = std::fs::read(store.data()).unwrap();
+        // Allow reads/writes, but deny deletion/atomic replacement while held.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(store.data())
+            .unwrap();
+        assert_eq!(
+            store.complete_pending(&token.info().id, &here, &lease(1)),
+            Err(LeaseStoreError::Io)
+        );
+        assert_eq!(std::fs::read(store.data()).unwrap(), before);
+        assert_eq!(store.get(&here).unwrap(), None);
+        assert_eq!(
+            store.list_pending("fixture").unwrap(),
+            vec![token.info().clone()]
+        );
+        drop(held);
+        store
+            .complete_pending(&token.info().id, &here, &lease(1))
+            .unwrap();
+        assert_eq!(store.get(&here).unwrap(), Some(lease(1)));
+        assert!(store.list_pending("fixture").unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_pending_keeps_original_ciphertext() {
+        let (_dir, store) = store();
+        let token = store
+            .reserve_pending("fixture", &Epoch::from_bytes([1; 16]))
+            .unwrap();
+        let record = format!(
+            r#"{{"id":"{}","alias":"fixture","epoch":"{}","dedup":"{}"}}"#,
+            token.info().id,
+            token.info().epoch.as_str(),
+            "a".repeat(32)
+        );
+        for json in [
+            r#"{"version":2,"entries":[],"pending":null}"#.to_owned(),
+            r#"{"version":1,"entries":[],"pending":[]}"#.to_owned(),
+            format!(r#"{{"version":2,"entries":[],"pending":[{record},{record}]}}"#),
+            format!(
+                r#"{{"version":2,"entries":[],"pending":[{}]}}"#,
+                record.replace("fixture", "-bad")
+            ),
+        ] {
+            write_plain(&store, &json);
+            let before = std::fs::read(store.data()).unwrap();
+            assert_eq!(store.list_pending("fixture"), Err(LeaseStoreError::Corrupt));
+            assert_eq!(std::fs::read(store.data()).unwrap(), before);
+        }
+    }
 
     fn store() -> (tempfile::TempDir, LeaseStore) {
         let dir = tempfile::tempdir().unwrap();

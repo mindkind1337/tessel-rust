@@ -171,6 +171,24 @@ pub enum LostReason {
     StartFailed { detail: String },
 }
 
+/// Fixed reason why a local terminal stream stopped or was refused without proving that the
+/// remote program exited (`Feed::State::Rejected(_)` / `Feed::State::Closed`).
+///
+/// Never embeds raw stream bytes or untrusted payload text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamRejectReason {
+    /// Snapshot parts arrived out of order, disagreed on screen metadata, exceeded part bounds,
+    /// or were interrupted by another event.
+    InvalidSnapshot,
+    /// Assembled snapshot exceeded `MAX_SNAPSHOT_BYTES` (`16 MiB`).
+    OversizedSnapshot,
+    /// Terminal stream frame, dimensions, or sequence was locally invalid (not necessarily a snapshot).
+    InvalidData,
+    /// Local terminal event stream closed permanently (`State::Closed`); automatic reconnect is
+    /// not running, and the remote program may still be running on the host.
+    Closed,
+}
+
 /// Lifecycle phase of a remote `tessel-host` terminal pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostTerminalPhase {
@@ -185,6 +203,11 @@ pub enum HostTerminalPhase {
         attempt: u32,
         max_attempts: Option<u32>,
     },
+    /// Remote PTY stream was refused locally (`InvalidSnapshot`, `OversizedSnapshot`,
+    /// `InvalidData`) or closed permanently (`Closed`): local stream is abandoned without
+    /// automatic reattach, previous screen & scrollback remain readable, input/resize/DSR/`Enter`
+    /// are suppressed, and the remote program may still be running on the host.
+    StreamRejected { reason: StreamRejectReason },
     /// Unrecoverable loss or changed epoch — never resumes old process; explicit `RestartNew` only.
     Lost { reason: LostReason },
     /// Remote shell/command exited normally or via signal.
@@ -261,8 +284,9 @@ impl<'a> SkippedOutputInput<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostTerminalCapabilities {
     /// True only when the pane holds a real capability/lease permitting remote process termination.
-    /// UI additionally restricts `Terminate` to [`HostTerminalPhase::Live`] and
-    /// [`HostTerminalPhase::ReadOnly`].
+    /// UI additionally restricts `Terminate` to [`HostTerminalPhase::Live`],
+    /// [`HostTerminalPhase::ReadOnly`], and [`HostTerminalPhase::StreamRejected`] (always after
+    /// explicit confirmation).
     pub can_terminate: bool,
     /// True when the pane can detach cleanly (leaving a live PTY running or cancelling attach).
     pub can_detach: bool,
@@ -299,6 +323,8 @@ pub enum HostHeaderTag {
     Opening,
     ReadOnly,
     Reconnecting,
+    StreamRejected,
+    StreamClosed,
     Lost,
     Exited,
 }
@@ -313,6 +339,10 @@ impl HostHeaderTag {
             (Self::ReadOnly, true) => "Lecture seule",
             (Self::Reconnecting, false) => "Reconnecting…",
             (Self::Reconnecting, true) => "Reconnexion…",
+            (Self::StreamRejected, false) => "Stream refused",
+            (Self::StreamRejected, true) => "Flux refusé",
+            (Self::StreamClosed, false) => "Stream closed",
+            (Self::StreamClosed, true) => "Flux fermé",
             (Self::Lost, false) => "Disconnected",
             (Self::Lost, true) => "Déconnecté",
             (Self::Exited, false) => "Exited",
@@ -353,7 +383,7 @@ pub fn show_header_tag(ui: &mut Ui, tag: HostHeaderTag, french: bool) -> Respons
             with_alpha(pal.warn, 0.18),
             if dark { WARN_TEXT_DARK } else { pal.warn },
         ),
-        HostHeaderTag::Lost => (
+        HostHeaderTag::StreamRejected | HostHeaderTag::StreamClosed | HostHeaderTag::Lost => (
             with_alpha(pal.danger, 0.22),
             if dark { DANGER_TEXT_DARK } else { pal.danger },
         ),
@@ -397,7 +427,8 @@ pub enum HostTerminalAction {
     RestartNew,
     /// Detach this local pane without killing the remote PTY (or cancel `Opening` attach).
     Detach,
-    /// Kill the remote PTY process and close this pane (only when `can_terminate` & `Live|ReadOnly`).
+    /// Kill the remote PTY process and close this pane (only when `can_terminate` &
+    /// `Live | ReadOnly | StreamRejected`, after explicit user confirmation).
     Terminate,
     /// Close this local pane after `Lost`, `Exited`, or when no remote process lease applies.
     ClosePane,
@@ -421,7 +452,23 @@ struct ButtonSpec {
     style: OverlayButtonStyle,
     action: Option<HostTerminalAction>,
     close_confirm: bool,
+    open_confirm: bool,
     request_initial_focus: bool,
+}
+
+struct BottomOverlaySpec {
+    id_key: &'static str,
+    text: String,
+    danger_border: bool,
+    buttons: Vec<ButtonSpec>,
+}
+
+struct BottomOverlayOutcome {
+    card_rect: Rect,
+    emitted_action: Option<HostTerminalAction>,
+    close_confirm_clicked: bool,
+    open_confirm_clicked: bool,
+    focused_any: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,6 +551,10 @@ impl HostTerminalPanel {
             HostTerminalPhase::Opening { .. } => Some(HostHeaderTag::Opening),
             HostTerminalPhase::ReadOnly { .. } => Some(HostHeaderTag::ReadOnly),
             HostTerminalPhase::Reconnecting { .. } => Some(HostHeaderTag::Reconnecting),
+            HostTerminalPhase::StreamRejected {
+                reason: StreamRejectReason::Closed,
+            } => Some(HostHeaderTag::StreamClosed),
+            HostTerminalPhase::StreamRejected { .. } => Some(HostHeaderTag::StreamRejected),
             HostTerminalPhase::Lost { .. } => Some(HostHeaderTag::Lost),
             HostTerminalPhase::Exited { .. } => Some(HostHeaderTag::Exited),
         }
@@ -610,6 +661,7 @@ impl HostTerminalPanel {
             HostTerminalPhase::Live
             | HostTerminalPhase::Opening { .. }
             | HostTerminalPhase::Reconnecting { .. }
+            | HostTerminalPhase::StreamRejected { .. }
             | HostTerminalPhase::Lost { .. } => None,
             HostTerminalPhase::ReadOnly { .. } => {
                 let (now, focused, write_attempt) =
@@ -662,6 +714,10 @@ impl HostTerminalPanel {
     ///     (alongside `Detach` if `can_detach`), so the user never kills a remote PTY by accident.
     ///   - Immediately emits `Detach` when `can_detach && !can_terminate`, or `ClosePane` when
     ///     neither capability is held.
+    /// - In [`HostTerminalPhase::StreamRejected`]:
+    ///   - Opens the explicit `Detach / Terminate / Cancel` confirmation (`None`) when
+    ///     `can_terminate` authority is held, because the remote program may still be running.
+    ///   - Otherwise immediately returns `Detach` without terminating the remote program.
     /// - In `Reconnecting`: emits `Detach` (if `can_detach`) or `ClosePane`.
     /// - In `Lost` or `Exited`: immediately emits `ClosePane`.
     pub fn request_close(
@@ -687,6 +743,16 @@ impl HostTerminalPanel {
                     Some(HostTerminalAction::Detach)
                 } else {
                     Some(HostTerminalAction::ClosePane)
+                }
+            }
+            HostTerminalPhase::StreamRejected { .. } => {
+                if can_offer_terminate(phase, capabilities) {
+                    self.confirm_close_open = true;
+                    self.confirm_close_focus_pending = true;
+                    None
+                } else {
+                    self.cancel_close_choice();
+                    Some(HostTerminalAction::Detach)
                 }
             }
             HostTerminalPhase::Lost { .. } | HostTerminalPhase::Exited { .. } => {
@@ -757,31 +823,31 @@ impl HostTerminalPanel {
         }
 
         // 2. Bottom `.exit-overlay` or inline Detach/Terminate close confirmation card.
-        if let Some((id_key, text, danger_border, buttons)) =
-            self.build_bottom_overlay(input, &host)
-        {
+        if let Some(spec) = self.build_bottom_overlay(input, &host) {
             let focus_pending = self.confirm_close_focus_pending;
-            let (card_rect, bottom_action, close_confirm_clicked, focused_any) =
-                paint_bottom_overlay(
-                    ui,
-                    clip_rect,
-                    terminal_rect,
-                    input.id_salt.with(id_key),
-                    &text,
-                    danger_border,
-                    &buttons,
-                    focus_pending,
-                    &pal,
-                );
-            if focused_any {
+            let outcome = paint_bottom_overlay(
+                ui,
+                clip_rect,
+                terminal_rect,
+                input.id_salt.with(spec.id_key),
+                &spec.text,
+                spec.danger_border,
+                &spec.buttons,
+                focus_pending,
+                &pal,
+            );
+            if outcome.focused_any {
                 self.confirm_close_focus_pending = false;
             }
-            self.overlay_rects.push(card_rect);
-            if close_confirm_clicked {
+            self.overlay_rects.push(outcome.card_rect);
+            if outcome.close_confirm_clicked {
                 self.cancel_close_choice();
+            } else if outcome.open_confirm_clicked {
+                self.confirm_close_open = true;
+                self.confirm_close_focus_pending = true;
             }
-            if emitted.is_none() && bottom_action.is_some() {
-                emitted = bottom_action;
+            if emitted.is_none() && outcome.emitted_action.is_some() {
+                emitted = outcome.emitted_action;
             }
         }
 
@@ -801,10 +867,7 @@ impl HostTerminalPanel {
             self.readonly_flash_until = None;
             self.last_readonly_notice_at = None;
         }
-        if !matches!(
-            input.phase,
-            HostTerminalPhase::Live | HostTerminalPhase::ReadOnly { .. }
-        ) {
+        if !can_offer_terminate(input.phase, input.capabilities) {
             self.confirm_close_open = false;
             self.confirm_close_focus_pending = false;
         }
@@ -867,6 +930,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Small,
                         action: Some(cancel_action),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     }],
                     dismiss: None,
@@ -899,6 +963,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::SmallPrimary,
                         action: Some(HostTerminalAction::Reconnect),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -909,6 +974,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Small,
                         action: Some(HostTerminalAction::Detach),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 } else {
@@ -918,6 +984,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Small,
                         action: Some(HostTerminalAction::ClosePane),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -971,6 +1038,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::SmallPrimary,
                         action: Some(HostTerminalAction::TakeControl),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -987,6 +1055,7 @@ impl HostTerminalPanel {
                 });
             }
             HostTerminalPhase::Live
+            | HostTerminalPhase::StreamRejected { .. }
             | HostTerminalPhase::Lost { .. }
             | HostTerminalPhase::Exited { .. } => {}
         }
@@ -1067,6 +1136,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Small,
                         action: Some(HostTerminalAction::BackToLiveOutput),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -1095,29 +1165,40 @@ impl HostTerminalPanel {
         &self,
         input: &HostTerminalInput<'_>,
         host: &str,
-    ) -> Option<(&'static str, String, bool, Vec<ButtonSpec>)> {
+    ) -> Option<BottomOverlaySpec> {
         let fr = input.french;
         let caps = input.capabilities;
 
         if self.confirm_close_open && can_offer_terminate(input.phase, caps) {
-            let text = match (caps.can_detach, fr) {
-                (true, false) => format!(
+            let is_rejected = matches!(input.phase, HostTerminalPhase::StreamRejected { .. });
+            let offer_detach = caps.can_detach || is_rejected;
+            let text = match (is_rejected, offer_detach, fr) {
+                (true, _, false) => format!(
+                    "Remote program on {host} may still be running — detach to leave it running, or terminate its process?"
+                ),
+                (true, _, true) => format!(
+                    "Le programme distant sur {host} est peut-être toujours actif — détacher pour le laisser tourner, ou terminer son processus ?"
+                ),
+                (false, true, false) => format!(
                     "Remote session on {host} is still running — detach to keep it alive, or terminate its process?"
                 ),
-                (true, true) => format!(
+                (false, true, true) => format!(
                     "La session distante sur {host} est toujours active — détacher pour la laisser tourner, ou terminer son processus ?"
                 ),
-                (false, false) => format!("Terminate the running remote session on {host}?"),
-                (false, true) => format!("Terminer la session distante active sur {host} ?"),
+                (false, false, false) => format!("Terminate the running remote session on {host}?"),
+                (false, false, true) => {
+                    format!("Terminer la session distante active sur {host} ?")
+                }
             };
             let mut buttons = Vec::with_capacity(3);
-            if caps.can_detach {
+            if offer_detach {
                 buttons.push(ButtonSpec {
                     id_key: "confirm-detach",
                     label: if fr { "Détacher" } else { "Detach" }.to_owned(),
                     style: OverlayButtonStyle::Primary,
                     action: Some(HostTerminalAction::Detach),
                     close_confirm: true,
+                    open_confirm: false,
                     request_initial_focus: true,
                 });
             }
@@ -1132,6 +1213,7 @@ impl HostTerminalPanel {
                 style: OverlayButtonStyle::Danger,
                 action: Some(HostTerminalAction::Terminate),
                 close_confirm: true,
+                open_confirm: false,
                 request_initial_focus: false,
             });
             buttons.push(ButtonSpec {
@@ -1140,12 +1222,52 @@ impl HostTerminalPanel {
                 style: OverlayButtonStyle::Standard,
                 action: None,
                 close_confirm: true,
-                request_initial_focus: !caps.can_detach,
+                open_confirm: false,
+                request_initial_focus: !offer_detach,
             });
-            return Some(("close-choice-overlay", text, true, buttons));
+            return Some(BottomOverlaySpec {
+                id_key: "close-choice-overlay",
+                text,
+                danger_border: true,
+                buttons,
+            });
         }
 
         match input.phase {
+            HostTerminalPhase::StreamRejected { reason } => {
+                let text = format_stream_rejected_message(*reason, host, fr);
+                let mut buttons = vec![ButtonSpec {
+                    id_key: "stream-rejected-detach",
+                    label: if fr { "Détacher" } else { "Detach" }.to_owned(),
+                    style: OverlayButtonStyle::Primary,
+                    action: Some(HostTerminalAction::Detach),
+                    close_confirm: false,
+                    open_confirm: false,
+                    request_initial_focus: false,
+                }];
+                if caps.can_terminate {
+                    buttons.push(ButtonSpec {
+                        id_key: "stream-rejected-terminate",
+                        label: if fr {
+                            "Terminer le processus"
+                        } else {
+                            "Terminate process"
+                        }
+                        .to_owned(),
+                        style: OverlayButtonStyle::Danger,
+                        action: None,
+                        close_confirm: false,
+                        open_confirm: true,
+                        request_initial_focus: false,
+                    });
+                }
+                Some(BottomOverlaySpec {
+                    id_key: "stream-rejected-overlay",
+                    text,
+                    danger_border: true,
+                    buttons,
+                })
+            }
             HostTerminalPhase::Lost { reason } => {
                 let text = format_lost_message(reason, host, fr);
                 let mut buttons = Vec::with_capacity(2);
@@ -1161,6 +1283,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Primary,
                         action: Some(HostTerminalAction::RestartNew),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -1170,9 +1293,15 @@ impl HostTerminalPanel {
                     style: OverlayButtonStyle::Standard,
                     action: Some(HostTerminalAction::ClosePane),
                     close_confirm: false,
+                    open_confirm: false,
                     request_initial_focus: false,
                 });
-                Some(("lost-overlay", text, true, buttons))
+                Some(BottomOverlaySpec {
+                    id_key: "lost-overlay",
+                    text,
+                    danger_border: true,
+                    buttons,
+                })
             }
             HostTerminalPhase::Exited { exit_code, signal } => {
                 let text = format_exited_message(*exit_code, *signal, caps.can_restart, fr);
@@ -1189,6 +1318,7 @@ impl HostTerminalPanel {
                         style: OverlayButtonStyle::Primary,
                         action: Some(HostTerminalAction::RestartNew),
                         close_confirm: false,
+                        open_confirm: false,
                         request_initial_focus: false,
                     });
                 }
@@ -1198,9 +1328,15 @@ impl HostTerminalPanel {
                     style: OverlayButtonStyle::Standard,
                     action: Some(HostTerminalAction::ClosePane),
                     close_confirm: false,
+                    open_confirm: false,
                     request_initial_focus: false,
                 });
-                Some(("exited-overlay", text, false, buttons))
+                Some(BottomOverlaySpec {
+                    id_key: "exited-overlay",
+                    text,
+                    danger_border: false,
+                    buttons,
+                })
             }
             HostTerminalPhase::Opening { .. }
             | HostTerminalPhase::Live
@@ -1214,8 +1350,39 @@ const fn can_offer_terminate(phase: &HostTerminalPhase, caps: HostTerminalCapabi
     caps.can_terminate
         && matches!(
             phase,
-            HostTerminalPhase::Live | HostTerminalPhase::ReadOnly { .. }
+            HostTerminalPhase::Live
+                | HostTerminalPhase::ReadOnly { .. }
+                | HostTerminalPhase::StreamRejected { .. }
         )
+}
+
+fn format_stream_rejected_message(reason: StreamRejectReason, host: &str, french: bool) -> String {
+    match (reason, french) {
+        (StreamRejectReason::InvalidSnapshot, false) => format!(
+            "Terminal stream from {host} was refused (invalid screen snapshot) — the remote program may still be running."
+        ),
+        (StreamRejectReason::InvalidSnapshot, true) => format!(
+            "Le flux du terminal sur {host} a été refusé (instantané d'écran invalide) — le programme distant est peut-être toujours actif."
+        ),
+        (StreamRejectReason::OversizedSnapshot, false) => format!(
+            "Terminal stream from {host} was refused (screen snapshot too large) — the remote program may still be running."
+        ),
+        (StreamRejectReason::OversizedSnapshot, true) => format!(
+            "Le flux du terminal sur {host} a été refusé (instantané d'écran trop volumineux) — le programme distant est peut-être toujours actif."
+        ),
+        (StreamRejectReason::InvalidData, false) => format!(
+            "Terminal stream from {host} was refused (invalid terminal data) — the remote program may still be running."
+        ),
+        (StreamRejectReason::InvalidData, true) => format!(
+            "Le flux du terminal sur {host} a été refusé (données du terminal invalides) — le programme distant est peut-être toujours actif."
+        ),
+        (StreamRejectReason::Closed, false) => format!(
+            "Terminal stream from {host} closed permanently — the remote program may still be running."
+        ),
+        (StreamRejectReason::Closed, true) => format!(
+            "Le flux du terminal sur {host} s'est fermé définitivement — le programme distant est peut-être toujours actif."
+        ),
+    }
 }
 
 fn sanitized_host_or_fallback(raw: &str, french: bool) -> String {
@@ -1719,7 +1886,7 @@ fn paint_bottom_overlay(
     buttons: &[ButtonSpec],
     focus_pending: bool,
     pal: &UiPalette,
-) -> (Rect, Option<HostTerminalAction>, bool, bool) {
+) -> BottomOverlayOutcome {
     let side_pad = if terminal_rect.width() < 180.0 {
         4.0
     } else {
@@ -1802,6 +1969,7 @@ fn paint_bottom_overlay(
 
     let mut emitted_action = None;
     let mut close_confirm_clicked = false;
+    let mut open_confirm_clicked = false;
     let mut focused_any = false;
 
     if single_row {
@@ -1831,6 +1999,9 @@ fn paint_bottom_overlay(
             if resp.clicked() {
                 if btn.close_confirm {
                     close_confirm_clicked = true;
+                }
+                if btn.open_confirm {
+                    open_confirm_clicked = true;
                 }
                 if emitted_action.is_none() {
                     emitted_action = btn.action;
@@ -1870,6 +2041,9 @@ fn paint_bottom_overlay(
                     if btn.close_confirm {
                         close_confirm_clicked = true;
                     }
+                    if btn.open_confirm {
+                        open_confirm_clicked = true;
+                    }
                     if emitted_action.is_none() {
                         emitted_action = btn.action;
                     }
@@ -1880,12 +2054,13 @@ fn paint_bottom_overlay(
         }
     }
 
-    (
+    BottomOverlayOutcome {
         card_rect,
         emitted_action,
         close_confirm_clicked,
+        open_confirm_clicked,
         focused_any,
-    )
+    }
 }
 
 fn paint_overlay_button(

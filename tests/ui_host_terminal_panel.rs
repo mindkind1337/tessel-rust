@@ -19,7 +19,8 @@ use host_terminal_panel::{
     HostHeaderTag, HostTerminalAction, HostTerminalCapabilities, HostTerminalInput,
     HostTerminalPanel, HostTerminalPhase, LostReason, MAX_EPOCH_CHARS, MAX_HOST_LABEL_CHARS,
     MAX_NOTE_CHARS, MAX_RAW_SCAN_CHARS, PersistenceWarningInput, ReadOnlyReason, SkippedOutput,
-    SkippedOutputInput, SurvivesLogout, header_tag_width, sanitize_host_text, show_header_tag,
+    SkippedOutputInput, StreamRejectReason, SurvivesLogout, header_tag_width, sanitize_host_text,
+    show_header_tag,
 };
 use theme_palettes::THEMES;
 
@@ -764,7 +765,7 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
             }
         }
 
-        // Bottom `.exit-overlay` in `Lost`
+        // Bottom `.exit-overlay` in `Lost` and `StreamRejected` (initial + confirmation)
         let in_lost = HostTerminalInput {
             phase: &lost,
             ..in0
@@ -779,8 +780,71 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
             m_lost.terminal_rect
         );
 
+        let rejected = HostTerminalPhase::StreamRejected {
+            reason: StreamRejectReason::OversizedSnapshot,
+        };
+        let in_rejected = HostTerminalInput {
+            phase: &rejected,
+            french: true,
+            ..in0
+        };
+        let m_rejected = settle_pane(&ctx, &mut panel, &in_rejected, viewport, 4.2);
+        assert_eq!(panel.overlay_rects().len(), 1);
+        let rejected_rect = panel.overlay_rects()[0];
+        assert!(
+            rejected_rect.left() >= m_rejected.terminal_rect.left() - 0.5
+                && rejected_rect.right() <= m_rejected.terminal_rect.right() + 0.5
+                && rejected_rect.top() >= m_rejected.terminal_rect.top() - 0.5
+                && rejected_rect.bottom() <= m_rejected.terminal_rect.bottom() + 0.5,
+            "stream-rejected overlay overflowed terminal_rect at {viewport:?}: {rejected_rect:?} vs {:?}",
+            m_rejected.terminal_rect
+        );
+
+        assert_eq!(
+            panel.request_close(&rejected, in_rejected.capabilities),
+            None
+        );
+        let m_rejected_confirm = settle_pane(&ctx, &mut panel, &in_rejected, viewport, 4.4);
+        assert_eq!(panel.overlay_rects().len(), 1);
+        let confirm_rect = panel.overlay_rects()[0];
+        assert!(
+            confirm_rect.left() >= m_rejected_confirm.terminal_rect.left() - 0.5
+                && confirm_rect.right() <= m_rejected_confirm.terminal_rect.right() + 0.5
+                && confirm_rect.top() >= m_rejected_confirm.terminal_rect.top() - 0.5
+                && confirm_rect.bottom() <= m_rejected_confirm.terminal_rect.bottom() + 0.5,
+            "stream-rejected close confirmation overflowed terminal_rect at {viewport:?}: {confirm_rect:?} vs {:?}",
+            m_rejected_confirm.terminal_rect
+        );
+        panel.cancel_close_choice();
+
+        let stream_closed = HostTerminalPhase::StreamRejected {
+            reason: StreamRejectReason::Closed,
+        };
+        let in_stream_closed = HostTerminalInput {
+            phase: &stream_closed,
+            ..in0
+        };
+        let m_stream_closed = settle_pane(&ctx, &mut panel, &in_stream_closed, viewport, 4.5);
+        assert_eq!(panel.overlay_rects().len(), 1);
+        let closed_rect = panel.overlay_rects()[0];
+        assert!(
+            closed_rect.left() >= m_stream_closed.terminal_rect.left() - 0.5
+                && closed_rect.right() <= m_stream_closed.terminal_rect.right() + 0.5
+                && closed_rect.top() >= m_stream_closed.terminal_rect.top() - 0.5
+                && closed_rect.bottom() <= m_stream_closed.terminal_rect.bottom() + 0.5,
+            "stream-closed overlay overflowed terminal_rect at {viewport:?}: {closed_rect:?} vs {:?}",
+            m_stream_closed.terminal_rect
+        );
+
         // `terminal_rect`, `(rows, cols)`, `ui.min_rect()`, and `ui.cursor()` must be 100% invariant!
-        for other in [&m1, &m3, &m_lost] {
+        for other in [
+            &m1,
+            &m3,
+            &m_lost,
+            &m_rejected,
+            &m_rejected_confirm,
+            &m_stream_closed,
+        ] {
             assert_eq!(other.terminal_rect, m0.terminal_rect);
             assert_eq!(other.grid_rows_cols, m0.grid_rows_cols);
             assert_eq!(other.ui_min_rect, m0.ui_min_rect);
@@ -1324,10 +1388,34 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
 
     // 1. Header tag EN/FR labels & `Live -> None`
     assert_eq!(HostTerminalPanel::header_tag(&live), None);
+    for rej_reason in [
+        StreamRejectReason::InvalidSnapshot,
+        StreamRejectReason::OversizedSnapshot,
+        StreamRejectReason::InvalidData,
+    ] {
+        assert_eq!(
+            HostTerminalPanel::header_tag(&HostTerminalPhase::StreamRejected {
+                reason: rej_reason,
+            }),
+            Some(HostHeaderTag::StreamRejected)
+        );
+    }
+    assert_eq!(
+        HostTerminalPanel::header_tag(&HostTerminalPhase::StreamRejected {
+            reason: StreamRejectReason::Closed,
+        }),
+        Some(HostHeaderTag::StreamClosed)
+    );
     for (tag, en, fr) in [
         (HostHeaderTag::Opening, "Connecting…", "Connexion…"),
         (HostHeaderTag::ReadOnly, "Read-only", "Lecture seule"),
         (HostHeaderTag::Reconnecting, "Reconnecting…", "Reconnexion…"),
+        (
+            HostHeaderTag::StreamRejected,
+            "Stream refused",
+            "Flux refusé",
+        ),
+        (HostHeaderTag::StreamClosed, "Stream closed", "Flux fermé"),
         (HostHeaderTag::Lost, "Disconnected", "Déconnecté"),
         (HostHeaderTag::Exited, "Exited", "Terminé"),
     ] {
@@ -1509,4 +1597,374 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
         &light_out.output.shapes,
         "Session ended (signal 15) — press Enter or start a new session"
     ));
+}
+
+#[test]
+fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_terminate() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx, true, Some(theme_palettes::ThemeId::Classic));
+
+    let mut panel = HostTerminalPanel::new();
+    let vp = Vec2::new(840.0, 520.0);
+    let mut clock = 1.0_f64;
+    let mut next_time = || {
+        let current = clock;
+        clock += 0.1;
+        current
+    };
+
+    // 1. All 4 fixed reasons (`InvalidSnapshot`, `OversizedSnapshot`, `InvalidData`, `Closed`)
+    //    render honest EN/FR messages stating the remote program may still be running, with zero
+    //    raw bytes, zero invented counts, zero input/resize/DSR/Enter/flash, and zero
+    //    Reattach/Retry/StartNew buttons.
+    for (reason, expected_tag, expected_en, expected_fr) in [
+        (
+            StreamRejectReason::InvalidSnapshot,
+            HostHeaderTag::StreamRejected,
+            "Terminal stream from gpu-alpha was refused (invalid screen snapshot) — the remote program may still be running.",
+            "Le flux du terminal sur gpu-alpha a été refusé (instantané d'écran invalide) — le programme distant est peut-être toujours actif.",
+        ),
+        (
+            StreamRejectReason::OversizedSnapshot,
+            HostHeaderTag::StreamRejected,
+            "Terminal stream from gpu-alpha was refused (screen snapshot too large) — the remote program may still be running.",
+            "Le flux du terminal sur gpu-alpha a été refusé (instantané d'écran trop volumineux) — le programme distant est peut-être toujours actif.",
+        ),
+        (
+            StreamRejectReason::InvalidData,
+            HostHeaderTag::StreamRejected,
+            "Terminal stream from gpu-alpha was refused (invalid terminal data) — the remote program may still be running.",
+            "Le flux du terminal sur gpu-alpha a été refusé (données du terminal invalides) — le programme distant est peut-être toujours actif.",
+        ),
+        (
+            StreamRejectReason::Closed,
+            HostHeaderTag::StreamClosed,
+            "Terminal stream from gpu-alpha closed permanently — the remote program may still be running.",
+            "Le flux du terminal sur gpu-alpha s'est fermé définitivement — le programme distant est peut-être toujours actif.",
+        ),
+    ] {
+        let phase = HostTerminalPhase::StreamRejected { reason };
+        assert!(!panel.accepts_input(&phase));
+        assert!(!panel.accepts_resize(&phase));
+        assert_eq!(HostTerminalPanel::header_tag(&phase), Some(expected_tag));
+
+        for (fr, expected_msg, detach_lbl, term_lbl) in [
+            (false, expected_en, "Detach", "Terminate process"),
+            (true, expected_fr, "Détacher", "Terminer le processus"),
+        ] {
+            let inp = HostTerminalInput {
+                id_salt: Id::new("pane-rejected"),
+                host_label: "gpu-alpha",
+                epoch: Some("ep-rej-1"),
+                phase: &phase,
+                capabilities: full_caps(),
+                terminal_focused: true,
+                persistence_warning: Some(PersistenceWarningInput::new(
+                    "ep-rej-1",
+                    SurvivesLogout::No,
+                )),
+                skipped_output: Some(SkippedOutputInput::resynchronized("ep-rej-1")),
+                scrollback_lines: 64,
+                french: fr,
+            };
+            let out = settle_pane(&ctx, &mut panel, &inp, vp, next_time());
+            assert!(!panel.blocks_terminal_focus());
+            assert!(!panel.has_pending_close_choice());
+            assert_eq!(panel.overlay_rects().len(), 1);
+
+            // Previous terminal screen & scrollback remain exposed and readable above the bottom card.
+            let readable_screen_pos =
+                Pos2::new(out.terminal_rect.center().x, out.terminal_rect.top() + 32.0);
+            assert!(out.terminal_rect.contains(readable_screen_pos));
+            assert!(!panel.pointer_over_overlay(readable_screen_pos));
+
+            assert!(has_painted_text(&out.output.shapes, expected_msg));
+            assert!(
+                painted_texts(&out.output.shapes).iter().any(|(txt, _, _)| {
+                    txt == expected_msg && !txt.chars().any(|c| c.is_ascii_digit())
+                }),
+                "StreamRejected message must never invent byte numbers: {expected_msg}"
+            );
+            for forbidden_claim in [
+                "Session ended",
+                "Session terminée",
+                "was closed",
+                "été fermée",
+                "no longer available",
+                "n'est plus disponible",
+                "previous session is gone",
+                "restarted",
+                "redémarré",
+                "reconnecting",
+                "reconnexion",
+                "Reconnecting…",
+                "Reconnexion…",
+            ] {
+                assert!(
+                    !has_painted_substring(&out.output.shapes, forbidden_claim),
+                    "StreamRejected ({reason:?}) must never claim program ended, daemon restarted, or auto-reconnecting ({forbidden_claim})"
+                );
+            }
+            if matches!(
+                reason,
+                StreamRejectReason::InvalidData | StreamRejectReason::Closed
+            ) {
+                for snapshot_word in ["snapshot", "instantané", "too large", "volumineux"] {
+                    assert!(
+                        !has_painted_substring(&out.output.shapes, snapshot_word),
+                        "{reason:?} must never blame a snapshot ({snapshot_word})"
+                    );
+                }
+            }
+            if reason == StreamRejectReason::Closed {
+                for refused_word in ["refused", "refusé"] {
+                    assert!(
+                        !has_painted_substring(&out.output.shapes, refused_word),
+                        "Closed stream must state permanent closure rather than refusal ({refused_word})"
+                    );
+                }
+            }
+
+            require_accesskit_button_center(&out.output, detach_lbl);
+            require_accesskit_button_center(&out.output, term_lbl);
+            for forbidden_btn in [
+                "Reattach",
+                "Rattacher",
+                "Retry now",
+                "Réessayer",
+                "Start new session",
+                "Nouvelle session",
+                "Take control",
+                "Prendre le contrôle",
+                "Close pane",
+                "Fermer le volet",
+            ] {
+                assert!(
+                    find_accesskit_button_center(&out.output, forbidden_btn).is_none(),
+                    "StreamRejected must not offer `{forbidden_btn}`"
+                );
+            }
+
+            // Pressing Enter or typing printable text in `StreamRejected` emits NO action,
+            // forwards zero Escape/input frames, and does NOT trigger a ReadOnly flash.
+            let t_keys = next_time();
+            let key_frame = step_pane_frame(
+                &ctx,
+                &mut panel,
+                &inp,
+                vp,
+                t_keys,
+                vec![
+                    key_ev(Key::Enter, true, false, Modifiers::NONE),
+                    key_ev(Key::Enter, false, false, Modifiers::NONE),
+                    Event::Text("ls -la".to_owned()),
+                    key_ev(Key::Escape, true, false, Modifiers::NONE),
+                    key_ev(Key::Escape, false, false, Modifiers::NONE),
+                ],
+                false,
+            );
+            assert_eq!(key_frame.action, None);
+            assert_eq!(key_frame.forwarded_escape_count, 0);
+            assert!(!panel.is_readonly_flash_active(t_keys + 0.05));
+        }
+    }
+
+    let rejected = HostTerminalPhase::StreamRejected {
+        reason: StreamRejectReason::OversizedSnapshot,
+    };
+
+    // 2. Without terminate authority (`can_terminate == false`), `×` (`request_close`) immediately
+    //    returns `Detach` without opening confirmation, and the overlay shows only `Detach` / `Détacher`.
+    for no_auth_caps in [
+        HostTerminalCapabilities {
+            can_terminate: false,
+            can_detach: true,
+            ..full_caps()
+        },
+        HostTerminalCapabilities::default(),
+    ] {
+        assert_eq!(
+            panel.request_close(&rejected, no_auth_caps),
+            Some(HostTerminalAction::Detach)
+        );
+        assert!(!panel.has_pending_close_choice());
+        assert!(!panel.blocks_terminal_focus());
+
+        let no_auth_in = HostTerminalInput {
+            id_salt: Id::new("pane-rejected-noauth"),
+            host_label: "gpu-alpha",
+            epoch: Some("ep-rej-1"),
+            phase: &rejected,
+            capabilities: no_auth_caps,
+            terminal_focused: true,
+            persistence_warning: None,
+            skipped_output: None,
+            scrollback_lines: 0,
+            french: false,
+        };
+        let f_no_auth = settle_pane(&ctx, &mut panel, &no_auth_in, vp, next_time());
+        assert!(find_accesskit_button_center(&f_no_auth.output, "Terminate process").is_none());
+        let detach_pos = require_accesskit_button_center(&f_no_auth.output, "Detach");
+        let (detach_act, _) =
+            click_pane(&ctx, &mut panel, &no_auth_in, vp, next_time(), detach_pos);
+        assert_eq!(detach_act, Some(HostTerminalAction::Detach));
+    }
+
+    // 3. With terminate authority (`can_terminate == true`), `×` opens `Detach / Terminate / Cancel`
+    //    confirmation in both EN and FR, focuses safe `Detach` initially, and `Cancel`/`Escape` abort.
+    let auth_en = HostTerminalInput {
+        id_salt: Id::new("pane-rejected-auth"),
+        host_label: "gpu-alpha",
+        epoch: Some("ep-rej-auth"),
+        phase: &rejected,
+        capabilities: full_caps(),
+        terminal_focused: true,
+        persistence_warning: None,
+        skipped_output: None,
+        scrollback_lines: 0,
+        french: false,
+    };
+    let _ = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+    assert_eq!(panel.request_close(&rejected, auth_en.capabilities), None);
+    assert!(panel.has_pending_close_choice());
+    assert!(panel.blocks_terminal_focus());
+
+    let f_confirm_en = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+    assert!(has_painted_text(
+        &f_confirm_en.output.shapes,
+        "Remote program on gpu-alpha may still be running — detach to leave it running, or terminate its process?"
+    ));
+    require_accesskit_button_center(&f_confirm_en.output, "Detach");
+    require_accesskit_button_center(&f_confirm_en.output, "Terminate process");
+    require_accesskit_button_center(&f_confirm_en.output, "Cancel");
+
+    // Pressing Enter on the newly opened confirmation activates focused safe `Detach` (never `Terminate`).
+    let enter_confirm = step_pane_frame(
+        &ctx,
+        &mut panel,
+        &auth_en,
+        vp,
+        next_time(),
+        vec![
+            key_ev(Key::Enter, true, false, Modifiers::NONE),
+            key_ev(Key::Enter, false, false, Modifiers::NONE),
+        ],
+        false,
+    );
+    assert_eq!(enter_confirm.action, Some(HostTerminalAction::Detach));
+    assert!(!panel.has_pending_close_choice());
+
+    // French `×` confirmation: verify `Détacher / Terminer le processus / Annuler`, then `Annuler`.
+    let auth_fr = HostTerminalInput {
+        french: true,
+        ..auth_en
+    };
+    assert_eq!(panel.request_close(&rejected, auth_fr.capabilities), None);
+    let f_confirm_fr = settle_pane(&ctx, &mut panel, &auth_fr, vp, next_time());
+    assert!(has_painted_text(
+        &f_confirm_fr.output.shapes,
+        "Le programme distant sur gpu-alpha est peut-être toujours actif — détacher pour le laisser tourner, ou terminer son processus ?"
+    ));
+    require_accesskit_button_center(&f_confirm_fr.output, "Détacher");
+    require_accesskit_button_center(&f_confirm_fr.output, "Terminer le processus");
+    let cancel_fr_pos = require_accesskit_button_center(&f_confirm_fr.output, "Annuler");
+    let (cancel_fr_act, _) = click_pane(&ctx, &mut panel, &auth_fr, vp, next_time(), cancel_fr_pos);
+    assert_eq!(cancel_fr_act, None);
+    assert!(!panel.has_pending_close_choice());
+
+    // Escape also dismisses confirmation cleanly in `StreamRejected`.
+    assert_eq!(panel.request_close(&rejected, auth_en.capabilities), None);
+    let _ = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+    let esc_confirm = step_pane_frame(
+        &ctx,
+        &mut panel,
+        &auth_en,
+        vp,
+        next_time(),
+        vec![
+            key_ev(Key::Escape, true, false, Modifiers::NONE),
+            key_ev(Key::Escape, false, false, Modifiers::NONE),
+        ],
+        false,
+    );
+    assert_eq!(esc_confirm.action, None);
+    assert!(!panel.has_pending_close_choice());
+
+    // 4. Clicking `Terminate process` on the `StreamRejected` overlay itself MUST NOT emit
+    //    `Terminate` unconfirmed — first click opens confirmation, second click emits `Terminate`.
+    let f_overlay_en = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+    assert!(!panel.has_pending_close_choice());
+    let overlay_term_pos =
+        require_accesskit_button_center(&f_overlay_en.output, "Terminate process");
+    let (unconfirmed_act, _) = click_pane(
+        &ctx,
+        &mut panel,
+        &auth_en,
+        vp,
+        next_time(),
+        overlay_term_pos,
+    );
+    assert_eq!(
+        unconfirmed_act, None,
+        "first click on Terminate process must open confirmation, never terminate immediately"
+    );
+    assert!(panel.has_pending_close_choice());
+    assert!(panel.blocks_terminal_focus());
+
+    let f_step2 = settle_pane(&ctx, &mut panel, &auth_en, vp, next_time());
+    require_accesskit_button_center(&f_step2.output, "Detach");
+    require_accesskit_button_center(&f_step2.output, "Cancel");
+    let confirmed_term_pos = require_accesskit_button_center(&f_step2.output, "Terminate process");
+    let (confirmed_act, _) = click_pane(
+        &ctx,
+        &mut panel,
+        &auth_en,
+        vp,
+        next_time(),
+        confirmed_term_pos,
+    );
+    assert_eq!(confirmed_act, Some(HostTerminalAction::Terminate));
+    assert!(!panel.has_pending_close_choice());
+    assert!(!panel.blocks_terminal_focus());
+
+    // 5. Revoking `can_terminate` while confirmation is open immediately clears the stale prompt,
+    //    and `InvalidData` / `Closed` share the exact same `×` + two-step `Terminate` flow.
+    assert_eq!(panel.request_close(&rejected, auth_en.capabilities), None);
+    assert!(panel.has_pending_close_choice());
+    let revoked_in = HostTerminalInput {
+        capabilities: HostTerminalCapabilities {
+            can_terminate: false,
+            ..auth_en.capabilities
+        },
+        ..auth_en
+    };
+    let _ = settle_pane(&ctx, &mut panel, &revoked_in, vp, next_time());
+    assert!(!panel.has_pending_close_choice());
+    assert!(!panel.blocks_terminal_focus());
+
+    for extra_reason in [StreamRejectReason::InvalidData, StreamRejectReason::Closed] {
+        let extra_phase = HostTerminalPhase::StreamRejected {
+            reason: extra_reason,
+        };
+        assert_eq!(
+            panel.request_close(&extra_phase, HostTerminalCapabilities::default()),
+            Some(HostTerminalAction::Detach)
+        );
+        let extra_in = HostTerminalInput {
+            phase: &extra_phase,
+            ..auth_en
+        };
+        let f_extra = settle_pane(&ctx, &mut panel, &extra_in, vp, next_time());
+        let term_btn = require_accesskit_button_center(&f_extra.output, "Terminate process");
+        let (first_act, _) = click_pane(&ctx, &mut panel, &extra_in, vp, next_time(), term_btn);
+        assert_eq!(first_act, None);
+        assert!(panel.has_pending_close_choice());
+        let f_extra_confirm = settle_pane(&ctx, &mut panel, &extra_in, vp, next_time());
+        let confirm_btn =
+            require_accesskit_button_center(&f_extra_confirm.output, "Terminate process");
+        let (second_act, _) = click_pane(&ctx, &mut panel, &extra_in, vp, next_time(), confirm_btn);
+        assert_eq!(second_act, Some(HostTerminalAction::Terminate));
+        assert!(!panel.has_pending_close_choice());
+    }
 }

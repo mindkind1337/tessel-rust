@@ -132,7 +132,7 @@ impl Driver for HostDriver {
                 rows: *rows,
                 cols: *cols,
             }),
-            Command::TakeControl => self.terminal.take_lease(),
+            Command::TakeControl => self.terminal.take_lease().map(|_| ()),
             Command::Terminate => self.terminal.close(),
         }
         .map_err(|_| ())

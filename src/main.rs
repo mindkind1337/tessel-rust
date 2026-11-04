@@ -62,6 +62,8 @@ pub mod help_panel;
 mod host_actions;
 #[cfg(windows)]
 pub mod host_lease_store;
+#[cfg(windows)]
+pub mod host_opening_adapter;
 mod i18n;
 pub mod icons;
 mod launch;
@@ -110,7 +112,7 @@ mod system_fonts;
 mod system_identity;
 mod task_actions;
 pub mod tasks_board_panel;
-mod terminal;
+pub mod terminal;
 mod terminal_layout;
 mod terminal_model;
 mod theme;

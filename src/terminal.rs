@@ -1,3 +1,10 @@
+pub mod host_apply;
+pub mod host_commands;
+pub mod host_events;
+pub mod host_handoff;
+pub mod host_history;
+pub mod host_opening;
+pub mod host_worker;
 mod local;
 mod mouse;
 use crate::i18n::tr;

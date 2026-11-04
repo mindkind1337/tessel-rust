@@ -21,6 +21,7 @@ pub struct Pending {
     kind: Kind,
     bytes: Vec<u8>,
     offset: usize,
+    archive_previous: bool,
 }
 impl Pending {
     pub fn output(sequence: u64, bytes: Vec<u8>) -> Result<Self, Invalid> {
@@ -32,6 +33,7 @@ impl Pending {
             kind: Kind::Output,
             bytes,
             offset: 0,
+            archive_previous: true,
         })
     }
     pub fn snapshot(sequence: u64, rows: u16, cols: u16, bytes: Vec<u8>) -> Result<Self, Invalid> {
@@ -44,10 +46,18 @@ impl Pending {
             kind: Kind::Snapshot(Some(Box::new(parser))),
             bytes,
             offset: 0,
+            archive_previous: true,
         })
     }
     pub fn is_snapshot(&self) -> bool {
         matches!(self.kind, Kind::Snapshot(_))
+    }
+    pub fn without_previous_screen(mut self) -> Self {
+        self.archive_previous = false;
+        self
+    }
+    pub fn remaining_bytes(&self) -> usize {
+        self.bytes.len() - self.offset
     }
     /// Apply live output through the caller's normal DSR/response path, then
     /// advance the position. Completion is never published before emulation.
@@ -87,7 +97,9 @@ impl Pending {
         if self.offset != self.bytes.len() {
             return false;
         }
-        history.capture(visible);
+        if self.archive_previous {
+            history.capture(visible);
+        }
         *visible = *fresh.take().expect("snapshot parser");
         true
     }

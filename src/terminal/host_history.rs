@@ -16,6 +16,9 @@ impl History {
     pub fn len(&self) -> usize {
         self.rows.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
     pub fn row(&self, index: usize) -> Option<&[vt100::Cell]> {
         self.rows.get(index).map(Vec::as_slice)
     }
@@ -77,7 +80,9 @@ mod tests {
         parser.process("old\r\nsecond\r\n\x1b[31;4m🙂é\x1b[0m\r\nlast".as_bytes());
         parser.set_scrollback(1);
         let mut history = History::default();
+        assert!(history.is_empty());
         history.capture(&mut parser);
+        assert!(!history.is_empty());
         assert_eq!(parser.screen().scrollback(), 1);
         assert_eq!(history.len(), 4);
         assert_eq!(history.row(0).unwrap()[0].contents(), "o");
