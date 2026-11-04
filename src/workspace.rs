@@ -75,6 +75,8 @@ pub struct NativeThread {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_options: Option<serde_json::Value>,
@@ -218,6 +220,12 @@ impl Workspace {
             }
         }
         for session in &self.sessions {
+            if let Some(id) = &session.conversation_id
+                && (!crate::claude::valid_uuid(id)
+                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent)))
+            {
+                return Err("Invalid terminal conversation metadata.".into());
+            }
             if !session_ids.insert(session.id)
                 || session.id == u64::MAX
                 || !session.cwd.is_absolute()
@@ -571,6 +579,43 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn terminal_conversations_round_trip_and_reject_invalid_or_wrong_provider_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let id = crate::claude::uuid().unwrap();
+        state.sessions.push(SavedSession {
+            conversation_id: Some(id.clone()),
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic".into(),
+            launch: crate::launch::Launch::Agent("claude".into()),
+            cwd: dir.path().to_owned(),
+        });
+        store.save(&state).unwrap();
+        drop(store);
+        let (store, mut loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            loaded.sessions[0].conversation_id.as_deref(),
+            Some(id.as_str())
+        );
+        loaded.sessions[0].conversation_id = Some("../../untrusted".into());
+        assert!(store.save(&loaded).is_err());
+        loaded.sessions[0].conversation_id = Some(id);
+        loaded.sessions[0].launch = crate::launch::Launch::Shell;
+        assert!(store.save(&loaded).is_err());
+        let mut old = serde_json::to_value(&state.sessions[0]).unwrap();
+        old.as_object_mut().unwrap().remove("conversation_id");
+        assert!(
+            serde_json::from_value::<SavedSession>(old)
+                .unwrap()
+                .conversation_id
+                .is_none()
+        );
+    }
+    #[test]
     fn pane_model_choices_roundtrip_independently_and_invalid_choices_never_replace_state() {
         use serde_json::json;
         let dir = tempfile::tempdir().unwrap();
@@ -583,6 +628,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: Some(options),
                 pane_name: None,
@@ -731,6 +777,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
@@ -764,6 +811,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
@@ -797,6 +845,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -820,6 +869,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
@@ -831,6 +881,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -892,6 +943,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -923,6 +975,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 id,
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: name.map(str::to_owned),

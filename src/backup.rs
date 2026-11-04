@@ -111,6 +111,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -147,6 +148,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            conversation_id: None,
             launch_fingerprint: Some("a".repeat(64)),
             session_options: Some(serde_json::json!({"model":"gpt-5.6-sol","effort":"high"})),
             pane_name: Some("Custom agent".into()),

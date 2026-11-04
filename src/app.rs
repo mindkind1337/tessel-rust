@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Session {
+    conversation_id: Option<String>,
     settings_changed: bool,
     launch_fingerprint: Option<String>,
     session_options: Option<serde_json::Value>,
@@ -56,6 +57,20 @@ impl Session {
             return;
         }
         let launch = self.launch.clone();
+        let managed = match (&launch, &prefs) {
+            (Launch::Agent(agent), Some(prefs)) => crate::claude_terminal::managed(agent, prefs),
+            _ => false,
+        };
+        if managed && self.conversation_id.is_none() {
+            match crate::claude::uuid() {
+                Ok(id) => self.conversation_id = Some(id),
+                Err(error) => {
+                    self.error = error;
+                    return;
+                }
+            }
+        }
+        let conversation = managed.then(|| self.conversation_id.clone()).flatten();
         self.settings_changed = false;
         self.launch_fingerprint = match (&self.launch, &prefs) {
             (Launch::Agent(id), Some(prefs)) => crate::launch_fingerprint::for_agent(id, prefs),
@@ -66,7 +81,14 @@ impl Session {
         self.loading = Some(receiver);
         self.error.clear();
         thread::spawn(move || {
-            let result = launch::command_with_preferences(&launch, &cwd, prefs.as_ref())
+            let effective = match (&launch, &prefs, conversation) {
+                (Launch::Agent(agent), Some(prefs), Some(id)) => {
+                    crate::claude_terminal::prepare(agent, prefs, &cwd, &id).map(Some)
+                }
+                _ => Ok(prefs),
+            };
+            let result = effective
+                .and_then(|prefs| launch::command_with_preferences(&launch, &cwd, prefs.as_ref()))
                 .and_then(|c| Terminal::spawn_command(c).map_err(|e| e.to_string()));
             let _ = sender.send(result);
         });
@@ -321,6 +343,7 @@ impl Tessel {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
                 settings_changed: false,
+                conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
@@ -488,6 +511,7 @@ impl Tessel {
                     app.next_session += 1;
                     app.sessions.push(Session {
                         settings_changed: false,
+                        conversation_id: None,
                         launch_fingerprint: None,
                         session_options: None,
                         pane_name: None,
@@ -522,6 +546,7 @@ impl Tessel {
                 app.next_session += 1;
                 app.sessions.push(Session {
                     settings_changed: false,
+                    conversation_id: None,
                     launch_fingerprint: None,
                     session_options: None,
                     pane_name: None,
@@ -586,6 +611,7 @@ impl Tessel {
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                conversation_id: s.conversation_id.clone(),
                 launch_fingerprint: s.launch_fingerprint.clone(),
                 session_options: s.session_options.clone(),
                 pane_name: s.pane_name.clone(),
@@ -755,9 +781,14 @@ impl Tessel {
         if chat_metadata_changed {
             self.save();
         }
+        let mut terminal_changed = false;
         for s in &mut self.sessions {
-            launch_changed |= s.poll();
+            terminal_changed |= s.poll();
         }
+        if terminal_changed {
+            self.save();
+        }
+        launch_changed |= terminal_changed;
         if launch_changed {
             self.refresh_launch_status();
         }
@@ -865,6 +896,7 @@ impl Tessel {
         self.next_session = next;
         let mut s = Session {
             settings_changed: false,
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -2302,6 +2334,7 @@ impl Tessel {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
                 settings_changed: false,
+                conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
@@ -4112,6 +4145,7 @@ mod tests {
         let prefs = crate::agent_preferences::Preferences::default();
         let mut session = Session {
             settings_changed: false,
+            conversation_id: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
             session_options: None,
             pane_name: None,
@@ -4147,6 +4181,7 @@ mod tests {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
                 settings_changed: false,
+                conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
@@ -4165,11 +4200,70 @@ mod tests {
             assert!(session.error.is_empty());
         }
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn claude_terminal_wake_reuses_its_id_and_resumes_only_an_existing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("synthetic cli.ps1");
+        std::fs::write(&script, r#"Set-Content -LiteralPath (Join-Path $env:SYNTHETIC_ROOT 'args.json') -Value (ConvertTo-Json -InputObject @($args))"#).unwrap();
+        let prefs = crate::agent_preferences::Preferences {
+            command: format!("& '{}'", script.display().to_string().replace('\'', "''")),
+            env: format!(
+                "CLAUDE_CONFIG_DIR={}\nSYNTHETIC_ROOT={}",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            ..Default::default()
+        };
+        let mut session = Session {
+            conversation_id: None,
+            settings_changed: false,
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic Claude".into(),
+            launch: Launch::Agent("claude".into()),
+            cwd: dir.path().to_owned(),
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        for expected_flag in ["--session-id", "--resume"] {
+            session.start(Some(prefs.clone()));
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                session.poll();
+                assert!(session.error.is_empty(), "{}", session.error);
+                if session.terminal.as_ref().is_some_and(Terminal::exited) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Synthetic CLI did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let args: Vec<String> =
+                serde_json::from_slice(&std::fs::read(dir.path().join("args.json")).unwrap())
+                    .unwrap();
+            let id = session.conversation_id.as_deref().unwrap();
+            assert_eq!(args, [expected_flag, id]);
+            assert!(crate::claude::valid_uuid(id));
+            let project = dir.path().join("projects").join("synthetic");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(project.join(format!("{id}.jsonl")), "synthetic transcript").unwrap();
+            session.terminal = None;
+        }
+    }
     #[test]
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
             settings_changed: false,
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,
@@ -4201,6 +4295,7 @@ mod tests {
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
             settings_changed: false,
+            conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
             pane_name: None,

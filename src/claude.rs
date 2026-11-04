@@ -49,7 +49,7 @@ pub fn valid_uuid(id: &str) -> bool {
             }
         })
 }
-fn uuid() -> Result<String, String> {
+pub(crate) fn uuid() -> Result<String, String> {
     let mut b = [0; 16];
     getrandom::fill(&mut b).map_err(|_| "Cannot create session identifier")?;
     b[6] = (b[6] & 15) | 64;

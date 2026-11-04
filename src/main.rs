@@ -39,6 +39,7 @@ mod browser;
 mod chat;
 mod chrome;
 mod claude;
+mod claude_terminal;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
