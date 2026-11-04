@@ -148,3 +148,62 @@ impl Token for CreateToken {
             .map_err(|_| LocalError)
     }
 }
+
+impl crate::terminal::host_terminal_list::Lister for HostConnection {
+    fn epoch(&self) -> Option<Epoch> {
+        self.client.epoch()
+    }
+    fn list(
+        &self,
+    ) -> Result<tessel_host_protocol::pty::Listed, crate::terminal::host_terminal_list::ListError>
+    {
+        use crate::terminal::host_terminal_list::ListError;
+        self.client
+            .ask(
+                tessel_host_protocol::pty::kind::LIST,
+                &serde_json::Value::Null,
+            )
+            .map_err(|error| match error {
+                ClientError::ConnectionLost => ListError::NotConnected,
+                ClientError::Timeout => ListError::TimedOut,
+                ClientError::Refused(ref refusal)
+                    if refusal.code == tessel_host_protocol::ErrorCode::UnsupportedKind =>
+                {
+                    ListError::Unsupported
+                }
+                _ => ListError::RequestFailed,
+            })
+    }
+}
+
+impl crate::terminal::host_terminal_list::SavedIndex for OwnerStore {
+    fn index(
+        &self,
+        alias: &str,
+        epoch: &Epoch,
+    ) -> Result<
+        crate::terminal::host_terminal_list::Index,
+        crate::terminal::host_terminal_list::IndexError,
+    > {
+        use crate::host_lease_store::LeaseStoreError;
+        use crate::terminal::host_terminal_list::{Index, IndexError, PendingMeta};
+        LeaseStore::open_default()
+            .and_then(|store| store.index(alias, epoch))
+            .map(|metadata| Index {
+                saved: metadata.saved.into_iter().collect(),
+                pending: metadata
+                    .pending
+                    .into_iter()
+                    .map(|entry| PendingMeta {
+                        id: entry.id,
+                        epoch: entry.epoch,
+                    })
+                    .collect(),
+            })
+            .map_err(|error| match error {
+                LeaseStoreError::Locked => IndexError::Locked,
+                LeaseStoreError::Corrupt => IndexError::Corrupt,
+                _ => IndexError::Unavailable,
+            })
+    }
+}

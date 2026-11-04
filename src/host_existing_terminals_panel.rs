@@ -2,16 +2,18 @@
 //!
 //! # Architectural & Security Boundaries
 //! - **Zero I/O & Zero Secrets:** Never calls `tessel-host-client`, never touches `LeaseStore`,
-//!   and never receives or stores a `LeaseKey`. Local lease availability is passed as a pure
-//!   `has_saved_lease: bool` flag by the caller.
+//!   and never receives or stores a `LeaseKey` or creation `dedup_key`. Local lease availability is
+//!   passed as a pure tri-state [`SavedLease`] (`Yes`, `No`, `Unknown`) and pending creations as
+//!   read-only [`PendingCreationEntry`] metadata.
 //! - **Exact Protocol Identity:** `epoch` and `terminal_id` carried inside emitted
 //!   [`ExistingTerminalsAction`] variants are **exact raw protocol strings** (`to_owned()` without
 //!   trimming, truncation, or control stripping). Sanitization and truncation via
 //!   [`sanitize_host_text`] apply strictly to rendered UI labels.
-//! - **No Implicit `create` or Lease Takeover:** Opening, refreshing, or pressing `Enter` on an
-//!   empty/error/stale list never spawns a terminal. Attaching to an existing terminal emits only
-//!   `ResumeSaved` (`Target::Existing { resume: true }`, gated on `has_saved_lease && running`) or
-//!   `AttachObserver` (`Target::Existing { resume: false }`, read-only `Writer::None`).
+//! - **No Implicit `create`, Lease Takeover, or Cleanup:** Opening, refreshing, or pressing `Enter`
+//!   on an empty/error/stale list never spawns or cleans up anything. Attaching to an existing
+//!   terminal emits only `ResumeSaved` (`Target::Existing { resume: true }`, gated strictly on
+//!   `saved_lease == SavedLease::Yes && running`) or `AttachObserver`
+//!   (`Target::Existing { resume: false }`, read-only `Writer::None`).
 
 use crate::host_terminal_panel::{MAX_HOST_LABEL_CHARS, sanitize_host_text};
 use crate::icons::{self, Icon};
@@ -25,10 +27,14 @@ use std::hash::{Hash, Hasher};
 
 /// Hard ceiling on entries rendered from `terminal.list` (matches `tessel-host` `MAX_TERMINALS`).
 pub const MAX_LISTED_TERMINALS: usize = 64;
+/// Hard ceiling on pending creation metadata records rendered (matches `host_terminal_list::MAX_PENDING`).
+pub const MAX_PENDING_CREATIONS: usize = 64;
 /// Maximum rows rendered on a single page so frame work stays O(1) even at full daemon capacity.
 pub const PAGE_SIZE: usize = 16;
-/// Maximum Unicode scalar count rendered for a terminal identifier label (display only).
+/// Maximum Unicode scalar count rendered for a terminal or pending-creation identifier (display only).
 pub const MAX_TERMINAL_ID_DISPLAY_CHARS: usize = 24;
+/// Maximum Unicode scalar count rendered for an epoch identifier in informational rows (display only).
+pub const MAX_EPOCH_DISPLAY_CHARS: usize = 16;
 
 const PRIMARY_DARK_FG: Color32 = Color32::from_rgb(0x0b, 0x15, 0x30);
 const WARN_TEXT_DARK: Color32 = Color32::from_rgb(0xff, 0xd9, 0x8f);
@@ -41,8 +47,46 @@ pub struct ExistingTerminalExit {
     pub signal: Option<i32>,
 }
 
+/// Whether local `LeaseStore` holds a saved lease for a listed terminal (`host_terminal_list::Saved`).
+///
+/// Never carries a `LeaseKey`; when the store could not be read (`Unknown`), UI never claims
+/// "no lease" or "controlled elsewhere" as proven lack of local access, forbids `ResumeSaved`,
+/// and keeps read-only observation available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SavedLease {
+    Yes,
+    No,
+    Unknown,
+}
+
+/// Honest reason why the local encrypted lease store could not be read during listing
+/// (`host_terminal_list::IndexError`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LeaseStoreError {
+    /// Another Tessel window currently holds the local lease store lock.
+    Locked,
+    /// Local lease store could not be decoded and was left untouched on disk.
+    Corrupt,
+    /// Local lease store is unavailable in the current environment.
+    Unavailable,
+}
+
+/// Read-only metadata for a locally recorded pending creation (`host_terminal_list::PendingRow`).
+///
+/// Never carries a deduplication key or `LeaseKey`, and never triggers automatic creation or cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PendingCreationEntry<'a> {
+    /// Raw pending-creation record identifier (sanitized strictly for display).
+    pub id: &'a str,
+    /// Raw protocol `Epoch` on which the creation was recorded (sanitized strictly for display).
+    pub epoch: &'a str,
+    /// `true` when `epoch == list_epoch` (current host daemon session); `false` when recorded
+    /// against an earlier host session.
+    pub current: bool,
+}
+
 /// Summary row for one remote terminal returned by `terminal.list`, enriched with non-secret local
-/// desktop state (`has_saved_lease`, `open_locally`).
+/// desktop state (`saved_lease`, `open_locally`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExistingTerminalEntry<'a> {
     /// Exact raw `TerminalId` from `tessel-host-protocol` (never mutated in emitted actions).
@@ -58,8 +102,8 @@ pub struct ExistingTerminalEntry<'a> {
     pub retained_bytes: u64,
     /// `Some` when the remote process has already exited and is lingering briefly.
     pub exited: Option<ExistingTerminalExit>,
-    /// True when local `LeaseStore` / `LeaseKeeper` holds a saved lease for `(alias, epoch, id)`.
-    pub has_saved_lease: bool,
+    /// Tri-state local lease knowledge (`Yes`, `No`, `Unknown`).
+    pub saved_lease: SavedLease,
     /// True when this terminal is already open in a local Tessel pane.
     pub open_locally: bool,
 }
@@ -79,6 +123,8 @@ pub enum ExistingTerminalsError {
     Unsupported,
     /// Transport or protocol refusal while listing.
     RequestFailed,
+    /// Local list-worker pool is busy or could not spawn a worker (`host_terminal_list::Refused`).
+    LocalBusy,
 }
 
 /// Current state of the remote terminal list for a host.
@@ -90,6 +136,14 @@ pub enum ExistingTerminalsState<'a> {
     Loaded {
         list_epoch: &'a str,
         entries: &'a [ExistingTerminalEntry<'a>],
+        /// True when the daemon reported more than [`MAX_LISTED_TERMINALS`] terminals.
+        truncated: bool,
+        /// `Some` when the local lease store could not be read (`entries` carry `SavedLease::Unknown`).
+        store_error: Option<LeaseStoreError>,
+        /// Informational pending-creation records for this host alias (never `dedup_key`).
+        pending: &'a [PendingCreationEntry<'a>],
+        /// True when local pending-creation records exceeded [`MAX_PENDING_CREATIONS`].
+        pending_truncated: bool,
     },
     /// `terminal.list` failed with a fixed translated reason.
     Error { reason: ExistingTerminalsError },
@@ -254,13 +308,16 @@ impl HostExistingTerminalsPanel {
         let fr = input.french;
         let host = sanitized_host_or_fallback(input.host_label, fr);
         let modal_id = input.id_salt.with("existing-terminals-modal");
+        let backdrop_id = modal_id.with("backdrop");
+        let card_id = modal_id.with("card");
         let mut emitted: Option<ExistingTerminalsAction> = None;
 
-        // 1. Full-window backdrop (`Order::Middle` sits strictly below the `Order::Foreground`
-        //    modal card and above `Order::Background` panels, preventing z-order swaps).
+        // 1. Full-window backdrop on `Order::Foreground` (pinned strictly below `card` via
+        //    `set_sublayer`), so it also dims and intercepts clicks above `Order::Foreground`
+        //    surfaces like `Settings` when opened from `Settings > SSH`.
         let mut backdrop_clicked = false;
-        Area::new(modal_id.with("backdrop"))
-            .order(Order::Middle)
+        Area::new(backdrop_id)
+            .order(Order::Foreground)
             .movable(false)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
@@ -276,6 +333,7 @@ impl HostExistingTerminalsPanel {
         if let ExistingTerminalsState::Loaded {
             list_epoch,
             entries,
+            ..
         } = input.state
         {
             let bounded = clamp_entries(entries);
@@ -313,7 +371,11 @@ impl HostExistingTerminalsPanel {
             .clamp(64.0, 520.0)
             .min(screen.height());
 
-        let area_resp = Area::new(modal_id.with("card"))
+        ctx.set_sublayer(
+            egui::LayerId::new(Order::Foreground, backdrop_id),
+            egui::LayerId::new(Order::Foreground, card_id),
+        );
+        let area_resp = Area::new(card_id)
             .order(Order::Foreground)
             .movable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -624,10 +686,17 @@ impl HostExistingTerminalsPanel {
             ExistingTerminalsState::Loaded {
                 list_epoch,
                 entries,
+                truncated,
+                store_error,
+                pending,
+                pending_truncated,
             } => {
                 let epoch_valid = loaded_epoch_valid;
-                let truncated = entries.len() > MAX_LISTED_TERMINALS;
+                let is_truncated = truncated || entries.len() > MAX_LISTED_TERMINALS;
                 let bounded = clamp_entries(entries);
+                let bounded_pending = clamp_pending(pending);
+                let is_pending_truncated =
+                    pending_truncated || pending.len() > MAX_PENDING_CREATIONS;
                 let pages = total_pages(bounded.len());
                 let cur_page = self.page.min(pages - 1);
                 self.page = cur_page;
@@ -672,7 +741,13 @@ impl HostExistingTerminalsPanel {
                             ui.add_space(6.0);
                         }
 
-                        if truncated {
+                        if let Some(store_err) = store_error {
+                            let (store_msg, is_danger) = format_store_error_notice(store_err, fr);
+                            paint_notice_box(ui, store_msg, is_danger, !is_danger, pal);
+                            ui.add_space(6.0);
+                        }
+
+                        if is_truncated {
                             let trunc_msg = if fr {
                                 format!(
                                     "Affichage limité aux {MAX_LISTED_TERMINALS} premiers terminaux signalés par l'hôte."
@@ -720,6 +795,16 @@ impl HostExistingTerminalsPanel {
                                     ui.add_space(4.0);
                                 }
                             }
+                        }
+
+                        if !bounded_pending.is_empty() || is_pending_truncated {
+                            render_pending_creations_section(
+                                ui,
+                                bounded_pending,
+                                is_pending_truncated,
+                                fr,
+                                pal,
+                            );
                         }
                     });
 
@@ -845,6 +930,11 @@ fn clamp_entries<'a>(entries: &'a [ExistingTerminalEntry<'a>]) -> &'a [ExistingT
     &entries[..cap]
 }
 
+fn clamp_pending<'a>(pending: &'a [PendingCreationEntry<'a>]) -> &'a [PendingCreationEntry<'a>] {
+    let cap = pending.len().min(MAX_PENDING_CREATIONS);
+    &pending[..cap]
+}
+
 const fn total_pages(len: usize) -> usize {
     if len == 0 { 1 } else { len.div_ceil(PAGE_SIZE) }
 }
@@ -862,7 +952,7 @@ fn fingerprint_list(list_epoch: &str, entries: &[ExistingTerminalEntry<'_>]) -> 
         entry.pid.hash(&mut hasher);
         entry.leased_on_host.hash(&mut hasher);
         entry.exited.hash(&mut hasher);
-        entry.has_saved_lease.hash(&mut hasher);
+        entry.saved_lease.hash(&mut hasher);
         entry.open_locally.hash(&mut hasher);
     }
     hasher.finish()
@@ -886,7 +976,7 @@ fn default_enter_action_for_row(
     if entry.exited.is_some() || !can_attach {
         return None;
     }
-    if entry.has_saved_lease {
+    if entry.saved_lease == SavedLease::Yes {
         Some(ExistingTerminalsAction::ResumeSaved {
             epoch: list_epoch.to_owned(),
             terminal_id: entry.terminal_id.to_owned(),
@@ -967,13 +1057,26 @@ fn render_terminal_row(
                 if entry.open_locally {
                     let local_lbl = if fr { "Ouvert ici" } else { "Open here" };
                     paint_badge_pill(ui, local_lbl, BadgeTone::Accent, pal);
-                } else if entry.has_saved_lease && entry.exited.is_none() {
-                    let saved_lbl = if fr {
-                        "Accès enregistré"
-                    } else {
-                        "Saved access"
-                    };
-                    paint_badge_pill(ui, saved_lbl, BadgeTone::Accent, pal);
+                } else if entry.exited.is_none() {
+                    match entry.saved_lease {
+                        SavedLease::Yes => {
+                            let saved_lbl = if fr {
+                                "Accès enregistré"
+                            } else {
+                                "Saved access"
+                            };
+                            paint_badge_pill(ui, saved_lbl, BadgeTone::Accent, pal);
+                        }
+                        SavedLease::Unknown => {
+                            let unk_lbl = if fr {
+                                "Accès inconnu"
+                            } else {
+                                "Access unknown"
+                            };
+                            paint_badge_pill(ui, unk_lbl, BadgeTone::Warn, pal);
+                        }
+                        SavedLease::No => {}
+                    }
                 }
             });
 
@@ -1017,7 +1120,8 @@ fn render_terminal_row(
                     } else if can_attach {
                         match entry.exited {
                             None => {
-                                if entry.has_saved_lease {
+                                let has_saved = entry.saved_lease == SavedLease::Yes;
+                                if has_saved {
                                     let resume_lbl = if fr { "Reprendre" } else { "Resume" };
                                     let resume_a11y = format!("{resume_lbl} #{display_id}");
                                     let resp = paint_modal_btn(
@@ -1041,7 +1145,7 @@ fn render_terminal_row(
                                 }
                                 let obs_lbl = if fr { "Observer" } else { "Observe" };
                                 let obs_a11y = format!("{obs_lbl} #{display_id}");
-                                let obs_style = if entry.has_saved_lease {
+                                let obs_style = if has_saved {
                                     ModalBtnStyle::Standard
                                 } else {
                                     ModalBtnStyle::Primary
@@ -1129,7 +1233,7 @@ fn format_row_badge(entry: &ExistingTerminalEntry<'_>, fr: bool) -> (String, Bad
         };
         return (label, BadgeTone::Warn);
     }
-    if entry.leased_on_host && !entry.has_saved_lease {
+    if entry.leased_on_host && entry.saved_lease == SavedLease::No {
         let lbl = if fr {
             "Contrôlé ailleurs".to_owned()
         } else {
@@ -1220,6 +1324,159 @@ fn format_error_message(reason: ExistingTerminalsError, host: &str, fr: bool) ->
             format!(
                 "Impossible de lister les terminaux existants sur {host} — actualisez pour réessayer."
             )
+        }
+        (ExistingTerminalsError::LocalBusy, false) => {
+            "Too many terminal list refreshes are already running locally — try again in a moment."
+                .to_owned()
+        }
+        (ExistingTerminalsError::LocalBusy, true) => {
+            "Trop d'actualisations de listes de terminaux sont déjà en cours localement — réessayez dans un instant."
+                .to_owned()
+        }
+    }
+}
+
+fn format_store_error_notice(err: LeaseStoreError, fr: bool) -> (&'static str, bool) {
+    match (err, fr) {
+        (LeaseStoreError::Locked, false) => (
+            "Local access store is locked by another Tessel window — saved control access cannot be verified right now (read-only observation remains available).",
+            false,
+        ),
+        (LeaseStoreError::Locked, true) => (
+            "Le coffre d'accès local est verrouillé par une autre fenêtre Tessel — les accès enregistrés ne peuvent pas être vérifiés pour l'instant (l'observation en lecture seule reste disponible).",
+            false,
+        ),
+        (LeaseStoreError::Corrupt, false) => (
+            "Local access store could not be read and was left untouched — saved control access is unknown (read-only observation remains available).",
+            true,
+        ),
+        (LeaseStoreError::Corrupt, true) => (
+            "Le coffre d'accès local est illisible et n'a pas été modifié — les accès enregistrés sont inconnus (l'observation en lecture seule reste disponible).",
+            true,
+        ),
+        (LeaseStoreError::Unavailable, false) => (
+            "Local access store is unavailable in this environment — saved control access cannot be verified (read-only observation remains available).",
+            false,
+        ),
+        (LeaseStoreError::Unavailable, true) => (
+            "Le coffre d'accès local est indisponible dans cet environnement — les accès enregistrés ne peuvent pas être vérifiés (l'observation en lecture seule reste disponible).",
+            false,
+        ),
+    }
+}
+
+fn render_pending_creations_section(
+    ui: &mut Ui,
+    pending: &[PendingCreationEntry<'_>],
+    truncated: bool,
+    fr: bool,
+    pal: &UiPalette,
+) {
+    let bounded = clamp_pending(pending);
+    ui.add_space(8.0);
+    paint_divider(ui, pal.border);
+    ui.add_space(6.0);
+
+    let sec_w = ui.available_width().max(16.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(sec_w, 0.0),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ui.set_max_width(sec_w);
+            let title = if fr {
+                "Créations enregistrées"
+            } else {
+                "Recorded creations"
+            };
+            let note = if fr {
+                "Créations locales non confirmées ou remplacées (informatif uniquement — vérifiez les terminaux listés ci-dessus avant d'en ouvrir un nouveau)."
+            } else {
+                "Unconfirmed or superseded local creation records (informational only — inspect listed terminals above before opening a new one)."
+            };
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(title)
+                        .size(12.0)
+                        .strong()
+                        .color(pal.text_strong),
+                )
+                .wrap(),
+            );
+            ui.add_space(2.0);
+            ui.add(egui::Label::new(egui::RichText::new(note).size(11.0).color(pal.text_dim)).wrap());
+        },
+    );
+
+    if truncated {
+        ui.add_space(4.0);
+        let trunc_msg = if fr {
+            format!(
+                "Affichage limité aux {MAX_PENDING_CREATIONS} premières créations enregistrées."
+            )
+        } else {
+            format!("Showing the first {MAX_PENDING_CREATIONS} recorded creations.")
+        };
+        paint_notice_box(ui, &trunc_msg, false, true, pal);
+    }
+
+    if !bounded.is_empty() {
+        ui.add_space(4.0);
+    }
+    let row_inner_w = (ui.available_width() - 22.0).max(16.0);
+    for (idx, item) in bounded.iter().enumerate() {
+        let clean_id = sanitize_host_text(item.id, MAX_TERMINAL_ID_DISPLAY_CHARS);
+        let display_id = if clean_id.is_empty() {
+            "pending".to_owned()
+        } else {
+            clean_id
+        };
+        let clean_ep = sanitize_host_text(item.epoch, MAX_EPOCH_DISPLAY_CHARS);
+        let display_ep = if clean_ep.is_empty() {
+            "—".to_owned()
+        } else {
+            clean_ep
+        };
+        let (badge_lbl, badge_tone) = match (item.current, fr) {
+            (true, false) => ("Creation to review", BadgeTone::Warn),
+            (true, true) => ("Création à vérifier", BadgeTone::Warn),
+            (false, false) => ("Previous host session", BadgeTone::Neutral),
+            (false, true) => ("Session hôte antérieure", BadgeTone::Neutral),
+        };
+        let ep_meta = if fr {
+            format!("session hôte {display_ep}")
+        } else {
+            format!("host session {display_ep}")
+        };
+
+        egui::Frame::new()
+            .fill(pal.surface_2)
+            .stroke(Stroke::new(1.0_f32, pal.border))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.set_max_width(row_inner_w);
+                ui.set_min_width(row_inner_w);
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("#{display_id}"))
+                                .size(11.5)
+                                .strong()
+                                .color(pal.text),
+                        )
+                        .wrap(),
+                    );
+                    paint_badge_pill(ui, badge_lbl, badge_tone, pal);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(ep_meta).size(11.0).color(pal.text_dim),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+        if idx + 1 < bounded.len() {
+            ui.add_space(3.0);
         }
     }
 }

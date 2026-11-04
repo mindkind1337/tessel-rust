@@ -9,6 +9,7 @@ pub mod host_lease_desk;
 pub mod host_lease_keeper;
 pub mod host_opening;
 pub mod host_runtime;
+pub mod host_terminal_list;
 pub mod host_worker;
 mod local;
 mod mouse;
@@ -63,6 +64,62 @@ impl Terminal {
     #[cfg(windows)]
     pub fn take_native_action(&mut self) -> Option<crate::host_terminal_panel::HostTerminalAction> {
         self.native_action.take()
+    }
+
+    #[cfg(windows)]
+    pub fn native_identity(&self) -> Option<crate::workspace::SavedHostTerminalIdentity> {
+        let backend::Backend::Native(native) = &self.backend else {
+            return None;
+        };
+        native
+            .slot
+            .as_ref()
+            .map(|slot| crate::workspace::SavedHostTerminalIdentity {
+                epoch: slot.epoch.clone(),
+                terminal: slot.terminal.clone(),
+            })
+    }
+
+    pub fn native_header_tag(&self) -> Option<crate::host_terminal_panel::HostHeaderTag> {
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &self.backend {
+            return crate::host_terminal_panel::HostTerminalPanel::header_tag(&native.phase());
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    pub fn native_owns_escape(&self) -> bool {
+        matches!(self.backend, backend::Backend::Native(_))
+            && (self.native_panel.has_pending_close_choice() || self.native_panel.is_escape_held())
+    }
+
+    /// Whether the app can remove this pane now. A controlled remote terminal
+    /// offers explicit detach/terminate choices; an opening is cancelled first.
+    #[cfg(windows)]
+    pub fn request_native_close(&mut self) -> bool {
+        use crate::host_terminal_panel::HostTerminalAction as Action;
+        let backend::Backend::Native(native) = &mut self.backend else {
+            return true;
+        };
+        match self
+            .native_panel
+            .request_close(&native.phase(), native.capabilities())
+        {
+            Some(Action::Detach) => !native.cancel_opening(&mut self.status),
+            Some(Action::ClosePane) => true,
+            Some(action) => {
+                self.native_action = Some(action);
+                false
+            }
+            None => false,
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn native_cancelled(&self) -> bool {
+        matches!(&self.backend, backend::Backend::Native(native)
+            if matches!(native.failure, Some(host_opening::Failure::Cancelled)))
     }
 
     #[cfg(windows)]

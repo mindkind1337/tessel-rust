@@ -60,6 +60,7 @@ mod git;
 mod git_result;
 pub mod help_panel;
 mod host_actions;
+pub mod host_existing_terminals_panel;
 #[cfg(windows)]
 pub mod host_lease_store;
 #[cfg(windows)]

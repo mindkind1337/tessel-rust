@@ -14,6 +14,11 @@ pub struct Panel {
     initially_open: bool,
 }
 
+pub enum Action {
+    NewTerminal(String),
+    ExistingTerminals(String),
+}
+
 fn failure(error: Failure) -> &'static str {
     match error {
         Failure::InvalidHost => "Invalid SSH host",
@@ -36,10 +41,16 @@ impl Panel {
             ..Default::default()
         }
     }
-    pub fn show(&mut self, ui: &mut egui::Ui, hosts: &[Host], manager: &mut Manager) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        hosts: &[Host],
+        manager: &mut Manager,
+    ) -> Option<Action> {
+        let mut action = None;
         egui::CollapsingHeader::new(tr("Native host service (preview)")).default_open(self.initially_open).show(ui, |ui| {
             ui.label(tr("Connect installs or reuses Tessel's bundled service on this Linux host. Existing SSH terminals and SFTP files keep their current connection."));
-            ui.label(tr("Terminal, editor and file subscriptions are not connected to this service yet."));
+            ui.label(tr("Editors and files still use SSH/SFTP. Native terminal access is available on Windows."));
             let mut aliases: Vec<_> = hosts.iter().map(|host| host.alias.clone()).chain(manager.aliases().map(str::to_owned)).collect();
             aliases.sort();
             aliases.dedup();
@@ -70,6 +81,12 @@ impl Panel {
                 }));
                 if let Some(hello) = connection.client().hello() {
                     ui.label(format!("{} {}", tr("Granted capabilities:"), hello.capabilities.iter().map(|capability| capability.name()).collect::<Vec<_>>().join(", ")));
+                    if cfg!(windows) && hello.capabilities.contains(&tessel_host_protocol::Capability::Pty) {
+                        ui.horizontal(|ui| {
+                            if ui.button(tr("New native terminal")).clicked() { action = Some(Action::NewTerminal(self.selected.clone())); }
+                            if ui.button(tr("Existing native terminals")).clicked() { action = Some(Action::ExistingTerminals(self.selected.clone())); }
+                        });
+                    }
                 }
                 ui.small(tr("Disconnect closes this connection; the service continues on the host."));
                 if ui.button(tr("Disconnect")).clicked() { manager.cancel(&self.selected); }
@@ -83,5 +100,6 @@ impl Panel {
                 }
             }
         });
+        action
     }
 }

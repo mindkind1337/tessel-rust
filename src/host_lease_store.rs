@@ -197,6 +197,13 @@ pub struct PendingInfo {
     pub epoch: Epoch,
 }
 
+/// One bounded read for the terminal picker. These identities grant no access.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseIndex {
+    pub saved: Vec<TerminalId>,
+    pub pending: Vec<PendingInfo>,
+}
+
 /// Exists only in the process that reserved the request. No Deserialize, Clone or Debug.
 pub struct CreateToken {
     info: PendingInfo,
@@ -315,6 +322,37 @@ impl LeaseStore {
                         epoch: Epoch::parse(&p.epoch).expect("validated epoch"),
                     })
                     .collect(),
+                false,
+            ))
+        })
+    }
+
+    /// Lists saved terminal identities for this exact alias/epoch and pending
+    /// metadata for this alias across epochs. One decrypt, no write, no secrets.
+    pub fn index(&self, alias: &str, epoch: &Epoch) -> Result<LeaseIndex, LeaseStoreError> {
+        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        self.transaction(|records| {
+            Ok((
+                LeaseIndex {
+                    saved: records
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.alias == alias && entry.epoch == epoch.as_str())
+                        .map(|entry| {
+                            TerminalId::parse(&entry.terminal).expect("validated terminal")
+                        })
+                        .collect(),
+                    pending: records
+                        .pending
+                        .iter()
+                        .filter(|entry| entry.alias == alias)
+                        .map(|entry| PendingInfo {
+                            id: entry.id.clone(),
+                            alias: entry.alias.clone(),
+                            epoch: Epoch::parse(&entry.epoch).expect("validated epoch"),
+                        })
+                        .collect(),
+                },
                 false,
             ))
         })
@@ -792,6 +830,38 @@ mod tests {
     fn write_plain(store: &LeaseStore, json: &str) {
         let encrypted = crate::vault::protect(json.as_bytes(), true).unwrap();
         std::fs::write(store.data(), &*encrypted).unwrap();
+    }
+
+    #[test]
+    fn picker_index_filters_alias_and_epoch_without_rewriting_or_exposing_secrets() {
+        let (_dir, store) = store();
+        store.put(&slot("fixture", 1, 1), &lease(0xab)).unwrap();
+        store.put(&slot("fixture", 2, 2), &lease(0xcd)).unwrap();
+        store.put(&slot("other", 1, 3), &lease(0xef)).unwrap();
+        let current = store
+            .reserve_pending("fixture", &Epoch::from_bytes([1; 16]))
+            .unwrap();
+        let old = store
+            .reserve_pending("fixture", &Epoch::from_bytes([2; 16]))
+            .unwrap();
+        let _other = store
+            .reserve_pending("other", &Epoch::from_bytes([1; 16]))
+            .unwrap();
+        let before = std::fs::read(store.data()).unwrap();
+        let index = store.index("fixture", &Epoch::from_bytes([1; 16])).unwrap();
+        assert_eq!(index.saved, vec![slot("fixture", 1, 1).terminal]);
+        assert_eq!(
+            index.pending,
+            vec![current.info().clone(), old.info().clone()]
+        );
+        assert_eq!(std::fs::read(store.data()).unwrap(), before);
+        let debug = format!("{index:?}");
+        assert!(!debug.contains(lease(0xab).as_str()));
+        assert!(!debug.contains(&current.dedup.0));
+        assert_eq!(
+            store.index("invalid alias", &Epoch::from_bytes([1; 16])),
+            Err(LeaseStoreError::InvalidSlot)
+        );
     }
 
     #[test]

@@ -6,6 +6,9 @@ use crate::{
     workspace::{self, Host, Store, Workspace},
 };
 use eframe::egui;
+#[cfg(windows)]
+#[path = "app/native_terminals.rs"]
+mod native_terminals;
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -408,6 +411,8 @@ pub struct Tessel {
     host_panel: crate::ssh_hosts_panel::SshHostsPanel,
     native_hosts: crate::native_host_manager::Manager,
     native_host_panel: crate::native_host_panel::Panel,
+    #[cfg(windows)]
+    native_terminals: native_terminals::State,
     host_notice: Option<(String, bool)>,
     host_import: Option<Receiver<crate::ssh_config::Discovery>>,
     tasks_board: crate::tasks_board_panel::TasksBoard,
@@ -515,6 +520,8 @@ impl Tessel {
             host_panel: Default::default(),
             native_hosts: Default::default(),
             native_host_panel: Default::default(),
+            #[cfg(windows)]
+            native_terminals: Default::default(),
             host_notice: None,
             host_import: None,
             tasks_board: Default::default(),
@@ -1320,6 +1327,19 @@ impl Tessel {
         self.save();
     }
     fn close_session(&mut self, id: u64) {
+        #[cfg(windows)]
+        if self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id)
+            .and_then(|session| session.terminal.as_mut())
+            .is_some_and(|terminal| !terminal.request_native_close())
+        {
+            return;
+        }
+        self.remove_session(id);
+    }
+    fn remove_session(&mut self, id: u64) {
         let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
             return;
         };
@@ -1737,7 +1757,8 @@ impl Tessel {
             .width_range(220.0..=500.0)
             .resizable(true)
             .show(ctx, |ui| {
-                if self.overlay.is_some()
+                if self.native_modal_open()
+                    || self.overlay.is_some()
                     || self.command_palette.open
                     || self.finder.is_open()
                     || self.toolbar_menu_open
@@ -1880,6 +1901,9 @@ impl Tessel {
             .default_width(330.0)
             .width_range(260.0..=max_width)
             .show(ctx, |ui| {
+                if self.native_modal_open() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     for (tab, label, icon, shortcut) in [
@@ -2149,6 +2173,8 @@ impl Tessel {
         let mut model_choice = None;
         let mut observed_updates = Vec::new();
         let mut native_options_changed = false;
+        #[cfg(windows)]
+        let mut native_wake = None;
         let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
@@ -2277,7 +2303,10 @@ impl Tessel {
                                     let text = crate::pane_session_model::model_text(observed_model.as_ref(), self.state.language == crate::i18n::Language::French);
                                     (ui.painter().layout_no_wrap(text, egui::FontId::proportional(10.5), ui.visuals().text_color()).size().x + 12.0).ceil().clamp(24.0, 140.0) + 4.0
                                 } else { 0.0 };
-                                let title_width = (ui.available_width() - 84.0 - chip_width).max(0.0);
+                                let native_tag = session.terminal.as_ref().and_then(Terminal::native_header_tag)
+                                    .filter(|tag| ui.available_width() > 164.0 + crate::host_terminal_panel::header_tag_width(ui, *tag, crate::i18n::is_french()));
+                                let native_tag_width = native_tag.map(|tag| crate::host_terminal_panel::header_tag_width(ui, tag, crate::i18n::is_french()) + 4.0).unwrap_or(0.0);
+                                let title_width = (ui.available_width() - 84.0 - chip_width - native_tag_width).max(0.0);
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(title_width, 22.0),
                                     egui::Layout::left_to_right(egui::Align::Center),
@@ -2342,6 +2371,7 @@ impl Tessel {
                                 .context_menu(|ui| {
                                     action = crate::pane_header::show(ui, &menu);
                                 });
+                                if let Some(tag) = native_tag { crate::host_terminal_panel::show_header_tag(ui, tag, crate::i18n::is_french()); }
                                 if let Launch::Agent(agent) = &session.launch {
                                     let chip = crate::session_option_picker_ui::show_header_model_chip(ui, egui::Id::new(("terminal-model", id)), &crate::session_option_picker_ui::HeaderModelChipInput {
                                         pane_header_width, is_agent: true, detected: false, agent_id: agent,
@@ -2521,6 +2551,8 @@ impl Tessel {
                                     && ui.button(tr("Start a new conversation")).clicked();
                                 if fresh { session.codex_seed = None; }
                                 if wake || fresh {
+                                #[cfg(windows)]
+                                if session.native_host.is_some() { native_wake = Some(session.id); }
                                 let prefs = match &session.launch {
                                     Launch::Agent(id) => {
                                         Some(crate::agent_preferences::for_pane_launch(
@@ -2540,6 +2572,10 @@ impl Tessel {
                         });
                 },
             );
+        }
+        #[cfg(windows)]
+        if let Some(id) = native_wake {
+            self.wake_native_terminal(id, ui.ctx());
         }
         if maximized.is_none() {
             for divider in &geometry.dividers {
@@ -2848,6 +2884,7 @@ impl Tessel {
             && !self.git_result.busy()
             && !self.scm_state.busy()
             && !self.account_busy()
+            && !self.native_exit_pending()
     }
     fn restore_settings(
         &mut self,
@@ -2869,6 +2906,10 @@ impl Tessel {
             .ok_or("Settings store unavailable")?
             .restore(&self.state, &state)?;
         self.sessions.clear();
+        #[cfg(windows)]
+        {
+            self.native_terminals.picker = None;
+        }
         self.chats.clear();
         self.claude_chats.clear();
         self.documents.clear();
@@ -3074,8 +3115,21 @@ impl Tessel {
                 capabilities,
             },
         );
-        self.native_host_panel
-            .show(ui, &self.state.hosts, &mut self.native_hosts);
+        let native_action =
+            self.native_host_panel
+                .show(ui, &self.state.hosts, &mut self.native_hosts);
+        #[cfg(windows)]
+        match native_action {
+            Some(crate::native_host_panel::Action::NewTerminal(alias)) => {
+                self.open_native_terminal(&alias, None, ui.ctx())
+            }
+            Some(crate::native_host_panel::Action::ExistingTerminals(alias)) => {
+                self.open_native_picker(&alias, ui.ctx())
+            }
+            None => {}
+        }
+        #[cfg(not(windows))]
+        let _ = native_action;
         let to_host = |host: SshHostSpec| Host {
             alias: host.alias,
             folder: host.folder,
@@ -3645,7 +3699,10 @@ impl Tessel {
                     });
             }
         });
-        if self.restore_preview.is_none() && (close || response.should_close()) {
+        if !self.native_modal_open()
+            && self.restore_preview.is_none()
+            && (close || response.should_close())
+        {
             self.overlay = None;
         }
     }
@@ -3750,7 +3807,10 @@ impl Tessel {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.set_width(nav_width - 24.0);
                             ui.set_min_height((height - 32.0).max(0.0));
-                            if self.restore_preview.is_some() || host_dialog_open {
+                            if self.native_modal_open()
+                                || self.restore_preview.is_some()
+                                || host_dialog_open
+                            {
                                 ui.disable();
                             }
                             let lang = if self.state.language == crate::i18n::Language::French {
@@ -3787,6 +3847,9 @@ impl Tessel {
                     egui::vec2(ui.available_width(), height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
+                        if self.native_modal_open() {
+                            ui.disable();
+                        }
                         crate::settings_surface::body(ui, |ui| match self.settings_section {
                             SettingsSection::Appearance => self.appearance_settings(ui),
                             SettingsSection::Hosts => self.host_settings(ui),
@@ -3806,6 +3869,7 @@ impl Tessel {
             });
         });
         if self.restore_preview.is_none()
+            && !self.native_modal_open()
             && !host_dialog_open
             && !agents_escape_consumed
             && !vault_escape_consumed
@@ -3850,7 +3914,11 @@ impl Tessel {
         if self.pending_exit {
             let model_busy = self.model_discovery.as_ref().is_some_and(|d| d.active());
             egui::Modal::new(egui::Id::new("close-app")).show(ctx, |ui| {
-                ui.label(tr("There are unsaved files or sessions. Closing ends sessions."));
+                ui.label(tr(if self.native_exit_pending() {
+                    "There are unsaved files or sessions. Local sessions end; native remote terminals remain on the host."
+                } else {
+                    "There are unsaved files or sessions. Closing ends sessions."
+                }));
                 if ui.button(tr("Keep working")).clicked() {
                     self.pending_exit = false;
                 }
@@ -3866,19 +3934,66 @@ impl Tessel {
                         .try_for_each(Document::save)
                     {
                         Ok(()) => {
-                            self.allow_exit = true;
-                            self.save();
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            self.finish_exit(ctx);
                         }
                         Err(e) => self.error = e,
                     }
                 }
                 if ui.add_enabled(!model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
-                    self.allow_exit = true;
-                    self.save();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.finish_exit(ctx);
                 }
             });
+        }
+    }
+    fn finish_exit(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
+        self.begin_native_exit(ctx);
+        #[cfg(not(windows))]
+        {
+            self.save();
+            self.allow_exit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+    #[cfg(not(windows))]
+    fn native_modal_open(&self) -> bool {
+        false
+    }
+
+    fn native_exit_pending(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.native_terminals
+                .runtime
+                .as_ref()
+                .is_some_and(|runtime| {
+                    runtime.closing()
+                        || self
+                            .sessions
+                            .iter()
+                            .any(|session| session.native_host.is_some())
+                        || runtime.openings().count() > 0
+                        || !runtime.keeper().is_idle()
+                        || !runtime.desk().unsettled().is_empty()
+                })
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+    fn native_terminals_not_closing(&self) -> bool {
+        #[cfg(windows)]
+        {
+            !self
+                .native_terminals
+                .runtime
+                .as_ref()
+                .is_some_and(crate::terminal::host_runtime::Runtime::closing)
+        }
+        #[cfg(not(windows))]
+        {
+            true
         }
     }
     fn sync_git_project(&mut self) {
@@ -4113,6 +4228,18 @@ impl eframe::App for Tessel {
 
         self.native_hosts.poll();
         self.poll();
+        #[cfg(windows)]
+        {
+            self.poll_native_terminals(ctx);
+            if self
+                .native_terminals
+                .panel
+                .handle_escape(ctx, self.native_terminals.picker.is_some())
+                .is_some()
+            {
+                self.native_terminals.picker = None;
+            }
+        }
         let previous_panels = self.state.panels;
         let terminal_focused = self.view == View::Work
             && self.sessions.iter().any(|session| {
@@ -4130,6 +4257,7 @@ impl eframe::App for Tessel {
             self.finder.close();
         }
         let confirmation_open = self.finder.is_open()
+            || self.native_modal_open()
             || self.toolbar_menu_open
             || self.pending_close.is_some()
             || self.pending_exit
@@ -4207,7 +4335,16 @@ impl eframe::App for Tessel {
                         self.new_session_placed(Launch::Shell, Some((target, dir)));
                     }
                 }
-                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                #[cfg(windows)]
+                let native_escape = self.sessions.iter().any(|s| {
+                    Some(s.id) == self.active_session
+                        && s.terminal
+                            .as_ref()
+                            .is_some_and(Terminal::native_owns_escape)
+                });
+                #[cfg(not(windows))]
+                let native_escape = false;
+                if !native_escape && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                     let key = crate::terminal_layout::project_key(self.state.active_project);
                     if let Some(layout) = self.state.terminal_layouts.get_mut(&key)
                         && layout.maximized.take().is_some()
@@ -4282,10 +4419,17 @@ impl eframe::App for Tessel {
                 || self.remote.needs_close_confirmation()
                 || self.account_busy()
                 || self.model_discovery.as_ref().is_some_and(|d| d.active())
+                || self.native_exit_pending()
                 || self.file_action_pending)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.pending_exit = true;
+            if self.native_terminals_not_closing() {
+                #[cfg(windows)]
+                {
+                    self.native_terminals.picker = None;
+                }
+                self.pending_exit = true;
+            }
         }
         self.toolbar_menu_open = false;
         egui::TopBottomPanel::top("toolbar")
@@ -4309,6 +4453,9 @@ impl eframe::App for Tessel {
                     frame.show(ui, [regions.search, regions.actions]);
                 }
                 chrome::brand(ui, regions.brand);
+                if self.native_modal_open() || self.pending_exit {
+                    ui.disable();
+                }
                 if regions.search.width() >= 40.0
                     && chrome::command_button(ui, regions.search).clicked()
                 {
@@ -4479,7 +4626,8 @@ impl eframe::App for Tessel {
         self.agent_browsers.hide_all();
         #[cfg(windows)]
         self.browser.visible(
-            !self.show_agent_browser
+            !self.native_modal_open()
+                && !self.show_agent_browser
                 && self.view == View::Browser
                 && !self.pending_exit
                 && self.pending_close.is_none()
@@ -4490,7 +4638,8 @@ impl eframe::App for Tessel {
                 && !self.finder.is_open(),
         );
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.finder.is_open()
+            if self.native_modal_open()
+                || self.finder.is_open()
                 || self.toolbar_menu_open
                 || self.command_palette.open
                 || self.overlay.is_some()
@@ -4507,7 +4656,8 @@ impl eframe::App for Tessel {
                 View::Remote => self.remote.show(ui, &self.state.hosts),
                 #[cfg(windows)]
                 View::Browser => {
-                    if !self.pending_exit
+                    if !self.native_modal_open()
+                        && !self.pending_exit
                         && self.pending_close.is_none()
                         && self.file_action.is_none()
                         && !self.command_palette.open
@@ -4578,6 +4728,12 @@ impl eframe::App for Tessel {
             });
         }
         self.confirmations(ctx);
+        #[cfg(windows)]
+        {
+            self.dispatch_native_actions(ctx);
+            self.show_native_picker(ctx);
+            self.show_native_drain(ctx);
+        }
         #[cfg(windows)]
         if self.overlay != Some(Overlay::Settings)
             || self.settings_section != SettingsSection::Passwords

@@ -22,8 +22,9 @@ use eframe::egui::accesskit::Role;
 use eframe::egui::{self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Shape, Vec2};
 use host_existing_terminals_panel::{
     ExistingTerminalEntry, ExistingTerminalExit, ExistingTerminalsAction, ExistingTerminalsError,
-    ExistingTerminalsInput, ExistingTerminalsState, HostExistingTerminalsPanel,
-    MAX_LISTED_TERMINALS, MAX_TERMINAL_ID_DISPLAY_CHARS, PAGE_SIZE,
+    ExistingTerminalsInput, ExistingTerminalsState, HostExistingTerminalsPanel, LeaseStoreError,
+    MAX_EPOCH_DISPLAY_CHARS, MAX_LISTED_TERMINALS, MAX_PENDING_CREATIONS,
+    MAX_TERMINAL_ID_DISPLAY_CHARS, PAGE_SIZE, PendingCreationEntry, SavedLease,
 };
 use host_terminal_panel::sanitize_host_text;
 use theme_palettes::THEMES;
@@ -352,7 +353,11 @@ fn pagination_cap_64_page_16_keyboard_nav_and_viewport_containment() {
                 _ => 3 * 1024 * 1024,
             },
             exited: None,
-            has_saved_lease: i == 0,
+            saved_lease: if i == 0 {
+                SavedLease::Yes
+            } else {
+                SavedLease::No
+            },
             open_locally: false,
         })
         .collect();
@@ -366,6 +371,10 @@ fn pagination_cap_64_page_16_keyboard_nav_and_viewport_containment() {
         state: ExistingTerminalsState::Loaded {
             list_epoch: "epoch-live-1",
             entries: &entries,
+            truncated: false,
+            store_error: None,
+            pending: &[],
+            pending_truncated: false,
         },
         can_attach: true,
         can_open_new: true,
@@ -499,7 +508,7 @@ fn exact_raw_identity_preserved_while_display_sanitizes_and_observer_vs_resume_h
             leased_on_host: true,
             retained_bytes: 4096,
             exited: None,
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: false,
         },
         ExistingTerminalEntry {
@@ -510,7 +519,7 @@ fn exact_raw_identity_preserved_while_display_sanitizes_and_observer_vs_resume_h
             leased_on_host: true,
             retained_bytes: 800,
             exited: None,
-            has_saved_lease: false,
+            saved_lease: SavedLease::No,
             open_locally: false,
         },
         ExistingTerminalEntry {
@@ -521,7 +530,7 @@ fn exact_raw_identity_preserved_while_display_sanitizes_and_observer_vs_resume_h
             leased_on_host: true,
             retained_bytes: 2 * 1024 * 1024,
             exited: None,
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: true,
         },
     ];
@@ -535,6 +544,10 @@ fn exact_raw_identity_preserved_while_display_sanitizes_and_observer_vs_resume_h
         state: ExistingTerminalsState::Loaded {
             list_epoch: raw_epoch,
             entries: &entries,
+            truncated: false,
+            store_error: None,
+            pending: &[],
+            pending_truncated: false,
         },
         can_attach: true,
         can_open_new: false,
@@ -572,8 +585,8 @@ fn exact_raw_identity_preserved_while_display_sanitizes_and_observer_vs_resume_h
     assert!(has_painted_text(&f0.output.shapes, "Controlled elsewhere"));
     assert!(has_painted_text(&f0.output.shapes, "Open here"));
 
-    // Row 0 (`has_saved_lease: true`) exposes BOTH `Resume` and `Observe`;
-    // Row 1 (`has_saved_lease: false, leased_on_host: true`) exposes ONLY `Observe` (never `Resume`);
+    // Row 0 (`saved_lease: SavedLease::Yes`) exposes BOTH `Resume` and `Observe`;
+    // Row 1 (`saved_lease: SavedLease::No, leased_on_host: true`) exposes ONLY `Observe` (never `Resume`);
     // Row 2 (`open_locally: true`) exposes ONLY `Switch to pane`.
     let resume_0 = require_accesskit_button_center(&f0.output, &format!("Resume #{disp_saved}"));
     let observe_0 = require_accesskit_button_center(&f0.output, &format!("Observe #{disp_saved}"));
@@ -712,7 +725,7 @@ fn stale_or_missing_live_epoch_disables_attach_resume_and_focus_local() {
             leased_on_host: true,
             retained_bytes: 128,
             exited: None,
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: true,
         },
         ExistingTerminalEntry {
@@ -723,7 +736,7 @@ fn stale_or_missing_live_epoch_disables_attach_resume_and_focus_local() {
             leased_on_host: false,
             retained_bytes: 256,
             exited: None,
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: false,
         },
     ];
@@ -770,6 +783,10 @@ fn stale_or_missing_live_epoch_disables_attach_resume_and_focus_local() {
             state: ExistingTerminalsState::Loaded {
                 list_epoch: list_ep,
                 entries: &entries,
+                truncated: false,
+                store_error: None,
+                pending: &[],
+                pending_truncated: false,
             },
             can_attach: true,
             can_open_new: true,
@@ -799,7 +816,7 @@ fn stale_or_missing_live_epoch_disables_attach_resume_and_focus_local() {
             );
         }
 
-        // Keyboard `Enter` on both Row 0 (`open_locally`) and Row 1 (`has_saved_lease`) must return `None`.
+        // Keyboard `Enter` on both Row 0 (`open_locally`) and Row 1 (`SavedLease::Yes`) must return `None`.
         let (e0, _) = press_key(&ctx, &mut panel, &input, vp, t + 0.05, Key::Enter);
         assert_eq!(e0, None);
         let _ = press_key(&ctx, &mut panel, &input, vp, t + 0.10, Key::ArrowDown);
@@ -833,7 +850,7 @@ fn exited_rows_forbid_resume_even_with_saved_lease_and_allow_only_final_output_o
                 exit_code: Some(0),
                 signal: None,
             }),
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: false,
         },
         ExistingTerminalEntry {
@@ -847,7 +864,7 @@ fn exited_rows_forbid_resume_even_with_saved_lease_and_allow_only_final_output_o
                 exit_code: None,
                 signal: Some(9),
             }),
-            has_saved_lease: true,
+            saved_lease: SavedLease::Yes,
             open_locally: false,
         },
         ExistingTerminalEntry {
@@ -861,7 +878,7 @@ fn exited_rows_forbid_resume_even_with_saved_lease_and_allow_only_final_output_o
                 exit_code: None,
                 signal: None,
             }),
-            has_saved_lease: true,
+            saved_lease: SavedLease::Unknown,
             open_locally: false,
         },
     ];
@@ -895,6 +912,10 @@ fn exited_rows_forbid_resume_even_with_saved_lease_and_allow_only_final_output_o
             state: ExistingTerminalsState::Loaded {
                 list_epoch: raw_epoch,
                 entries: &entries,
+                truncated: false,
+                store_error: None,
+                pending: &[],
+                pending_truncated: false,
             },
             can_attach: true,
             can_open_new: false,
@@ -909,6 +930,8 @@ fn exited_rows_forbid_resume_even_with_saved_lease_and_allow_only_final_output_o
         }
         assert!(!has_painted_text(&f.output.shapes, "Saved access"));
         assert!(!has_painted_text(&f.output.shapes, "Accès enregistré"));
+        assert!(!has_painted_text(&f.output.shapes, "Access unknown"));
+        assert!(!has_painted_text(&f.output.shapes, "Accès inconnu"));
 
         let btns = all_accesskit_button_labels(&f.output);
         assert!(
@@ -999,7 +1022,7 @@ fn empty_loading_and_fixed_errors_never_auto_create_and_gate_open_new() {
         assert_eq!(h_act, Some(ExistingTerminalsAction::Close));
     }
 
-    // 2. All 5 fixed `ExistingTerminalsError` variants in EN & FR: never offer `New terminal` even
+    // 2. All 6 fixed `ExistingTerminalsError` variants in EN & FR: never offer `New terminal` even
     //    when `can_open_new: true`, never trigger on `Enter`, and expose `Refresh` + `Close`.
     let err_cases = [
         (
@@ -1026,6 +1049,11 @@ fn empty_loading_and_fixed_errors_never_auto_create_and_gate_open_new() {
             ExistingTerminalsError::RequestFailed,
             "Could not list existing terminals on build-box",
             "Impossible de lister les terminaux existants sur build-box",
+        ),
+        (
+            ExistingTerminalsError::LocalBusy,
+            "Too many terminal list refreshes are already running locally",
+            "Trop d'actualisations de listes de terminaux sont déjà en cours localement",
         ),
     ];
 
@@ -1080,6 +1108,10 @@ fn empty_loading_and_fixed_errors_never_auto_create_and_gate_open_new() {
         state: ExistingTerminalsState::Loaded {
             list_epoch: "ep-empty",
             entries: &empty,
+            truncated: false,
+            store_error: None,
+            pending: &[],
+            pending_truncated: false,
         },
         can_attach: true,
         can_open_new: false,
@@ -1151,7 +1183,7 @@ fn escape_popup_priority_held_autorepeat_backdrop_close_and_all_themes() {
         leased_on_host: false,
         retained_bytes: 512,
         exited: None,
-        has_saved_lease: false,
+        saved_lease: SavedLease::No,
         open_locally: false,
     }];
 
@@ -1164,6 +1196,10 @@ fn escape_popup_priority_held_autorepeat_backdrop_close_and_all_themes() {
         state: ExistingTerminalsState::Loaded {
             list_epoch: "ep-esc",
             entries: &entries,
+            truncated: false,
+            store_error: None,
+            pending: &[],
+            pending_truncated: false,
         },
         can_attach: true,
         can_open_new: true,
@@ -1316,4 +1352,400 @@ fn escape_popup_priority_held_autorepeat_backdrop_close_and_all_themes() {
     let light_frame = settle_modal(&ctx, &mut panel, &input, vp, t);
     assert!(!light_frame.output.shapes.is_empty());
     assert_modal_within_viewport(&panel, vp);
+}
+
+#[test]
+fn unknown_saved_lease_store_errors_and_informational_pending_creations() {
+    assert_eq!(MAX_PENDING_CREATIONS, 64);
+    assert_eq!(MAX_EPOCH_DISPLAY_CHARS, 16);
+
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx, true, Some(theme_palettes::ThemeId::Classic));
+
+    let mut panel = HostExistingTerminalsPanel::new();
+    let vp = Vec2::new(800.0, 560.0);
+    let mut clock = 1.0_f64;
+    let mut next_t = || {
+        let cur = clock;
+        clock += 0.1;
+        cur
+    };
+
+    // 1. `SavedLease::Unknown` + all 3 `LeaseStoreError` variants + worker-reported `truncated: true`
+    //    even when `entries.len() < MAX_LISTED_TERMINALS`.
+    //    `unk-leased` has `leased_on_host: true`, yet must NEVER claim `"Controlled elsewhere"` /
+    //    `"Contrôlé ailleurs"` because the local lease store could not be read!
+    let raw_ep = "  ep-unk\t#42  ";
+    let raw_unk_leased = "  unk-leased\t#1  ";
+    let disp_unk_leased = sanitize_host_text(raw_unk_leased, MAX_TERMINAL_ID_DISPLAY_CHARS);
+    let unk_entries = [
+        ExistingTerminalEntry {
+            terminal_id: raw_unk_leased,
+            pid: 7001,
+            size: (24, 80),
+            attached: 1,
+            leased_on_host: true,
+            retained_bytes: 2048,
+            exited: None,
+            saved_lease: SavedLease::Unknown,
+            open_locally: false,
+        },
+        ExistingTerminalEntry {
+            terminal_id: "unk-idle-2",
+            pid: 7002,
+            size: (24, 80),
+            attached: 0,
+            leased_on_host: false,
+            retained_bytes: 512,
+            exited: None,
+            saved_lease: SavedLease::Unknown,
+            open_locally: false,
+        },
+    ];
+
+    let store_cases = [
+        (
+            LeaseStoreError::Locked,
+            "Local access store is locked by another Tessel window",
+            "Le coffre d'accès local est verrouillé par une autre fenêtre Tessel",
+        ),
+        (
+            LeaseStoreError::Corrupt,
+            "Local access store could not be read and was left untouched",
+            "Le coffre d'accès local est illisible et n'a pas été modifié",
+        ),
+        (
+            LeaseStoreError::Unavailable,
+            "Local access store is unavailable in this environment",
+            "Le coffre d'accès local est indisponible dans cet environnement",
+        ),
+    ];
+
+    for (idx, (store_err, en_notice, fr_notice)) in store_cases.into_iter().enumerate() {
+        for (
+            fr,
+            expected_notice,
+            unk_badge,
+            running_badge,
+            forbidden_elsewhere,
+            obs_prefix,
+            trunc_sub,
+        ) in [
+            (
+                false,
+                en_notice,
+                "Access unknown",
+                "Running",
+                "Controlled elsewhere",
+                "Observe",
+                "Showing the first 64 terminals reported by the host.",
+            ),
+            (
+                true,
+                fr_notice,
+                "Accès inconnu",
+                "Actif",
+                "Contrôlé ailleurs",
+                "Observer",
+                "Affichage limité aux 64 premiers terminaux signalés par l'hôte.",
+            ),
+        ] {
+            panel.reset_selection();
+            let input = ExistingTerminalsInput {
+                id_salt: Id::new(("store-err", idx, fr)),
+                host_label: "vault-host",
+                live_epoch: Some(raw_ep),
+                state: ExistingTerminalsState::Loaded {
+                    list_epoch: raw_ep,
+                    entries: &unk_entries,
+                    truncated: true,
+                    store_error: Some(store_err),
+                    pending: &[],
+                    pending_truncated: false,
+                },
+                can_attach: true,
+                can_open_new: false,
+                french: fr,
+            };
+
+            let f = settle_modal(&ctx, &mut panel, &input, vp, next_t());
+            assert_modal_within_viewport(&panel, vp);
+            assert!(
+                has_painted_substring(&f.output.shapes, expected_notice),
+                "missing store_error notice `{expected_notice}` for {store_err:?}"
+            );
+            assert!(
+                has_painted_substring(&f.output.shapes, trunc_sub),
+                "worker-reported `truncated: true` must show banner even when entries.len() < 64"
+            );
+            assert!(has_painted_text(&f.output.shapes, unk_badge));
+            assert!(has_painted_text(&f.output.shapes, running_badge));
+            assert!(
+                !has_painted_text(&f.output.shapes, forbidden_elsewhere),
+                "SavedLease::Unknown must never falsely claim `{forbidden_elsewhere}`"
+            );
+            assert!(!has_painted_text(&f.output.shapes, "Saved access"));
+            assert!(!has_painted_text(&f.output.shapes, "Accès enregistré"));
+
+            let btns = all_accesskit_button_labels(&f.output);
+            assert!(
+                !btns
+                    .iter()
+                    .any(|b| b.contains("Resume") || b.contains("Reprendre")),
+                "SavedLease::Unknown must forbid Resume/Reprendre: {btns:?}"
+            );
+
+            // Bare `Enter` on `unk-leased` attaches read-only (`AttachObserver`) with exact raw strings.
+            let (enter_act, _) = press_key(&ctx, &mut panel, &input, vp, next_t(), Key::Enter);
+            assert_eq!(
+                enter_act,
+                Some(ExistingTerminalsAction::AttachObserver {
+                    epoch: raw_ep.to_owned(),
+                    terminal_id: raw_unk_leased.to_owned(),
+                })
+            );
+
+            // Explicit `Observe` / `Observer` button also emits `AttachObserver` with exact raw strings.
+            let f_btn = settle_modal(&ctx, &mut panel, &input, vp, next_t());
+            let obs_pos = require_accesskit_button_center(
+                &f_btn.output,
+                &format!("{obs_prefix} #{disp_unk_leased}"),
+            );
+            let (obs_act, _) = click_modal(&ctx, &mut panel, &input, vp, next_t(), obs_pos);
+            assert_eq!(
+                obs_act,
+                Some(ExistingTerminalsAction::AttachObserver {
+                    epoch: raw_ep.to_owned(),
+                    terminal_id: raw_unk_leased.to_owned(),
+                })
+            );
+        }
+    }
+
+    // 2. Informational `PendingCreationEntry` rows: exact approved EN/FR badges, control/bidi
+    //    sanitization + length caps, zero cleanup/implicit actions, and >64 truncation + 280x320 fit.
+    let raw_pend_cur_id = "  pend-cur-\x1b[31m\u{202e}-very-long-pending-record-0001  ";
+    let raw_pend_cur_ep = "  ep-cur-\u{2066}-very-long-epoch-9999  ";
+    let disp_pend_id = sanitize_host_text(raw_pend_cur_id, MAX_TERMINAL_ID_DISPLAY_CHARS);
+    let disp_pend_ep = sanitize_host_text(raw_pend_cur_ep, MAX_EPOCH_DISPLAY_CHARS);
+    assert_eq!(disp_pend_id.chars().count(), MAX_TERMINAL_ID_DISPLAY_CHARS);
+    assert_eq!(disp_pend_ep.chars().count(), MAX_EPOCH_DISPLAY_CHARS);
+
+    let pending_two = [
+        PendingCreationEntry {
+            id: raw_pend_cur_id,
+            epoch: raw_pend_cur_ep,
+            current: true,
+        },
+        PendingCreationEntry {
+            id: "pend-prev\n\t#02",
+            epoch: "ep-prev\r#01",
+            current: false,
+        },
+    ];
+    let empty_entries: [ExistingTerminalEntry<'_>; 0] = [];
+
+    for (fr, sec_hdr, cur_badge, prev_badge, ep_sub, trunc_pend_sub) in [
+        (
+            false,
+            "Recorded creations",
+            "Creation to review",
+            "Previous host session",
+            format!("host session {disp_pend_ep}"),
+            "Showing the first 64 recorded creations.",
+        ),
+        (
+            true,
+            "Créations enregistrées",
+            "Création à vérifier",
+            "Session hôte antérieure",
+            format!("session hôte {disp_pend_ep}"),
+            "Affichage limité aux 64 premières créations enregistrées.",
+        ),
+    ] {
+        let input_pend = ExistingTerminalsInput {
+            id_salt: Id::new(("pend-two", fr)),
+            host_label: "pend-host",
+            live_epoch: Some("ep-live"),
+            state: ExistingTerminalsState::Loaded {
+                list_epoch: "ep-live",
+                entries: &empty_entries,
+                truncated: false,
+                store_error: None,
+                pending: &pending_two,
+                pending_truncated: true,
+            },
+            can_attach: true,
+            can_open_new: false,
+            french: fr,
+        };
+        let f_p = settle_modal(&ctx, &mut panel, &input_pend, vp, next_t());
+        assert_modal_within_viewport(&panel, vp);
+
+        for (text, _, _) in painted_texts(&f_p.output.shapes) {
+            assert!(
+                !text.chars().any(is_forbidden_display_char),
+                "unsanitized control/bidi char leaked from PendingCreationEntry: {text:?}"
+            );
+        }
+        assert!(has_painted_text(&f_p.output.shapes, sec_hdr));
+        assert!(has_painted_text(
+            &f_p.output.shapes,
+            &format!("#{disp_pend_id}")
+        ));
+        assert!(has_painted_text(&f_p.output.shapes, cur_badge));
+        assert!(has_painted_text(&f_p.output.shapes, prev_badge));
+        assert!(has_painted_text(&f_p.output.shapes, &ep_sub));
+        assert!(has_painted_substring(&f_p.output.shapes, trunc_pend_sub));
+
+        // Zero cleanup/delete/resume buttons may exist for informational pending creations.
+        let btns = all_accesskit_button_labels(&f_p.output);
+        let allowed: [&str; 3] = if fr {
+            ["Actualiser", "Fermer", "Fermer la fenêtre"]
+        } else {
+            ["Refresh", "Close", "Close dialog"]
+        };
+        for b in &btns {
+            assert!(
+                allowed.contains(&b.as_str()),
+                "unexpected interactive button `{b}` rendered when only informational pending creations exist: {btns:?}"
+            );
+        }
+
+        let (enter_pend, _) = press_key(&ctx, &mut panel, &input_pend, vp, next_t(), Key::Enter);
+        assert_eq!(enter_pend, None);
+    }
+
+    // 3. Hard ceiling of 64 pending creations (`> 64` slice) + narrow `280x320` viewport fit.
+    let pend_ids: Vec<String> = (0..70).map(|i| format!("pend-{i:03}")).collect();
+    let pend_many: Vec<PendingCreationEntry<'_>> = pend_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| PendingCreationEntry {
+            id: id.as_str(),
+            epoch: if i % 2 == 0 { "ep-live" } else { "ep-older" },
+            current: i % 2 == 0,
+        })
+        .collect();
+
+    let vp_narrow = Vec2::new(280.0, 320.0);
+    let input_many_narrow = ExistingTerminalsInput {
+        id_salt: Id::new("pend-many-narrow"),
+        host_label: "narrow-pend-host",
+        live_epoch: Some("ep-live"),
+        state: ExistingTerminalsState::Loaded {
+            list_epoch: "ep-live",
+            entries: &unk_entries,
+            truncated: true,
+            store_error: Some(LeaseStoreError::Locked),
+            pending: &pend_many,
+            pending_truncated: false,
+        },
+        can_attach: true,
+        can_open_new: true,
+        french: true,
+    };
+    let f_many = settle_modal(&ctx, &mut panel, &input_many_narrow, vp_narrow, next_t());
+    assert_modal_within_viewport(&panel, vp_narrow);
+
+    // In a compact `280x320` viewport, `egui::ScrollArea` culls offscreen `Label`s below its
+    // `clip_rect`; scroll down through the real `ScrollArea` to verify every capped element
+    // becomes genuinely visible inside `clip_rect` while `#pend-064`+ never appears and the modal
+    // card stays strictly inside `280x320` at every scroll offset.
+    let scroll_pos = painted_texts(&f_many.output.shapes)
+        .into_iter()
+        .find(|(text, rect, clip)| text.contains("verrouillé") && clip.intersects(*rect))
+        .map(|(_, rect, clip)| rect.intersect(clip).center())
+        .expect("top store_error notice must be visible inside compact ScrollArea");
+
+    let has_visible_substring = |shapes: &[egui::epaint::ClippedShape], needle: &str| {
+        painted_texts(shapes)
+            .into_iter()
+            .any(|(text, rect, clip)| text.contains(needle) && clip.intersects(rect))
+    };
+    let has_visible_exact = |shapes: &[egui::epaint::ClippedShape], exact: &str| {
+        painted_texts(shapes)
+            .into_iter()
+            .any(|(text, rect, clip)| text == exact && clip.intersects(rect))
+    };
+
+    let mut saw_trunc_banner = has_visible_substring(
+        &f_many.output.shapes,
+        "Affichage limité aux 64 premières créations enregistrées.",
+    );
+    let mut saw_pend_000 = has_visible_exact(&f_many.output.shapes, "#pend-000");
+    let mut saw_pend_063 = has_visible_exact(&f_many.output.shapes, "#pend-063");
+    let mut extra_bottom_steps = 0_u8;
+
+    for _ in 0..80 {
+        let wheel_frame = step_modal_frame(
+            &ctx,
+            &mut panel,
+            Some(&input_many_narrow),
+            vp_narrow,
+            clock,
+            vec![
+                Event::PointerMoved(scroll_pos),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -90.0),
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            false,
+        );
+        clock += 0.03;
+        assert_modal_within_viewport(&panel, vp_narrow);
+        assert!(!has_painted_text(&wheel_frame.output.shapes, "#pend-064"));
+        saw_trunc_banner |= has_visible_substring(
+            &wheel_frame.output.shapes,
+            "Affichage limité aux 64 premières créations enregistrées.",
+        );
+        saw_pend_000 |= has_visible_exact(&wheel_frame.output.shapes, "#pend-000");
+        saw_pend_063 |= has_visible_exact(&wheel_frame.output.shapes, "#pend-063");
+
+        for _ in 0..8 {
+            let settled = step_modal_frame(
+                &ctx,
+                &mut panel,
+                Some(&input_many_narrow),
+                vp_narrow,
+                clock,
+                vec![Event::PointerMoved(scroll_pos)],
+                false,
+            );
+            clock += 0.03;
+            assert_modal_within_viewport(&panel, vp_narrow);
+            assert!(!has_painted_text(&settled.output.shapes, "#pend-064"));
+            assert!(!has_painted_text(&settled.output.shapes, "#pend-069"));
+
+            saw_trunc_banner |= has_visible_substring(
+                &settled.output.shapes,
+                "Affichage limité aux 64 premières créations enregistrées.",
+            );
+            saw_pend_000 |= has_visible_exact(&settled.output.shapes, "#pend-000");
+            saw_pend_063 |= has_visible_exact(&settled.output.shapes, "#pend-063");
+        }
+
+        if saw_trunc_banner && saw_pend_000 && saw_pend_063 {
+            extra_bottom_steps += 1;
+            if extra_bottom_steps >= 4 {
+                break;
+            }
+        }
+    }
+
+    assert!(
+        saw_trunc_banner,
+        "scrolling compact 280x320 modal must reveal 64-entry pending truncation banner"
+    );
+    assert!(
+        saw_pend_000,
+        "scrolling compact 280x320 modal must reveal #pend-000"
+    );
+    assert!(
+        saw_pend_063,
+        "scrolling compact 280x320 modal must reach last capped entry #pend-063"
+    );
 }

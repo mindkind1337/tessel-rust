@@ -244,12 +244,15 @@ fn silent_native_input_reaches_client_but_modal_and_close_confirmation_do_not() 
             egui::Event::Paste("paste-secret".into()),
         ],
     );
-    let Backend::Native(native) = &terminal.backend else {
-        unreachable!()
-    };
-    let phase = native.phase();
-    let caps = native.capabilities();
-    assert_eq!(terminal.native_panel.request_close(&phase, caps), None);
+    let identity = terminal.native_identity().expect("resumable pane identity");
+    assert_eq!(identity.epoch, Epoch::from_bytes([7; 16]));
+    assert_eq!(identity.terminal, TerminalId::from_bytes([4; 16]));
+    assert!(
+        !terminal.request_native_close(),
+        "the app must retain a controlled pane until the user chooses"
+    );
+    assert!(terminal.native_owns_escape());
+    assert!(terminal.take_native_action().is_none());
     frame(
         &mut terminal,
         &ctx,

@@ -346,3 +346,44 @@ Formatting checks pass for the changed Rust sources. Native overlays retain pane
 clipping, stay below global dialogs, release IME/mouse state on input loss and
 preserve Escape for disabled panes. Local save states distinguish pending, failed
 and superseded access without inventing a saved result or a retry authority.
+
+Gate 7B workspace routing (2026-11-04, acceptance in progress): Windows settings
+now exposes explicit new-native-terminal and existing-terminal actions. The
+application owns the opening count, lease desk and keeper until shutdown; pane
+closure detaches, whereas cancellation of a not-yet-adopted creation follows the
+existing explicit cancellation protocol. Only after the exit confirmation does
+shutdown close admissions and drop native pane handles. Pending openings and
+recovery writes continue, failed writes can be retried, and abandoning the wait
+requires Quit anyway. Keep working remains available before this irreversible
+phase. An empty, settled runtime does not introduce a redundant exit dialog.
+
+The existing-terminal worker is bounded across lists, reads recovery metadata in
+one encrypted transaction, validates the host epoch before and after the local
+read, and discards unread results when a newer refresh starts. Unknown local
+access is not represented as missing access: observation remains available,
+saved-lease resume does not. Pending creations are informational and capped.
+Saved pane identities contain only epoch and terminal id; a restored pane wakes
+only by explicit attachment. A creation completed during app shutdown may have
+no saved pane identity and is found through the existing-terminal picker after
+its recovery access has been saved. Detached panes likewise remain discoverable
+there. Both the initial new-terminal request and emulator start at 30x100.
+
+Validation so far: 12 list-worker tests, 18 encrypted-store tests, six native
+emulator/client UI boundary tests, and strict scoped all-feature Clippy pass.
+A broader native binary filter passed 32 cases (two dedicated fixture/reference
+cases ignored). All seven picker suites now pass, including real wheel scrolling through the
+280x320 viewport and clipped-text visibility. Review fixes disable underlying
+settings and toolbar controls, replace a restarted native pane in place, reuse
+matching saved identities and restore project/maximized-pane focus. This does not establish real-server or full
+desktop visual acceptance. Host-info logout-persistence warnings and retained
+pre-resynchronization history rendering still need integration.
+
+Next acceptance work: cache `host.info` persistence by the exact current daemon
+epoch rather than interpreting `HelloOk` as a persistence report. The existing
+long-lived connection worker is a suitable place for this bounded request;
+frames should only read a non-secret cache. An absent, failed, disconnected or
+stale-epoch report must produce Unknown, never a survival guarantee. Reuse the
+worker's existing close channel and capacity ownership; do not create a worker
+per pane or issue requests from terminal rendering. Tests must cover epoch
+changes during the request, failed reads, cancellation and multiple panes
+sharing the same cached report.

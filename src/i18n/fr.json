@@ -370,5 +370,20 @@
   "Remote cursor reply was not queued": "La r\u00e9ponse du curseur distant n\u2019a pas pu \u00eatre mise en attente",
   "Ended terminal access could not be queued for cleanup": "L\u2019acc\u00e8s au terminal termin\u00e9 n\u2019a pas pu \u00eatre mis en attente de nettoyage",
   "Waiting for the remote program to exit": "En attente de la fin du programme distant",
-  "Terminal access could not be queued for storage. Cancel this opening to continue.": "L\u2019acc\u00e8s au terminal n\u2019a pas pu \u00eatre mis en attente d\u2019enregistrement. Annulez cette ouverture pour continuer."
+  "Terminal access could not be queued for storage. Cancel this opening to continue.": "L\u2019acc\u00e8s au terminal n\u2019a pas pu \u00eatre mis en attente d\u2019enregistrement. Annulez cette ouverture pour continuer.",
+  "Cannot start terminal access storage": "Impossible de d\u00e9marrer la sauvegarde des acc\u00e8s aux terminaux",
+  "Connect the native host service first": "Connectez d\u2019abord le service natif de l\u2019h\u00f4te",
+  "The native host is disconnected": "L\u2019h\u00f4te natif est d\u00e9connect\u00e9",
+  "This host does not grant terminal access": "Cet h\u00f4te n\u2019autorise pas l\u2019acc\u00e8s aux terminaux",
+  "Finishing terminal access storage before closing": "Sauvegarde des acc\u00e8s aux terminaux avant la fermeture",
+  "Remote terminals remain on the host. Wait until their recovery access is saved.": "Les terminaux distants restent sur l\u2019h\u00f4te. Attendez la sauvegarde de leurs acc\u00e8s de reprise.",
+  "Some terminal access changes could not be saved.": "Certaines modifications des acc\u00e8s aux terminaux n\u2019ont pas pu \u00eatre sauvegard\u00e9es.",
+  "Retry saving": "R\u00e9essayer la sauvegarde",
+  "Quitting now may leave a created terminal without saved recovery access.": "Quitter maintenant peut laisser un terminal cr\u00e9\u00e9 sans acc\u00e8s de reprise sauvegard\u00e9.",
+  "Quit anyway": "Quitter quand m\u00eame",
+  "Editors and files still use SSH/SFTP. Native terminal access is available on Windows.": "Les \u00e9diteurs et les fichiers utilisent toujours SSH/SFTP. Les terminaux natifs sont disponibles sur Windows.",
+  "New native terminal": "Nouveau terminal natif",
+  "Existing native terminals": "Terminaux natifs existants",
+  "There are unsaved files or sessions. Local sessions end; native remote terminals remain on the host.": "Des fichiers ou des sessions ne sont pas sauvegard\u00e9s. Les sessions locales se terminent; les terminaux natifs distants restent sur l\u2019h\u00f4te.",
+  "Close a pane before opening another terminal": "Fermez un volet avant d\u2019ouvrir un autre terminal"
 }
