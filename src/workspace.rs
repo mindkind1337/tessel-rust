@@ -75,6 +75,8 @@ pub struct NativeThread {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_options: Option<serde_json::Value>,
     #[serde(default)]
     pub pane_name: Option<String>,
@@ -222,6 +224,12 @@ impl Workspace {
                 || session.title.len() > 512
             {
                 return Err("Invalid session metadata.".into());
+            }
+            if session.launch_fingerprint.as_deref().is_some_and(|value| {
+                !matches!(session.launch, crate::launch::Launch::Agent(_))
+                    || !crate::launch_fingerprint::valid(value)
+            }) {
+                return Err("Invalid saved launch fingerprint.".into());
             }
             if let Some(values) = &session.session_options {
                 let agent = match &session.launch {
@@ -575,6 +583,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                launch_fingerprint: None,
                 session_options: Some(options),
                 pane_name: None,
                 id,
@@ -722,6 +731,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
                 id,
@@ -754,6 +764,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
                 id,
@@ -786,6 +797,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id: 1,
@@ -808,6 +820,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
                 id,
@@ -818,6 +831,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id: 12,
@@ -878,6 +892,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id: 11,
@@ -908,6 +923,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 id,
+                launch_fingerprint: None,
                 session_options: None,
                 pane_name: name.map(str::to_owned),
                 project: None,

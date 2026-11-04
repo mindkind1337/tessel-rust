@@ -20,6 +20,9 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
     for prefs in portable.agent_prefs.values_mut() {
         prefs.env.clear();
     }
+    for pane in &mut portable.sessions {
+        pane.launch_fingerprint = None;
+    }
     let bytes = serde_json::to_vec_pretty(&Backup {
         format: "tessel-rust-settings".into(),
         version: 1,
@@ -57,6 +60,9 @@ pub fn import(path: &Path) -> Result<Workspace> {
     // secrets. Visibility is inert and remains portable.
     for prefs in backup.workspace.agent_prefs.values_mut() {
         prefs.reset();
+    }
+    for pane in &mut backup.workspace.sessions {
+        pane.launch_fingerprint = None;
     }
     backup.workspace.validate()?;
     Ok(backup.workspace)
@@ -105,6 +111,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id: 4,
@@ -140,6 +147,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            launch_fingerprint: Some("a".repeat(64)),
             session_options: Some(serde_json::json!({"model":"gpt-5.6-sol","effort":"high"})),
             pane_name: Some("Custom agent".into()),
             id: 1,
@@ -151,6 +159,12 @@ mod tests {
         export(&path, &state).unwrap();
         assert!(export(&path, &Workspace::default()).is_err());
         let mut imported = import(&path).unwrap();
+        assert!(imported.sessions[0].launch_fingerprint.is_none());
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("launch_fingerprint")
+        );
         imported.migrate_native_threads();
         assert_eq!(imported.projects, state.projects);
         assert_eq!(imported.agent_prefs, state.agent_prefs);
@@ -165,6 +179,14 @@ mod tests {
         assert_eq!(imported.sessions[0].title, "codex");
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["workspace"]["sessions"][0]["launch_fingerprint"] =
+            "untrusted-plaintext-signature".into();
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(
+            import(&path).unwrap().sessions[0]
+                .launch_fingerprint
+                .is_none()
+        );
         value["workspace"]["sessions"] = serde_json::json!([{"id":1,"project":null,"title":"bad","launch":{"Agent":"arbitrary-command"},"cwd":dir.path()}]);
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(import(&path).is_err());

@@ -14,6 +14,8 @@ use std::{
 };
 
 struct Session {
+    settings_changed: bool,
+    launch_fingerprint: Option<String>,
     session_options: Option<serde_json::Value>,
     pane_name: Option<String>,
     id: u64,
@@ -26,6 +28,25 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn needs_restart(&self) -> bool {
+        self.settings_changed
+            && self.loading.is_none()
+            && self
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| !terminal.exited())
+    }
+    fn launch_stale(&self, current: Option<&crate::agent_preferences::Preferences>) -> bool {
+        if self.loading.is_some() || self.terminal.as_ref().is_none_or(Terminal::exited) {
+            return false;
+        }
+        let (Launch::Agent(id), Some(before), Some(current)) =
+            (&self.launch, &self.launch_fingerprint, current)
+        else {
+            return false;
+        };
+        crate::launch_fingerprint::for_agent(id, current).is_some_and(|now| now != *before)
+    }
     fn label(&self) -> &str {
         self.pane_name.as_deref().unwrap_or(&self.title)
     }
@@ -35,6 +56,11 @@ impl Session {
             return;
         }
         let launch = self.launch.clone();
+        self.settings_changed = false;
+        self.launch_fingerprint = match (&self.launch, &prefs) {
+            (Launch::Agent(id), Some(prefs)) => crate::launch_fingerprint::for_agent(id, prefs),
+            _ => None,
+        };
         let cwd = self.cwd.clone();
         let (sender, receiver) = mpsc::channel();
         self.loading = Some(receiver);
@@ -45,7 +71,8 @@ impl Session {
             let _ = sender.send(result);
         });
     }
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
+        let mut changed = false;
         let result = self
             .loading
             .as_ref()
@@ -57,6 +84,7 @@ impl Session {
                 )),
             });
         if let Some(result) = result {
+            changed = true;
             self.loading = None;
             match result {
                 Ok(t) => {
@@ -67,8 +95,11 @@ impl Session {
             }
         }
         if let Some(t) = &mut self.terminal {
+            let was_exited = t.exited();
             t.poll();
+            changed |= was_exited != t.exited();
         }
+        changed
     }
 }
 enum Message {
@@ -289,6 +320,8 @@ impl Tessel {
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
+                settings_changed: false,
+                launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
@@ -454,6 +487,8 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        settings_changed: false,
+                        launch_fingerprint: None,
                         session_options: None,
                         pane_name: None,
                         id,
@@ -467,6 +502,15 @@ impl Tessel {
                     });
                     app.active_session = Some(id);
                     app.view = View::Work;
+                    if std::env::args().any(|arg| arg == "--restart-fixture") {
+                        app.overlay = None;
+                        let session = app.sessions.last_mut().expect("synthetic terminal");
+                        session.launch = Launch::Agent("codex".into());
+                        session.title = "Synthetic agent".into();
+                        session.launch_fingerprint =
+                            crate::launch_fingerprint::for_agent("codex", &Default::default());
+                        session.settings_changed = true;
+                    }
                 }
                 Err(e) => app.error = e.to_string(),
             }
@@ -477,6 +521,8 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    settings_changed: false,
+                    launch_fingerprint: None,
                     session_options: None,
                     pane_name: None,
                     id,
@@ -533,12 +579,14 @@ impl Tessel {
         app
     }
     fn save(&mut self) {
+        self.refresh_launch_status();
         normalize_session_names(&mut self.sessions);
         self.state.next_pane = self.next_session;
         self.state.sessions = self
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                launch_fingerprint: s.launch_fingerprint.clone(),
                 session_options: s.session_options.clone(),
                 pane_name: s.pane_name.clone(),
                 id: s.id,
@@ -617,11 +665,26 @@ impl Tessel {
             false
         }
     }
+    fn refresh_launch_status(&mut self) {
+        for session in &mut self.sessions {
+            let prefs = match &session.launch {
+                Launch::Agent(id) => Some(crate::agent_preferences::for_pane_launch(
+                    &self.state,
+                    id,
+                    self.model_discovery.as_ref().and_then(|d| d.models(id)),
+                    session.session_options.as_ref(),
+                )),
+                _ => None,
+            };
+            session.settings_changed = session.launch_stale(prefs.as_ref());
+        }
+    }
     fn poll(&mut self) {
         self.agents.poll();
-        if let Some(discovery) = &mut self.model_discovery {
-            discovery.poll();
-        }
+        let mut launch_changed = self
+            .model_discovery
+            .as_mut()
+            .is_some_and(|discovery| discovery.poll());
         self.poll_host_import();
         self.sync_git_project();
         let git_owner = self.git_result.pending_owner().cloned();
@@ -693,7 +756,10 @@ impl Tessel {
             self.save();
         }
         for s in &mut self.sessions {
-            s.poll();
+            launch_changed |= s.poll();
+        }
+        if launch_changed {
+            self.refresh_launch_status();
         }
         while let Ok(message) = self.receiver.try_recv() {
             match message {
@@ -798,6 +864,8 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            settings_changed: false,
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id,
@@ -1726,7 +1794,57 @@ impl Tessel {
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         ui.set_min_width(title_width);
-                                        ui.add(egui::Label::new(session.label()).truncate())
+                                        let badge = crate::sidebar_model::PaneHeaderBadge::Apply
+                                            .label(
+                                                if self.state.language
+                                                    == crate::i18n::Language::French
+                                                {
+                                                    crate::sidebar_model::SidebarLang::Fr
+                                                } else {
+                                                    crate::sidebar_model::SidebarLang::En
+                                                },
+                                            );
+                                        let font = egui::FontId::proportional(11.0);
+                                        let badge_width = ui
+                                            .painter()
+                                            .layout_no_wrap(
+                                                badge.into(),
+                                                font.clone(),
+                                                ui.visuals().warn_fg_color,
+                                            )
+                                            .size()
+                                            .x
+                                            + 8.0;
+                                        let show_badge = session.needs_restart()
+                                            && title_width > badge_width + 80.0;
+                                        let response = ui
+                                            .allocate_ui_with_layout(
+                                                [
+                                                    if show_badge {
+                                                        title_width - badge_width - 4.0
+                                                    } else {
+                                                        title_width
+                                                    },
+                                                    22.0,
+                                                ]
+                                                .into(),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.add(
+                                                        egui::Label::new(session.label())
+                                                            .truncate(),
+                                                    )
+                                                },
+                                            )
+                                            .inner;
+                                        if show_badge {
+                                            ui.label(
+                                                egui::RichText::new(badge)
+                                                    .font(font)
+                                                    .color(ui.visuals().warn_fg_color),
+                                            );
+                                        }
+                                        response
                                     },
                                 )
                                 .inner
@@ -2183,6 +2301,8 @@ impl Tessel {
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                settings_changed: false,
+                launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
@@ -2523,6 +2643,7 @@ impl Tessel {
                         crate::agent_model_defaults::save(&mut self.state, store, &id, defaults)
                     })
                     .err();
+                self.refresh_launch_status();
             }
             Some(Action::Terminal(id)) => {
                 self.new_session(Launch::Agent(id));
@@ -2587,6 +2708,7 @@ impl Tessel {
                     crate::agent_preferences::save(&mut self.state, store, &id, prefs)
                 })
                 .err();
+            self.refresh_launch_status();
             return self.agents_notice.is_none();
         }
         true
@@ -3986,9 +4108,46 @@ mod tests {
         assert_eq!(active_after_close(0, 0, 0), 0);
     }
     #[test]
+    fn restart_status_requires_a_running_known_launch_and_tracks_effective_changes() {
+        let prefs = crate::agent_preferences::Preferences::default();
+        let mut session = Session {
+            settings_changed: false,
+            launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic agent metadata".into(),
+            launch: Launch::Agent("codex".into()),
+            cwd: std::env::temp_dir(),
+            terminal: Some(Terminal::spawn().unwrap()),
+            loading: None,
+            error: String::new(),
+        };
+        assert!(!session.launch_stale(Some(&prefs)));
+        let changed = crate::agent_preferences::Preferences {
+            args: "-m different-model".into(),
+            ..prefs.clone()
+        };
+        session.settings_changed = session.launch_stale(Some(&changed));
+        assert!(session.needs_restart());
+        let (sender, receiver) = mpsc::channel();
+        session.loading = Some(receiver);
+        assert!(!session.needs_restart());
+        assert!(!session.launch_stale(Some(&changed)));
+        drop(sender);
+        session.loading = None;
+        session.launch_fingerprint = None;
+        assert!(!session.launch_stale(Some(&changed)));
+        session.terminal = None;
+        assert!(!session.needs_restart());
+    }
+    #[test]
     fn native_panes_cannot_start_pty_workers() {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
+                settings_changed: false,
+                launch_fingerprint: None,
                 session_options: None,
                 pane_name: None,
                 id: 1,
@@ -4010,6 +4169,8 @@ mod tests {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            settings_changed: false,
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id: 1,
@@ -4039,6 +4200,8 @@ mod tests {
     #[test]
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
+            settings_changed: false,
+            launch_fingerprint: None,
             session_options: None,
             pane_name: None,
             id,

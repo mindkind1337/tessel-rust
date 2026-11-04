@@ -16,6 +16,7 @@ pub struct Terminal {
     parser: vt100::Parser,
     size: (u16, u16),
     status: String,
+    exited: bool,
     query_tail: Vec<u8>,
     selection: Option<Selection>,
     composition: String,
@@ -27,6 +28,9 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    pub fn exited(&self) -> bool {
+        self.exited
+    }
     pub fn output(&self) -> String {
         self.parser.screen().contents()
     }
@@ -105,6 +109,7 @@ impl Terminal {
             parser: vt100::Parser::new(30, 100, 1000),
             size: (30, 100),
             status: String::new(),
+            exited: false,
             query_tail: Vec::new(),
             selection: None,
             composition: String::new(),
@@ -156,6 +161,7 @@ impl Terminal {
             self.process_output(&bytes);
         }
         if let Ok(Some(exit)) = self.child.try_wait() {
+            self.exited = true;
             self.status = format!("Shell exited: {exit}");
         }
     }

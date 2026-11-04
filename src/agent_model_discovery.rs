@@ -147,7 +147,8 @@ impl Discovery {
 
     /// UI-safe polling: no waits or filesystem operations. Disk snapshots are
     /// serialized on one writer, so an older completion cannot overwrite a newer one.
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
         let completed: Vec<_> = self
             .pending
             .iter()
@@ -186,6 +187,7 @@ impl Discovery {
                         &self.cache.entries()[&agent].models,
                     ) {
                         self.catalogs.insert(agent.clone(), rows);
+                        changed = true;
                     }
                     self.errors.remove(&agent);
                 }
@@ -220,6 +222,7 @@ impl Discovery {
                 Err(_) => self.storage_error = true,
             }
         }
+        changed
     }
 }
 
@@ -228,17 +231,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn complete(state: &mut Discovery) {
+    fn complete(state: &mut Discovery) -> bool {
+        let mut changed = false;
         let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while (!state.pending.is_empty() || state.disk.is_some() || state.dirty)
             && std::time::Instant::now() < until
         {
-            state.poll();
+            changed |= state.poll();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(state.pending.is_empty());
         assert!(state.disk.is_none());
         assert!(!state.dirty);
+        changed
     }
     #[test]
     fn duplicate_requests_do_not_start_and_failure_preserves_last_success() {
@@ -259,7 +264,7 @@ mod tests {
         assert_eq!(state.lists()["codex"].models[0]["id"], "old-model");
         assert_eq!(state.models("codex").unwrap()[0]["id"], "old-model");
         tx.send(Err(Failure::Empty)).unwrap();
-        complete(&mut state);
+        assert!(!complete(&mut state));
         assert_eq!(state.error("codex"), Some(&Failure::Empty));
         assert_eq!(state.lists()["codex"].models[0]["id"], "old-model");
         assert!(state.start(
@@ -267,7 +272,8 @@ mod tests {
             || Ok(vec![json!({"id":"new-model","extra":"discard"})]),
             || {}
         ));
-        complete(&mut state);
+        assert!(complete(&mut state));
+        assert!(!state.poll());
         assert!(state.error("codex").is_none());
         assert_eq!(
             state.lists()["codex"].models,

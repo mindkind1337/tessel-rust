@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [switch]$Compact,
     [switch]$Discovered,
-    [switch]$Cursor
+    [switch]$Cursor,
+    [switch]$Restart
 )
 $ErrorActionPreference = 'Stop'
 # Requires a binary built with --features visual-test. Every run gets isolated
@@ -29,6 +30,7 @@ try {
     $env:TESSEL_SETTLED_SCREENSHOT = $pngPath
     $arguments = @('--models-fixture', '--data-dir', ('"' + $dataDirectory + '"'))
     if ($Cursor) { $arguments += '--cursor-models-fixture' }
+    if ($Restart) { $arguments += @('--terminal-fixture', '--restart-fixture') }
     if ($Compact) { $arguments += '--compact-fixture' }
     $process = Start-Process -FilePath $binaryPath -ArgumentList $arguments -WorkingDirectory $runDirectory -WindowStyle Hidden -PassThru -RedirectStandardError $errorPath -RedirectStandardOutput $outputPath
     if (-not $process.WaitForExit(30000)) {

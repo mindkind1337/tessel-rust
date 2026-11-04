@@ -55,6 +55,7 @@ mod host_actions;
 mod i18n;
 pub mod icons;
 mod launch;
+mod launch_fingerprint;
 pub mod launcher_panel;
 pub mod muse_catalog;
 pub mod muse_model_probe;
