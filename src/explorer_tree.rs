@@ -247,23 +247,150 @@ impl DirectoryLister for FsDirectoryLister {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeContextKind {
     CreateFile,
     CreateFolder,
     Rename,
+    Trash,
     Delete,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeAction {
     OpenFile(PathBuf),
+    OpenPinnedFile(PathBuf),
+    CopyPath(PathBuf),
     Context {
         kind: TreeContextKind,
         root: PathBuf,
         path: PathBuf,
         name: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContentMatch {
+    path: PathBuf,
+    rel_display: String,
+    line: usize,
+    preview: String,
+}
+
+struct ContentSearchTask {
+    query_key: String,
+    cancel: Arc<AtomicBool>,
+    rx: Receiver<Vec<ContentMatch>>,
+}
+
+impl Drop for ContentSearchTask {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+fn search_project_contents(root: &Path, query: &str, cancel: &AtomicBool) -> Vec<ContentMatch> {
+    const MAX_MATCHES: usize = 200;
+    const MAX_FILES_EXAMINED: usize = 4_000;
+    const MAX_FILE_BYTES: u64 = 512 * 1024;
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let Ok(canonical_root) = root.canonicalize() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0_usize)];
+    let mut files_seen = 0_usize;
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    while let Some((dir, depth)) = stack.pop() {
+        if cancel.load(Ordering::Relaxed)
+            || Instant::now() >= deadline
+            || out.len() >= MAX_MATCHES
+            || files_seen >= MAX_FILES_EXAMINED
+        {
+            break;
+        }
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<fs::DirEntry> = read_dir.filter_map(Result::ok).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries.into_iter().rev() {
+            if cancel.load(Ordering::Relaxed) || out.len() >= MAX_MATCHES {
+                break;
+            }
+            let name = entry.file_name();
+            let name_lossy = name.to_string_lossy();
+            if matches!(
+                name_lossy.as_ref(),
+                ".git" | "node_modules" | "target" | "dist" | ".next"
+            ) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let path = entry.path();
+            if is_path_symlink_or_reparse(&path) {
+                continue;
+            }
+            let Ok(resolved) = path.canonicalize() else {
+                continue;
+            };
+            if !resolved.starts_with(&canonical_root) {
+                continue;
+            }
+            if meta.is_dir() {
+                if depth < 16 {
+                    stack.push((path, depth + 1));
+                }
+            } else if meta.is_file() && meta.len() <= MAX_FILE_BYTES {
+                files_seen += 1;
+                let Ok(bytes) = fs::read(&path) else {
+                    continue;
+                };
+                if bytes.iter().take(4096).any(|&b| b == 0) {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(&bytes);
+                let rel_display = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                for (idx, line) in text.lines().enumerate() {
+                    if line.to_lowercase().contains(&needle) {
+                        let trimmed: String = line.trim().chars().take(120).collect();
+                        out.push(ContentMatch {
+                            path: path.clone(),
+                            rel_display: rel_display.clone(),
+                            line: idx + 1,
+                            preview: trimmed,
+                        });
+                        if out.len() >= MAX_MATCHES {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn git_badge_color(ch: char) -> egui::Color32 {
+    match ch {
+        'M' => egui::Color32::from_rgb(0xe2, 0xc0, 0x8d),
+        'A' | '?' => egui::Color32::from_rgb(0x73, 0xc9, 0x91),
+        'D' | 'U' => egui::Color32::from_rgb(0xf1, 0x4c, 0x4c),
+        'R' => egui::Color32::from_rgb(0x4e, 0xc9, 0xb0),
+        _ => egui::Color32::GRAY,
+    }
 }
 
 struct WorkerTask {
@@ -297,6 +424,13 @@ pub struct ExplorerTree {
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
     selected_key: Option<String>,
     compact_folders: bool,
+    show_dotfiles: bool,
+    filter_query: String,
+    content_search_mode: bool,
+    content_search_hits: Vec<ContentMatch>,
+    content_search_last_key: String,
+    content_search_task: Option<ContentSearchTask>,
+    git_badges: HashMap<String, char>,
     cached_tree: ExplorerTreeResult,
     rows_dirty: bool,
     row_rebuild_count: usize,
@@ -336,6 +470,13 @@ impl ExplorerTree {
             expanded_by_project: VecDeque::new(),
             selected_key: None,
             compact_folders: false,
+            show_dotfiles: true,
+            filter_query: String::new(),
+            content_search_mode: false,
+            content_search_hits: Vec::new(),
+            content_search_last_key: String::new(),
+            content_search_task: None,
+            git_badges: HashMap::new(),
             cached_tree: ExplorerTreeResult::default(),
             rows_dirty: true,
             row_rebuild_count: 0,
@@ -389,6 +530,39 @@ impl ExplorerTree {
         if self.compact_folders != compact {
             self.compact_folders = compact;
             self.rows_dirty = true;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_show_dotfiles(&mut self, show: bool) {
+        if self.show_dotfiles != show {
+            self.show_dotfiles = show;
+            self.rows_dirty = true;
+        }
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn show_dotfiles(&self) -> bool {
+        self.show_dotfiles
+    }
+
+    #[allow(dead_code)]
+    pub fn set_filter_query(&mut self, query: impl Into<String>) {
+        self.filter_query = query.into();
+    }
+
+    #[allow(dead_code)]
+    pub fn set_git_badges(&mut self, badges: HashMap<String, char>) {
+        self.git_badges = badges;
+    }
+
+    pub fn collapse_all(&mut self) {
+        if !self.open_dirs.is_empty() || !self.restore_open.is_empty() {
+            self.open_dirs.clear();
+            self.restore_open.clear();
+            self.rows_dirty = true;
+            self.save_current_expanded();
         }
     }
 
@@ -556,6 +730,9 @@ impl ExplorerTree {
         self.queued_keys.clear();
         self.selected_key = None;
         self.last_row_rects.clear();
+        self.content_search_hits.clear();
+        self.content_search_last_key.clear();
+        self.content_search_task = None;
         self.project_root = root.map(Path::to_path_buf);
 
         if let Some(r) = root {
@@ -723,13 +900,26 @@ impl ExplorerTree {
         if !self.rows_dirty {
             return;
         }
+        let hidden = if self.show_dotfiles {
+            None
+        } else {
+            let mut set = HashSet::new();
+            for list in self.nodes.values() {
+                for entry in list {
+                    if entry.name.starts_with('.') {
+                        set.insert(entry.path.clone());
+                    }
+                }
+            }
+            Some(set)
+        };
         self.cached_tree = build_explorer_rows(
             root_key,
             &self.nodes,
             &self.open_dirs,
             &ExplorerBuildOpts {
                 compact: self.compact_folders,
-                hidden_paths: None,
+                hidden_paths: hidden.as_ref(),
                 no_join_paths: None,
             },
         );
@@ -795,10 +985,27 @@ impl ExplorerTree {
 
         ui.horizontal(|ui| {
             ui.strong(root_title);
-            if self.is_loading() {
+            if self.is_loading() || self.content_search_task.is_some() {
                 ui.spinner();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("⋯", |ui| {
+                    let mut show_dots = self.show_dotfiles;
+                    if ui.checkbox(&mut show_dots, tr("Show dotfiles")).changed() {
+                        self.set_show_dotfiles(show_dots);
+                    }
+                    let mut compact = self.compact_folders;
+                    if ui.checkbox(&mut compact, tr("Compact folders")).changed() {
+                        self.set_compact_folders(compact);
+                    }
+                });
+                if ui
+                    .small_button("⊟")
+                    .on_hover_text(tr("Collapse all"))
+                    .clicked()
+                {
+                    self.collapse_all();
+                }
                 ui.add_enabled_ui(actions_enabled, |ui| {
                     ui.menu_button(tr("New…"), |ui| {
                         for (title, kind) in [
@@ -823,6 +1030,129 @@ impl ExplorerTree {
             });
         });
 
+        // `.explorer-tools`: filename filter + bounded project content search toggle
+        ui.horizontal(|ui| {
+            let mode_label = if self.content_search_mode {
+                tr("Text")
+            } else {
+                tr("Name")
+            };
+            if ui
+                .selectable_label(self.content_search_mode, mode_label)
+                .on_hover_text(tr("Toggle file name filter vs project text search"))
+                .clicked()
+            {
+                self.content_search_mode = !self.content_search_mode;
+                self.content_search_last_key.clear();
+            }
+            let hint = if self.content_search_mode {
+                tr("Search in files…")
+            } else {
+                tr("Filter files…")
+            };
+            let avail = (ui.available_width() - 28.0_f32).max(60.0_f32);
+            ui.add_sized(
+                [avail, 20.0_f32],
+                egui::TextEdit::singleline(&mut self.filter_query).hint_text(hint),
+            );
+            if !self.filter_query.is_empty() && ui.small_button("×").clicked() {
+                self.filter_query.clear();
+                self.content_search_hits.clear();
+                self.content_search_last_key.clear();
+                self.content_search_task = None;
+            }
+        });
+
+        if let Some(task) = &self.content_search_task {
+            match task.rx.try_recv() {
+                Ok(hits) => {
+                    if task.query_key == self.content_search_last_key {
+                        self.content_search_hits = hits;
+                    }
+                    self.content_search_task = None;
+                }
+                Err(TryRecvError::Empty) => {
+                    ui.ctx().request_repaint_after(Duration::from_millis(60));
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.content_search_task = None;
+                }
+            }
+        }
+
+        let trimmed_query = self.filter_query.trim().to_owned();
+        if self.content_search_mode && !trimmed_query.is_empty() {
+            let query_key = format!("{}::{trimmed_query}", root_key);
+            if self.content_search_last_key != query_key {
+                self.content_search_last_key = query_key.clone();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let worker_cancel = Arc::clone(&cancel);
+                let worker_root = root_path.clone();
+                let worker_q = trimmed_query.clone();
+                let (tx, rx) = mpsc::sync_channel(1);
+                thread::spawn(move || {
+                    let res = search_project_contents(&worker_root, &worker_q, &worker_cancel);
+                    let _ = tx.send(res);
+                });
+                self.content_search_task = Some(ContentSearchTask {
+                    query_key,
+                    cancel,
+                    rx,
+                });
+                ui.ctx().request_repaint_after(Duration::from_millis(60));
+            }
+            self.last_row_rects.clear();
+            if self.content_search_hits.is_empty() {
+                if self.content_search_task.is_some() {
+                    ui.label(tr("Working…"));
+                } else {
+                    ui.label(tr("No matching files."));
+                }
+                return emitted;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("explorer-content-hits")
+                .auto_shrink([false, false])
+                .show_rows(ui, 36.0_f32, self.content_search_hits.len(), |ui, range| {
+                    for idx in range {
+                        let hit = &self.content_search_hits[idx];
+                        let w = ui.available_width().max(120.0_f32);
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(w, 34.0_f32), egui::Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                4.0_f32,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
+                        let p = ui
+                            .painter()
+                            .with_clip_rect(rect.shrink2(egui::vec2(4.0, 2.0)));
+                        p.text(
+                            egui::pos2(rect.left() + 6.0_f32, rect.top() + 9.0_f32),
+                            egui::Align2::LEFT_CENTER,
+                            format!("{}:{}", hit.rel_display, hit.line),
+                            egui::FontId::proportional(11.5_f32),
+                            ui.visuals().strong_text_color(),
+                        );
+                        p.text(
+                            egui::pos2(rect.left() + 6.0_f32, rect.top() + 24.0_f32),
+                            egui::Align2::LEFT_CENTER,
+                            &hit.preview,
+                            egui::FontId::monospace(10.5_f32),
+                            ui.visuals().weak_text_color(),
+                        );
+                        if resp.double_clicked() {
+                            emitted = Some(TreeAction::OpenPinnedFile(hit.path.clone()));
+                        } else if resp.clicked() {
+                            emitted = Some(TreeAction::OpenFile(hit.path.clone()));
+                        }
+                    }
+                });
+            return emitted;
+        }
+
         if !self.error.is_empty() {
             ui.colored_label(ui.visuals().error_fg_color, &self.error);
         }
@@ -830,11 +1160,27 @@ impl ExplorerTree {
             ui.small(tr("Search limit reached; some files are not listed."));
         }
 
-        // Re-ensure if `Refresh` button was clicked in the header above.
+        // Re-ensure if `Refresh` or options changed in the header above.
         self.ensure_rows_built(&root_key);
 
         self.last_row_rects.clear();
-        if self.cached_tree.rows.is_empty() {
+        let filter_lc = trimmed_query.to_lowercase();
+        let visible_indices: Vec<usize> = if filter_lc.is_empty() {
+            (0..self.cached_tree.rows.len()).collect()
+        } else {
+            self.cached_tree
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    r.name.to_lowercase().contains(&filter_lc)
+                        || r.path.to_lowercase().contains(&filter_lc)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        if visible_indices.is_empty() {
             if self.is_loading() {
                 ui.label(tr("Working…"));
             } else if self.error.is_empty() {
@@ -845,13 +1191,17 @@ impl ExplorerTree {
 
         let active_key = active.map(norm_tree_key);
         let guide_target = self.selected_key.clone().or_else(|| active_key.clone());
-        let guide = active_guide(
-            &self.cached_tree.rows,
-            &self.cached_tree.index,
-            guide_target.as_deref(),
-        );
-        let mut clicked_row: Option<(usize, PathBuf)> = None;
-        let row_count = self.cached_tree.rows.len();
+        let guide = if filter_lc.is_empty() {
+            active_guide(
+                &self.cached_tree.rows,
+                &self.cached_tree.index,
+                guide_target.as_deref(),
+            )
+        } else {
+            None
+        };
+        let mut clicked_row: Option<(usize, PathBuf, bool)> = None;
+        let row_count = visible_indices.len();
 
         egui::ScrollArea::vertical()
             .id_salt("explorer-tree-scroll")
@@ -859,7 +1209,8 @@ impl ExplorerTree {
             .show_rows(ui, EXPLORER_ROW_HEIGHT, row_count, |ui, range| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let font_id = egui::TextStyle::Body.resolve(ui.style());
-                for idx in range {
+                for vis_i in range {
+                    let idx = visible_indices[vis_i];
                     let row = &self.cached_tree.rows[idx];
                     let row_path = self
                         .path_by_key
@@ -933,7 +1284,20 @@ impl ExplorerTree {
                             ui.visuals().weak_text_color(),
                         );
                     }
-                    let text_color = if is_active_doc {
+
+                    let rel_badge_key = row_path
+                        .strip_prefix(&root_path)
+                        .ok()
+                        .map(|rel| rel.to_string_lossy().replace('\\', "/").to_lowercase());
+                    let git_badge = rel_badge_key
+                        .as_deref()
+                        .and_then(|k| self.git_badges.get(k).copied());
+
+                    let text_color = if let Some(ch) = git_badge
+                        && !row.dir
+                    {
+                        git_badge_color(ch)
+                    } else if is_active_doc {
                         ui.visuals().strong_text_color()
                     } else {
                         ui.visuals().text_color()
@@ -946,11 +1310,37 @@ impl ExplorerTree {
                         text_color,
                     );
 
+                    if let Some(ch) = git_badge {
+                        let badge_col = git_badge_color(ch);
+                        if row.dir {
+                            painter.circle_filled(
+                                egui::pos2(rect.right() - 10.0_f32, rect.center().y),
+                                3.0_f32,
+                                badge_col,
+                            );
+                        } else {
+                            painter.text(
+                                egui::pos2(rect.right() - 8.0_f32, rect.center().y),
+                                egui::Align2::RIGHT_CENTER,
+                                ch.to_string(),
+                                egui::FontId::monospace(10.5_f32),
+                                badge_col,
+                            );
+                        }
+                    }
+
                     response.context_menu(|ui| {
+                        if ui.button(tr("Copy path")).clicked() {
+                            emitted = Some(TreeAction::CopyPath(row_path.clone()));
+                            ui.close();
+                            return;
+                        }
                         if !actions_enabled {
+                            ui.separator();
                             ui.label(tr("Save pending edits before changing files."));
                             return;
                         }
+                        ui.separator();
                         if row.dir {
                             for (title, kind) in [
                                 ("Create file", TreeContextKind::CreateFile),
@@ -970,6 +1360,7 @@ impl ExplorerTree {
                         }
                         for (title, kind) in [
                             ("Rename…", TreeContextKind::Rename),
+                            ("Move to Recycle Bin", TreeContextKind::Trash),
                             ("Delete…", TreeContextKind::Delete),
                         ] {
                             if ui.button(tr(title)).clicked() {
@@ -984,13 +1375,15 @@ impl ExplorerTree {
                         }
                     });
 
-                    if response.clicked() {
-                        clicked_row = Some((idx, row_path));
+                    if response.double_clicked() && !row.dir {
+                        clicked_row = Some((idx, row_path, true));
+                    } else if response.clicked() {
+                        clicked_row = Some((idx, row_path, false));
                     }
                 }
             });
 
-        if let Some((idx, row_path)) = clicked_row {
+        if let Some((idx, row_path, pinned)) = clicked_row {
             let row = self.cached_tree.rows[idx].clone();
             self.selected_key = Some(row.path.clone());
             if row.dir {
@@ -1031,6 +1424,8 @@ impl ExplorerTree {
                 } else {
                     self.truncated = true;
                 }
+            } else if pinned {
+                emitted = Some(TreeAction::OpenPinnedFile(row_path));
             } else {
                 emitted = Some(TreeAction::OpenFile(row_path));
             }

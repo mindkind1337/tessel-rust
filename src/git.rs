@@ -1,6 +1,7 @@
 //! Bounded, on-demand Git operations. No automatic recursive status polling.
 use crate::workspace::Result;
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
@@ -15,6 +16,7 @@ pub fn run(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String> {
 
 /// Stage exactly one project-relative file, including an already tracked deletion.
 /// Literal pathspecs prevent names such as `*.txt` from selecting other files.
+#[cfg(test)]
 pub fn stage_file(root: &Path, relative: &str) -> Result<String> {
     stage_files(root, &[relative.to_owned()])
 }
@@ -49,6 +51,259 @@ pub fn unstage_files(root: &Path, paths: &[String]) -> Result<String> {
         Some(&input),
     )?;
     Ok(format!("Unstaged {} selected file(s).", paths.len()))
+}
+
+pub fn commit_staged(root: &Path, message: &str) -> Result<String> {
+    if message.trim().is_empty() {
+        return Err("Enter a commit message.".into());
+    }
+    if message.len() > OUTPUT_LIMIT {
+        return Err("Commit message exceeds the size limit.".into());
+    }
+    let out = run(root, &["commit", "-F", "-"], Some(message.as_bytes()))?;
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        Ok("Committed staged changes.".into())
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+pub fn discard_worktree(
+    root: &Path,
+    tracked_paths: &[String],
+    untracked_paths: &[String],
+) -> Result<String> {
+    let total = tracked_paths.len() + untracked_paths.len();
+    if total == 0 || total > 5000 {
+        return Err("Select between one and 5,000 files.".into());
+    }
+    for path in tracked_paths.iter().chain(untracked_paths.iter()) {
+        validate_stage_file(root, path)?;
+    }
+    if !tracked_paths.is_empty() {
+        let input = selected_path_input(root, tracked_paths)?;
+        run(
+            root,
+            &[
+                "--literal-pathspecs",
+                "checkout",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+                "--",
+            ],
+            Some(&input),
+        )?;
+    }
+    for rel in untracked_paths {
+        let target = root.join(rel);
+        if crate::file_actions::move_to_trash(root, &target).is_err() {
+            let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+            let confined = crate::files::confined(&canonical_root, &target)?;
+            if std::fs::symlink_metadata(&target)
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .is_symlink()
+            {
+                return Err("Refusing to remove a symbolic link.".into());
+            }
+            std::fs::remove_file(&confined).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(format!("Discarded {total} file(s)."))
+}
+
+pub fn remote_op(
+    root: &Path,
+    op: crate::scm_changes_panel::ScmRemoteOp,
+    branch: Option<&str>,
+) -> Result<String> {
+    use crate::scm_changes_panel::ScmRemoteOp;
+    match op {
+        ScmRemoteOp::Fetch => {
+            let out = run(root, &["fetch", "--prune"], None)?;
+            Ok(if out.trim().is_empty() {
+                "Fetched remote updates.".into()
+            } else {
+                out.trim().to_owned()
+            })
+        }
+        ScmRemoteOp::Pull | ScmRemoteOp::FastForward => {
+            let out = run(root, &["pull", "--ff-only"], None)?;
+            Ok(if out.trim().is_empty() {
+                "Pulled fast-forward updates.".into()
+            } else {
+                out.trim().to_owned()
+            })
+        }
+        ScmRemoteOp::Push => {
+            let out = run(root, &["push"], None)?;
+            Ok(if out.trim().is_empty() {
+                "Pushed commits to upstream.".into()
+            } else {
+                out.trim().to_owned()
+            })
+        }
+        ScmRemoteOp::Sync => {
+            let pulled = run(root, &["pull", "--ff-only"], None)?;
+            let pushed = run(root, &["push"], None)?;
+            let combined = format!("{}\n{}", pulled.trim(), pushed.trim());
+            let trimmed = combined.trim();
+            Ok(if trimmed.is_empty() {
+                "Synchronized branch with upstream.".into()
+            } else {
+                trimmed.to_owned()
+            })
+        }
+        ScmRemoteOp::Publish => {
+            let branch = branch
+                .map(str::trim)
+                .filter(|b| {
+                    !b.is_empty()
+                        && !b.starts_with('-')
+                        && !b.chars().any(|c| c.is_control() || c.is_whitespace())
+                })
+                .ok_or("Cannot publish a detached or invalid branch name.")?;
+            let out = run(root, &["push", "-u", "origin", branch], None)?;
+            Ok(if out.trim().is_empty() {
+                format!("Published branch {branch} to origin.")
+            } else {
+                out.trim().to_owned()
+            })
+        }
+    }
+}
+
+pub fn file_diff(
+    root: &Path,
+    relative: &str,
+    old_relative: Option<&str>,
+    staged: bool,
+    untracked: bool,
+) -> Result<String> {
+    validate_stage_file(root, relative)?;
+    if let Some(old) = old_relative {
+        validate_stage_file(root, old)?;
+    }
+    if untracked {
+        let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+        let path = crate::files::confined(&canonical_root, &root.join(relative))?;
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        const DIFF_PREVIEW_MAX: usize = 512 * 1024;
+        if bytes.iter().take(8192).any(|&b| b == 0) {
+            return Ok(format!(
+                "diff --git a/{relative} b/{relative}\nnew file\nBinary files /dev/null and b/{relative} differ\n"
+            ));
+        }
+        let truncated = bytes.len() > DIFF_PREVIEW_MAX;
+        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(DIFF_PREVIEW_MAX)]);
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out = format!(
+            "diff --git a/{relative} b/{relative}\nnew file mode 100644\n--- /dev/null\n+++ b/{relative}\n@@ -0,0 +1,{} @@\n",
+            lines.len()
+        );
+        for line in lines {
+            out.push('+');
+            out.push_str(line);
+            out.push('\n');
+        }
+        if truncated {
+            out.push_str("\n[Untracked diff preview truncated at 512 KiB.]\n");
+        }
+        return Ok(out);
+    }
+    let mut args = vec!["--literal-pathspecs", "diff"];
+    if staged {
+        args.push("--cached");
+    }
+    args.extend(["--no-ext-diff", "--no-textconv", "--"]);
+    if let Some(old) = old_relative {
+        args.push(old);
+    }
+    args.push(relative);
+    run(root, &args, None)
+}
+
+pub type NumstatMap = HashMap<String, (Option<u32>, Option<u32>)>;
+
+pub fn parse_numstat_z(bytes: &[u8], project_prefix: &str) -> NumstatMap {
+    let mut map = NumstatMap::new();
+    let mut records = bytes.split(|&b| b == 0);
+    while let Some(rec) = records.next() {
+        if rec.is_empty() {
+            continue;
+        }
+        let Ok(rec_str) = std::str::from_utf8(rec) else {
+            continue;
+        };
+        let mut parts = rec_str.splitn(3, '\t');
+        let Some(added_raw) = parts.next() else {
+            continue;
+        };
+        let Some(removed_raw) = parts.next() else {
+            continue;
+        };
+        let Some(path_part) = parts.next() else {
+            continue;
+        };
+        let added = if added_raw == "-" {
+            None
+        } else {
+            added_raw.parse::<u32>().ok()
+        };
+        let removed = if removed_raw == "-" {
+            None
+        } else {
+            removed_raw.parse::<u32>().ok()
+        };
+        let repo_path = if path_part.is_empty() {
+            // Rename/copy in `-z` mode: `<added>\t<removed>\t\0<old_path>\0<new_path>\0`
+            let _old = records.next();
+            let Some(new_bytes) = records.next() else {
+                break;
+            };
+            let Ok(new_str) = std::str::from_utf8(new_bytes) else {
+                continue;
+            };
+            new_str
+        } else {
+            path_part
+        };
+        if let Some(rel) = project_relative_path(project_prefix, repo_path) {
+            map.insert(rel.to_owned(), (added, removed));
+        }
+    }
+    map
+}
+
+pub fn scoped_numstat(root: &Path, project_prefix: &str, cached: bool) -> Result<NumstatMap> {
+    let args: &[&str] = if cached {
+        &[
+            "diff",
+            "--cached",
+            "--numstat",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            ".",
+        ]
+    } else {
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            ".",
+        ]
+    };
+    let capture = run_bytes(root, args, None)?;
+    if capture.truncated {
+        return Ok(NumstatMap::new());
+    }
+    Ok(parse_numstat_z(&capture.bytes, project_prefix))
 }
 
 fn selected_path_input(root: &Path, paths: &[String]) -> Result<Vec<u8>> {
@@ -546,5 +801,50 @@ mod tests {
             std::fs::read_to_string(dir.path().join("[one].txt")).unwrap(),
             "one"
         );
+    }
+
+    #[test]
+    fn numstat_discard_commit_and_file_diff_round_trip() {
+        let raw =
+            b"12\t3\tsrc/app.rs\x00-\t-\tassets/logo.png\x004\t1\t\x00src/old.rs\x00src/new.rs\x00";
+        let parsed = parse_numstat_z(raw, "src/");
+        assert_eq!(parsed.get("app.rs"), Some(&(Some(12), Some(3))));
+        assert_eq!(parsed.get("new.rs"), Some(&(Some(4), Some(1))));
+        assert!(!parsed.contains_key("assets/logo.png"));
+
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q"], None).unwrap();
+        run(dir.path(), &["config", "core.autocrlf", "false"], None).unwrap();
+        run(dir.path(), &["config", "user.name", "Fixture"], None).unwrap();
+        run(
+            dir.path(),
+            &["config", "user.email", "fixture@example.invalid"],
+            None,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("tracked.txt"), "line1\nline2\n").unwrap();
+        stage_file(dir.path(), "tracked.txt").unwrap();
+        assert!(commit_staged(dir.path(), "   ").is_err());
+        commit_staged(dir.path(), "initial commit").unwrap();
+
+        std::fs::write(
+            dir.path().join("tracked.txt"),
+            "line1\nchanged\nextra1\nextra2\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("scratch.txt"), "temp untracked\n").unwrap();
+        let stats = scoped_numstat(dir.path(), "", false).unwrap();
+        assert_eq!(stats.get("tracked.txt"), Some(&(Some(3), Some(1))));
+        let wt_diff = file_diff(dir.path(), "tracked.txt", None, false, false).unwrap();
+        assert!(wt_diff.contains("+changed"));
+        let untracked_diff = file_diff(dir.path(), "scratch.txt", None, false, true).unwrap();
+        assert!(untracked_diff.contains("+temp untracked"));
+
+        discard_worktree(dir.path(), &["tracked.txt".into()], &["scratch.txt".into()]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("tracked.txt")).unwrap(),
+            "line1\nline2\n"
+        );
+        assert!(!dir.path().join("scratch.txt").exists());
     }
 }

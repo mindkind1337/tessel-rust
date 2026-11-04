@@ -1,5 +1,10 @@
-//! Empty-project launcher. Receives available actions; never starts processes itself.
+//! Empty-project launcher (`ProjectLauncher.vue` parity). Receives available actions; never starts processes itself.
 use eframe::egui::{self, Key, Modifiers};
+
+use crate::{
+    i18n::tr,
+    icons::{self, Icon},
+};
 
 pub struct Entry {
     pub id: String,
@@ -8,12 +13,40 @@ pub struct Entry {
     pub enabled: bool,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShellOption<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmptyStateAction {
+    Launch(String),
+    SelectShell(String),
+    SetRememberDefault(bool),
+}
+
+fn entry_icon(id: &str) -> Icon {
+    if id == "browser" {
+        Icon::ExternalLink
+    } else if id == "folder" {
+        Icon::FolderPlus
+    } else if id == "terminal" || id == "shell" || id.starts_with("shell:") {
+        Icon::Terminal
+    } else {
+        Icon::Agent
+    }
+}
+
 #[derive(Default)]
 pub struct EmptyState {
     selected: usize,
 }
 
 impl EmptyState {
+    #[allow(dead_code)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -21,6 +54,23 @@ impl EmptyState {
         subtitle: &str,
         entries: &[Entry],
     ) -> Option<String> {
+        match self.show_full(ui, title, subtitle, entries, &[], "", false) {
+            Some(EmptyStateAction::Launch(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_full(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        subtitle: &str,
+        entries: &[Entry],
+        shells: &[ShellOption<'_>],
+        selected_shell: &str,
+        remember_default: bool,
+    ) -> Option<EmptyStateAction> {
         let room = ui.available_rect_before_wrap();
         let root = ui.interact(
             room,
@@ -46,9 +96,16 @@ impl EmptyState {
                 let down = input.consume_key(Modifiers::NONE, Key::ArrowDown);
                 let fresh = |key| {
                     input.events.iter().any(|event| {
-                        matches!(event,
-                    egui::Event::Key { key: actual, pressed: true, repeat: false, modifiers, .. }
-                        if *actual == key && *modifiers == Modifiers::NONE)
+                        matches!(
+                            event,
+                            egui::Event::Key {
+                                key: actual,
+                                pressed: true,
+                                repeat: false,
+                                modifiers,
+                                ..
+                            } if *actual == key && *modifiers == Modifiers::NONE
+                        )
                     })
                 };
                 let activate = fresh(Key::Enter);
@@ -94,12 +151,18 @@ impl EmptyState {
                 root.surrender_focus();
             } else if let Some(index) = number.filter(|&i| i < entries.len() && entries[i].enabled)
             {
-                action = Some(entries[index].id.clone());
+                action = Some(EmptyStateAction::Launch(entries[index].id.clone()));
             } else if activate && let Some(entry) = entries.get(self.selected).filter(|e| e.enabled)
             {
-                action = Some(entry.id.clone());
+                action = Some(EmptyStateAction::Launch(entry.id.clone()));
             }
         }
+
+        let effective_title = if title.trim().is_empty() {
+            tr("No project folder")
+        } else {
+            title
+        };
         let width = (room.width() - 48.0).clamp(0.0, 520.0);
         egui::ScrollArea::vertical()
             .id_salt("empty-project-scroll")
@@ -115,10 +178,12 @@ impl EmptyState {
                         |ui| {
                             ui.set_width(width);
                             ui.add(
-                                egui::Label::new(egui::RichText::new(title).size(15.0).strong())
-                                    .truncate(),
+                                egui::Label::new(
+                                    egui::RichText::new(effective_title).size(15.0).strong(),
+                                )
+                                .truncate(),
                             )
-                            .on_hover_text(title);
+                            .on_hover_text(effective_title);
                             if !subtitle.is_empty() {
                                 ui.add(
                                     egui::Label::new(
@@ -133,7 +198,14 @@ impl EmptyState {
                             for (index, entry) in entries.iter().enumerate() {
                                 if entry.group != last_group {
                                     ui.add_space(10.0);
-                                    ui.weak(&entry.group);
+                                    let grp_heading = entry.group.to_uppercase();
+                                    ui.label(
+                                        egui::RichText::new(grp_heading)
+                                            .size(11.0)
+                                            .strong()
+                                            .color(ui.visuals().weak_text_color()),
+                                    );
+                                    ui.add_space(2.0);
                                     last_group = &entry.group;
                                 }
                                 let row = ui.add_enabled(
@@ -174,24 +246,38 @@ impl EmptyState {
                                     egui::FontId::proportional(11.0),
                                     color,
                                 );
+                                let icon_rect = egui::Rect::from_center_size(
+                                    egui::pos2(row.rect.left() + 38.0, row.rect.center().y),
+                                    egui::Vec2::splat(15.0),
+                                );
+                                icons::paint(
+                                    ui.painter(),
+                                    icon_rect,
+                                    entry_icon(&entry.id),
+                                    if entry.enabled {
+                                        ui.visuals().selection.stroke.color
+                                    } else {
+                                        color
+                                    },
+                                );
                                 let mut label = egui::text::LayoutJob::simple_singleline(
                                     entry.label.clone(),
                                     egui::FontId::proportional(13.0),
                                     color,
                                 );
-                                label.wrap.max_width = (row.rect.width() - 44.0).max(1.0);
+                                label.wrap.max_width = (row.rect.width() - 62.0).max(1.0);
                                 label.wrap.max_rows = 1;
                                 let galley = ui.fonts_mut(|f| f.layout_job(label));
                                 ui.painter().galley(
                                     egui::pos2(
-                                        row.rect.left() + 36.0,
+                                        row.rect.left() + 54.0,
                                         row.rect.center().y - galley.size().y / 2.0,
                                     ),
                                     galley,
                                     color,
                                 );
                                 if row.clicked() {
-                                    action = Some(entry.id.clone());
+                                    action = Some(EmptyStateAction::Launch(entry.id.clone()));
                                 }
                                 if scroll_selected && index == self.selected {
                                     row.scroll_to_me(Some(egui::Align::Center));
@@ -204,10 +290,31 @@ impl EmptyState {
                                 }
                                 row.on_hover_text(&entry.label);
                             }
-                            ui.add_space(14.0);
-                            ui.weak(crate::i18n::tr(
-                                "1–9 or arrows and Enter to start · Esc to stay empty",
-                            ));
+
+                            if !shells.is_empty() {
+                                ui.add_space(12.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.weak(format!("{}:", tr("Shell")));
+                                    for sh in shells {
+                                        let active = sh.id == selected_shell
+                                            || (selected_shell.is_empty() && sh.id == "powershell");
+                                        if ui.selectable_label(active, sh.label).clicked() {
+                                            action =
+                                                Some(EmptyStateAction::SelectShell(sh.id.into()));
+                                        }
+                                    }
+                                });
+                                let mut rem = remember_default;
+                                if ui
+                                    .checkbox(&mut rem, tr("Remember for new projects"))
+                                    .changed()
+                                {
+                                    action = Some(EmptyStateAction::SetRememberDefault(rem));
+                                }
+                            }
+
+                            ui.add_space(12.0);
+                            ui.weak(tr("1–9 or arrows and Enter to start · Esc to stay empty"));
                         },
                     );
                 });

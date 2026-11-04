@@ -108,6 +108,21 @@ impl Default for FloatingPreferences {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SidebarPreferences {
+    pub sort_by_activity: bool,
+    pub compact_rows: bool,
+    pub hide_sleeping: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LauncherPreferences {
+    pub preferred_shell: Option<String>,
+    pub remember_default: Option<String>,
+}
+
 impl Default for Panels {
     fn default() -> Self {
         Self {
@@ -218,6 +233,8 @@ pub struct Workspace {
     pub columns: usize,
     pub broadcast: bool,
     pub panels: Panels,
+    pub sidebar: SidebarPreferences,
+    pub launcher_prefs: LauncherPreferences,
     pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
@@ -246,6 +263,8 @@ impl Default for Workspace {
             columns: 1,
             broadcast: false,
             panels: Default::default(),
+            sidebar: Default::default(),
+            launcher_prefs: Default::default(),
             status_bar: Default::default(),
             floating: Default::default(),
             terminal_layouts: Default::default(),
@@ -288,6 +307,16 @@ impl Workspace {
         }
         if self.projects.len() > 1000 || self.hosts.len() > 1000 || self.tasks.len() > 10000 {
             return Err("Workspace exceeds supported limits.".into());
+        }
+        if let Some(shell) = &self.launcher_prefs.preferred_shell
+            && !matches!(shell.as_str(), "powershell" | "cmd" | "wsl" | "sh")
+        {
+            return Err("Unsupported preferred shell.".into());
+        }
+        if let Some(rem) = &self.launcher_prefs.remember_default
+            && (rem.len() > 64 || rem.chars().any(char::is_control))
+        {
+            return Err("Invalid remembered launcher entry.".into());
         }
         if self
             .agent_prefs

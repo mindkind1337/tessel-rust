@@ -18,6 +18,8 @@
 //!     `Alt+ArrowLeft`/`Alt+ArrowRight` or `ArrowLeft`/`ArrowRight` on the focused card list to
 //!     move one column with held-key anti-repeat, respecting `!ui.is_enabled()` and open popups).
 
+use std::collections::BTreeSet;
+
 use eframe::egui::{
     self, Color32, FontId, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
@@ -45,10 +47,14 @@ pub struct TasksBoardInput<'a> {
 }
 
 /// User action emitted by [`TasksBoard::show`].
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TasksBoardAction {
     Add(String),
     Move { id: u64, column: usize },
+    Rename { id: u64, title: String },
+    Delete(u64),
+    DeleteMany(Vec<u64>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +128,38 @@ const fn board_landmark_label(french: bool) -> &'static str {
     }
 }
 
+const fn rename_label(french: bool) -> &'static str {
+    if french { "Renommer" } else { "Rename" }
+}
+
+const fn delete_label(french: bool) -> &'static str {
+    if french { "Supprimer" } else { "Delete" }
+}
+
+const fn select_label(french: bool) -> &'static str {
+    if french { "Sélectionner" } else { "Select" }
+}
+
+const fn cancel_label(french: bool) -> &'static str {
+    if french { "Annuler" } else { "Cancel" }
+}
+
+const fn select_all_label(french: bool) -> &'static str {
+    if french { "Tout" } else { "All" }
+}
+
+const fn select_none_label(french: bool) -> &'static str {
+    if french { "Aucun" } else { "None" }
+}
+
+fn delete_selected_label(count: usize, french: bool) -> String {
+    if french {
+        format!("Supprimer ({count})")
+    } else {
+        format!("Delete ({count})")
+    }
+}
+
 fn move_button_label(target_col: usize, french: bool) -> String {
     let col_name = column_label(target_col, french);
     if french {
@@ -181,6 +219,53 @@ fn paint_chevron_horizontal(painter: &Painter, rect: Rect, color: Color32, left:
         ]
     };
     painter.add(egui::Shape::line(points, stroke));
+}
+
+fn paint_close_x(painter: &Painter, rect: Rect, color: Color32) {
+    let side = rect.width().min(rect.height());
+    if !side.is_finite() || side <= 0.0_f32 {
+        return;
+    }
+    let sq = Rect::from_center_size(rect.center(), Vec2::splat(side));
+    let pad = (side * 0.28_f32).max(2.0_f32);
+    let inner = sq.shrink(pad);
+    let stroke = Stroke::new(1.5_f32, color);
+    painter.line_segment([inner.left_top(), inner.right_bottom()], stroke);
+    painter.line_segment([inner.right_top(), inner.left_bottom()], stroke);
+}
+
+fn paint_checkbox(painter: &Painter, rect: Rect, checked: bool, accent: Color32, border: Color32) {
+    let fill = if checked {
+        accent
+    } else {
+        Color32::TRANSPARENT
+    };
+    let stroke_col = if checked { accent } else { border };
+    painter.rect(
+        rect,
+        3.5_f32,
+        fill,
+        Stroke::new(1.0_f32, stroke_col),
+        StrokeKind::Inside,
+    );
+    if checked {
+        let p1 = Pos2::new(
+            rect.min.x + rect.width() * 0.24_f32,
+            rect.min.y + rect.height() * 0.52_f32,
+        );
+        let p2 = Pos2::new(
+            rect.min.x + rect.width() * 0.44_f32,
+            rect.min.y + rect.height() * 0.74_f32,
+        );
+        let p3 = Pos2::new(
+            rect.min.x + rect.width() * 0.78_f32,
+            rect.min.y + rect.height() * 0.28_f32,
+        );
+        painter.add(egui::Shape::line(
+            vec![p1, p2, p3],
+            Stroke::new(1.6_f32, Color32::WHITE),
+        ));
+    }
 }
 
 fn paint_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke, dash: f32, gap: f32) {
@@ -266,6 +351,11 @@ pub struct TasksBoard {
     focus_input_requested: bool,
     input_widget_id: Option<Id>,
     held_key: Option<Key>,
+    editing_task_id: Option<u64>,
+    edit_draft: String,
+    focus_edit_requested: bool,
+    done_select_mode: bool,
+    selected_done_ids: BTreeSet<u64>,
 }
 
 impl TasksBoard {
@@ -282,6 +372,23 @@ impl TasksBoard {
         self.dragging_task_id = None;
         self.focus_input_requested = false;
         self.held_key = None;
+        self.editing_task_id = None;
+        self.edit_draft.clear();
+        self.focus_edit_requested = false;
+        self.done_select_mode = false;
+        self.selected_done_ids.clear();
+    }
+
+    #[allow(dead_code)]
+    pub fn begin_rename(&mut self, id: u64, current_title: &str) {
+        self.editing_task_id = Some(id);
+        self.edit_draft = current_title.chars().take(MAX_TASK_TITLE_CHARS).collect();
+        self.focus_edit_requested = true;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_edit_draft(&mut self, draft: impl Into<String>) {
+        self.edit_draft = draft.into().chars().take(MAX_TASK_TITLE_CHARS).collect();
     }
 
     /// Returns the current bounded creation draft.
@@ -557,6 +664,19 @@ impl TasksBoard {
         let ordered_ids = Self::flat_ordered_ids(&buckets);
         let has_tasks = !ordered_ids.is_empty();
 
+        self.selected_done_ids
+            .retain(|id| buckets[3].iter().any(|c| c.id == *id));
+        if buckets[3].is_empty() {
+            self.done_select_mode = false;
+        }
+        if let Some(eid) = self.editing_task_id
+            && !ordered_ids.contains(&eid)
+        {
+            self.editing_task_id = None;
+            self.edit_draft.clear();
+            self.focus_edit_requested = false;
+        }
+
         if let Some(cur) = self.focused_task_id
             && !ordered_ids.contains(&cur)
         {
@@ -581,7 +701,7 @@ impl TasksBoard {
 
         let can_submit_before = sanitized_submit_title(&self.draft).is_some();
         let focused_before = ui.ctx().memory(|m| m.focused());
-        let focus_owner = if interaction_blocked {
+        let focus_owner = if interaction_blocked || self.editing_task_id.is_some() {
             if !ui.is_enabled() {
                 self.focus_input_requested = false;
             }
@@ -982,8 +1102,49 @@ impl TasksBoard {
             ui.set_max_width(full_w);
             ui.spacing_mut().item_spacing.y = 6.0_f32;
 
-            // `.task-column-head`: 8px colored dot + bold 12px title + count pill.
+            // `.task-column-head`: 8px colored dot + bold 12px title + count pill (+ Select toggle on Done).
             let (_, head_rect) = ui.allocate_space(Vec2::new(full_w, 24.0_f32));
+            let show_done_select_toggle = col_idx == 3 && !cards.is_empty();
+            let toggle_lbl = if self.done_select_mode {
+                cancel_label(french)
+            } else {
+                select_label(french)
+            };
+            let toggle_w = if show_done_select_toggle {
+                let tw = ui
+                    .fonts_mut(|f| {
+                        f.layout_no_wrap(
+                            toggle_lbl.to_owned(),
+                            FontId::proportional(10.5_f32),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                    })
+                    .ceil();
+                (tw + 14.0_f32).max(44.0_f32)
+            } else {
+                0.0_f32
+            };
+            let toggle_rect = Rect::from_min_size(
+                Pos2::new(
+                    (head_rect.max.x - toggle_w).max(head_rect.min.x),
+                    head_rect.center().y - 9.5_f32,
+                ),
+                Vec2::new(toggle_w, 19.0_f32),
+            );
+            let toggle_resp = show_done_select_toggle.then(|| {
+                let r = ui.interact(
+                    toggle_rect,
+                    board_id.with("done-select-toggle"),
+                    Sense::CLICK,
+                );
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), toggle_lbl)
+                });
+                r
+            });
+
             let hp = ui.painter().with_clip_rect(head_rect);
             let dot_center = Pos2::new(head_rect.min.x + 6.0_f32, head_rect.center().y);
             hp.circle_filled(dot_center, 4.0_f32, col_color);
@@ -994,8 +1155,14 @@ impl TasksBoard {
                 hp.layout_no_wrap(count_str, FontId::proportional(10.5_f32), count_fg);
             let pill_w = (count_galley.size().x + 12.0_f32).max(18.0_f32);
 
+            let right_reserve = if show_done_select_toggle {
+                toggle_w + 6.0_f32
+            } else {
+                0.0_f32
+            };
             let title_min_x = head_rect.min.x + 16.0_f32;
-            let max_title_w = (head_rect.max.x - title_min_x - pill_w - 8.0_f32).max(24.0_f32);
+            let max_title_w =
+                (head_rect.max.x - right_reserve - title_min_x - pill_w - 8.0_f32).max(24.0_f32);
             let mut title_job = egui::text::LayoutJob::simple(
                 col_title.to_owned(),
                 FontId::proportional(12.0_f32),
@@ -1010,8 +1177,8 @@ impl TasksBoard {
                 title_min_x,
                 head_rect.center().y - title_galley.size().y * 0.5_f32,
             );
-            let pill_x =
-                (title_pos.x + title_galley.size().x + 8.0_f32).min(head_rect.max.x - pill_w);
+            let pill_x = (title_pos.x + title_galley.size().x + 8.0_f32)
+                .min(head_rect.max.x - right_reserve - pill_w);
             hp.galley(title_pos, title_galley, ui.visuals().strong_text_color());
 
             let pill_rect = Rect::from_center_size(
@@ -1031,6 +1198,56 @@ impl TasksBoard {
                 count_galley,
                 count_fg,
             );
+
+            if let Some(tr_resp) = toggle_resp {
+                let hovered = tr_resp.hovered();
+                let bg = if self.done_select_mode || hovered {
+                    ui.visuals().widgets.hovered.bg_fill
+                } else {
+                    Color32::TRANSPARENT
+                };
+                let border = ui.visuals().widgets.noninteractive.bg_stroke.color;
+                hp.rect(
+                    toggle_rect,
+                    5.0_f32,
+                    bg,
+                    Stroke::new(1.0_f32, border),
+                    StrokeKind::Inside,
+                );
+                let fg_col = if self.done_select_mode || hovered {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                let tg = hp.layout_no_wrap(
+                    toggle_lbl.to_owned(),
+                    FontId::proportional(10.5_f32),
+                    fg_col,
+                );
+                hp.galley(
+                    Pos2::new(
+                        toggle_rect.center().x - tg.size().x * 0.5_f32,
+                        toggle_rect.center().y - tg.size().y * 0.5_f32,
+                    ),
+                    tg,
+                    fg_col,
+                );
+                if !interaction_blocked && tr_resp.clicked() {
+                    self.done_select_mode = !self.done_select_mode;
+                    if !self.done_select_mode {
+                        self.selected_done_ids.clear();
+                    }
+                }
+            }
+
+            if col_idx == 3
+                && self.done_select_mode
+                && !cards.is_empty()
+                && let Some(bulk_act) =
+                    self.render_done_bulk_bar(ui, board_id, cards, french, interaction_blocked)
+            {
+                action = Some(bulk_act);
+            }
 
             if cards.is_empty() {
                 // `.task-column-empty`: dashed rounded box with localized `"No tasks"`.
@@ -1117,6 +1334,159 @@ impl TasksBoard {
         (action, col_resp.response.rect)
     }
 
+    fn render_done_bulk_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        board_id: Id,
+        cards: &[&TaskCard],
+        french: bool,
+        interaction_blocked: bool,
+    ) -> Option<TasksBoardAction> {
+        let full_w = ui.available_width().max(64.0_f32);
+        let (_, bar_rect) = ui.allocate_space(Vec2::new(full_w, 24.0_f32));
+        let all_lbl = select_all_label(french);
+        let none_lbl = select_none_label(french);
+
+        let measure = |ui: &mut egui::Ui, s: &str| -> f32 {
+            ui.fonts_mut(|f| {
+                f.layout_no_wrap(s.to_owned(), FontId::proportional(10.5_f32), Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .ceil()
+                + 12.0_f32
+        };
+        let all_w = measure(ui, all_lbl).max(32.0_f32);
+        let none_w = measure(ui, none_lbl).max(38.0_f32);
+
+        let all_rect = Rect::from_min_size(
+            Pos2::new(bar_rect.min.x, bar_rect.min.y + 2.0_f32),
+            Vec2::new(all_w, 20.0_f32),
+        );
+        let none_rect = Rect::from_min_size(
+            Pos2::new(all_rect.max.x + 4.0_f32, bar_rect.min.y + 2.0_f32),
+            Vec2::new(none_w, 20.0_f32),
+        );
+
+        let all_resp = ui.interact(all_rect, board_id.with("done-bulk-all"), Sense::CLICK);
+        all_resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), all_lbl)
+        });
+        let none_resp = ui.interact(none_rect, board_id.with("done-bulk-none"), Sense::CLICK);
+        none_resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), none_lbl)
+        });
+        if !interaction_blocked {
+            if all_resp.clicked() {
+                for c in cards {
+                    self.selected_done_ids.insert(c.id);
+                }
+                ui.ctx().request_repaint();
+            } else if none_resp.clicked() {
+                self.selected_done_ids.clear();
+                ui.ctx().request_repaint();
+            }
+        }
+
+        let count = self.selected_done_ids.len();
+        let del_lbl = delete_selected_label(count, french);
+        let del_w = measure(ui, &del_lbl).max(62.0_f32);
+        let del_rect = Rect::from_min_size(
+            Pos2::new(
+                (bar_rect.max.x - del_w).max(none_rect.max.x + 4.0_f32),
+                bar_rect.min.y + 2.0_f32,
+            ),
+            Vec2::new(del_w, 20.0_f32),
+        );
+        let can_del = ui.is_enabled() && count > 0;
+        let del_resp = ui.interact(
+            del_rect,
+            board_id.with("done-bulk-del"),
+            if can_del {
+                Sense::CLICK
+            } else {
+                Sense::hover()
+            },
+        );
+        del_resp
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_del, &del_lbl));
+
+        let bp = ui.painter().with_clip_rect(bar_rect);
+        let border = ui.visuals().widgets.noninteractive.bg_stroke.color;
+        for (rect, resp, lbl) in [
+            (all_rect, &all_resp, all_lbl),
+            (none_rect, &none_resp, none_lbl),
+        ] {
+            let bg = if resp.hovered() {
+                ui.visuals().widgets.hovered.bg_fill
+            } else {
+                Color32::TRANSPARENT
+            };
+            bp.rect(
+                rect,
+                5.0_f32,
+                bg,
+                Stroke::new(1.0_f32, border),
+                StrokeKind::Inside,
+            );
+            let fg = if resp.hovered() {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            let g = bp.layout_no_wrap(lbl.to_owned(), FontId::proportional(10.5_f32), fg);
+            bp.galley(
+                Pos2::new(
+                    rect.center().x - g.size().x * 0.5_f32,
+                    rect.center().y - g.size().y * 0.5_f32,
+                ),
+                g,
+                fg,
+            );
+        }
+
+        let danger = Color32::from_rgb(0xe0, 0x6c, 0x75);
+        let del_bg = if can_del && del_resp.hovered() {
+            danger.gamma_multiply(0.22_f32)
+        } else {
+            Color32::TRANSPARENT
+        };
+        let del_stroke = if can_del {
+            danger.gamma_multiply(0.75_f32)
+        } else {
+            border.gamma_multiply(0.45_f32)
+        };
+        let del_fg = if can_del {
+            danger
+        } else {
+            ui.visuals().weak_text_color().gamma_multiply(0.45_f32)
+        };
+        bp.rect(
+            del_rect,
+            5.0_f32,
+            del_bg,
+            Stroke::new(1.0_f32, del_stroke),
+            StrokeKind::Inside,
+        );
+        let dg = bp.layout_no_wrap(del_lbl, FontId::proportional(10.5_f32), del_fg);
+        bp.galley(
+            Pos2::new(
+                del_rect.center().x - dg.size().x * 0.5_f32,
+                del_rect.center().y - dg.size().y * 0.5_f32,
+            ),
+            dg,
+            del_fg,
+        );
+
+        if !interaction_blocked && can_del && del_resp.clicked() {
+            let ids: Vec<u64> = self.selected_done_ids.iter().copied().collect();
+            self.selected_done_ids.clear();
+            self.done_select_mode = false;
+            return Some(TasksBoardAction::DeleteMany(ids));
+        }
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_card(
         &mut self,
@@ -1132,8 +1502,72 @@ impl TasksBoard {
         interaction_blocked: bool,
     ) -> Option<TasksBoardAction> {
         let full_w = ui.available_width().max(64.0_f32);
-        let text_wrap_w = (full_w - 22.0_f32).max(24.0_f32);
         let fg = ui.visuals().strong_text_color();
+
+        if self.editing_task_id == Some(card.id) {
+            clamp_draft_in_place(&mut self.edit_draft);
+            let card_h = 46.0_f32;
+            let (_, card_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
+            let accent = ui.visuals().selection.stroke.color;
+            let cp = ui.painter().with_clip_rect(card_rect);
+            cp.rect(
+                card_rect,
+                6.0_f32,
+                ui.visuals().extreme_bg_color,
+                Stroke::new(1.5_f32, accent),
+                StrokeKind::Inside,
+            );
+            let stripe_rect = Rect::from_min_max(
+                Pos2::new(card_rect.min.x + 0.5_f32, card_rect.min.y + 3.0_f32),
+                Pos2::new(card_rect.min.x + 3.5_f32, card_rect.max.y - 3.0_f32),
+            );
+            cp.rect_filled(stripe_rect, 1.5_f32, col_color);
+
+            let edit_rect = card_rect.shrink2(Vec2::new(10.0_f32, 9.0_f32));
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(edit_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            child.set_clip_rect(ui.clip_rect().intersect(edit_rect));
+            let edit_id = board_id.with(("task-edit-input", card.id));
+            let focus_req = self.focus_edit_requested;
+            self.focus_edit_requested = false;
+            let edit_out = egui::TextEdit::singleline(&mut self.edit_draft)
+                .id(edit_id)
+                .frame(false)
+                .font(FontId::proportional(12.5_f32))
+                .char_limit(MAX_TASK_TITLE_CHARS)
+                .desired_width(edit_rect.width().max(16.0_f32))
+                .show(&mut child);
+            if focus_req && ui.is_enabled() {
+                edit_out.response.request_focus();
+            }
+            clamp_draft_in_place(&mut self.edit_draft);
+
+            let enter_pressed = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+            let esc_pressed = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+            if enter_pressed {
+                let submitted = sanitized_submit_title(&self.edit_draft);
+                self.editing_task_id = None;
+                self.edit_draft.clear();
+                self.focused_task_id = Some(card.id);
+                ui.ctx().memory_mut(|m| m.request_focus(list_id));
+                if let Some(title) = submitted {
+                    return Some(TasksBoardAction::Rename { id: card.id, title });
+                }
+            } else if esc_pressed || (!focus_req && edit_out.response.lost_focus()) {
+                self.editing_task_id = None;
+                self.edit_draft.clear();
+                ui.ctx().memory_mut(|m| m.request_focus(list_id));
+            }
+            return None;
+        }
+
+        let in_done_select = col_idx == 3 && self.done_select_mode;
+        let left_text_pad = if in_done_select { 30.0_f32 } else { 11.0_f32 };
+        let right_text_pad = if in_done_select { 10.0_f32 } else { 26.0_f32 };
+        let text_wrap_w = (full_w - left_text_pad - right_text_pad).max(24.0_f32);
         let title_galley = layout_card_title(ui, &card.title, text_wrap_w, fg);
 
         let title_h = title_galley.size().y.max(16.0_f32);
@@ -1150,28 +1584,59 @@ impl TasksBoard {
             Pos2::new(right_btn_rect.min.x - 4.0_f32 - 26.0_f32, foot_y),
             Vec2::new(26.0_f32, foot_h),
         );
+        let del_btn_rect = Rect::from_min_size(
+            Pos2::new(
+                card_rect.max.x - 6.0_f32 - 18.0_f32,
+                card_rect.min.y + 6.0_f32,
+            ),
+            Vec2::new(18.0_f32, 18.0_f32),
+        );
 
         let card_id = board_id.with(("task-card", card.id));
         let left_id = board_id.with(("task-move-left", card.id));
         let right_id = board_id.with(("task-move-right", card.id));
+        let del_id = board_id.with(("task-delete", card.id));
 
-        let can_left = ui.is_enabled() && col_idx > 0;
-        let can_right = ui.is_enabled() && col_idx + 1 < TASK_COLUMN_COUNT;
+        let can_left = ui.is_enabled() && !in_done_select && col_idx > 0;
+        let can_right = ui.is_enabled() && !in_done_select && col_idx + 1 < TASK_COLUMN_COUNT;
+        let can_del = ui.is_enabled() && !in_done_select;
 
-        // Register card body first so move buttons on top win pointer hit-testing cleanly.
-        let card_resp = ui.interact(card_rect, card_id, Sense::CLICK | Sense::DRAG);
+        // Register card body first so move/delete buttons on top win pointer hit-testing cleanly.
+        let card_resp = ui.interact(
+            card_rect,
+            card_id,
+            if in_done_select {
+                Sense::CLICK
+            } else {
+                Sense::CLICK | Sense::DRAG
+            },
+        );
+        let is_selected_done = in_done_select && self.selected_done_ids.contains(&card.id);
         let card_a11y = format!("{} ({})", card.title.trim(), column_label(col_idx, french));
         card_resp.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
                 ui.is_enabled(),
-                is_key_focused,
+                is_key_focused || is_selected_done,
                 &card_a11y,
             )
         });
         if scroll_to_focused && is_key_focused {
             card_resp.scroll_to_me(Some(egui::Align::Center));
         }
+
+        let del_lbl = delete_label(french);
+        let del_resp = ui.interact(
+            del_btn_rect,
+            del_id,
+            if can_del {
+                Sense::CLICK
+            } else {
+                Sense::hover()
+            },
+        );
+        del_resp
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_del, del_lbl));
 
         let left_label = if col_idx > 0 {
             move_button_label(col_idx - 1, french)
@@ -1209,7 +1674,13 @@ impl TasksBoard {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, can_right, &right_label)
         });
 
-        if !interaction_blocked && card_resp.drag_started() {
+        if !interaction_blocked
+            && !in_done_select
+            && card_resp.drag_started()
+            && !del_resp.hovered()
+            && !left_resp.hovered()
+            && !right_resp.hovered()
+        {
             self.dragging_task_id = Some(card.id);
             self.focused_task_id = Some(card.id);
             ui.ctx().memory_mut(|m| m.request_focus(list_id));
@@ -1222,7 +1693,7 @@ impl TasksBoard {
         let base_bg = ui.visuals().widgets.noninteractive.bg_fill;
         let bg = if is_dragging {
             base_bg.gamma_multiply(0.5_f32)
-        } else if is_key_focused {
+        } else if is_key_focused || is_selected_done {
             ui.visuals()
                 .widgets
                 .hovered
@@ -1231,9 +1702,13 @@ impl TasksBoard {
         } else {
             base_bg
         };
-        let border_stroke = if is_key_focused {
+        let border_stroke = if is_key_focused || is_selected_done {
             Stroke::new(1.5_f32, accent)
-        } else if card_resp.hovered() || left_resp.hovered() || right_resp.hovered() {
+        } else if card_resp.hovered()
+            || left_resp.hovered()
+            || right_resp.hovered()
+            || del_resp.hovered()
+        {
             Stroke::new(1.0_f32, ui.visuals().widgets.hovered.bg_stroke.color)
         } else {
             Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color)
@@ -1247,8 +1722,22 @@ impl TasksBoard {
         );
         cp.rect_filled(stripe_rect, 1.5_f32, col_color);
 
+        if in_done_select {
+            let cb_rect = Rect::from_min_size(
+                Pos2::new(card_rect.min.x + 10.0_f32, card_rect.min.y + 11.0_f32),
+                Vec2::splat(14.0_f32),
+            );
+            paint_checkbox(
+                &cp,
+                cb_rect,
+                is_selected_done,
+                accent,
+                ui.visuals().widgets.inactive.bg_stroke.color,
+            );
+        }
+
         cp.galley(
-            Pos2::new(card_rect.min.x + 11.0_f32, card_rect.min.y + 10.0_f32),
+            Pos2::new(card_rect.min.x + left_text_pad, card_rect.min.y + 10.0_f32),
             title_galley,
             if is_dragging {
                 fg.gamma_multiply(0.55_f32)
@@ -1256,6 +1745,24 @@ impl TasksBoard {
                 fg
             },
         );
+
+        let show_del_icon =
+            can_del && (card_resp.hovered() || del_resp.hovered() || is_key_focused);
+        if show_del_icon {
+            if del_resp.hovered() {
+                cp.rect_filled(
+                    del_btn_rect,
+                    4.0_f32,
+                    Color32::from_rgb(0xe0, 0x6c, 0x75).gamma_multiply(0.2_f32),
+                );
+            }
+            let del_col = if del_resp.hovered() {
+                Color32::from_rgb(0xe0, 0x6c, 0x75)
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            paint_close_x(&cp, del_btn_rect, del_col);
+        }
 
         // Paint `.task-btn` vector move buttons.
         Self::paint_move_btn(&cp, ui, left_btn_rect, can_left, left_resp.hovered(), true);
@@ -1268,11 +1775,39 @@ impl TasksBoard {
             false,
         );
 
+        let del_clicked = !interaction_blocked && can_del && del_resp.clicked();
         let left_clicked = !interaction_blocked && can_left && left_resp.clicked();
         let right_clicked = !interaction_blocked && can_right && right_resp.clicked();
-        let card_clicked =
-            !interaction_blocked && card_resp.clicked() && !left_clicked && !right_clicked;
+        let card_clicked = !interaction_blocked
+            && card_resp.clicked()
+            && !left_clicked
+            && !right_clicked
+            && !del_clicked;
+        let card_double_clicked = !interaction_blocked
+            && !in_done_select
+            && card_resp.double_clicked()
+            && !left_clicked
+            && !right_clicked
+            && !del_clicked;
 
+        let mut ctx_action: Option<TasksBoardAction> = None;
+        if ui.is_enabled() && !in_done_select {
+            card_resp.context_menu(|ui| {
+                ui.set_min_width(140.0_f32);
+                if ui.button(rename_label(french)).clicked() {
+                    self.begin_rename(card.id, &card.title);
+                    ui.close();
+                }
+                if ui.button(delete_label(french)).clicked() {
+                    ctx_action = Some(TasksBoardAction::Delete(card.id));
+                    ui.close();
+                }
+            });
+        }
+
+        if can_del {
+            del_resp.on_hover_text(del_lbl);
+        }
         if can_left {
             left_resp.on_hover_text(&left_label);
         }
@@ -1280,7 +1815,11 @@ impl TasksBoard {
             right_resp.on_hover_text(&right_label);
         }
 
-        if left_clicked {
+        if let Some(act) = ctx_action {
+            Some(act)
+        } else if del_clicked {
+            Some(TasksBoardAction::Delete(card.id))
+        } else if left_clicked {
             self.focused_task_id = Some(card.id);
             ui.ctx().memory_mut(|m| m.request_focus(list_id));
             Some(TasksBoardAction::Move {
@@ -1294,10 +1833,19 @@ impl TasksBoard {
                 id: card.id,
                 column: col_idx + 1,
             })
+        } else if card_double_clicked {
+            self.begin_rename(card.id, &card.title);
+            None
         } else {
             if card_clicked {
-                self.focused_task_id = Some(card.id);
-                ui.ctx().memory_mut(|m| m.request_focus(list_id));
+                if in_done_select {
+                    if !self.selected_done_ids.remove(&card.id) {
+                        self.selected_done_ids.insert(card.id);
+                    }
+                } else {
+                    self.focused_task_id = Some(card.id);
+                    ui.ctx().memory_mut(|m| m.request_focus(list_id));
+                }
             }
             None
         }

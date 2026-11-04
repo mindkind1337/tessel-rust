@@ -563,3 +563,26 @@ non-dismissible `560px` `LiveShareAsk` knock/action modal (`900ms` arming delay,
 toolbar `LiveSharePill` + `360px` popover, pane header presence badges, and
 `.osb-live` sidebar indicators. Validation: 9 `ui_live_share` TLS + headless UI
 tests, `ui_project_panel`, `i18n::tests`, `files::tests` and strict Clippy pass.
+
+Workspace panels parity integration: left sidebar adds a collapsed `52px`
+`.osb-rail` when hidden (`ExpandSidebar`, project-initial tiles, `OpenFolder`),
+`Workspace options` (`Sort by activity`, `Compact rows`, `Hide sleeping`
+persisted in `SidebarPreferences`), `New terminal`, Git branch pills, live
+`AgentDotState` indicators, `Alt+Up/Down` project reordering, and project /
+session context menus. Right panel defaults to `420px` with a changed-file badge
+on `Changes` and a fullscreen expand/restore toggle (`Escape` restores).
+`ExplorerTree` adds filename filtering, bounded background content search,
+`Show dotfiles`, `Compact folders`, `Collapse all`, Git status badges (`M`, `A`,
+`D`, `U`, `R`, `?`), single-click italic preview vs double-click pinned open,
+`Copy path`, and confined Windows `SHFileOperationW` `Move to Recycle Bin`
+(`FOF_ALLOWUNDO`). `ScmChangesPanel` enables all eight `ScmCapabilities`
+(`OpenDiff` unified syntax-colored diff tabs, `scoped_numstat` `+added /
+-removed` badges, modal-confirmed tracked `git checkout` + untracked Recycle Bin
+discard, inline `Commit` clearing draft on success, and `Fetch` / `Pull` /
+`Push` / `Sync` / `Publish` remote operations). `TasksBoard` adds inline card
+rename, card delete and `Done` bulk selection (`Select` / `All` / `None` /
+`Delete (N)`). `view_tabs` adds closable `Browser`, `Diff` tabs, file-extension
+icon tints, italic preview tabs (`Keep open`), deleted-file strikethrough, and
+`Close others` / `Close all` / `Copy path`. `EmptyState` adds `No project
+folder` fallback, `PowerShell` / `CMD` / `WSL` shell pills and `Remember for new
+projects` (`LauncherPreferences`).

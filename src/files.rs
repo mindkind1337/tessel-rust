@@ -273,8 +273,38 @@ pub struct Document {
     pub pdf: Option<crate::pdf::PdfView>,
     pub office: Option<crate::office::OfficeView>,
     pub tools: EditorTools,
+    pub unpinned_preview: bool,
+    pub diff_title: Option<String>,
+    pub deleted_on_disk: bool,
 }
 impl Document {
+    pub fn from_diff(
+        root: &Path,
+        path: PathBuf,
+        title: String,
+        diff_text: String,
+        unpinned_preview: bool,
+    ) -> Self {
+        Self {
+            root: root.to_owned(),
+            path,
+            text: diff_text,
+            original: vec![],
+            error: String::new(),
+            preview_mode: false,
+            preview: None,
+            image: None,
+            texture: None,
+            media: true,
+            pdf: None,
+            office: None,
+            tools: EditorTools::default(),
+            unpinned_preview,
+            diff_title: Some(title),
+            deleted_on_disk: false,
+        }
+    }
+
     pub fn open(root: &Path, path: &Path) -> Result<Self> {
         let path = confined(root, path)?;
         let extension = path
@@ -298,6 +328,9 @@ impl Document {
                 pdf: None,
                 office: Some(office),
                 tools: EditorTools::default(),
+                unpinned_preview: false,
+                diff_title: None,
+                deleted_on_disk: false,
             });
         }
         if extension == "pdf" {
@@ -316,6 +349,9 @@ impl Document {
                 pdf: Some(pdf),
                 office: None,
                 tools: EditorTools::default(),
+                unpinned_preview: false,
+                diff_title: None,
+                deleted_on_disk: false,
             });
         }
         if matches!(
@@ -358,6 +394,9 @@ impl Document {
                 pdf: None,
                 office: None,
                 tools: EditorTools::default(),
+                unpinned_preview: false,
+                diff_title: None,
+                deleted_on_disk: false,
             });
         }
         let original = read(&path)?;
@@ -380,6 +419,9 @@ impl Document {
             pdf: None,
             office: None,
             tools: EditorTools::default(),
+            unpinned_preview: false,
+            diff_title: None,
+            deleted_on_disk: false,
         })
     }
     pub fn original_text(&self) -> Option<&str> {

@@ -1,4 +1,6 @@
 //! Applies board actions only within the currently selected, existing project.
+use std::collections::HashSet;
+
 use crate::{
     tasks_board_panel::{MAX_TASK_TITLE_CHARS, TASK_COLUMN_COUNT, TasksBoardAction},
     workspace::{Task, Workspace},
@@ -41,6 +43,40 @@ pub fn apply(
                 return Ok(true);
             }
             Ok(false)
+        }
+        TasksBoardAction::Rename { id, title } => {
+            let title: String = title.trim().chars().take(MAX_TASK_TITLE_CHARS).collect();
+            if title.is_empty() {
+                return Ok(false);
+            }
+            if let Some(task) = state
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == id && task.project == project)
+                && task.title != title
+            {
+                task.title = title;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        TasksBoardAction::Delete(id) => {
+            let before = state.tasks.len();
+            state
+                .tasks
+                .retain(|task| !(task.id == id && task.project == project));
+            Ok(state.tasks.len() != before)
+        }
+        TasksBoardAction::DeleteMany(ids) => {
+            if ids.is_empty() {
+                return Ok(false);
+            }
+            let target_ids: HashSet<u64> = ids.into_iter().collect();
+            let before = state.tasks.len();
+            state
+                .tasks
+                .retain(|task| !(task.project == project && target_ids.contains(&task.id)));
+            Ok(state.tasks.len() != before)
         }
         _ => Ok(false),
     }
@@ -99,5 +135,69 @@ mod tests {
         assert!(apply(&mut state, 1, TasksBoardAction::Add("Next".into())).is_err());
         assert_eq!(state.tasks.len(), 10_000);
         assert_eq!(state.next_id, 10_003);
+    }
+    #[test]
+    fn rename_delete_and_delete_many_are_scoped_to_active_project() {
+        let mut state = workspace();
+        state.tasks = vec![
+            Task {
+                id: 10,
+                project: 1,
+                title: "Alpha".into(),
+                column: 3,
+            },
+            Task {
+                id: 11,
+                project: 1,
+                title: "Beta".into(),
+                column: 3,
+            },
+            Task {
+                id: 12,
+                project: 2,
+                title: "Foreign".into(),
+                column: 3,
+            },
+        ];
+        assert!(
+            apply(
+                &mut state,
+                1,
+                TasksBoardAction::Rename {
+                    id: 10,
+                    title: "  Alpha v2  ".into(),
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(state.tasks[0].title, "Alpha v2");
+        assert!(
+            !apply(
+                &mut state,
+                1,
+                TasksBoardAction::Rename {
+                    id: 10,
+                    title: "   ".into(),
+                }
+            )
+            .unwrap()
+        );
+        assert!(
+            !apply(
+                &mut state,
+                1,
+                TasksBoardAction::Rename {
+                    id: 12,
+                    title: "Hijack".into(),
+                }
+            )
+            .unwrap()
+        );
+        assert!(apply(&mut state, 1, TasksBoardAction::DeleteMany(vec![11, 12])).unwrap());
+        assert_eq!(state.tasks.len(), 2);
+        assert!(state.tasks.iter().any(|t| t.id == 12));
+        assert!(apply(&mut state, 1, TasksBoardAction::Delete(10)).unwrap());
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].id, 12);
     }
 }

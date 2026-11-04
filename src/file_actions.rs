@@ -3,12 +3,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     File,
     Folder,
     Rename,
     Delete,
+    Trash,
 }
 #[derive(Clone)]
 pub struct Action {
@@ -66,10 +67,62 @@ fn rename_new(from: &Path, to: &Path) -> Result<()> {
 fn rename_new(_from: &Path, _to: &Path) -> Result<()> {
     Err("Atomic no-overwrite rename is currently supported on Windows only".into())
 }
+
+#[cfg(windows)]
+fn send_path_to_recycle_bin(path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::UI::Shell::{
+            FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+            SHFILEOPSTRUCTW, SHFileOperationW,
+        },
+        core::PCWSTR,
+    };
+    let simplified = dunce::simplified(path);
+    let mut wide: Vec<u16> = simplified.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err("Path contains an embedded NUL character".into());
+    }
+    wide.push(0);
+    wide.push(0);
+    let flags = (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0 | FOF_SILENT.0) as u16;
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(wide.as_ptr()),
+        fFlags: flags,
+        ..Default::default()
+    };
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    if rc != 0 || op.fAnyOperationsAborted.as_bool() {
+        return Err("Could not move item to the Recycle Bin".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn send_path_to_recycle_bin(_path: &Path) -> Result<()> {
+    Err("Recycle Bin is currently supported on Windows only".into())
+}
+
+pub fn move_to_trash(root: &Path, target: &Path) -> Result<PathBuf> {
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = confined(&root, target)?;
+    if path == root
+        || fs::symlink_metadata(target)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_symlink()
+    {
+        return Err("Cannot change the project root or a symbolic link".into());
+    }
+    send_path_to_recycle_bin(&path)?;
+    Ok(path)
+}
+
 pub fn execute(action: Action) -> Result<Change> {
     let root = action.root.canonicalize().map_err(|e| e.to_string())?;
     let path = confined(&root, &action.path)?;
-    if action.kind != Kind::Delete && !name_ok(&action.name) {
+    if !matches!(action.kind, Kind::Delete | Kind::Trash) && !name_ok(&action.name) {
         return Err(
             "Enter a valid single filename; reserved names and path separators are refused".into(),
         );
@@ -94,7 +147,7 @@ pub fn execute(action: Action) -> Result<Change> {
                 after: Some(to),
             })
         }
-        Kind::Rename | Kind::Delete => {
+        Kind::Rename | Kind::Delete | Kind::Trash => {
             if path == root
                 || fs::symlink_metadata(&action.path)
                     .map_err(|e| e.to_string())?
@@ -109,6 +162,12 @@ pub fn execute(action: Action) -> Result<Change> {
                 Ok(Change {
                     before: Some(path),
                     after: Some(to),
+                })
+            } else if action.kind == Kind::Trash {
+                send_path_to_recycle_bin(&path)?;
+                Ok(Change {
+                    before: Some(path),
+                    after: None,
                 })
             } else {
                 if path.is_dir() {

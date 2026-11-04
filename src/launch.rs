@@ -165,6 +165,15 @@ pub fn command_with_preferences(
     cwd: &Path,
     prefs: Option<&crate::agent_preferences::Preferences>,
 ) -> Result<CommandBuilder> {
+    command_with_shell(launch, cwd, prefs, None)
+}
+
+pub fn command_with_shell(
+    launch: &Launch,
+    cwd: &Path,
+    prefs: Option<&crate::agent_preferences::Preferences>,
+    preferred_shell: Option<&str>,
+) -> Result<CommandBuilder> {
     if launch.native_chat().is_some() {
         return Err("Native chats do not launch a terminal.".into());
     }
@@ -174,15 +183,21 @@ pub fn command_with_preferences(
             return Err("Native chats do not launch a terminal.".into());
         }
         Launch::Shell => {
-            let mut c = CommandBuilder::new(if cfg!(windows) {
-                "powershell.exe"
+            if cfg!(windows) && preferred_shell == Some("cmd") {
+                CommandBuilder::new("cmd.exe")
+            } else if cfg!(windows) && preferred_shell == Some("wsl") {
+                CommandBuilder::new("wsl.exe")
             } else {
-                "/bin/sh"
-            });
-            if cfg!(windows) {
-                c.args(["-NoLogo", "-NoProfile"]);
+                let mut c = CommandBuilder::new(if cfg!(windows) {
+                    "powershell.exe"
+                } else {
+                    "/bin/sh"
+                });
+                if cfg!(windows) {
+                    c.args(["-NoLogo", "-NoProfile"]);
+                }
+                c
             }
-            c
         }
         Launch::Agent(program) => {
             let preset = crate::agent_catalog::find(program).ok_or("Unknown agent.")?;

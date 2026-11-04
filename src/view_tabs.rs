@@ -1,10 +1,14 @@
-//! Native center tabs, using the dimensions and vector controls of ViewTabs.vue.
+//! Native center tabs, using the dimensions and vector controls of `ViewTabs.vue`.
 use eframe::egui::{self, Color32, Rect, Stroke, Vec2};
 
-#[derive(Clone, Copy)]
+use crate::i18n::tr;
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Terminal,
     Editor,
+    Diff,
     #[cfg(windows)]
     Browser,
 }
@@ -16,16 +20,44 @@ pub struct Tab<'a> {
     pub selected: bool,
     pub dirty: bool,
     pub closable: bool,
+    pub preview: bool,
+    pub deleted: bool,
+    pub has_file_menu: bool,
 }
 
 pub struct Response {
     pub body: egui::Response,
     pub close: bool,
+    pub keep_open: bool,
+    pub close_others: bool,
+    pub close_all: bool,
+    pub copy_path: bool,
+}
+
+fn file_icon_tint(title: &str, selected: bool, accent: Color32, fallback: Color32) -> Color32 {
+    let ext = title
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "rs" => Color32::from_rgb(0xde, 0xa5, 0x84),
+        "ts" | "tsx" => Color32::from_rgb(0x51, 0x9a, 0xba),
+        "js" | "jsx" | "mjs" | "cjs" => Color32::from_rgb(0xcb, 0xcb, 0x41),
+        "vue" => Color32::from_rgb(0x41, 0xb8, 0x83),
+        "json" | "toml" | "yaml" | "yml" => Color32::from_rgb(0xe5, 0xc0, 0x7b),
+        "md" | "txt" => Color32::from_rgb(0x56, 0xb6, 0xc2),
+        "css" | "scss" | "html" => Color32::from_rgb(0xc6, 0x78, 0xdd),
+        _ if selected => accent,
+        _ => fallback,
+    }
 }
 
 pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
     let font = egui::FontId::proportional(12.0);
-    let color = if tab.selected {
+    let danger = Color32::from_rgb(0xe0, 0x6c, 0x75);
+    let base_color = if tab.deleted {
+        danger
+    } else if tab.selected {
         ui.visuals().strong_text_color()
     } else {
         ui.visuals().weak_text_color()
@@ -37,7 +69,7 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
         + if tab.dirty { 13.0 } else { 0.0 };
     let natural = ui
         .painter()
-        .layout_no_wrap(tab.title.into(), font.clone(), color)
+        .layout_no_wrap(tab.title.into(), font.clone(), base_color)
         .size()
         .x;
     let width = (natural + extra).clamp(72.0, 220.0);
@@ -83,7 +115,7 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
         egui::pos2(rect.left() + 17.0, rect.center().y),
         Vec2::splat(14.0),
     );
-    let icon_color = if tab.selected { accent } else { color };
+    let icon_color = if tab.selected { accent } else { base_color };
     match tab.kind {
         Kind::Terminal => crate::icons::paint(
             ui.painter(),
@@ -92,6 +124,7 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             icon_color,
         ),
         Kind::Editor => {
+            let file_col = file_icon_tint(tab.title, tab.selected, accent, base_color);
             let p = |x: f32, y: f32| icon_rect.min + Vec2::new(x, y) * (14.0 / 16.0);
             for points in [
                 [p(5.5, 4.5), p(2.0, 8.0), p(5.5, 11.5)],
@@ -99,10 +132,16 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             ] {
                 ui.painter().add(egui::Shape::line(
                     points.to_vec(),
-                    Stroke::new(1.3_f32, icon_color),
+                    Stroke::new(1.3_f32, file_col),
                 ));
             }
         }
+        Kind::Diff => crate::icons::paint(
+            ui.painter(),
+            icon_rect,
+            crate::icons::Icon::GitBranch,
+            Color32::from_rgb(0xe2, 0xc0, 0x8d),
+        ),
         #[cfg(windows)]
         Kind::Browser => {
             let c = icon_rect.center();
@@ -119,7 +158,18 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             ui.painter().add(egui::Shape::line(points, stroke));
         }
     }
-    let mut job = egui::text::LayoutJob::simple_singleline(tab.title.into(), font, color);
+
+    let mut fmt = egui::TextFormat {
+        font_id: font,
+        color: base_color,
+        italics: tab.preview,
+        ..Default::default()
+    };
+    if tab.deleted {
+        fmt.strikethrough = Stroke::new(1.0_f32, danger);
+    }
+    let mut job = egui::text::LayoutJob::default();
+    job.append(tab.title, 0.0, fmt);
     job.wrap.max_width = (width - extra).max(1.0);
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
@@ -127,14 +177,21 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
     ui.painter().galley(
         egui::pos2(rect.left() + 30.0, rect.center().y - text.size().y / 2.0),
         text,
-        color,
+        base_color,
     );
+
     if tab.dirty {
         let x = rect.right() - if tab.closable { 31.5 } else { 10.0 };
         ui.painter()
-            .circle_filled(egui::pos2(x, rect.center().y), 3.5, color);
+            .circle_filled(egui::pos2(x, rect.center().y), 3.5, base_color);
     }
+
     let mut close = false;
+    let mut keep_open = tab.preview && ui.is_enabled() && body.double_clicked();
+    let mut close_others = false;
+    let mut close_all = false;
+    let mut copy_path = false;
+
     if tab.closable {
         let close_rect = Rect::from_center_size(
             egui::pos2(rect.right() - 13.0, rect.center().y),
@@ -145,7 +202,7 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
                 ui.is_enabled(),
-                format!("{} {}", crate::i18n::tr("Close"), tab.title),
+                format!("{} {}", tr("Close"), tab.title),
             )
         });
         if tab.selected || body.hovered() || button.hovered() || button.has_focus() {
@@ -160,15 +217,51 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
                 ui.painter(),
                 close_rect.shrink(3.0),
                 crate::icons::Icon::Close,
-                color,
+                base_color,
             );
         }
         close = button.clicked() || body.clicked_by(egui::PointerButton::Middle);
-        button.on_hover_text(crate::i18n::tr("Close"));
+        button.on_hover_text(tr("Close"));
     }
+
+    if ui.is_enabled() && (tab.closable || tab.has_file_menu) {
+        body.context_menu(|ui| {
+            ui.set_min_width(150.0);
+            if tab.preview && ui.button(tr("Keep open")).clicked() {
+                keep_open = true;
+                ui.close();
+            }
+            if tab.closable && ui.button(tr("Close")).clicked() {
+                close = true;
+                ui.close();
+            }
+            if tab.has_file_menu {
+                if ui.button(tr("Close others")).clicked() {
+                    close_others = true;
+                    ui.close();
+                }
+                if ui.button(tr("Close all")).clicked() {
+                    close_all = true;
+                    ui.close();
+                }
+                if !tab.hint.is_empty() {
+                    ui.separator();
+                    if ui.button(tr("Copy path")).clicked() {
+                        copy_path = true;
+                        ui.close();
+                    }
+                }
+            }
+        });
+    }
+
     Response {
         body: body.on_hover_text(tab.hint),
         close,
+        keep_open,
+        close_others,
+        close_all,
+        copy_path,
     }
 }
 
@@ -203,6 +296,9 @@ mod tests {
                                     selected: true,
                                     dirty: true,
                                     closable,
+                                    preview: false,
+                                    deleted: false,
+                                    has_file_menu: true,
                                 },
                             ));
                         });

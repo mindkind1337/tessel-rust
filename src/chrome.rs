@@ -12,6 +12,16 @@ pub struct ToolbarRegions {
 }
 
 pub fn side_tab(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> Response {
+    side_tab_with_badge(ui, icon, label, selected, 0)
+}
+
+pub fn side_tab_with_badge(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    selected: bool,
+    badge: usize,
+) -> Response {
     let response = ui.add(
         egui::Button::new("")
             .frame(false)
@@ -38,6 +48,36 @@ pub fn side_tab(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> R
         icon,
         color,
     );
+    if badge > 0 {
+        let badge_text = if badge > 99 {
+            "99+".to_owned()
+        } else {
+            badge.to_string()
+        };
+        let font = FontId::proportional(9.5);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(badge_text, font, egui::Color32::WHITE);
+        let pill_w = (galley.size().x + 7.0_f32).max(15.0_f32);
+        let pill_h = 14.0_f32;
+        let pill_rect = Rect::from_min_size(
+            egui::pos2(
+                (response.rect.right() - pill_w - 2.0_f32).max(response.rect.left()),
+                response.rect.top() + 3.0_f32,
+            ),
+            Vec2::new(pill_w, pill_h),
+        );
+        ui.painter()
+            .rect_filled(pill_rect, 7.0_f32, ui.visuals().hyperlink_color);
+        ui.painter().galley(
+            egui::pos2(
+                pill_rect.center().x - galley.size().x * 0.5_f32,
+                pill_rect.center().y - galley.size().y * 0.5_f32,
+            ),
+            galley,
+            egui::Color32::WHITE,
+        );
+    }
     if selected {
         let r = response.rect;
         ui.painter().rect_filled(

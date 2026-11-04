@@ -25,7 +25,17 @@ use eframe::egui::{
 
 use crate::icons::{self, Icon};
 use crate::shortcuts::chords_of;
-use crate::sidebar_model::{SidebarLang, WorktreeCardStatus};
+use crate::sidebar_model::{
+    AgentDotState, SidebarLang, WorktreeCardStatus, agent_state_label, summary_state_word,
+};
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SidebarOptions {
+    pub sort_by_activity: bool,
+    pub compact_rows: bool,
+    pub hide_sleeping: bool,
+}
 
 /// Runtime kind of a session row displayed in [`ProjectPanel`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,13 +73,23 @@ pub struct ProjectPanelInput<'a> {
     pub french: bool,
 }
 
-/// User action emitted by [`ProjectPanel::show`].
+/// User action emitted by [`ProjectPanel::show`] or [`ProjectPanel::show_collapsed_rail`].
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectAction {
     Search,
     OpenFolder,
+    ExpandSidebar,
+    NewTerminal(Option<u64>),
     SelectProject(Option<u64>),
     SelectSession { project: Option<u64>, id: u64 },
+    RenameProject(u64),
+    RemoveProject(u64),
+    MoveProject { id: u64, delta: i32 },
+    RenameSession { project: Option<u64>, id: u64 },
+    RestartSession { project: Option<u64>, id: u64 },
+    CloseSession { project: Option<u64>, id: u64 },
+    UpdateOptions(SidebarOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,10 +326,36 @@ fn paint_group_status(painter: &Painter, rect: Rect, status: WorktreeCardStatus,
     }
 }
 
-fn paint_session_dot(painter: &Painter, rect: Rect, sleeping: bool, muted: Color32) {
+fn agent_dot_color(state: AgentDotState, muted: Color32) -> Option<Color32> {
+    match state {
+        AgentDotState::Waiting => Some(Color32::from_rgb(0xf5, 0x9e, 0x0b)),
+        AgentDotState::Blocked => Some(Color32::from_rgb(0xef, 0x44, 0x44)),
+        AgentDotState::Working => Some(Color32::from_rgb(0x10, 0xb9, 0x81)),
+        AgentDotState::Monitoring => Some(Color32::from_rgb(0x38, 0xbd, 0xf8)),
+        AgentDotState::Interrupted => Some(Color32::from_rgb(0xf9, 0x73, 0x16)),
+        AgentDotState::Done => Some(Color32::from_rgb(0x10, 0xb9, 0x81).gamma_multiply(0.75_f32)),
+        AgentDotState::Unverifiable => Some(muted.gamma_multiply(0.75_f32)),
+        AgentDotState::Idle => None,
+    }
+}
+
+fn paint_session_dot(
+    painter: &Painter,
+    rect: Rect,
+    sleeping: bool,
+    dot_state: Option<AgentDotState>,
+    muted: Color32,
+) {
     if sleeping {
         let moon_rect = Rect::from_center_size(rect.center(), Vec2::splat(10.5_f32));
         paint_sleeping_moon(painter, moon_rect, muted);
+    } else if let Some(state) = dot_state
+        && let Some(color) = agent_dot_color(state, muted)
+    {
+        if matches!(state, AgentDotState::Working | AgentDotState::Waiting) {
+            painter.circle_filled(rect.center(), 4.6_f32, color.gamma_multiply(0.22_f32));
+        }
+        painter.circle_filled(rect.center(), 3.3_f32, color);
     } else {
         painter.circle_filled(
             rect.center(),
@@ -317,6 +363,36 @@ fn paint_session_dot(painter: &Painter, rect: Rect, sleeping: bool, muted: Color
             Color32::from_rgb(0x73, 0x73, 0x73).gamma_multiply(0.55_f32),
         );
     }
+}
+
+fn project_initials(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "?".to_owned();
+    }
+    let words: Vec<&str> = trimmed
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() >= 2 {
+        let mut out = String::new();
+        if let Some(c1) = words[0].chars().next() {
+            for u in c1.to_uppercase() {
+                out.push(u);
+            }
+        }
+        if let Some(c2) = words[1].chars().next() {
+            for u in c2.to_uppercase() {
+                out.push(u);
+            }
+        }
+        return out;
+    }
+    trimmed
+        .chars()
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn paint_single_line_ellipsis(
@@ -351,6 +427,10 @@ pub struct ProjectPanel {
     last_nav_items: Vec<NavItem>,
     held_activate_key: Option<Key>,
     live_share_projects: HashMap<u64, Vec<String>>,
+    session_states: HashMap<u64, AgentDotState>,
+    project_branches: HashMap<u64, String>,
+    options: SidebarOptions,
+    options_popup_open: bool,
 }
 
 impl ProjectPanel {
@@ -363,6 +443,446 @@ impl ProjectPanel {
     #[allow(dead_code)]
     pub fn set_live_share_projects(&mut self, shared: HashMap<u64, Vec<String>>) {
         self.live_share_projects = shared;
+    }
+
+    /// Updates live agent/runtime dot states per session ID (`session_id -> AgentDotState`).
+    #[allow(dead_code)]
+    pub fn set_session_states(&mut self, states: HashMap<u64, AgentDotState>) {
+        self.session_states = states;
+    }
+
+    /// Updates git branch badges per project ID (`project_id -> branch_name`).
+    #[allow(dead_code)]
+    pub fn set_project_branches(&mut self, branches: HashMap<u64, String>) {
+        self.project_branches = branches;
+    }
+
+    /// Updates persisted Workspace sidebar display options (`sort_by_activity`, `compact_rows`, `hide_sleeping`).
+    #[allow(dead_code)]
+    pub fn set_options(&mut self, options: SidebarOptions) {
+        self.options = options;
+    }
+
+    fn ordered_projects<'a>(&self, projects: &'a [ProjectEntry]) -> Vec<&'a ProjectEntry> {
+        let mut out: Vec<&'a ProjectEntry> = projects.iter().collect();
+        if self.options.sort_by_activity {
+            out.sort_by_key(|proj| {
+                proj.sessions
+                    .iter()
+                    .map(|s| {
+                        if s.sleeping {
+                            3_u8
+                        } else {
+                            match self.session_states.get(&s.id).copied() {
+                                Some(AgentDotState::Waiting | AgentDotState::Blocked) => 0_u8,
+                                Some(AgentDotState::Working | AgentDotState::Monitoring) => 1_u8,
+                                _ => 2_u8,
+                            }
+                        }
+                    })
+                    .min()
+                    .unwrap_or(4_u8)
+            });
+        }
+        out
+    }
+
+    fn visible_sessions<'a>(
+        &self,
+        sessions: &'a [SessionEntry],
+        active_session: Option<u64>,
+    ) -> Vec<&'a SessionEntry> {
+        sessions
+            .iter()
+            .filter(|s| !self.options.hide_sleeping || !s.sleeping || active_session == Some(s.id))
+            .collect()
+    }
+
+    fn project_lead_dot(&self, sessions: &[SessionEntry], muted: Color32) -> Color32 {
+        let mut best: Option<(u8, Color32)> = None;
+        for s in sessions {
+            if s.sleeping {
+                continue;
+            }
+            if let Some(st) = self.session_states.get(&s.id).copied()
+                && let Some(col) = agent_dot_color(st, muted)
+            {
+                let rank = match st {
+                    AgentDotState::Waiting | AgentDotState::Blocked => 0,
+                    AgentDotState::Working | AgentDotState::Monitoring => 1,
+                    AgentDotState::Interrupted => 2,
+                    _ => 3,
+                };
+                if best.is_none_or(|(r, _)| rank < r) {
+                    best = Some((rank, col));
+                }
+            }
+        }
+        if let Some((_, col)) = best {
+            col
+        } else {
+            match group_status(sessions) {
+                WorktreeCardStatus::Active => Color32::from_rgb(0x10, 0xb9, 0x81),
+                WorktreeCardStatus::Sleeping => muted,
+                _ => Color32::from_rgb(0x73, 0x73, 0x73).gamma_multiply(0.45_f32),
+            }
+        }
+    }
+
+    /// Renders the collapsed `52px` `.osb-rail` when `panels.left_open == false`.
+    #[allow(dead_code)]
+    pub fn show_collapsed_rail(
+        &mut self,
+        ui: &mut egui::Ui,
+        input: ProjectPanelInput<'_>,
+    ) -> Option<ProjectAction> {
+        let mut action = None;
+        let rail_id = ui.id().with("tessel-project-rail");
+        let lang = sidebar_lang(input.french);
+        let accent = ui.visuals().selection.stroke.color;
+        let muted = ui.visuals().weak_text_color();
+
+        let icon_btn = |ui: &mut egui::Ui, id: Id, icon: Icon, tooltip: &str| -> bool {
+            let full_w = ui.available_width().max(36.0_f32);
+            let (_, row) = ui.allocate_space(Vec2::new(full_w, 38.0_f32));
+            let btn = Rect::from_center_size(row.center(), Vec2::splat(34.0_f32));
+            let resp = ui.interact(btn, id, Sense::click());
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+            });
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(btn, 7.0_f32, ui.visuals().widgets.hovered.bg_fill);
+            }
+            let col = if resp.hovered() {
+                ui.visuals().strong_text_color()
+            } else {
+                muted
+            };
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(btn.center(), Vec2::splat(15.0_f32)),
+                icon,
+                col,
+            );
+            let clicked = resp.clicked();
+            resp.on_hover_text(tooltip);
+            clicked
+        };
+
+        ui.spacing_mut().item_spacing.y = 4.0_f32;
+        ui.add_space(4.0_f32);
+        let expand_tip = if input.french {
+            "Développer la barre latérale (Ctrl+B)"
+        } else {
+            "Expand sidebar (Ctrl+B)"
+        };
+        if icon_btn(
+            ui,
+            rail_id.with("expand"),
+            Icon::PanelLeftClosed,
+            expand_tip,
+        ) {
+            action = Some(ProjectAction::ExpandSidebar);
+        }
+        let search_tip = if input.french {
+            "Rechercher (Ctrl+Maj+P)"
+        } else {
+            "Search (Ctrl+Shift+P)"
+        };
+        if icon_btn(ui, rail_id.with("search"), Icon::Search, search_tip) {
+            action = Some(ProjectAction::Search);
+        }
+        ui.separator();
+
+        let bottom_reserve = 46.0_f32;
+        let scroll_h = (ui.available_height() - bottom_reserve).max(44.0_f32);
+        let ordered = self.ordered_projects(input.projects);
+        let proj_count = ordered.len();
+
+        egui::ScrollArea::vertical()
+            .id_salt(rail_id.with("scroll"))
+            .max_height(scroll_h)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0_f32;
+                for (idx, project) in ordered.iter().enumerate() {
+                    let is_active = input.active_project == Some(project.id);
+                    let full_w = ui.available_width().max(36.0_f32);
+                    let (_, row) = ui.allocate_space(Vec2::new(full_w, 38.0_f32));
+                    let tile = Rect::from_center_size(row.center(), Vec2::splat(36.0_f32));
+                    let resp = ui.interact(
+                        tile,
+                        rail_id.with(("proj-tile", project.id)),
+                        Sense::click(),
+                    );
+                    let display_name = if project.name.trim().is_empty() {
+                        if input.french {
+                            "(sans nom)"
+                        } else {
+                            "(unnamed)"
+                        }
+                    } else {
+                        project.name.as_str()
+                    };
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            ui.is_enabled(),
+                            is_active,
+                            display_name,
+                        )
+                    });
+                    let bg = if is_active {
+                        accent.gamma_multiply(0.18_f32)
+                    } else if resp.hovered() {
+                        ui.visuals().widgets.hovered.bg_fill
+                    } else {
+                        ui.visuals().strong_text_color().gamma_multiply(0.05_f32)
+                    };
+                    let stroke = if is_active {
+                        Stroke::new(1.0_f32, accent.gamma_multiply(0.75_f32))
+                    } else {
+                        Stroke::new(
+                            1.0_f32,
+                            ui.visuals()
+                                .widgets
+                                .noninteractive
+                                .bg_stroke
+                                .color
+                                .gamma_multiply(0.55_f32),
+                        )
+                    };
+                    ui.painter()
+                        .rect(tile, 8.0_f32, bg, stroke, StrokeKind::Inside);
+                    if is_active {
+                        let bar = Rect::from_min_size(
+                            Pos2::new(row.min.x + 1.0_f32, tile.min.y + 8.0_f32),
+                            Vec2::new(2.5_f32, 20.0_f32),
+                        );
+                        ui.painter().rect_filled(bar, 1.5_f32, accent);
+                    }
+                    let initials = project_initials(display_name);
+                    let fg = if is_active {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    let g =
+                        ui.painter()
+                            .layout_no_wrap(initials, FontId::proportional(11.5_f32), fg);
+                    ui.painter().galley(
+                        Pos2::new(
+                            tile.center().x - g.size().x * 0.5_f32,
+                            tile.center().y - g.size().y * 0.5_f32,
+                        ),
+                        g,
+                        fg,
+                    );
+                    if !project.sessions.is_empty() {
+                        let dot_col = self.project_lead_dot(&project.sessions, muted);
+                        ui.painter().circle_filled(
+                            Pos2::new(tile.max.x - 5.5_f32, tile.max.y - 5.5_f32),
+                            3.2_f32,
+                            dot_col,
+                        );
+                    }
+                    if self.live_share_projects.contains_key(&project.id) {
+                        ui.painter().circle_filled(
+                            Pos2::new(tile.max.x - 5.5_f32, tile.min.y + 5.5_f32),
+                            3.0_f32,
+                            Color32::from_rgb(0xef, 0x44, 0x44),
+                        );
+                    }
+                    resp.context_menu(|ui| {
+                        if let Some(ctx_act) = Self::project_context_menu(
+                            ui,
+                            project.id,
+                            idx,
+                            proj_count,
+                            input.french,
+                        ) {
+                            action = Some(ctx_act);
+                        }
+                    });
+                    let mut tip = display_name.to_owned();
+                    if !project.path.trim().is_empty() {
+                        tip.push('\n');
+                        tip.push_str(project.path.trim());
+                    }
+                    if let Some(branch) = self.project_branches.get(&project.id) {
+                        tip.push_str("\n⎇ ");
+                        tip.push_str(branch);
+                    }
+                    tip.push('\n');
+                    tip.push_str(group_status(&project.sessions).label(lang));
+                    let clicked = resp.clicked();
+                    resp.on_hover_text(tip);
+                    if clicked {
+                        action = Some(ProjectAction::SelectProject(Some(project.id)));
+                    }
+                }
+
+                if !input.global_sessions.is_empty() {
+                    let is_active = input.active_project.is_none();
+                    let full_w = ui.available_width().max(36.0_f32);
+                    let (_, row) = ui.allocate_space(Vec2::new(full_w, 38.0_f32));
+                    let tile = Rect::from_center_size(row.center(), Vec2::splat(36.0_f32));
+                    let resp = ui.interact(tile, rail_id.with("global-tile"), Sense::click());
+                    let title = if input.french {
+                        "Sessions sans projet"
+                    } else {
+                        "Sessions without a project"
+                    };
+                    let bg = if is_active {
+                        accent.gamma_multiply(0.18_f32)
+                    } else if resp.hovered() {
+                        ui.visuals().widgets.hovered.bg_fill
+                    } else {
+                        ui.visuals().strong_text_color().gamma_multiply(0.05_f32)
+                    };
+                    ui.painter().rect_filled(tile, 8.0_f32, bg);
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(tile.center(), Vec2::splat(15.0_f32)),
+                        Icon::Terminal,
+                        if is_active { accent } else { muted },
+                    );
+                    let clicked = resp.clicked();
+                    resp.on_hover_text(title);
+                    if clicked {
+                        action = Some(ProjectAction::SelectProject(None));
+                    }
+                }
+            });
+
+        ui.separator();
+        let add_tip = if input.french {
+            "Ajouter un projet"
+        } else {
+            "Add project"
+        };
+        if icon_btn(ui, rail_id.with("add-project"), Icon::FolderPlus, add_tip) {
+            action = Some(ProjectAction::OpenFolder);
+        }
+
+        action
+    }
+
+    fn project_context_menu(
+        ui: &mut egui::Ui,
+        project_id: u64,
+        index: usize,
+        total: usize,
+        french: bool,
+    ) -> Option<ProjectAction> {
+        let mut act = None;
+        let new_term = if french {
+            "Nouveau terminal"
+        } else {
+            "New terminal"
+        };
+        if ui.button(new_term).clicked() {
+            act = Some(ProjectAction::NewTerminal(Some(project_id)));
+            ui.close();
+        }
+        let rename_lbl = if french {
+            "Renommer le projet…"
+        } else {
+            "Rename project…"
+        };
+        if ui.button(rename_lbl).clicked() {
+            act = Some(ProjectAction::RenameProject(project_id));
+            ui.close();
+        }
+        if total > 1 {
+            ui.separator();
+            let up_lbl = if french {
+                "Déplacer vers le haut"
+            } else {
+                "Move up"
+            };
+            if ui
+                .add_enabled(index > 0, egui::Button::new(up_lbl))
+                .clicked()
+            {
+                act = Some(ProjectAction::MoveProject {
+                    id: project_id,
+                    delta: -1,
+                });
+                ui.close();
+            }
+            let down_lbl = if french {
+                "Déplacer vers le bas"
+            } else {
+                "Move down"
+            };
+            if ui
+                .add_enabled(index + 1 < total, egui::Button::new(down_lbl))
+                .clicked()
+            {
+                act = Some(ProjectAction::MoveProject {
+                    id: project_id,
+                    delta: 1,
+                });
+                ui.close();
+            }
+        }
+        ui.separator();
+        let rm_lbl = if french {
+            "Retirer le projet"
+        } else {
+            "Remove project"
+        };
+        if ui.button(rm_lbl).clicked() {
+            act = Some(ProjectAction::RemoveProject(project_id));
+            ui.close();
+        }
+        act
+    }
+
+    fn session_context_menu(
+        ui: &mut egui::Ui,
+        project: Option<u64>,
+        session: &SessionEntry,
+        french: bool,
+    ) -> Option<ProjectAction> {
+        let mut act = None;
+        let rename_lbl = if french { "Renommer…" } else { "Rename…" };
+        if ui.button(rename_lbl).clicked() {
+            act = Some(ProjectAction::RenameSession {
+                project,
+                id: session.id,
+            });
+            ui.close();
+        }
+        let wake_lbl = match (session.sleeping, french) {
+            (true, true) => "Réveiller la session",
+            (true, false) => "Wake session",
+            (false, true) => "Redémarrer la session",
+            (false, false) => "Restart session",
+        };
+        if ui.button(wake_lbl).clicked() {
+            act = Some(ProjectAction::RestartSession {
+                project,
+                id: session.id,
+            });
+            ui.close();
+        }
+        ui.separator();
+        let close_lbl = if french {
+            "Fermer la session"
+        } else {
+            "Close session"
+        };
+        if ui.button(close_lbl).clicked() {
+            act = Some(ProjectAction::CloseSession {
+                project,
+                id: session.id,
+            });
+            ui.close();
+        }
+        act
     }
 
     /// Returns `true` when project `id` is currently collapsed in this panel.
@@ -394,10 +914,10 @@ impl ProjectPanel {
 
     fn build_nav_items(&self, input: &ProjectPanelInput<'_>) -> Vec<NavItem> {
         let mut out = Vec::new();
-        for project in input.projects {
+        for project in self.ordered_projects(input.projects) {
             out.push(NavItem::Project(project.id));
             if !self.collapsed_projects.contains(&project.id) {
-                for session in &project.sessions {
+                for session in self.visible_sessions(&project.sessions, input.active_session) {
                     out.push(NavItem::Session {
                         project: Some(project.id),
                         id: session.id,
@@ -408,7 +928,7 @@ impl ProjectPanel {
         if !input.global_sessions.is_empty() {
             out.push(NavItem::GlobalHeader);
             if !self.global_collapsed {
-                for session in input.global_sessions {
+                for session in self.visible_sessions(input.global_sessions, input.active_session) {
                     out.push(NavItem::Session {
                         project: None,
                         id: session.id,
@@ -566,7 +1086,7 @@ impl ProjectPanel {
     ) -> (Option<ProjectAction>, bool) {
         let mut pressed_activate: Option<Key> = None;
         let held_before = self.held_activate_key;
-        let (down, up, left, right) = ui.input_mut(|i| {
+        let (down, up, left, right, alt_up, alt_down) = ui.input_mut(|i| {
             for ev in &i.events {
                 if let egui::Event::Key {
                     key: k @ (Key::Enter | Key::Space),
@@ -584,11 +1104,17 @@ impl ProjectPanel {
             }
             let _ = i.consume_key(Modifiers::NONE, Key::Enter);
             let _ = i.consume_key(Modifiers::NONE, Key::Space);
+            let alt_up = owner == FocusOwner::List
+                && matches!(self.focused_nav, Some(NavItem::Project(_)))
+                && i.consume_key(Modifiers::ALT, Key::ArrowUp);
+            let alt_down = owner == FocusOwner::List
+                && matches!(self.focused_nav, Some(NavItem::Project(_)))
+                && i.consume_key(Modifiers::ALT, Key::ArrowDown);
             let down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
             let up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
             let left = i.consume_key(Modifiers::NONE, Key::ArrowLeft);
             let right = i.consume_key(Modifiers::NONE, Key::ArrowRight);
-            (down, up, left, right)
+            (down, up, left, right, alt_up, alt_down)
         });
 
         if let Some(k) = pressed_activate {
@@ -597,6 +1123,18 @@ impl ProjectPanel {
 
         let mut action = None;
         let mut scroll_to_focused = false;
+
+        if (alt_up || alt_down)
+            && let Some(NavItem::Project(pid)) = self.focused_nav
+        {
+            return (
+                Some(ProjectAction::MoveProject {
+                    id: pid,
+                    delta: if alt_up { -1 } else { 1 },
+                }),
+                true,
+            );
+        }
 
         if pressed_activate.is_some() {
             match owner {
@@ -774,7 +1312,9 @@ impl ProjectPanel {
         if let Some(search_act) = self.render_search_button(ui, panel_id, input.french) {
             action = Some(search_act);
         }
-        if let Some(header_act) = self.render_projects_header(ui, panel_id, input.french) {
+        if let Some(header_act) =
+            self.render_projects_header(ui, panel_id, input.active_project, input.french)
+        {
             action = Some(header_act);
         }
 
@@ -797,6 +1337,8 @@ impl ProjectPanel {
             None
         };
         let lang = sidebar_lang(input.french);
+        let ordered = self.ordered_projects(input.projects);
+        let proj_total = ordered.len();
 
         egui::ScrollArea::vertical()
             .id_salt(panel_id.with("scroll"))
@@ -817,11 +1359,13 @@ impl ProjectPanel {
                     return;
                 }
 
-                for project in input.projects {
+                for (proj_idx, project) in ordered.into_iter().enumerate() {
                     if let Some(proj_act) = self.render_project_group(
                         ui,
                         panel_id,
                         project,
+                        proj_idx,
+                        proj_total,
                         &input,
                         lang,
                         active_focused_nav,
@@ -1012,14 +1556,27 @@ impl ProjectPanel {
         &mut self,
         ui: &mut egui::Ui,
         panel_id: Id,
+        active_project: Option<u64>,
         french: bool,
     ) -> Option<ProjectAction> {
         let open_id = panel_id.with("open-folder");
+        let new_term_id = panel_id.with("new-terminal");
+        let opts_id = panel_id.with("workspace-options");
         let title = if french { "Projets" } else { "Projects" };
         let add_label = if french {
             "Ajouter un projet"
         } else {
             "Add project"
+        };
+        let new_term_label = if french {
+            "Nouveau terminal"
+        } else {
+            "New terminal"
+        };
+        let opts_label = if french {
+            "Options de l'espace de travail"
+        } else {
+            "Workspace options"
         };
 
         let full_w = ui.available_width().max(80.0_f32);
@@ -1029,12 +1586,23 @@ impl ProjectPanel {
             Pos2::new(row_rect.max.x - 14.0_f32, row_rect.center().y),
             Vec2::splat(24.0_f32),
         );
+        let show_aux = row_rect.width() >= 190.0_f32;
+        let new_term_rect = Rect::from_center_size(
+            Pos2::new(row_rect.max.x - 40.0_f32, row_rect.center().y),
+            Vec2::splat(24.0_f32),
+        );
+        let opts_rect = Rect::from_center_size(
+            Pos2::new(row_rect.max.x - 66.0_f32, row_rect.center().y),
+            Vec2::splat(24.0_f32),
+        );
+        let title_max_x = if show_aux {
+            opts_rect.min.x - 6.0_f32
+        } else {
+            btn_rect.min.x - 6.0_f32
+        };
         let title_rect = Rect::from_min_max(
             Pos2::new(row_rect.min.x + 6.0_f32, row_rect.min.y),
-            Pos2::new(
-                (btn_rect.min.x - 6.0_f32).max(row_rect.min.x + 12.0_f32),
-                row_rect.max.y,
-            ),
+            Pos2::new(title_max_x.max(row_rect.min.x + 12.0_f32), row_rect.max.y),
         );
         paint_single_line_ellipsis(
             ui.painter(),
@@ -1043,6 +1611,123 @@ impl ProjectPanel {
             FontId::proportional(12.0_f32),
             ui.visuals().weak_text_color(),
         );
+
+        let mut action = None;
+
+        if show_aux {
+            // 1. Workspace options (`SlidersHorizontal`, `Sense::CLICK` so zero extra Tab stops).
+            let opts_resp = ui.interact(opts_rect, opts_id, Sense::CLICK);
+            opts_resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), opts_label)
+            });
+            let opts_active = self.options_popup_open
+                || self.options.sort_by_activity
+                || self.options.compact_rows
+                || self.options.hide_sleeping;
+            if opts_resp.hovered() || self.options_popup_open {
+                ui.painter()
+                    .rect_filled(opts_rect, 6.0_f32, ui.visuals().widgets.hovered.bg_fill);
+            }
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(opts_rect.center(), Vec2::splat(13.5_f32)),
+                Icon::SlidersHorizontal,
+                if opts_active || opts_resp.hovered() {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().weak_text_color()
+                },
+            );
+            let opts_clicked = opts_resp.clicked();
+            opts_resp.on_hover_text(opts_label);
+            if opts_clicked {
+                self.options_popup_open = !self.options_popup_open;
+            }
+
+            // 2. New terminal (`Icon::Plus` vector icon, `Sense::CLICK`).
+            let nt_resp = ui.interact(new_term_rect, new_term_id, Sense::CLICK);
+            nt_resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), new_term_label)
+            });
+            if nt_resp.hovered() {
+                ui.painter().rect_filled(
+                    new_term_rect,
+                    6.0_f32,
+                    ui.visuals().widgets.hovered.bg_fill,
+                );
+            }
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(new_term_rect.center(), Vec2::splat(13.5_f32)),
+                Icon::Plus,
+                if nt_resp.hovered() {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().weak_text_color()
+                },
+            );
+            let nt_clicked = nt_resp.clicked();
+            nt_resp.on_hover_text(new_term_label);
+            if nt_clicked {
+                action = Some(ProjectAction::NewTerminal(active_project));
+            }
+        } else {
+            self.options_popup_open = false;
+        }
+
+        if self.options_popup_open && ui.is_enabled() {
+            let popup_pos = Pos2::new(
+                (opts_rect.min.x - 110.0_f32).max(row_rect.min.x + 4.0_f32),
+                row_rect.max.y + 4.0_f32,
+            );
+            let area_resp = egui::Area::new(panel_id.with("workspace-options-popover"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(popup_pos)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style())
+                        .corner_radius(8.0_f32)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.set_min_width(196.0_f32);
+                            ui.label(egui::RichText::new(opts_label).strong().size(12.0_f32));
+                            ui.add_space(4.0_f32);
+                            let mut next = self.options;
+                            let sort_lbl = if french {
+                                "Trier par activité"
+                            } else {
+                                "Sort by activity"
+                            };
+                            let compact_lbl = if french {
+                                "Lignes compactes"
+                            } else {
+                                "Compact rows"
+                            };
+                            let hide_lbl = if french {
+                                "Masquer les sessions en veille"
+                            } else {
+                                "Hide sleeping sessions"
+                            };
+                            let mut changed = false;
+                            changed |= ui.checkbox(&mut next.sort_by_activity, sort_lbl).changed();
+                            changed |= ui.checkbox(&mut next.compact_rows, compact_lbl).changed();
+                            changed |= ui.checkbox(&mut next.hide_sleeping, hide_lbl).changed();
+                            if changed {
+                                self.options = next;
+                                action = Some(ProjectAction::UpdateOptions(next));
+                            }
+                        });
+                });
+            let esc = ui.input(|i| i.key_pressed(Key::Escape));
+            let clicked_outside = ui.input(|i| i.pointer.any_pressed())
+                && ui.input(|i| {
+                    i.pointer.interact_pos().is_some_and(|pos| {
+                        !area_resp.response.rect.contains(pos) && !opts_rect.contains(pos)
+                    })
+                });
+            if esc || clicked_outside {
+                self.options_popup_open = false;
+            }
+        }
 
         let resp = ui.interact(btn_rect, open_id, Sense::click());
         resp.widget_info(|| {
@@ -1076,10 +1761,9 @@ impl ProjectPanel {
         resp.on_hover_text(add_label);
         if clicked {
             ui.ctx().memory_mut(|m| m.request_focus(open_id));
-            Some(ProjectAction::OpenFolder)
-        } else {
-            None
+            action = Some(ProjectAction::OpenFolder);
         }
+        action
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1088,6 +1772,8 @@ impl ProjectPanel {
         ui: &mut egui::Ui,
         panel_id: Id,
         project: &ProjectEntry,
+        proj_idx: usize,
+        proj_total: usize,
         input: &ProjectPanelInput<'_>,
         lang: SidebarLang,
         focused_nav: Option<NavItem>,
@@ -1096,13 +1782,21 @@ impl ProjectPanel {
         let collapsed = self.collapsed_projects.contains(&project.id);
         let is_active = input.active_project == Some(project.id);
         let status = group_status(&project.sessions);
-        let show_path = !collapsed && !project.path.trim().is_empty();
-        let show_sessions = !collapsed && !project.sessions.is_empty();
+        let shown_sessions = self.visible_sessions(&project.sessions, input.active_session);
+        let show_path = !collapsed
+            && !project.path.trim().is_empty()
+            && (!self.options.compact_rows || is_active);
+        let show_sessions = !collapsed && !shown_sessions.is_empty();
+        let row_h = if self.options.compact_rows {
+            20.0_f32
+        } else {
+            24.0_f32
+        };
 
         let header_h = if show_path { 44.0_f32 } else { 28.0_f32 };
         let sessions_h = if show_sessions {
-            (project.sessions.len() as f32) * 24.0_f32
-                + (project.sessions.len().saturating_sub(1) as f32) * 2.0_f32
+            (shown_sessions.len() as f32) * row_h
+                + (shown_sessions.len().saturating_sub(1) as f32) * 2.0_f32
                 + 6.0_f32
         } else {
             0.0_f32
@@ -1209,18 +1903,17 @@ impl ProjectPanel {
             Pos2::new(card_rect.min.x + 13.0_f32, row1_y),
             Vec2::splat(14.0_f32),
         );
-        paint_group_status(
-            &painter,
-            status_rect,
-            status,
-            ui.visuals().weak_text_color(),
-        );
-
-        let folder_color = if is_active {
-            accent
+        let muted = ui.visuals().weak_text_color();
+        if status == WorktreeCardStatus::Sleeping {
+            paint_group_status(&painter, status_rect, status, muted);
+        } else if !project.sessions.is_empty() {
+            let col = self.project_lead_dot(&project.sessions, muted);
+            painter.circle_filled(status_rect.center(), 4.0_f32, col);
         } else {
-            ui.visuals().weak_text_color()
-        };
+            paint_group_status(&painter, status_rect, status, muted);
+        }
+
+        let folder_color = if is_active { accent } else { muted };
         let folder_rect = Rect::from_center_size(
             Pos2::new(card_rect.min.x + 29.0_f32, row1_y),
             Vec2::splat(14.0_f32),
@@ -1232,7 +1925,7 @@ impl ProjectPanel {
         if !project.sessions.is_empty() && card_rect.width() >= 150.0_f32 {
             let count_str = project.sessions.len().to_string();
             let count_font = FontId::proportional(10.0_f32);
-            let count_fg = ui.visuals().weak_text_color();
+            let count_fg = muted;
             let galley = painter.layout_no_wrap(count_str, count_font, count_fg);
             let pill_w = (galley.size().x + 10.0_f32).max(18.0_f32);
             let pill_rect = Rect::from_center_size(
@@ -1313,6 +2006,53 @@ impl ProjectPanel {
             title_right = live_rect.min.x - 4.0_f32;
         }
 
+        // Optional Git branch pill when supplied via `set_project_branches`.
+        if let Some(branch) = self.project_branches.get(&project.id)
+            && !branch.trim().is_empty()
+            && card_rect.width() >= 210.0_f32
+        {
+            let mut br_job = egui::text::LayoutJob::simple(
+                branch.trim().to_owned(),
+                FontId::proportional(9.5_f32),
+                muted,
+                64.0_f32,
+            );
+            br_job.wrap.max_rows = 1;
+            br_job.wrap.break_anywhere = true;
+            br_job.wrap.overflow_character = Some('…');
+            let br_galley = painter.layout_job(br_job);
+            let br_w = (br_galley.size().x + 20.0_f32).ceil();
+            if title_right - br_w > folder_rect.max.x + 48.0_f32 {
+                let br_rect = Rect::from_center_size(
+                    Pos2::new(title_right - br_w * 0.5_f32, row1_y),
+                    Vec2::new(br_w, 16.0_f32),
+                );
+                painter.rect_filled(
+                    br_rect,
+                    6.0_f32,
+                    ui.visuals().strong_text_color().gamma_multiply(0.055_f32),
+                );
+                icons::paint(
+                    &painter,
+                    Rect::from_center_size(
+                        Pos2::new(br_rect.min.x + 8.0_f32, row1_y),
+                        Vec2::splat(10.0_f32),
+                    ),
+                    Icon::GitBranch,
+                    muted,
+                );
+                painter.galley(
+                    Pos2::new(
+                        br_rect.min.x + 15.0_f32,
+                        br_rect.center().y - br_galley.size().y * 0.5_f32,
+                    ),
+                    br_galley,
+                    muted,
+                );
+                title_right = br_rect.min.x - 4.0_f32;
+            }
+        }
+
         let name_color = if status == WorktreeCardStatus::Sleeping && !is_active {
             ui.visuals().text_color().gamma_multiply(0.62_f32)
         } else {
@@ -1346,7 +2086,7 @@ impl ProjectPanel {
         let chev_color = if collapse_resp.hovered() {
             ui.visuals().strong_text_color()
         } else {
-            ui.visuals().weak_text_color()
+            muted
         };
         let chev_icon_rect = Rect::from_center_size(collapse_rect.center(), Vec2::splat(13.0_f32));
         if collapsed {
@@ -1368,7 +2108,7 @@ impl ProjectPanel {
                 path_rect,
                 project.path.trim(),
                 FontId::monospace(10.5_f32),
-                ui.visuals().weak_text_color(),
+                muted,
             );
         }
 
@@ -1383,6 +2123,14 @@ impl ProjectPanel {
             self.focused_nav = Some(nav_item);
             ui.ctx().memory_mut(|m| m.request_focus(list_id));
         }
+
+        card_resp.context_menu(|ui| {
+            if let Some(ctx_act) =
+                Self::project_context_menu(ui, project.id, proj_idx, proj_total, input.french)
+            {
+                action = Some(ctx_act);
+            }
+        });
 
         let card_hover = if project.path.trim().is_empty() {
             format!("{display_name}\n{}", status.label(lang))
@@ -1405,10 +2153,10 @@ impl ProjectPanel {
             let mut row_y = card_rect.min.y + 2.0_f32 + header_h + 3.0_f32;
             let row_min_x = card_rect.min.x + 6.0_f32;
             let row_max_x = (card_rect.max.x - 6.0_f32).max(row_min_x + 32.0_f32);
-            for session in &project.sessions {
+            for session in shown_sessions {
                 let row_rect = Rect::from_min_max(
                     Pos2::new(row_min_x, row_y),
-                    Pos2::new(row_max_x, row_y + 24.0_f32),
+                    Pos2::new(row_max_x, row_y + row_h),
                 );
                 if let Some(sess_act) = self.render_session_row(
                     ui,
@@ -1423,7 +2171,7 @@ impl ProjectPanel {
                 ) {
                     action = Some(sess_act);
                 }
-                row_y += 26.0_f32;
+                row_y += row_h + 2.0_f32;
             }
         }
 
@@ -1442,12 +2190,18 @@ impl ProjectPanel {
         let collapsed = self.global_collapsed;
         let is_active = input.active_project.is_none();
         let status = group_status(input.global_sessions);
-        let show_sessions = !collapsed && !input.global_sessions.is_empty();
+        let shown_sessions = self.visible_sessions(input.global_sessions, input.active_session);
+        let show_sessions = !collapsed && !shown_sessions.is_empty();
+        let row_h = if self.options.compact_rows {
+            20.0_f32
+        } else {
+            24.0_f32
+        };
 
         let header_h = 28.0_f32;
         let sessions_h = if show_sessions {
-            (input.global_sessions.len() as f32) * 24.0_f32
-                + (input.global_sessions.len().saturating_sub(1) as f32) * 2.0_f32
+            (shown_sessions.len() as f32) * row_h
+                + (shown_sessions.len().saturating_sub(1) as f32) * 2.0_f32
                 + 6.0_f32
         } else {
             0.0_f32
@@ -1667,10 +2421,10 @@ impl ProjectPanel {
             let mut row_y = card_rect.min.y + 2.0_f32 + header_h + 3.0_f32;
             let row_min_x = card_rect.min.x + 6.0_f32;
             let row_max_x = (card_rect.max.x - 6.0_f32).max(row_min_x + 32.0_f32);
-            for session in input.global_sessions {
+            for session in shown_sessions {
                 let row_rect = Rect::from_min_max(
                     Pos2::new(row_min_x, row_y),
-                    Pos2::new(row_max_x, row_y + 24.0_f32),
+                    Pos2::new(row_max_x, row_y + row_h),
                 );
                 if let Some(sess_act) = self.render_session_row(
                     ui,
@@ -1685,7 +2439,7 @@ impl ProjectPanel {
                 ) {
                     action = Some(sess_act);
                 }
-                row_y += 26.0_f32;
+                row_y += row_h + 2.0_f32;
             }
         }
 
@@ -1726,6 +2480,7 @@ impl ProjectPanel {
         }
         let painter = ui.painter().with_clip_rect(row_rect);
         let accent = ui.visuals().selection.stroke.color;
+        let muted = ui.visuals().weak_text_color();
 
         if is_selected || resp.hovered() || has_focus {
             let bg = if is_selected {
@@ -1749,19 +2504,15 @@ impl ProjectPanel {
             painter.rect(row_rect, 4.0_f32, bg, stroke, StrokeKind::Inside);
         }
 
+        let dot_state = self.session_states.get(&session.id).copied();
         let dot_rect = Rect::from_center_size(
             Pos2::new(row_rect.min.x + 10.0_f32, row_rect.center().y),
             Vec2::splat(10.0_f32),
         );
-        paint_session_dot(
-            &painter,
-            dot_rect,
-            session.sleeping,
-            ui.visuals().weak_text_color(),
-        );
+        paint_session_dot(&painter, dot_rect, session.sleeping, dot_state, muted);
 
         let icon_color = if session.sleeping {
-            ui.visuals().weak_text_color().gamma_multiply(0.65_f32)
+            muted.gamma_multiply(0.65_f32)
         } else if is_selected || resp.hovered() {
             match session.kind {
                 SessionKind::Shell => ui.visuals().strong_text_color(),
@@ -1769,7 +2520,7 @@ impl ProjectPanel {
             }
         } else {
             match session.kind {
-                SessionKind::Shell => ui.visuals().weak_text_color(),
+                SessionKind::Shell => muted,
                 SessionKind::Agent | SessionKind::Chat => accent.gamma_multiply(0.85_f32),
             }
         };
@@ -1786,8 +2537,18 @@ impl ProjectPanel {
             }
         }
 
+        let active_agent_tag = dot_state.and_then(|st| match st {
+            AgentDotState::Waiting
+            | AgentDotState::Blocked
+            | AgentDotState::Working
+            | AgentDotState::Monitoring
+            | AgentDotState::Interrupted => Some(summary_state_word(st, lang)),
+            _ => None,
+        });
         let right_tag: Option<&str> = if session.sleeping {
             Some(WorktreeCardStatus::Sleeping.label(lang))
+        } else if let Some(tag) = active_agent_tag {
+            Some(tag)
         } else if session.kind == SessionKind::Chat {
             Some("chat")
         } else {
@@ -1799,7 +2560,10 @@ impl ProjectPanel {
             && row_rect.width() >= 148.0_f32
         {
             let tag_font = FontId::proportional(10.0_f32);
-            let tag_fg = ui.visuals().weak_text_color();
+            let tag_fg = dot_state
+                .and_then(|st| agent_dot_color(st, muted))
+                .filter(|_| !session.sleeping && active_agent_tag.is_some())
+                .unwrap_or(muted);
             let galley = painter.layout_no_wrap(tag.to_owned(), tag_font, tag_fg);
             let max_tag_w = (row_rect.width() * 0.34_f32).max(28.0_f32);
             if galley.size().x <= max_tag_w {
@@ -1814,7 +2578,7 @@ impl ProjectPanel {
         }
 
         let title_color = if session.sleeping && !is_selected {
-            ui.visuals().weak_text_color().gamma_multiply(0.75_f32)
+            muted.gamma_multiply(0.75_f32)
         } else if is_selected || resp.hovered() || has_focus {
             ui.visuals().strong_text_color()
         } else {
@@ -1832,19 +2596,33 @@ impl ProjectPanel {
             title_color,
         );
 
-        let hover_text = session_hover_text(session, lang);
+        let mut action = None;
+        let french = lang == SidebarLang::Fr;
+        resp.context_menu(|ui| {
+            if let Some(ctx_act) = Self::session_context_menu(ui, project, session, french) {
+                action = Some(ctx_act);
+            }
+        });
+
+        let mut hover_text = session_hover_text(session, lang);
+        if !session.sleeping
+            && let Some(st) = dot_state
+            && st != AgentDotState::Idle
+        {
+            hover_text.push_str(" · ");
+            hover_text.push_str(agent_state_label(st, lang));
+        }
         let clicked = resp.clicked();
         resp.on_hover_text(hover_text);
         if clicked {
             self.focused_nav = Some(nav_item);
             ui.ctx()
                 .memory_mut(|m| m.request_focus(panel_id.with("list")));
-            Some(ProjectAction::SelectSession {
+            action = Some(ProjectAction::SelectSession {
                 project,
                 id: session.id,
-            })
-        } else {
-            None
+            });
         }
+        action
     }
 }

@@ -2,9 +2,10 @@
 use crate::{
     git,
     git_result::Owner,
-    scm_changes_panel::{self, ParsedGitStatus},
+    scm_changes_panel::{self, ParsedGitStatus, ScmArea, ScmFileStatus},
 };
 use std::{
+    collections::{BTreeSet, HashMap},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
 };
@@ -39,7 +40,44 @@ fn load(owner: &Owner) -> StatusResult {
                 .to_owned();
         }
     }
+    if !parsed.entries.is_empty() {
+        let has_staged = parsed.entries.iter().any(|e| e.area == ScmArea::Staged);
+        let has_unstaged = parsed.entries.iter().any(|e| e.area == ScmArea::Unstaged);
+        let staged_stats = if has_staged {
+            git::scoped_numstat(&owner.root, &capture.project_prefix, true).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        let unstaged_stats = if has_unstaged {
+            git::scoped_numstat(&owner.root, &capture.project_prefix, false).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        for entry in &mut parsed.entries {
+            let lookup = match entry.area {
+                ScmArea::Staged => staged_stats.get(&entry.path),
+                ScmArea::Unstaged => unstaged_stats.get(&entry.path),
+                ScmArea::Untracked => None,
+            };
+            if let Some(&(added, removed)) = lookup {
+                entry.added = added;
+                entry.removed = removed;
+            }
+        }
+    }
     Ok(parsed)
+}
+
+fn badge_priority(ch: char) -> u8 {
+    match ch {
+        'U' => 6,
+        'M' => 5,
+        'A' => 4,
+        'D' => 3,
+        'R' => 2,
+        '?' => 1,
+        _ => 0,
+    }
 }
 
 impl ScmState {
@@ -93,6 +131,155 @@ impl ScmState {
         }
     }
 
+    pub fn badge_count(&self) -> usize {
+        self.result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map_or(0, |s| s.badge_count(true))
+    }
+
+    pub fn branch_name(&self) -> Option<String> {
+        self.result.as_ref()?.as_ref().ok()?.branch.clone()
+    }
+
+    /// Relative path -> status letter (`U`, `M`, `A`, `D`, `R`, `?`) for Explorer rows & parent folders.
+    pub fn explorer_badges(&self) -> HashMap<String, char> {
+        let mut map = HashMap::new();
+        let Some(Ok(status)) = &self.result else {
+            return map;
+        };
+        let mut upsert = |key: String, ch: char| {
+            let cur = map.get(&key).copied().unwrap_or('\0');
+            if badge_priority(ch) > badge_priority(cur) {
+                map.insert(key, ch);
+            }
+        };
+        for entry in &status.entries {
+            let ch = if entry.is_conflict() {
+                'U'
+            } else {
+                match entry.status {
+                    ScmFileStatus::Modified => 'M',
+                    ScmFileStatus::Added | ScmFileStatus::Copied => 'A',
+                    ScmFileStatus::Deleted => 'D',
+                    ScmFileStatus::Renamed => 'R',
+                    ScmFileStatus::Untracked => '?',
+                }
+            };
+            let norm = entry.path.replace('\\', "/").to_lowercase();
+            upsert(norm.clone(), ch);
+            // Propagate dirty indicator (`M` / `U` / `?`) to ancestor folders
+            let dir_ch = if ch == 'U' {
+                'U'
+            } else if ch == '?' {
+                '?'
+            } else {
+                'M'
+            };
+            let mut prefix = String::new();
+            let parts: Vec<&str> = norm.split('/').collect();
+            for seg in parts.iter().take(parts.len().saturating_sub(1)) {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(seg);
+                upsert(prefix.clone(), dir_ch);
+            }
+        }
+        map
+    }
+
+    pub fn validate_commit(&self) -> Result<(), String> {
+        let status = self
+            .result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .ok_or("Refresh Git status first.")?;
+        if self.busy() || self.owner.is_none() {
+            return Err("Refresh Git status before committing.".into());
+        }
+        if status.entries.iter().any(|e| e.is_conflict()) {
+            return Err("Resolve merge conflicts before committing.".into());
+        }
+        if !status
+            .entries
+            .iter()
+            .any(|e| e.area == ScmArea::Staged && !e.is_conflict())
+        {
+            return Err("Stage at least one file before committing.".into());
+        }
+        Ok(())
+    }
+
+    pub fn discard_selection(
+        &self,
+        area: ScmArea,
+        paths: &[String],
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        let status = self
+            .result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .ok_or("Refresh Git status first.")?;
+        if self.busy()
+            || self.owner.is_none()
+            || status.blocks_bulk_actions()
+            || paths.is_empty()
+            || paths.len() > 5000
+        {
+            return Err("Refresh a complete Git status before discarding files.".into());
+        }
+        let mut tracked = BTreeSet::new();
+        let mut untracked = BTreeSet::new();
+        for path in paths {
+            let entry = status
+                .entries
+                .iter()
+                .find(|entry| entry.area == area && entry.path == *path && entry.can_discard())
+                .ok_or("Selected Git file changed; refresh status.")?;
+            if entry.area == ScmArea::Untracked || entry.status == ScmFileStatus::Untracked {
+                untracked.insert(entry.path.clone());
+            } else {
+                tracked.insert(entry.path.clone());
+                if entry.status == ScmFileStatus::Renamed
+                    && let Some(old) = &entry.old_path
+                {
+                    tracked.insert(old.clone());
+                }
+            }
+        }
+        Ok((
+            tracked.into_iter().collect(),
+            untracked.into_iter().collect(),
+        ))
+    }
+
+    pub fn validate_diff_entry(
+        &self,
+        area: ScmArea,
+        relative: &str,
+    ) -> Result<(String, Option<String>, bool, bool), String> {
+        let status = self
+            .result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .ok_or("Refresh Git status first.")?;
+        let entry = status
+            .entries
+            .iter()
+            .find(|e| e.area == area && e.path == relative)
+            .ok_or("Selected Git file changed; refresh status.")?;
+        let staged = entry.area == ScmArea::Staged;
+        let untracked =
+            entry.area == ScmArea::Untracked || entry.status == ScmFileStatus::Untracked;
+        Ok((
+            entry.path.clone(),
+            entry.old_path.clone(),
+            staged,
+            untracked,
+        ))
+    }
+
     pub fn stage_paths(&self, paths: &[String]) -> Result<Vec<String>, String> {
         self.selected_paths(paths, false)
     }
@@ -115,7 +302,7 @@ impl ScmState {
         {
             return Err("Refresh a complete Git status before changing selected files.".into());
         }
-        let mut selected = std::collections::BTreeSet::new();
+        let mut selected = BTreeSet::new();
         for path in paths {
             let entry = status
                 .entries
@@ -130,7 +317,7 @@ impl ScmState {
                 })
                 .ok_or("Selected Git file changed; refresh status.")?;
             selected.insert(entry.path.clone());
-            if entry.status == scm_changes_panel::ScmFileStatus::Renamed
+            if entry.status == ScmFileStatus::Renamed
                 && let Some(old) = &entry.old_path
             {
                 selected.insert(old.clone());
@@ -239,6 +426,7 @@ mod tests {
         state.refresh();
         assert!(!state.busy());
     }
+
     #[test]
     fn unstage_rename_includes_both_paths_and_keeps_the_worktree_rename() {
         let dir = tempfile::tempdir().unwrap();
@@ -284,5 +472,65 @@ mod tests {
             std::fs::read_to_string(dir.path().join("new.txt")).unwrap(),
             "same content"
         );
+    }
+
+    #[test]
+    fn load_populates_numstat_badges_and_discard_selection_splits_tracked_and_untracked() {
+        let dir = tempfile::tempdir().unwrap();
+        git::run(dir.path(), &["init", "-q"], None).unwrap();
+        std::fs::write(dir.path().join("src_a.rs"), "a\nb\n").unwrap();
+        git::stage_file(dir.path(), "src_a.rs").unwrap();
+        git::run(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "base",
+            ],
+            None,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src_a.rs"), "a\nb\nc\nd\n").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/new.rs"), "untracked\n").unwrap();
+
+        let owner = Owner {
+            project: 1,
+            root: dir.path().into(),
+        };
+        let parsed = load(&owner).unwrap();
+        let mod_entry = parsed
+            .entries
+            .iter()
+            .find(|e| e.path == "src_a.rs")
+            .unwrap();
+        assert_eq!(mod_entry.added, Some(2));
+        assert_eq!(mod_entry.removed, Some(0));
+
+        let state = ScmState {
+            owner: Some(owner),
+            result: Some(Ok(parsed)),
+            ..Default::default()
+        };
+        let badges = state.explorer_badges();
+        assert_eq!(badges.get("src_a.rs"), Some(&'M'));
+        assert_eq!(badges.get("sub/new.rs"), Some(&'?'));
+        assert_eq!(badges.get("sub"), Some(&'?'));
+
+        let (tracked, untracked) = state
+            .discard_selection(ScmArea::Unstaged, &["src_a.rs".into()])
+            .unwrap();
+        assert_eq!(tracked, vec!["src_a.rs"]);
+        assert!(untracked.is_empty());
+
+        let (tracked2, untracked2) = state
+            .discard_selection(ScmArea::Untracked, &["sub/new.rs".into()])
+            .unwrap();
+        assert!(tracked2.is_empty());
+        assert_eq!(untracked2, vec!["sub/new.rs"]);
     }
 }
