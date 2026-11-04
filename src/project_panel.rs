@@ -17,7 +17,7 @@
 //!   and focus-scoped keyboard navigation (`↑` / `↓` / `←` / `→` / `Enter` / `Space`) that never
 //!   consumes keys when focus belongs to a terminal, editor, or dialog outside the panel.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui::{
     self, Color32, FontId, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
@@ -350,12 +350,19 @@ pub struct ProjectPanel {
     focused_nav: Option<NavItem>,
     last_nav_items: Vec<NavItem>,
     held_activate_key: Option<Key>,
+    live_share_projects: HashMap<u64, Vec<String>>,
 }
 
 impl ProjectPanel {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Updates which projects are currently shared in Live Share (`project_id -> guest initials`).
+    #[allow(dead_code)]
+    pub fn set_live_share_projects(&mut self, shared: HashMap<u64, Vec<String>>) {
+        self.live_share_projects = shared;
     }
 
     /// Returns `true` when project `id` is currently collapsed in this panel.
@@ -1256,6 +1263,54 @@ impl ProjectPanel {
                 count_fg,
             );
             title_right = pill_rect.min.x - 4.0_f32;
+        }
+
+        // Optional `.osb-live` Live Share badge + guest avatars before session count pill.
+        if let Some(avatars) = self.live_share_projects.get(&project.id)
+            && card_rect.width() >= 170.0_f32
+        {
+            let live_red = Color32::from_rgb(0xef, 0x44, 0x44);
+            let mut live_label = if input.french {
+                "En direct".to_owned()
+            } else {
+                "Live".to_owned()
+            };
+            if !avatars.is_empty() {
+                let shown: Vec<&str> = avatars.iter().take(2).map(String::as_str).collect();
+                live_label.push_str(" · ");
+                live_label.push_str(&shown.join(" "));
+                if avatars.len() > 2 {
+                    live_label.push_str(&format!(" +{}", avatars.len() - 2));
+                }
+            }
+            let live_galley =
+                painter.layout_no_wrap(live_label, FontId::proportional(9.5_f32), live_red);
+            let live_w = (live_galley.size().x + 18.0_f32).ceil();
+            let live_rect = Rect::from_center_size(
+                Pos2::new(title_right - live_w * 0.5_f32, row1_y),
+                Vec2::new(live_w, 16.0_f32),
+            );
+            painter.rect(
+                live_rect,
+                8.0_f32,
+                live_red.gamma_multiply(0.12_f32),
+                Stroke::new(1.0_f32, live_red.gamma_multiply(0.5_f32)),
+                StrokeKind::Inside,
+            );
+            painter.circle_filled(
+                Pos2::new(live_rect.min.x + 6.5_f32, row1_y),
+                2.5_f32,
+                live_red,
+            );
+            painter.galley(
+                Pos2::new(
+                    live_rect.min.x + 12.0_f32,
+                    live_rect.center().y - live_galley.size().y * 0.5_f32,
+                ),
+                live_galley,
+                live_red,
+            );
+            title_right = live_rect.min.x - 4.0_f32;
         }
 
         let name_color = if status == WorktreeCardStatus::Sleeping && !is_active {

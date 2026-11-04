@@ -77,6 +77,15 @@ impl Default for Browser {
     }
 }
 
+impl Browser {
+    pub fn active_url(&self) -> Option<&str> {
+        self.view
+            .as_ref()
+            .map(|_| self.address.as_str())
+            .filter(|u| !u.trim().is_empty())
+    }
+}
+
 fn allowed(address: &str) -> bool {
     address.len() <= 8192
         && crate::view_tabs_browser_model::allowed_browser_url(address, true).is_some()

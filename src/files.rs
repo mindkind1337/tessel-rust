@@ -7,13 +7,6 @@ use std::{
 
 pub const MAX_TEXT: usize = 2 * 1024 * 1024;
 
-#[derive(Clone)]
-pub struct Entry {
-    pub name: String,
-    pub path: PathBuf,
-    pub directory: bool,
-}
-
 pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let path = path.canonicalize().map_err(|e| e.to_string())?;
@@ -21,33 +14,6 @@ pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
         return Err("Path is outside this project (including symlinks).".into());
     }
     Ok(path)
-}
-
-pub fn list(root: &Path, path: &Path) -> Result<Vec<Entry>> {
-    let path = confined(root, path)?;
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entries.len() == 10000 {
-            return Err("Directory exceeds 10,000 entries. Open a smaller project folder.".into());
-        }
-        let kind = entry.file_type().map_err(|e| e.to_string())?;
-        // Do not traverse links automatically. Explicit navigation checks confinement too.
-        if kind.is_symlink() {
-            continue;
-        }
-        entries.push(Entry {
-            name: entry.file_name().to_string_lossy().into_owned(),
-            path: entry.path(),
-            directory: kind.is_dir(),
-        });
-    }
-    entries.sort_by(|a, b| {
-        b.directory
-            .cmp(&a.directory)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    Ok(entries)
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {

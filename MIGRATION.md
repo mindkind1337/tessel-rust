@@ -22,7 +22,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending |
 | Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown, images and bounded original PDF rendering implemented; bounded Office/OpenDocument content previews implemented with synthetic format and native worker acceptance; full webpage rendering and rich Office layout pending |
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
-| Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Native read-only LAN protocol implemented and real TLS tests pass; cloud relay, editing and Electron compatibility pending |
+| Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Duplex TLS 1.3 LAN session with 8-flag `ShareRights`, 6-digit SAS knock approval (`900ms` arming delay + trust gating), multi-invitation management (`MAX_INVITES = 20`), `720px` dialog (`Overview`/`People`/`Invitations`/`Settings`), `24px` toolbar pill + `360px` popover, pane presence and `.osb-live` sidebar badges implemented and verified; cloud relay and Electron wire compatibility pending |
 | Connectors/account/sync | Match existing service contracts; token isolation and consent | Native account PKCE, callback, DPAPI and HTTP fixture tests pass; backend activation, real sign-in, connectors and sync pending |
 | Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending |
 | Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; searchable native shortcut help visually checked, modal Escape/focus and document shortcut isolation tests pass; external/technical diagnostics and screen-reader acceptance pending |
@@ -546,3 +546,20 @@ and `Ctrl+R` / `F5`; native chats add `Alt+A` pending-request focus. Command
 Palette adds full `New`, `Project`, `Layout`, `Files`, `Task`, `Theme` and
 `Tessel` catalogs plus localized `"Nothing matches \"{{query}}\""` empty states,
 and `pane_header` renders contextual status facts and `SendSelectionTo` targets.
+
+Live Share parity integration: `share` and `share_panel` implement the full
+host/guest experience over duplex `rustls` TLS 1.3 with invitation-pinned
+SHA-256 certificate verification and deterministic 6-digit SAS codes (`"123 456"`).
+Host sessions manage up to 20 revocable/rotatable invitations (`MAX_INVITES`),
+up to 64 trusted peers (`MAX_TRUSTED`), 8-flag `ShareRights` with 4 presets and
+fail-closed unknown-key stripping, `ShareSettings` (`hideSecrets`, `confirmClose`),
+project-confined file listing/read/write, task-board RPCs, terminal view/input
+forwarding and per-pane guest presence (`watching` / `typing`). UI surfaces match
+the `720px` `LiveShareDialog` (`Share`/`Join`, `<LsStatus>` with inline `"Stop
+Live Share?"` confirmation, `Overview`/`People`/`Invitations`/`Settings`, 8-tile
+`RightsGrid` with `"Runs commands as you"` warning, `RightsChip`), the
+non-dismissible `560px` `LiveShareAsk` knock/action modal (`900ms` arming delay,
+`Escape` blocking, `"Trust next time"` gated on SAS verification), the `24px`
+toolbar `LiveSharePill` + `360px` popover, pane header presence badges, and
+`.osb-live` sidebar indicators. Validation: 9 `ui_live_share` TLS + headless UI
+tests, `ui_project_panel`, `i18n::tests`, `files::tests` and strict Clippy pass.

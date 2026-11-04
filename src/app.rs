@@ -1951,7 +1951,12 @@ impl Tessel {
             PaletteCommand::new("zoom:reset", "Tessel", tr("Reset text size"))
                 .with_shortcut("Ctrl+0"),
         );
-        commands.push(PaletteCommand::new("share", "Tessel", tr("Share")));
+        commands.push(PaletteCommand::new("share", "Tessel", tr("Live Share…")));
+        commands.push(PaletteCommand::new(
+            "share:join",
+            "Tessel",
+            tr("Join Live Share session…"),
+        ));
         #[cfg(windows)]
         commands.push(PaletteCommand::new("browser", "Tessel", tr("Browser")));
         #[cfg(windows)]
@@ -2035,7 +2040,14 @@ impl Tessel {
                 "settings" => self.overlay = Some(Overlay::Settings),
                 "help" => self.open_help(),
                 "remote" => self.view = View::Remote,
-                "share" => self.overlay = Some(Overlay::Share),
+                "share" => {
+                    self.share.tab = crate::share_panel::DialogTab::Share;
+                    self.overlay = Some(Overlay::Share);
+                }
+                "share:join" => {
+                    self.share.tab = crate::share_panel::DialogTab::Join;
+                    self.overlay = Some(Overlay::Share);
+                }
                 "broadcast" => {
                     self.state.broadcast = !self.state.broadcast;
                     self.save();
@@ -2266,6 +2278,8 @@ impl Tessel {
             .filter(|s| s.project.is_none())
             .map(&entry)
             .collect();
+        self.project_panel
+            .set_live_share_projects(self.share.shared_projects_sidebar_map());
         let mut action = None;
         egui::SidePanel::left("projects")
             .default_width(280.0)
@@ -2273,6 +2287,8 @@ impl Tessel {
             .resizable(true)
             .show(ctx, |ui| {
                 if self.native_modal_open()
+                    || self.share.has_pending_ask()
+                    || self.share.is_pill_popover_open()
                     || self.overlay.is_some()
                     || self.command_palette.open
                     || self.finder.is_open()
@@ -3131,6 +3147,12 @@ impl Tessel {
                                     .changed()
                                 {
                                     broadcast_membership_changed = true;
+                                }
+                                if self.share.hosting() {
+                                    let presence = self.share.pane_presence(id);
+                                    crate::share_panel::SharePanel::paint_pane_presence(
+                                        ui, &presence, french,
+                                    );
                                 }
                                 let more = crate::pane_header::button(
                                     ui,
@@ -4986,6 +5008,106 @@ impl Tessel {
         Ok(())
     }
 
+    fn live_share_project_list(&self) -> Vec<crate::share::SharedProject> {
+        self.state
+            .projects
+            .iter()
+            .map(|p| crate::share::SharedProject {
+                id: p.id,
+                name: p.name.clone(),
+                path: p.path.clone(),
+            })
+            .collect()
+    }
+
+    fn sync_live_share(&mut self) {
+        let all_projects = self.live_share_project_list();
+        let (panes, pages) = if self.share.hosting() {
+            let panes = self
+                .sessions
+                .iter()
+                .filter_map(|s| {
+                    let project_id = s.project?;
+                    let is_agent = matches!(
+                        s.launch,
+                        Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+                    );
+                    let output = s
+                        .terminal
+                        .as_ref()
+                        .map_or_else(String::new, Terminal::output);
+                    Some(crate::share::SharedPaneSnapshot {
+                        id: s.id,
+                        project_id,
+                        title: s.label().to_owned(),
+                        is_agent,
+                        output,
+                    })
+                })
+                .collect();
+            #[cfg(windows)]
+            let pages = self
+                .browser
+                .active_url()
+                .map(|url| {
+                    vec![crate::share::SharedBrowserPage {
+                        project_id: self.state.active_project,
+                        title: tr("Browser").to_owned(),
+                        url: url.to_owned(),
+                    }]
+                })
+                .unwrap_or_default();
+            #[cfg(not(windows))]
+            let pages = Vec::new();
+            (panes, pages)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let cmds = self.share.sync_host_workspace(
+            &all_projects,
+            panes,
+            pages,
+            self.state.active_project,
+            self.active_session,
+        );
+        for cmd in cmds {
+            match cmd {
+                crate::share::HostCommand::WriteTerminal { pane_id, bytes } => {
+                    if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id)
+                        && let Some(terminal) = &mut session.terminal
+                    {
+                        terminal.send_broadcast(&crate::terminal::BroadcastInput::Raw(bytes));
+                    }
+                }
+                crate::share::HostCommand::ResizeTerminal { .. } => {}
+                crate::share::HostCommand::OpenPane {
+                    project_id,
+                    agent_name,
+                } => {
+                    if self.state.projects.iter().any(|p| p.id == project_id) {
+                        if self.state.active_project != Some(project_id) {
+                            self.state.active_project = Some(project_id);
+                            self.refresh_project();
+                        }
+                        let launch = match agent_name {
+                            Some(agent)
+                                if crate::agent_preferences::enabled(&self.state, &agent) =>
+                            {
+                                Launch::Agent(agent)
+                            }
+                            _ => Launch::Shell,
+                        };
+                        self.new_session(launch);
+                    }
+                }
+                crate::share::HostCommand::ClosePane { pane_id } => {
+                    self.close_session(pane_id);
+                }
+            }
+        }
+    }
+
     fn show_overlay(&mut self, ctx: &egui::Context) {
         let Some(overlay) = self.overlay else {
             return;
@@ -5019,6 +5141,14 @@ impl Tessel {
         }
         if overlay == Overlay::Settings {
             self.show_settings(ctx);
+            return;
+        }
+        if overlay == Overlay::Share {
+            let all_projects = self.live_share_project_list();
+            let french = self.state.language == crate::i18n::Language::French;
+            if self.share.show_dialog_modal(ctx, &all_projects, french) {
+                self.overlay = None;
+            }
             return;
         }
         let mut close = false;
@@ -5620,6 +5750,7 @@ impl eframe::App for Tessel {
         self.native_hosts.poll();
         self.poll();
         self.poll_floating(ctx);
+        self.sync_live_share();
         #[cfg(windows)]
         {
             self.poll_native_terminals(ctx);
@@ -5653,6 +5784,8 @@ impl eframe::App for Tessel {
         }
         let confirmation_open = self.finder.is_open()
             || self.native_modal_open()
+            || self.share.has_pending_ask()
+            || self.share.is_pill_popover_open()
             || self.toolbar_menu_open
             || self.pending_close.is_some()
             || self.pending_exit
@@ -6018,12 +6151,20 @@ impl eframe::App for Tessel {
                 });
                 self.toolbar_menu_open |= shown.is_some();
                 ui.separator();
-                if chrome::icon_button(ui, Icon::Share, tr("Share"), self.share.hosting(), false)
-                    .clicked()
+                let toolbar_french = self.state.language == crate::i18n::Language::French;
+                let share_projects = self.live_share_project_list();
+                if let Some(crate::share_panel::ShareUiAction::OpenDialog(tab)) =
+                    self.share.show_toolbar_control(
+                        ui,
+                        &share_projects,
+                        self.state.active_project,
+                        toolbar_french,
+                    )
                 {
+                    self.share.tab = tab;
                     self.overlay = Some(Overlay::Share);
                 }
-                let toolbar_french = self.state.language == crate::i18n::Language::French;
+                self.toolbar_menu_open |= self.share.is_pill_popover_open();
                 let toolbar_spec = crate::theme::active(ui.ctx()).spec();
                 if crate::layout_broadcast_ui::paint_broadcast_toolbar_button(
                     ui,
@@ -6125,6 +6266,7 @@ impl eframe::App for Tessel {
         }
         let central = egui::CentralPanel::default().show(ctx, |ui| {
             if self.native_modal_open()
+                || self.share.has_pending_ask()
                 || self.finder.is_open()
                 || self.toolbar_menu_open
                 || self.status_bar.has_open_popover()
@@ -6145,6 +6287,7 @@ impl eframe::App for Tessel {
                 #[cfg(windows)]
                 View::Browser => {
                     if !self.native_modal_open()
+                        && !self.share.has_pending_ask()
                         && !self.pending_exit
                         && self.pending_close.is_none()
                         && self.file_action.is_none()
@@ -6228,6 +6371,14 @@ impl eframe::App for Tessel {
             });
         }
         self.confirmations(ctx);
+        #[cfg_attr(not(windows), allow(unused_variables))]
+        let ask_modal_open = if self.share.hosting() {
+            let all_projects = self.live_share_project_list();
+            let french = self.state.language == crate::i18n::Language::French;
+            self.share.show_ask_modal(ctx, &all_projects, french)
+        } else {
+            false
+        };
         #[cfg(windows)]
         {
             self.dispatch_native_actions(ctx);
@@ -6235,6 +6386,8 @@ impl eframe::App for Tessel {
             self.show_native_drain(ctx);
             let browser_unblocked = self.view == View::Browser
                 && !self.native_modal_open()
+                && !ask_modal_open
+                && !self.share.has_pending_ask()
                 && !self.pending_exit
                 && self.pending_close.is_none()
                 && self.file_action.is_none()

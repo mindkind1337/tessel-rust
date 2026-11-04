@@ -442,5 +442,7 @@
   "Go to line": "Aller \u00e0 la ligne",
   "Word wrap": "Retour \u00e0 la ligne",
   "Next change": "Modification suivante",
-  "Find\u2026": "Rechercher\u2026"
+  "Find\u2026": "Rechercher\u2026",
+  "Live Share\u2026": "Live Share\u2026",
+  "Join Live Share session\u2026": "Rejoindre une session Live Share\u2026"
 }
