@@ -71,6 +71,7 @@ mod pane_header;
 pub mod pane_menu_model;
 mod pane_model_history;
 pub mod pane_model_log;
+pub mod pane_model_profile;
 pub mod pane_model_settings;
 pub mod pane_model_worker;
 pub mod pane_session_model;

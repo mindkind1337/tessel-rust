@@ -18,6 +18,7 @@ pub struct Terminal {
     observed_model: Option<crate::pane_session_model::ShownAgentModel>,
     model_catalog: Vec<serde_json::Value>,
     model_agent: String,
+    model_profile: Option<crate::pane_model_profile::Profile>,
     size: (u16, u16),
     status: String,
     exited: bool,
@@ -85,6 +86,12 @@ impl Terminal {
         agent: &str,
         models: &[serde_json::Value],
     ) -> Option<&crate::pane_session_model::ShownAgentModel> {
+        if self
+            .model_profile()
+            .is_some_and(|profile| profile.agent() != agent)
+        {
+            return None;
+        }
         if self.model_agent != agent {
             self.observed_model = None;
             self.model_agent = agent.to_owned();
@@ -132,6 +139,24 @@ impl Terminal {
             &crate::launch::default_directory(),
         )?;
         Self::spawn_command(command)
+    }
+
+    pub fn model_profile(&self) -> Option<&crate::pane_model_profile::Profile> {
+        self.model_profile.as_ref()
+    }
+
+    /// For a known provider launch, on its launch worker. Custom shell wrappers
+    /// use spawn_command because their inner environment is not observable here.
+    pub fn spawn_agent_command(
+        agent: &str,
+        command: CommandBuilder,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let profile = directories::BaseDirs::new().and_then(|dirs| {
+            crate::pane_model_profile::Profile::capture(agent, &command, dirs.home_dir())
+        });
+        let mut terminal = Self::spawn_command(command)?;
+        terminal.model_profile = profile;
+        Ok(terminal)
     }
 
     pub fn spawn_command(command: CommandBuilder) -> Result<Self, Box<dyn std::error::Error>> {
@@ -182,6 +207,7 @@ impl Terminal {
             observed_model: None,
             model_catalog: Vec::new(),
             model_agent: String::new(),
+            model_profile: None,
             size: (30, 100),
             status: String::new(),
             exited: false,
@@ -1122,13 +1148,19 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
             env: "RUST_AGENT_FIXTURE=ENV_FROM_PREFERENCES".into(),
             ..Default::default()
         };
-        let command = crate::launch::command_with_preferences(
+        let mut command = crate::launch::command_with_preferences(
             &crate::launch::Launch::Agent("codex".into()),
             dir.path(),
             Some(&prefs),
         )
         .unwrap();
-        let mut terminal = Terminal::spawn_command(command).unwrap();
+        command.env("CODEX_HOME", dir.path().join("captured-profile"));
+        let mut terminal = Terminal::spawn_agent_command("codex", command).unwrap();
+        let profile = terminal
+            .model_profile()
+            .expect("profile captured at PTY launch");
+        assert_eq!(profile.root(), dir.path().join("captured-profile"));
+        assert_eq!(profile.cwd(), dir.path());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut found = false;
         while std::time::Instant::now() < deadline {

@@ -239,9 +239,19 @@ impl Session {
                 }
                 _ => Ok(prefs),
             };
-            let result = effective
-                .and_then(|prefs| launch::command_with_preferences(&launch, &cwd, prefs.as_ref()))
-                .and_then(|c| Terminal::spawn_command(c).map_err(|e| e.to_string()));
+            let result = effective.and_then(|prefs| {
+                let command = launch::command_with_preferences(&launch, &cwd, prefs.as_ref())?;
+                let custom = prefs
+                    .as_ref()
+                    .is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
+                match &launch {
+                    Launch::Agent(agent) if !custom => {
+                        Terminal::spawn_agent_command(agent, command)
+                    }
+                    _ => Terminal::spawn_command(command),
+                }
+                .map_err(|e| e.to_string())
+            });
             let _ = sender.send(result);
         });
     }
