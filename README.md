@@ -153,12 +153,14 @@ Install Rust stable and native C/C++ build tools. Windows requires MSVC build to
 ```sh
 cargo run --locked -j 2
 cargo fmt --check
-cargo test --locked -j 2
+cargo test --locked -j 2 -- --test-threads=2
 cargo clippy --locked -j 2 --all-targets -- -D warnings
 cargo build --locked -j 2
 ```
 
 Windows executable: `target/debug/tessel-rust.exe`. CI produces an optimized portable ZIP with its checksum; no installer or product release is published yet. `--data-dir <folder>` selects a separate workspace metadata directory for testing.
+
+The Git build label tracks commits without forcing recompilation when optional Git reference files are absent. Two test threads keep synthetic child-process timing checks from competing with the entire suite at once.
 
 Optional native acceptance checks:
 
