@@ -1,0 +1,11 @@
+{
+  "name": "tessel-rust-fixtures",
+  "private": true,
+  "description": "Development-only TypeScript source-comparison fixtures; the application is native Rust.",
+  "engines": { "node": ">=24.12.0 <25" },
+  "scripts": { "check:scripts": "tsc --project tsconfig.scripts.json" },
+  "devDependencies": {
+    "@types/node": "24.13.2",
+    "typescript": "7.0.2"
+  }
+}

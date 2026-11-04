@@ -177,6 +177,29 @@ Optional native acceptance checks:
 
 The browser check creates a local HTTP fixture and temporary browser profile, downloads direct, cookie-authenticated and blob PDFs, and compares all saved bytes to the original synthetic PDF. Both browser checks also cancel a deliberately slow transfer after observing native progress and verify that an incomplete response cannot report completion and is stopped by the stall guard (three seconds in the fixture, 120 seconds normally). It uses no personal account. The agent-browser check repeats those original downloads with tool-selected names, checks returned paths/status, exercises snapshot/fill/click/select/check/scroll and a real nonblank PNG screenshot with project/origin rejection, refuses origin mismatch and password-field entry, and checks cookie isolation against a separate profile. The Codex check initializes the real installed app-server and verifies its applied permissions and probes history compatibility; it sends no prompt or model turn. The PDF check renders two synthetic original pages in the resource-limited worker and rejects invalid input. The Office check decodes synthetic DOCX and XLSX files through the actual isolated worker, checks original text/cached values and refuses damaged/cancelled input. The vault check uses a temporary profile and an in-process synthetic HTTPS site, without real credentials or network access. `cargo build --features visual-test` enables eframe's screenshot test support.
 
+### Fixture development (optional)
+
+The application and its Cargo build remain native Rust. Source-comparison fixture
+generators are separate development tools. The catalogue, listed-model and
+model-option generators now use strict TypeScript (`scripts/*.cts`); the eight
+other existing CommonJS generators are still being converted.
+
+Use Node 24.12 or newer within the Node 24 series:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check:scripts
+node scripts/model-catalog-fixture.cts path/to/reference/src/shared/agentSessionOptions.js
+node scripts/model-listed-fixture.cts path/to/reference/src/shared
+node scripts/model-options-fixture.cts path/to/reference/src/shared/agentSessionOptions.js
+```
+
+The generators read the reference source and rewrite only their Rust-side JSON
+fixtures. They do not launch agents or modify the reference application.
+The locked TypeScript compiler checks types without emitting JavaScript;
+[Node's native type stripping](https://nodejs.org/api/typescript.html) executes
+the `.cts` files. A separate CI job checks every migrated `.cts` script.
+
 ## Validation and remaining migration
 
 The remote-host daemon, installer and protocol now live in the separate private
