@@ -5,6 +5,7 @@ pub mod host_emulator;
 pub mod host_events;
 pub mod host_handoff;
 pub mod host_history;
+pub mod host_lease_desk;
 pub mod host_lease_keeper;
 pub mod host_opening;
 pub mod host_worker;

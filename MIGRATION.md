@@ -311,3 +311,13 @@ The expanded store suite passes 17 cases, and 15 filtered local-terminal/profile
 cases pass, including real synthetic PTY execution and descendant cleanup.
 Created terminals start from their requested dimensions and sequence zero, so a
 silent program can receive input; existing attachments still await their snapshot.
+
+The application-level lease desk is implemented and passes 30 scoped tests
+(12 desk cases plus shared helpers). Failed-save tokens survive pane closure and
+are shared by panes displaying the same terminal. End-recording work is bounded,
+and a blocked new slot does not stall an already-tracked slot. It is not yet wired
+into the app's shutdown/opening lifecycle. Two native-facade tests use the actual
+client protocol and command worker over in-process pipes: silent-program input,
+modal/close-confirmation input isolation, detach without termination, and retaining
+the last screen while refusing input and resize after stream rejection all pass.
+These fixtures never open the owner store or connect to SSH.

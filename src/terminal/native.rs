@@ -8,6 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
+
 type Opening = host_opening::Pending<HostConnection, OwnerStore>;
 pub(super) type Failure = host_opening::Failure<HostConnection, OwnerStore>;
 
