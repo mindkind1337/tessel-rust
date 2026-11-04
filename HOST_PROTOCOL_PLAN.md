@@ -28,6 +28,39 @@ fixtures and the matrix row by row, strict Clippy, and a deterministic mutation
 fuzzer (frames, bounded reads, connection rules, streams, chunks/paths,
 deduplication model) run for 1,000,000 iterations in release mode
 (`TESSEL_FUZZ_ITERATIONS`). Not run on Windows for gate 1; no daemon exists yet.
+Gate 2 (daemon, bridge, rootless installer) is complete in `crates/host` and
+`crates/host-xtask`. `tessel-host serve` keeps one daemon per user and version
+under `~/.tessel-server/host/<version>/` (new directory, not `run/`): every
+directory on the way is a real directory owned by the user, the daemon's own
+ones exactly 0700, the socket 0600, a flock single-instance lock, peer UID
+checked with SO_PEERCRED, a 10-second hello deadline, 16 clients at most, a log
+of operation names and numbers only. `--daemonize` detaches (new session,
+stdio on /dev/null) and its first process exits only once the daemon is ready.
+`tessel-host connect --stdio` connects or starts the daemon, in a systemd user
+scope when the user lingers, otherwise detached in the session, then relays
+bytes with plain reads and writes (`io::copy`'s Linux kernel shortcuts held a
+reply back). `host.info` reports version, architecture, pid and persistence
+read from logind (KillUserProcesses through busctl or logind.conf) and the
+linger file; nothing changes either setting. `install` is the client side:
+`uname -m` to an architecture, a manifest with digests, and fixed commands
+(`cat` to a nonce-named temporary file under `$HOME`, `sha256sum` or BusyBox,
+`chmod 700`, atomic `mv`, then `version`), refusing symbolic links on the way.
+`cargo run -p tessel-host-xtask -- release` builds both static musl programs
+(aarch64 linked with rust-lld), refuses a dependency on a toolkit, web view or
+JavaScript runtime, checks each ELF file (machine, no interpreter, no shared
+library) and writes `manifest.json` and `SHA256SUMS`; `accept` runs each one.
+Evidence, Ubuntu 24.04 WSL with systemd, Rust 1.99.1: 8 host tests (daemon
+started once and alive after a SIGKILLed bridge with the same epoch, second
+daemon refused by the lock, garbage refused without harm, a SIGKILLed daemon
+replaced by another epoch over its stale socket, unsafe directories and a
+non-socket at the socket path refused, the install plan run by `sh` with a
+wrong program refused and a symbolic link stopping the upload), strict Clippy,
+and `accept` passing for x86_64 natively and aarch64 under qemu-aarch64-static
+8.2.2 (user mode, unpacked without root): version, daemon, bridge, hello,
+host.info, killed bridge, same epoch. x86_64 is 803,624 bytes (static-pie),
+aarch64 710,432 bytes (static). Not verified: survival of a real SSH logout,
+a real host other than this WSL, aarch64 on real hardware, builds being
+reproducible, and Windows compilation of the host crates.
 `cargo test --locked -j 2 -p tessel-host-protocol` runs only this lightweight crate.
 Workspace default-members remains the desktop; existing desktop commands retain
 their scope. The lockfile adds only the local crate, no dependency upgrades.

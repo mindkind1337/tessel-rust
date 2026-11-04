@@ -6,7 +6,7 @@ license = "MIT"
 description = "Native Rust Tessel prototype"
 
 [workspace]
-members = ["crates/host-protocol"]
+members = ["crates/host-protocol", "crates/host", "crates/host-xtask"]
 default-members = ["."]
 resolver = "3"
 

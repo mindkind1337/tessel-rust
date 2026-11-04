@@ -291,12 +291,82 @@ fn plain_json(value: &Value, depth: usize) -> bool {
     }
 }
 
+/// How the host daemon was started, as far as the host can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersistenceMethod {
+    /// In a systemd user scope, with lingering on: outside the login session.
+    UserScope,
+    /// Detached (new session) inside the login session that started it.
+    Session,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Survival {
+    Yes,
+    No,
+    /// The host's policy could not be read: no promise either way.
+    Unknown,
+}
+
+/// Whether terminals survive the end of the SSH login that started the daemon. Read from the
+/// host's policy (systemd-logind's KillUserProcesses, the user's lingering), not assumed; a
+/// client shows `no` and `unknown` as a warning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Persistence {
+    pub method: PersistenceMethod,
+    pub linger: Option<bool>,
+    pub kill_user_processes: Option<bool>,
+    pub survives_logout: Survival,
+}
+
+impl Persistence {
+    pub const UNKNOWN: Self = Self {
+        method: PersistenceMethod::Session,
+        linger: None,
+        kill_user_processes: None,
+        survives_logout: Survival::Unknown,
+    };
+}
+
+/// What the daemon is: `host.info`, answered after hello.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostInfo {
+    pub version: String,
+    pub arch: String,
+    pub pid: u32,
+    pub persistence: Persistence,
+}
+
+impl HostInfo {
+    pub fn validate(&self) -> Result<(), WireError> {
+        let token = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 32
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._+-".contains(&b))
+        };
+        if token(&self.version) && token(&self.arch) {
+            Ok(())
+        } else {
+            Err(WireError::detail(
+                ErrorCode::BadRequest,
+                "invalid host info",
+            ))
+        }
+    }
+}
+
 /// The messages every connection understands, whatever was negotiated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
     Hello(Hello),
     Ping,
     Cancel(Cancel),
+    HostInfo,
 }
 
 impl ClientMessage {
@@ -305,6 +375,7 @@ impl ClientMessage {
             Self::Hello(hello) => RawMessage::of("hello", &hello),
             Self::Ping => RawMessage::empty("ping"),
             Self::Cancel(cancel) => RawMessage::of("cancel", &cancel),
+            Self::HostInfo => RawMessage::empty("host.info"),
         }
     }
 
@@ -317,6 +388,10 @@ impl ClientMessage {
                 Self::Ping
             }
             "cancel" => Self::Cancel(message.body_as()?),
+            "host.info" => {
+                message.require_empty()?;
+                Self::HostInfo
+            }
             _ => return Ok(None),
         }))
     }
@@ -329,6 +404,7 @@ pub enum ReplyMessage {
     Pong,
     /// A request that has nothing more to say than that it was done.
     Done,
+    HostInfo(HostInfo),
 }
 
 impl ReplyMessage {
@@ -337,6 +413,7 @@ impl ReplyMessage {
             Self::HelloOk(ok) => RawMessage::of("hello_ok", &ok),
             Self::Pong => RawMessage::empty("pong"),
             Self::Done => RawMessage::empty("done"),
+            Self::HostInfo(info) => RawMessage::of("host_info", &info),
         }
     }
 
@@ -346,6 +423,11 @@ impl ReplyMessage {
                 let ok: HelloOk = message.body_as()?;
                 ok.validate()?;
                 Self::HelloOk(ok)
+            }
+            "host_info" => {
+                let info: HostInfo = message.body_as()?;
+                info.validate()?;
+                Self::HostInfo(info)
             }
             "pong" => {
                 message.require_empty()?;

@@ -93,7 +93,10 @@ run of the daemon: another epoch after a reconnect means what the client knew is
 ## Requests
 
 - Core kinds, always allowed after hello: `hello` (refused: already accepted), `ping` → `pong`,
-  `cancel` → `done`.
+  `cancel` → `done`, `host.info` → `host_info`: the daemon's `version`, `arch`, `pid` and
+  `persistence` (`method`: `user_scope` or `session`; `linger` and `kill_user_processes`: true,
+  false or null when unknown; `survives_logout`: `yes`, `no` or `unknown`). Persistence is read
+  from the host's policy, never assumed; a client shows `no` and `unknown` as a warning.
 - Every other kind belongs to a capability by its first word: `terminal.*` → pty, `tree.*` and
   `root.*` → tree, `file.*` → editor, `git.*` → git, `tunnel.*` → tunnel.reverse. A kind of a
   capability not negotiated is refused with `capability_not_negotiated`; a kind no capability
@@ -146,6 +149,7 @@ A client reads a code it does not know as `unknown`.
 | a frame with `"version":2` | any time | connection error `unsupported_version`, closes |
 | hello with a malformed body | first | reply `bad_request`, closes |
 | ping, any request, or an ack | before hello | reply (or connection error) `not_negotiated`, closes |
+| `host.info` | after hello | `host_info` |
 | hello asking for `future.optional` | first | ignored, not in `hello_ok` |
 | hello again | after hello | reply `bad_request` |
 | `future.thing` | after hello | reply `unsupported_kind` |

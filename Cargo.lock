@@ -5418,12 +5418,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessel-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tessel-host-protocol",
+]
+
+[[package]]
 name = "tessel-host-protocol"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "tessel-host-xtask"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tessel-host",
+ "tessel-host-protocol",
 ]
 
 [[package]]

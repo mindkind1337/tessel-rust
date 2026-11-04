@@ -25,6 +25,12 @@ fn limits(capabilities: &[Capability]) -> HostLimits {
         capabilities: capabilities.to_vec(),
         budgets: Budgets::SLOW_HOST,
         epoch: epoch(),
+        info: HostInfo {
+            version: "0.1.0".into(),
+            arch: "x86_64".into(),
+            pid: 42,
+            persistence: Persistence::UNKNOWN,
+        },
     }
 }
 
@@ -623,4 +629,35 @@ fn deduplication_never_repeats_an_effect_within_its_time() {
     assert_eq!(cache.begin(&other, 99_999).unwrap(), Dedup::Running);
     cache.abandon(&other);
     assert_eq!(cache.begin(&other, 100_000).unwrap(), Dedup::Fresh);
+}
+
+#[test]
+fn host_info_only_after_hello() {
+    let mut c = Connection::new(limits(&[]));
+    assert_eq!(
+        c.on_frame(ClientFrame::request(1, ClientMessage::HostInfo))
+            .unwrap_err()
+            .error
+            .code,
+        ErrorCode::NotNegotiated
+    );
+    let mut c = connected(&[]);
+    let Ok(Step::Reply(reply)) = c.on_frame(ClientFrame::request(2, ClientMessage::HostInfo))
+    else {
+        panic!()
+    };
+    let Some(ReplyMessage::HostInfo(info)) =
+        ReplyMessage::from_raw(reply.ok.as_ref().unwrap()).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (info.version.as_str(), info.persistence.survives_logout),
+        ("0.1.0", Survival::Unknown)
+    );
+    let body = RawMessage::new("host.info", json!({ "x": 1 }));
+    assert_eq!(
+        reply_code(c.on_frame(ClientFrame::request_raw(3, body))),
+        Some(ErrorCode::BadRequest)
+    );
 }

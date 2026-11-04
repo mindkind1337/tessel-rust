@@ -1,8 +1,8 @@
 use crate::ids::Epoch;
 use crate::stream::Ack;
 use crate::wire::{
-    Budgets, Capability, ClientFrame, ClientMessage, ErrorCode, HelloOk, HostFrame, RawMessage,
-    ReplyMessage, WireError,
+    Budgets, Capability, ClientFrame, ClientMessage, ErrorCode, HelloOk, HostFrame, HostInfo,
+    RawMessage, ReplyMessage, WireError,
 };
 use std::collections::HashMap;
 
@@ -12,6 +12,7 @@ pub struct HostLimits {
     pub capabilities: Vec<Capability>,
     pub budgets: Budgets,
     pub epoch: Epoch,
+    pub info: HostInfo,
 }
 
 /// A refusal that ends the connection: send `frame()`, then close.
@@ -194,6 +195,9 @@ impl Connection {
                 "hello was already accepted",
             ))),
             Ok(Some(ClientMessage::Ping)) => reply(Ok(ReplyMessage::Pong)),
+            Ok(Some(ClientMessage::HostInfo)) => {
+                reply(Ok(ReplyMessage::HostInfo(self.limits.info.clone())))
+            }
             Ok(Some(ClientMessage::Cancel(cancel))) => {
                 if cancel.target == 0 || cancel.target >= id {
                     reply(Err(WireError::detail(

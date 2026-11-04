@@ -24,7 +24,8 @@ pub use ids::{DedupKey, Epoch, MAX_ID, StreamId};
 pub use stream::{Ack, AckError, Arrival, SendError, StreamPos, StreamReceiver, StreamSender};
 pub use wire::{
     Budgets, Cancel, Capability, ClientFrame, ClientMessage, ErrorCode, Hello, HelloOk, HostFrame,
-    RawMessage, ReplyMessage, VERSION, WireError,
+    HostInfo, Persistence, PersistenceMethod, RawMessage, ReplyMessage, Survival, VERSION,
+    WireError,
 };
 
 /// Kept for code written against the foundation: the largest request identifier.

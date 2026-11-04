@@ -290,6 +290,12 @@ fn a_connection_keeps_its_rules_under_any_sequence() {
         capabilities: vec![Capability::Pty, Capability::Tree],
         budgets: Budgets::SLOW_HOST,
         epoch: Epoch::from_bytes([9; 16]),
+        info: HostInfo {
+            version: "0.1.0".into(),
+            arch: "x86_64".into(),
+            pid: 42,
+            persistence: Persistence::UNKNOWN,
+        },
     };
     let mut connection = Connection::new(limits.clone());
     let mut next_id = 0u64;
