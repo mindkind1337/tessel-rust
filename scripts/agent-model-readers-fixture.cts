@@ -1056,6 +1056,23 @@ const museSettingsSamples: Array<{ name: string; json: string; probeIds: string[
     json: JSON.stringify({ schema_version: 1, model: { theme: 'dark' } }),
     probeIds: ['muse-spark-1.3'],
   },
+  {
+    name: 'trimmed-key-collision-later-inserted-key-wins',
+    json: '{"model":"muse-spark-1.3","model_reasoning_efforts":{"muse-spark-1.3":"max"," muse-spark-1.3 ":"low"}}',
+    probeIds: ['muse-spark-1.3'],
+  },
+  {
+    name: 'slice-first-100-uses-insertion-order-not-lexicographic',
+    json: (() => {
+      const pairs: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        pairs.push(`"z-entry-${String(i).padStart(3, '0')}":"medium"`);
+      }
+      pairs.push('"a-after-100":"xhigh"');
+      return `{"model_reasoning_efforts":{${pairs.join(',')}}}`;
+    })(),
+    probeIds: ['z-entry-000', 'z-entry-099', 'a-after-100'],
+  },
 ];
 
 const museSettingsCases = museSettingsSamples.map((c) => {
@@ -1336,7 +1353,7 @@ resetVirtual({
     '.claude\\settings.json': claudeEffortDocs.user,
   },
 });
-const claudeSettingsEffortCases = [
+const claudeSettingsEffortBaseCases = [
   { model: 'claude-fable-5-1', useCwd: false },
   { model: 'fable', useCwd: false },
   { model: 'opus[1m]', useCwd: false },
@@ -1348,6 +1365,62 @@ const claudeSettingsEffortCases = [
   docs: c.useCwd ? [claudeEffortDocs.local, claudeEffortDocs.project, claudeEffortDocs.user] : [claudeEffortDocs.user],
   expected: vmApi.claudeSettingsEffort(c.model, c.useCwd ? path.win32.join(HOME, 'proj') : null, HOME),
 }));
+
+const claudeSettingsOrderSamples: Array<{ model: string | null; docs: string[] }> = [
+  {
+    model: 'claude-opus-4-8',
+    docs: ['{"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"}}}'],
+  },
+  {
+    model: 'claude-opus-4-8',
+    docs: ['{"modelSettings":{"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"high"}}}'],
+  },
+  {
+    model: 'opus',
+    docs: ['{"modelSettings":{"claude-opus-5-5":{"effortLevel":"max"},"claude-opus-4-8":{"effortLevel":"low"}}}'],
+  },
+  {
+    model: 'claude-opus-4-8',
+    docs: [
+      '{"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"max"}}}',
+    ],
+  },
+  {
+    model: 'claude-opus-4-8',
+    docs: [
+      '{"modelSettings":{"claude-opus-4-8":{"effortLevel":"max"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"bogus"}}}',
+    ],
+  },
+  {
+    model: 'opus[1m]',
+    docs: [
+      '{\n  // JSONC comment + trailing commas + duplicate inner effortLevel\n  "modelSettings": {\n    "claude-opus-4-8": { "effortLevel": "low", "effortLevel": "xhigh", },\n    "CLAUDE-OPUS-4-8": { "effortLevel": "medium" },\n  },\n}',
+    ],
+  },
+  {
+    model: '2',
+    docs: ['{"modelSettings":{"z":{"effortLevel":"low"},"10":{"effortLevel":"high"},"2":{"effortLevel":"max"}}}'],
+  },
+];
+
+const claudeSettingsOrderCases = claudeSettingsOrderSamples.map((c) => {
+  const files: Record<string, string> = {};
+  if (c.docs.length === 1) {
+    files['.claude\\settings.json'] = c.docs[0];
+  } else {
+    if (c.docs[0] !== undefined) files['proj\\.claude\\settings.local.json'] = c.docs[0];
+    if (c.docs[1] !== undefined) files['proj\\.claude\\settings.json'] = c.docs[1];
+    if (c.docs[2] !== undefined) files['.claude\\settings.json'] = c.docs[2];
+  }
+  resetVirtual({ files });
+  return {
+    model: c.model,
+    docs: c.docs,
+    expected: vmApi.claudeSettingsEffort(c.model, c.docs.length > 1 ? path.win32.join(HOME, 'proj') : null, HOME),
+  };
+});
+
+const claudeSettingsEffortCases = [...claudeSettingsEffortBaseCases, ...claudeSettingsOrderCases];
 
 // -----------------------------------------------------------------------------
 // 6. End-to-end `agentModel` resolution vectors (`resolve_agent_model`)
@@ -1404,6 +1477,23 @@ const agentModelScenarios: AgentModelScenario[] = [
       command: 'claude',
       chosenModel: 'opus',
       claudeSettingsDocs: [JSON.stringify({ effortLevel: 'xhigh' })],
+    },
+  },
+  {
+    name: 'claude-model-settings-insertion-and-duplicate-key-order',
+    snap: {
+      files: {
+        '.claude\\settings.json':
+          '{"model":"opus","modelSettings":{"claude-opus-5-5":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-5-5":{"effortLevel":"max"}}}',
+      },
+    },
+    query: { agentId: 'claude', command: 'claude' },
+    inputs: {
+      agentId: 'claude',
+      command: 'claude',
+      claudeSettingsDocs: [
+        '{"model":"opus","modelSettings":{"claude-opus-5-5":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-5-5":{"effortLevel":"max"}}}',
+      ],
     },
   },
   {

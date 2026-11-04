@@ -1,14 +1,36 @@
 // Development-only source comparisons for Cursor model grouping.
 // Read-only against reference src/shared; no provider invocation or source edits.
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const crypto = require('node:crypto');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+const vm = require('node:vm') as typeof import('node:vm');
+const crypto = require('node:crypto') as typeof import('node:crypto');
+
+interface SourceHash {
+  file: string;
+  sha256: string;
+}
+
+interface GroupInputSuite {
+  name: string;
+  rows: unknown[];
+}
+
+interface ParsedCursorRow {
+  id: string;
+  label?: string;
+  isDefault?: boolean;
+}
+
+interface LaunchProbeInput {
+  values: Record<string, string | boolean>;
+  userArgs: string;
+}
 
 const root = process.argv[2];
 if (!root) {
   throw new Error('Pass the reference src/shared directory (e.g. C:\\Tessel\\src\\shared)');
 }
+const outPath = process.argv[3] ?? path.join(__dirname, '../tests/fixtures/agent_model_cursor.json');
 
 const files = [
   'cursorModels.js',
@@ -18,16 +40,19 @@ const files = [
 ];
 
 const context = vm.createContext({});
-const sources = files.map((file) => {
+const sources: SourceHash[] = files.map((file) => {
   const fullPath = path.join(root, file);
   const text = fs.readFileSync(fullPath, 'utf8');
-  const exported = [];
+  const exported: string[] = [];
   const stripped = text
     .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
-    .replace(/^export\s+(?:const|let|var|function)\s+([A-Za-z0-9_$]+)/gm, (m, name) => {
-      exported.push(name);
-      return m.replace(/^export\s+/, '');
-    });
+    .replace(
+      /^export\s+(?:const|let|var|function)\s+([A-Za-z0-9_$]+)/gm,
+      (m: string, name: string) => {
+        exported.push(name);
+        return m.replace(/^export\s+/, '');
+      },
+    );
   const assign = exported.map((n) => `globalThis.${n} = ${n};`).join('\n');
   vm.runInContext(`(() => {\n${stripped}\n${assign}\n})();`, context, { filename: file });
   return {
@@ -43,7 +68,21 @@ sources.push({
   sha256: crypto.createHash('sha256').update(rawCursorList).digest('hex'),
 });
 
-const clone = (v) => JSON.parse(JSON.stringify(v));
+function clone(v: unknown): unknown {
+  const serialized = JSON.stringify(v);
+  if (serialized === undefined) throw new Error('Reference value did not serialize');
+  return JSON.parse(serialized) as unknown;
+}
+
+function asParsedRowArray(v: unknown): ParsedCursorRow[] {
+  if (!Array.isArray(v)) throw new Error('Expected parsed Cursor row array');
+  return v as ParsedCursorRow[];
+}
+
+function asUnknownArray(v: unknown): unknown[] {
+  if (!Array.isArray(v)) throw new Error('Expected grouped Cursor model array');
+  return v;
+}
 
 const idInputs = [
   '',
@@ -90,7 +129,7 @@ const parsedIds = idInputs.map((input) => {
   };
 });
 
-const groupInputs = [
+const groupInputs: GroupInputSuite[] = [
   { name: 'empty', rows: [] },
   {
     name: 'invalid_and_empty_ids_ignored',
@@ -227,7 +266,28 @@ const groupInputs = [
   },
 ];
 
-groupInputs.push({name:'unicode-collation',rows:['z','é','e','e\u0301','É','ä','a','A','a-b','a_b','a b','a+b','a$b','α','中','🙂'].map((label,i)=>({id:`other-${String.fromCharCode(97+i)}`,label}))});
+groupInputs.push({
+  name: 'unicode-collation',
+  rows: [
+    'z',
+    'é',
+    'e',
+    'e\u0301',
+    'É',
+    'ä',
+    'a',
+    'A',
+    'a-b',
+    'a_b',
+    'a b',
+    'a+b',
+    'a$b',
+    'α',
+    '中',
+    '🙂',
+  ].map((label, i) => ({ id: `other-${String.fromCharCode(97 + i)}`, label })),
+});
+
 const groups = groupInputs.map(({ name, rows }) => {
   context.groupRows = rows;
   return {
@@ -238,31 +298,42 @@ const groups = groupInputs.map(({ name, rows }) => {
 });
 
 context.rawCursorList = rawCursorList;
-const realParsedRows = clone(vm.runInContext('parseCursorModelList(rawCursorList)', context));
+const realParsedRows = asParsedRowArray(
+  clone(vm.runInContext('parseCursorModelList(rawCursorList)', context)),
+);
 context.realParsedRows = realParsedRows;
-const realGrouped = clone(vm.runInContext('listedToCatalogModels("cursor", realParsedRows)', context));
+const realGrouped = asUnknownArray(
+  clone(vm.runInContext('listedToCatalogModels("cursor", realParsedRows)', context)),
+);
 context.realGrouped = realGrouped;
 const realCatalog = clone(vm.runInContext('catalogModelsFor("cursor", realGrouped)', context));
 context.realCatalog = realCatalog;
 
 const realDecomposed = realParsedRows.map((row) => {
   context.variantId = row.id;
+  const launchFromDecomposed: unknown = vm.runInContext(
+    'sessionOptionLaunchText("cursor", valuesOnListedRow(realCatalog, { model: variantId }), "", realCatalog)',
+    context,
+  );
   return {
     id: row.id,
     shown: clone(vm.runInContext('valuesOnListedRow(realCatalog, { model: variantId })', context)),
-    launchFromDecomposed: vm.runInContext(
-      'sessionOptionLaunchText("cursor", valuesOnListedRow(realCatalog, { model: variantId }), "", realCatalog)',
-      context
-    ),
+    launchFromDecomposed,
   };
 });
 
-const launchProbes = [
+const launchProbeInputs: LaunchProbeInput[] = [
   { values: { model: 'auto' }, userArgs: '' },
   { values: { model: 'claude-opus-5' }, userArgs: '' },
   { values: { model: 'claude-opus-5', effort: 'xhigh', thinking: false }, userArgs: '' },
-  { values: { model: 'claude-opus-5', effort: 'xhigh', thinking: true, fastMode: true }, userArgs: '' },
-  { values: { model: 'claude-opus-5', effort: 'max', thinking: true, fastMode: true }, userArgs: '' },
+  {
+    values: { model: 'claude-opus-5', effort: 'xhigh', thinking: true, fastMode: true },
+    userArgs: '',
+  },
+  {
+    values: { model: 'claude-opus-5', effort: 'max', thinking: true, fastMode: true },
+    userArgs: '',
+  },
   { values: { model: 'gpt-5.3-codex', effort: 'medium' }, userArgs: '' },
   { values: { model: 'gpt-5.3-codex', effort: 'high', fastMode: true }, userArgs: '' },
   { values: { model: 'gpt-5.4', effort: 'low', fastMode: true }, userArgs: '' },
@@ -270,19 +341,21 @@ const launchProbes = [
   { values: { model: 'gpt-5.1', effort: 'max' }, userArgs: '' },
   { values: { model: 'grok-4.7-xhigh-fast' }, userArgs: '' },
   { values: { model: 'gpt-5.3-codex', effort: 'high' }, userArgs: '--model custom' },
-].map((probe) => {
+];
+
+const launchProbes = launchProbeInputs.map((probe) => {
   context.probe = probe;
+  const expected: unknown = vm.runInContext(
+    'sessionOptionLaunchText("cursor", probe.values, probe.userArgs, realCatalog)',
+    context,
+  );
   return {
     values: probe.values,
     userArgs: probe.userArgs,
-    expected: vm.runInContext(
-      'sessionOptionLaunchText("cursor", probe.values, probe.userArgs, realCatalog)',
-      context
-    ),
+    expected,
   };
 });
 
-const outPath = path.join(__dirname, '../tests/fixtures/agent_model_cursor.json');
 fs.writeFileSync(
   outPath,
   JSON.stringify({
@@ -297,9 +370,9 @@ fs.writeFileSync(
       decomposed: realDecomposed,
       launchProbes,
     },
-  }) + '\n'
+  }) + '\n',
 );
 
 console.log(
-  `Generated ${parsedIds.length} id cases, ${groups.length} group suites, ${realParsedRows.length} real rows -> ${realGrouped.length} grouped models`
+  `Generated ${parsedIds.length} id cases, ${groups.length} group suites, ${realParsedRows.length} real rows -> ${realGrouped.length} grouped models`,
 );

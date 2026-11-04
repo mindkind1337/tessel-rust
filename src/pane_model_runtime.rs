@@ -90,9 +90,23 @@ fn read_session((profile, id): &Scope) -> Result<Option<ShownAgentModel>, Failur
             return Ok(None);
         };
         let text = crate::pane_model_worker::read_jsonl_tail_file(&mut file, 256 * 1024)?;
-        return Ok(
-            crate::agent_model_readers::claude_turn_from_text(&text).and_then(shown_metadata)
-        );
+        let Some(turn) = crate::agent_model_readers::claude_turn_from_text(&text) else {
+            return Ok(None);
+        };
+        if profile.agent() == "claude" {
+            // Raw settings stay on this worker. The launch-captured root selects
+            // the user profile, regardless of later preference edits.
+            let inputs = crate::agent_model_readers::AgentModelInputs {
+                agent_id: "claude",
+                session: Some(turn),
+                claude_settings_docs: claude_settings_documents(profile)?,
+                ..Default::default()
+            };
+            return Ok(crate::agent_model_readers::resolve_agent_model(&inputs)
+                .found
+                .and_then(clean_shown_metadata));
+        }
+        return Ok(shown_metadata(turn));
     }
     let Some(mut file) = crate::codex_sessions::open_verified(profile.root(), profile.cwd(), id)
         .map_err(|_| Failure::Io)?
@@ -102,25 +116,39 @@ fn read_session((profile, id): &Scope) -> Result<Option<ShownAgentModel>, Failur
     crate::pane_model_log::latest(&mut file, codex_turn)
 }
 
+fn claude_settings_documents(profile: &Profile) -> Result<Vec<String>, Failure> {
+    let paths = [
+        profile.cwd().join(".claude/settings.local.json"),
+        profile.cwd().join(".claude/settings.json"),
+        profile.root().join("settings.json"),
+    ];
+    let mut documents = Vec::new();
+    for path in paths {
+        match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(Failure::Io),
+            Ok(_) => documents.push(crate::pane_model_worker::read_document(&path)?),
+        }
+    }
+    Ok(documents)
+}
+
 fn codex_turn(text: &str) -> Option<ShownAgentModel> {
     crate::agent_model_readers::codex_model_from_text(text).and_then(shown_metadata)
 }
 
 fn shown_metadata(found: crate::agent_model_readers::FoundModel) -> Option<ShownAgentModel> {
+    clean_shown_metadata(found.into_shown(ModelSource::Session))
+}
+
+fn clean_shown_metadata(mut shown: ShownAgentModel) -> Option<ShownAgentModel> {
     let clean = crate::pane_session_model::saved_pane_model(Some(
-        &serde_json::json!({"model":found.model,"name":found.name,"effort":found.effort}),
+        &serde_json::json!({"model":shown.model,"name":shown.name,"effort":shown.effort}),
     ))?;
-    Some(ShownAgentModel {
-        model: clean.model,
-        name: clean.name,
-        effort: clean.effort,
-        chosen_effort: None,
-        source: ModelSource::Session,
-        at: found
-            .at
-            .and_then(|t| u64::try_from(t).ok())
-            .filter(|t| *t > 0),
-    })
+    shown.model = clean.model;
+    shown.name = clean.name;
+    shown.effort = clean.effort;
+    Some(shown)
 }
 
 #[cfg(test)]
@@ -195,6 +223,60 @@ mod tests {
             "x".repeat(1024)
         );
         assert!(codex_turn(&bad_effort).unwrap().effort.is_none());
+    }
+
+    #[test]
+    fn claude_settings_fill_missing_effort_with_per_model_priority_in_captured_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("profile");
+        let project = root.join("projects/synthetic");
+        let local = dir.path().join(".claude");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        let turn_path = project.join(format!("{ID}.jsonl"));
+        let mut turn = serde_json::json!({"type":"assistant", "sessionId":ID,"cwd":dir.path(),
+            "message":{"model":"claude-opus-4-8"}});
+        fs::write(&turn_path, format!("{turn}\n")).unwrap();
+        fs::write(
+            local.join("settings.local.json"),
+            r#"{"model":"opus[1m]","effortLevel":"low"}"#,
+        )
+        .unwrap();
+        fs::write(local.join("settings.json"), r#"{"effortLevel":"medium"}"#).unwrap();
+        fs::write(root.join("settings.json"), r#"{"modelSettings":{"claude-opus-4-8":{"effortLevel":"xhigh"}},"privateToken":"synthetic-never-returned"}"#).unwrap();
+        let mut command = portable_pty::CommandBuilder::new("synthetic");
+        command.env_clear();
+        command.cwd(dir.path());
+        command.env("CLAUDE_CONFIG_DIR", &root);
+        let profile = Profile::capture("claude", &command, dir.path()).unwrap();
+        command.env("CLAUDE_CONFIG_DIR", dir.path().join("new-profile"));
+        let scope = (profile, ID.into());
+        let found = read_session(&scope).unwrap().unwrap();
+        assert_eq!(found.model, "claude-opus-4-8[1m]");
+        assert_eq!(found.effort.as_deref(), Some("xhigh"));
+        assert_eq!(found.source, ModelSource::Session);
+        assert!(!format!("{found:?}").contains("synthetic-never-returned"));
+        fs::write(
+            local.join("settings.local.json"),
+            r#"{"modelSettings":{"claude-opus-4-8":{"effortLevel":"max"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_session(&scope).unwrap().unwrap().effort.as_deref(),
+            Some("max")
+        );
+        turn["perTurnEffort"] = serde_json::json!("high");
+        fs::write(&turn_path, format!("{turn}\n")).unwrap();
+        assert_eq!(
+            read_session(&scope).unwrap().unwrap().effort.as_deref(),
+            Some("high")
+        );
+        fs::write(
+            root.join("settings.json"),
+            vec![b'x'; crate::pane_model_worker::MAX_READ + 1],
+        )
+        .unwrap();
+        assert_eq!(read_session(&scope), Err(Failure::TooLarge));
     }
 
     #[test]

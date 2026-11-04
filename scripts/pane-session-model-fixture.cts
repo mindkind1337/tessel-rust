@@ -2,15 +2,39 @@
 // signatures, pure live-switch planning, Claude switch observation, and screen readers.
 // Strictly read-only against the reference Tessel source tree; never spawns a provider CLI.
 
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const crypto = require('node:crypto');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+const vm = require('node:vm') as typeof import('node:vm');
+const crypto = require('node:crypto') as typeof import('node:crypto');
+
+interface SourceRecord {
+  file: string;
+  sha256: string;
+}
+
+interface LivePickScenario {
+  name: string;
+  mode?: 'action' | 'chat';
+  isAgent: boolean;
+  chatViewAvailable?: boolean;
+  paneRunning: boolean;
+  paneBusy: boolean;
+  userTyping?: boolean;
+  claudeOutcome?: string;
+  discovered?: unknown;
+  useCursorFixtureModels?: boolean;
+  agentModel?: Record<string, unknown>;
+  optionId: string;
+  value?: string | null;
+  node: Record<string, unknown>;
+}
 
 const argPath = process.argv[2];
 if (!argPath) {
   throw new Error('Pass the reference Tessel repo or src directory (e.g. C:\\Tessel)');
 }
+const outPath =
+  process.argv[3] ?? path.join(__dirname, '..', 'tests', 'fixtures', 'pane_session_model.json');
 
 const srcDir = fs.existsSync(path.join(argPath, 'shared', 'agentSessionOptions.js'))
   ? argPath
@@ -20,10 +44,24 @@ if (!fs.existsSync(path.join(srcDir, 'shared', 'agentSessionOptions.js'))) {
   throw new Error(`Could not locate shared/agentSessionOptions.js under ${srcDir}`);
 }
 
-const context = vm.createContext({ console, Math, JSON, Object, Array, String, Number, Boolean, RegExp, Map, Set, Promise, Error });
-const sources = [];
+const context = vm.createContext({
+  console,
+  Math,
+  JSON,
+  Object,
+  Array,
+  String,
+  Number,
+  Boolean,
+  RegExp,
+  Map,
+  Set,
+  Promise,
+  Error,
+});
+const sources: SourceRecord[] = [];
 
-function recordFile(relPath) {
+function recordFile(relPath: string): string {
   const full = path.join(srcDir, relPath);
   const text = fs.readFileSync(full, 'utf8');
   sources.push({
@@ -33,8 +71,13 @@ function recordFile(relPath) {
   return text;
 }
 
-function flattenLocale(obj, prefix = '', out = {}) {
-  for (const [k, v] of Object.entries(obj || {})) {
+function flattenLocale(
+  obj: unknown,
+  prefix = '',
+  out: Record<string, string> = {},
+): Record<string, string> {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
     const key = prefix ? `${prefix}.${k}` : k;
     if (v && typeof v === 'object' && !Array.isArray(v)) flattenLocale(v, key, out);
     else if (typeof v === 'string') out[key] = v;
@@ -42,13 +85,13 @@ function flattenLocale(obj, prefix = '', out = {}) {
   return out;
 }
 
-const frMessages = {};
+const frMessages: Record<string, string> = {};
 for (const localeFile of [
   'renderer/src/i18n/locales/fr/panes.json',
   'renderer/src/i18n/locales/fr/chat.json',
   'renderer/src/i18n/locales/fr/app.json',
 ]) {
-  Object.assign(frMessages, flattenLocale(JSON.parse(recordFile(localeFile))));
+  Object.assign(frMessages, flattenLocale(JSON.parse(recordFile(localeFile)) as unknown));
 }
 
 context.__locale = 'en';
@@ -65,23 +108,26 @@ vm.runInContext(
   context,
 );
 
-function evalModule(relPath) {
+function evalModule(relPath: string): void {
   const text = recordFile(relPath);
-  const exported = [];
+  const exported: string[] = [];
   const stripped = text
     .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
-    .replace(/^export\s+class\s+([A-Za-z0-9_$]+)/gm, (_, name) => {
+    .replace(/^export\s+class\s+([A-Za-z0-9_$]+)/gm, (_: string, name: string) => {
       exported.push(name);
       return `class ${name}`;
     })
-    .replace(/^export\s+async\s+function\s+([A-Za-z0-9_$]+)/gm, (_, name) => {
+    .replace(/^export\s+async\s+function\s+([A-Za-z0-9_$]+)/gm, (_: string, name: string) => {
       exported.push(name);
       return `async function ${name}`;
     })
-    .replace(/^export\s+(?:const|let|var|function)\s+([A-Za-z0-9_$]+)/gm, (m, name) => {
-      exported.push(name);
-      return m.replace(/^export\s+/, '');
-    });
+    .replace(
+      /^export\s+(?:const|let|var|function)\s+([A-Za-z0-9_$]+)/gm,
+      (m: string, name: string) => {
+        exported.push(name);
+        return m.replace(/^export\s+/, '');
+      },
+    );
   const assign = exported.map((n) => `globalThis.${n} = ${n};`).join('\n');
   vm.runInContext(`(() => {\n${stripped}\n${assign}\n})();`, context, { filename: relPath });
 }
@@ -109,7 +155,12 @@ for (const modPath of [
 recordFile('renderer/src/components/TerminalPane.vue');
 const cursorListRaw = recordFile('shared/__tests__/fixtures/cursor-list-models.txt');
 
-const clone = (v) => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+function clone(v: unknown): unknown {
+  if (v === undefined) return null;
+  const serialized = JSON.stringify(v);
+  if (serialized === undefined) return null;
+  return JSON.parse(serialized) as unknown;
+}
 
 // Install pure simulation harness mirroring TerminalPane.vue's exact lines 324-930 & 1271-1279 & 1672.
 vm.runInContext(
@@ -463,7 +514,7 @@ vm.runInContext(
 // ---------------------------------------------------------------------------
 // 1. validPaneSessionOptions
 // ---------------------------------------------------------------------------
-const validPaneCases = [
+const validPaneInputs: Array<{ name: string; input: unknown }> = [
   { name: 'null', input: null },
   { name: 'array', input: ['opus'] },
   { name: 'empty_object', input: {} },
@@ -472,8 +523,14 @@ const validPaneCases = [
   { name: 'unsafe_flag_model', input: { model: '--yolo' } },
   { name: 'space_in_model', input: { model: 'opus 4' } },
   { name: 'valid_model_only', input: { model: 'claude-opus-5-5' } },
-  { name: 'valid_bracket_1m_and_provider', input: { model: 'anthropic/claude-opus-4-7[1m]', effort: 'xhigh', fastMode: true } },
-  { name: 'valid_cursor_composed', input: { model: 'gpt-5.3-codex', effort: 'high', fastMode: false, thinking: true } },
+  {
+    name: 'valid_bracket_1m_and_provider',
+    input: { model: 'anthropic/claude-opus-4-7[1m]', effort: 'xhigh', fastMode: true },
+  },
+  {
+    name: 'valid_cursor_composed',
+    input: { model: 'gpt-5.3-codex', effort: 'high', fastMode: false, thinking: true },
+  },
   { name: 'null_option_value_rejected', input: { model: 'opus', effort: null } },
   { name: 'number_option_value_rejected', input: { model: 'opus', effort: 2 } },
   { name: 'unsafe_option_value_rejected', input: { model: 'opus', effort: '--high' } },
@@ -483,7 +540,23 @@ const validPaneCases = [
   { name: 'max_length_option_key_ok', input: { model: 'opus', ['a'.repeat(40)]: 'high' } },
   { name: 'max_160_model_ok', input: { model: 'm'.repeat(160) } },
   { name: 'over_160_model_rejected', input: { model: 'm'.repeat(161) } },
-  { name: 'ten_entries_before_model_keeps_eleven_and_drops_twelfth', input: { a0: '0', a1: '1', a2: '2', a3: '3', a4: '4', a5: '5', a6: '6', a7: '7', a8: '8', a9: '9', model: 'opus', z10: 'h' } },
+  {
+    name: 'ten_entries_before_model_keeps_eleven_and_drops_twelfth',
+    input: {
+      a0: '0',
+      a1: '1',
+      a2: '2',
+      a3: '3',
+      a4: '4',
+      a5: '5',
+      a6: '6',
+      a7: '7',
+      a8: '8',
+      a9: '9',
+      model: 'opus',
+      z10: 'h',
+    },
+  },
   {
     name: 'ten_entries_ok',
     input: {
@@ -515,7 +588,9 @@ const validPaneCases = [
       z10: 'h',
     },
   },
-].map((c) => {
+];
+
+const validPaneCases = validPaneInputs.map((c) => {
   context.__in = c.input;
   return { ...c, expected: clone(vm.runInContext('validPaneSessionOptions(__in)', context)) };
 });
@@ -540,59 +615,162 @@ const persistedSample = {
 };
 
 const launchValuesCases = [
-  { name: 'pane_model_overrides_settings_whole_without_mixing_effort', agentId: 'claude', paneChoice: { model: 'opus' }, persisted: persistedSample },
-  { name: 'pane_model_and_effort_used', agentId: 'claude', paneChoice: { model: 'opus', effort: 'low' }, persisted: persistedSample },
-  { name: 'null_pane_falls_back_to_settings_defaults', agentId: 'claude', paneChoice: null, persisted: persistedSample },
-  { name: 'empty_pane_model_falls_back_to_settings_defaults', agentId: 'claude', paneChoice: { model: '' }, persisted: persistedSample },
-  { name: 'cleared_settings_model_returns_null', agentId: 'codex', paneChoice: null, persisted: persistedSample },
-  { name: 'unknown_agent_returns_null', agentId: 'aider', paneChoice: null, persisted: persistedSample },
+  {
+    name: 'pane_model_overrides_settings_whole_without_mixing_effort',
+    agentId: 'claude',
+    paneChoice: { model: 'opus' },
+    persisted: persistedSample,
+  },
+  {
+    name: 'pane_model_and_effort_used',
+    agentId: 'claude',
+    paneChoice: { model: 'opus', effort: 'low' },
+    persisted: persistedSample,
+  },
+  {
+    name: 'null_pane_falls_back_to_settings_defaults',
+    agentId: 'claude',
+    paneChoice: null,
+    persisted: persistedSample,
+  },
+  {
+    name: 'empty_pane_model_falls_back_to_settings_defaults',
+    agentId: 'claude',
+    paneChoice: { model: '' },
+    persisted: persistedSample,
+  },
+  {
+    name: 'cleared_settings_model_returns_null',
+    agentId: 'codex',
+    paneChoice: null,
+    persisted: persistedSample,
+  },
+  {
+    name: 'unknown_agent_returns_null',
+    agentId: 'aider',
+    paneChoice: null,
+    persisted: persistedSample,
+  },
 ].map((c) => {
   context.__c = c;
   return {
     ...c,
-    expected: clone(vm.runInContext('launchSessionValues(__c.paneChoice, __c.persisted, __c.agentId)', context)),
+    expected: clone(
+      vm.runInContext('launchSessionValues(__c.paneChoice, __c.persisted, __c.agentId)', context),
+    ),
   };
 });
 
-const launchSignatureCases = [
+const launchSignatureCases: Array<{
+  name: string;
+  launch: { command: string; args: string; env: Record<string, string> };
+}> = [
   { name: 'minimal_empty', launch: { command: 'claude', args: '', env: {} } },
-  { name: 'sorted_env_and_args', launch: { command: 'codex', args: '-m gpt-5.6-sol -c model_reasoning_effort=high', env: { Z_VAR: 'last', A_VAR: 'first', M_VAR: 'mid=val' } } },
-  { name: 'quotes_and_unicode_in_args', launch: { command: 'C:\\Tools\\claude.exe', args: '--model "claude-opus-5-5" --effort max', env: { LANG: 'fr_CA.UTF-8' } } },
-].map((c) => {
+  {
+    name: 'sorted_env_and_args',
+    launch: {
+      command: 'codex',
+      args: '-m gpt-5.6-sol -c model_reasoning_effort=high',
+      env: { Z_VAR: 'last', A_VAR: 'first', M_VAR: 'mid=val' },
+    },
+  },
+  {
+    name: 'quotes_and_unicode_in_args',
+    launch: {
+      command: 'C:\\Tools\\claude.exe',
+      args: '--model "claude-opus-5-5" --effort max',
+      env: { LANG: 'fr_CA.UTF-8' },
+    },
+  },
+];
+
+const mappedLaunchSignatureCases = launchSignatureCases.map((c) => {
   context.__l = c.launch;
-  return { ...c, expected: vm.runInContext('launchSignature(__l)', context) };
+  const expected: unknown = vm.runInContext('launchSignature(__l)', context);
+  return { ...c, expected };
 });
 
 // ---------------------------------------------------------------------------
-const effectiveAgentCases = [
-  { name: 'claude_yolo_with_session_values', agent: { id: 'claude', command: 'claude' }, prefs: {}, permissions: 'yolo', values: { model: 'opus', effort: 'max' } },
-  { name: 'claude_manual_strips_legacy_yolo_arg', agent: { id: 'claude', command: 'claude' }, prefs: { claude: { command: '', args: '--dangerously-skip-permissions --verbose', env: 'FOO=1' } }, permissions: 'manual', values: { model: 'sonnet', effort: 'high' } },
-  { name: 'goose_yolo_env_overlaid_by_user_env', agent: { id: 'goose', command: 'goose' }, prefs: { goose: { command: 'goose-cli', args: '', env: 'EXTRA=yes' } }, permissions: 'yolo', values: null },
-  { name: 'goose_custom_args_suppresses_yolo_env', agent: { id: 'goose', command: 'goose' }, prefs: { goose: { command: '', args: '--profile dev', env: '' } }, permissions: 'yolo', values: null },
-  { name: 'codex_user_model_flag_wins_over_session_values', agent: { id: 'codex', command: 'codex' }, prefs: { codex: { command: '', args: '-m o3', env: '' } }, permissions: 'yolo', values: { model: 'gpt-5.6-sol', effort: 'xhigh' } },
-].map((c) => {
+const effectiveAgentInputs: Array<{
+  name: string;
+  agent: { id: string; command: string };
+  prefs: Record<string, { command: string; args: string; env: string }>;
+  permissions: string;
+  values: Record<string, string> | null;
+}> = [
+  {
+    name: 'claude_yolo_with_session_values',
+    agent: { id: 'claude', command: 'claude' },
+    prefs: {},
+    permissions: 'yolo',
+    values: { model: 'opus', effort: 'max' },
+  },
+  {
+    name: 'claude_manual_strips_legacy_yolo_arg',
+    agent: { id: 'claude', command: 'claude' },
+    prefs: { claude: { command: '', args: '--dangerously-skip-permissions --verbose', env: 'FOO=1' } },
+    permissions: 'manual',
+    values: { model: 'sonnet', effort: 'high' },
+  },
+  {
+    name: 'goose_yolo_env_overlaid_by_user_env',
+    agent: { id: 'goose', command: 'goose' },
+    prefs: { goose: { command: 'goose-cli', args: '', env: 'EXTRA=yes' } },
+    permissions: 'yolo',
+    values: null,
+  },
+  {
+    name: 'goose_custom_args_suppresses_yolo_env',
+    agent: { id: 'goose', command: 'goose' },
+    prefs: { goose: { command: '', args: '--profile dev', env: '' } },
+    permissions: 'yolo',
+    values: null,
+  },
+  {
+    name: 'codex_user_model_flag_wins_over_session_values',
+    agent: { id: 'codex', command: 'codex' },
+    prefs: { codex: { command: '', args: '-m o3', env: '' } },
+    permissions: 'yolo',
+    values: { model: 'gpt-5.6-sol', effort: 'xhigh' },
+  },
+];
+
+const effectiveAgentCases = effectiveAgentInputs.map((c) => {
   context.__ea = c;
-  const launch = clone(vm.runInContext('effectiveAgent(__ea.agent, __ea.prefs, __ea.permissions, __ea.values, catalogModelsFor(__ea.agent.id, null))', context));
+  const launch = clone(
+    vm.runInContext(
+      'effectiveAgent(__ea.agent, __ea.prefs, __ea.permissions, __ea.values, catalogModelsFor(__ea.agent.id, null))',
+      context,
+    ),
+  );
   context.__eal = launch;
-  const signature = vm.runInContext('launchSignature(__eal)', context);
+  const signature: unknown = vm.runInContext('launchSignature(__eal)', context);
   return { ...c, expectedLaunch: launch, expectedSignature: signature };
 });
 
 // 3. savedPaneModel, paneModelToSave, samePaneModel
 // ---------------------------------------------------------------------------
-const savedModelCases = [
+const savedModelInputs: Array<{ name: string; input: unknown }> = [
   { name: 'null', input: null },
   { name: 'empty_model', input: { model: '   ' } },
-  { name: 'valid_full', input: { model: ' claude-opus-5-5 ', name: ' Opus 5.5 ', effort: 'high', source: 'session' } },
+  {
+    name: 'valid_full',
+    input: { model: ' claude-opus-5-5 ', name: ' Opus 5.5 ', effort: 'high', source: 'session' },
+  },
   { name: 'control_char_in_model_rejected', input: { model: 'opus\n5' } },
   { name: 'del_char_in_model_rejected', input: { model: 'opus\u007f' } },
-  { name: 'control_char_in_name_drops_name_only', input: { model: 'claude-opus-5-5', name: 'bad\tname', effort: 'medium', source: 'screen' } },
+  {
+    name: 'control_char_in_name_drops_name_only',
+    input: { model: 'claude-opus-5-5', name: 'bad\tname', effort: 'medium', source: 'screen' },
+  },
   { name: 'uppercase_effort_dropped', input: { model: 'gpt-5.6-sol', effort: 'High', source: 'screen' } },
   { name: 'short_1char_effort_dropped', input: { model: 'gpt-5.6-sol', effort: 'x', source: 'screen' } },
   { name: 'saved_source_not_resaved', input: { model: 'claude-opus-5-5', effort: 'high', source: 'saved' } },
   { name: 'over_120_model_rejected', input: { model: 'x'.repeat(121), source: 'session' } },
   { name: 'exact_120_model_accepted', input: { model: 'x'.repeat(120), source: 'session' } },
-].map((c) => {
+];
+
+const savedModelCases = savedModelInputs.map((c) => {
   context.__m = c.input;
   return {
     ...c,
@@ -604,28 +782,66 @@ const savedModelCases = [
 // ---------------------------------------------------------------------------
 // 4. sessionChoiceError (EN & FR)
 // ---------------------------------------------------------------------------
-const cursorParsedRows = vm.runInContext(`parseCursorModelList(${JSON.stringify(cursorListRaw)})`, context);
-const cursorGroupedModels = clone(vm.runInContext(`catalogModelsFor('cursor', groupCursorModels(${JSON.stringify(cursorParsedRows)}))`, context));
+const cursorParsedRows: unknown = vm.runInContext(
+  `parseCursorModelList(${JSON.stringify(cursorListRaw)})`,
+  context,
+);
+const cursorGroupedModels = clone(
+  vm.runInContext(
+    `catalogModelsFor('cursor', groupCursorModels(${JSON.stringify(cursorParsedRows)}))`,
+    context,
+  ),
+);
 
-const choiceErrorInputs = [
+const choiceErrorInputs: Array<{
+  name: string;
+  agentId: string;
+  model: string;
+  effort: string;
+  models: unknown;
+}> = [
   { name: 'empty_model_ok', agentId: 'claude', model: '', effort: '', models: null },
   { name: 'unknown_agent_aider', agentId: 'aider', model: 'gpt-5', effort: '', models: null },
   { name: 'valid_claude_opus_xhigh', agentId: 'claude', model: 'opus', effort: 'xhigh', models: null },
   { name: 'unknown_claude_model', agentId: 'claude', model: 'claude-99', effort: '', models: null },
   { name: 'unsafe_model_flag', agentId: 'claude', model: '--model=opus', effort: '', models: null },
-  { name: 'empty_catalog_opencode_unknown_model', agentId: 'opencode', model: 'anthropic/claude', effort: '', models: [] },
+  {
+    name: 'empty_catalog_opencode_unknown_model',
+    agentId: 'opencode',
+    model: 'anthropic/claude',
+    effort: '',
+    models: [],
+  },
   { name: 'haiku_has_no_effort', agentId: 'claude', model: 'haiku', effort: 'low', models: null },
   { name: 'claude_unknown_effort', agentId: 'claude', model: 'opus', effort: 'ultra', models: null },
-  { name: 'cursor_grouped_row_id_ok', agentId: 'cursor', model: 'gpt-5.3-codex', effort: 'high', models: cursorGroupedModels },
-  { name: 'cursor_exact_variant_id_ok', agentId: 'cursor', model: 'gpt-5.3-codex-high-fast', effort: '', models: cursorGroupedModels },
+  {
+    name: 'cursor_grouped_row_id_ok',
+    agentId: 'cursor',
+    model: 'gpt-5.3-codex',
+    effort: 'high',
+    models: cursorGroupedModels,
+  },
+  {
+    name: 'cursor_exact_variant_id_ok',
+    agentId: 'cursor',
+    model: 'gpt-5.3-codex-high-fast',
+    effort: '',
+    models: cursorGroupedModels,
+  },
 ];
 
 const sessionChoiceErrorCases = choiceErrorInputs.map((c) => {
   context.__ce = c;
   context.__locale = 'en';
-  const en = vm.runInContext('sessionChoiceError(__ce.agentId, __ce.model, __ce.effort, __ce.models)', context);
+  const en: unknown = vm.runInContext(
+    'sessionChoiceError(__ce.agentId, __ce.model, __ce.effort, __ce.models)',
+    context,
+  );
   context.__locale = 'fr';
-  const fr = vm.runInContext('sessionChoiceError(__ce.agentId, __ce.model, __ce.effort, __ce.models)', context);
+  const fr: unknown = vm.runInContext(
+    'sessionChoiceError(__ce.agentId, __ce.model, __ce.effort, __ce.models)',
+    context,
+  );
   context.__locale = 'en';
   return {
     name: c.name,
@@ -664,7 +880,8 @@ const effortInputs = [
 ];
 const effortLevelCases = effortInputs.map((input) => {
   context.__e = input;
-  return { input, expected: vm.runInContext('effortLevel(__e)', context) };
+  const expected: unknown = vm.runInContext('effortLevel(__e)', context);
+  return { input, expected };
 });
 
 const modelLabelInputs = [
@@ -699,13 +916,14 @@ const modelLabelInputs = [
 ];
 const modelLabelCases = modelLabelInputs.map((input) => {
   context.__ml = input;
-  return { input, expected: vm.runInContext('modelLabel(__ml)', context) };
+  const expected: unknown = vm.runInContext('modelLabel(__ml)', context);
+  return { input, expected };
 });
 
 // ---------------------------------------------------------------------------
 // 6. Header & Title formatting (EN & FR)
 // ---------------------------------------------------------------------------
-const headerTitleInputs = [
+const headerTitleInputs: Array<Record<string, unknown>> = [
   {
     name: 'claude_session_opus_medium',
     isAgent: true,
@@ -714,7 +932,7 @@ const headerTitleInputs = [
     agentId: 'claude',
     paneRunning: true,
     paneBusy: false,
-    models: vm.runInContext("catalogModelsFor('claude', null)", context),
+    models: vm.runInContext("catalogModelsFor('claude', null)", context) as unknown,
     persistedDefaults: persistedSample,
     agentModel: { model: 'claude-opus-5-5', effort: 'medium', source: 'session' },
   },
@@ -726,7 +944,7 @@ const headerTitleInputs = [
     agentId: 'codex',
     paneRunning: true,
     paneBusy: true,
-    models: vm.runInContext("catalogModelsFor('codex', null)", context),
+    models: vm.runInContext("catalogModelsFor('codex', null)", context) as unknown,
     persistedDefaults: {},
     agentModel: { model: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', effort: 'xhigh', source: 'screen' },
   },
@@ -738,9 +956,14 @@ const headerTitleInputs = [
     agentId: 'cursor',
     paneRunning: true,
     paneBusy: false,
-    models: vm.runInContext("catalogModelsFor('cursor', null)", context),
+    models: vm.runInContext("catalogModelsFor('cursor', null)", context) as unknown,
     persistedDefaults: {},
-    agentModel: { model: 'gpt-5.3-codex-high-fast', name: 'GPT-5.3 Codex Fast', effort: 'high', source: 'chosen' },
+    agentModel: {
+      model: 'gpt-5.3-codex-high-fast',
+      name: 'GPT-5.3 Codex Fast',
+      effort: 'high',
+      source: 'chosen',
+    },
   },
   {
     name: 'offline_saved_source_none_effort',
@@ -786,7 +1009,7 @@ const headerTitleInputs = [
     agentId: 'gemini',
     paneRunning: true,
     paneBusy: false,
-    models: vm.runInContext("catalogModelsFor('gemini', null)", context),
+    models: vm.runInContext("catalogModelsFor('gemini', null)", context) as unknown,
     persistedDefaults: {},
     agentModel: { model: 'gemini-3-pro-preview', effort: null, source: 'picked' },
   },
@@ -798,7 +1021,7 @@ const headerTitleInputs = [
     agentId: 'claude',
     paneRunning: true,
     paneBusy: false,
-    models: vm.runInContext("catalogModelsFor('claude', null)", context),
+    models: vm.runInContext("catalogModelsFor('claude', null)", context) as unknown,
     persistedDefaults: {},
     agentModel: { model: 'claude-sonnet-5-5', effort: 'low', source: 'settings' },
   },
@@ -858,7 +1081,11 @@ const chosenShownCases = [
   },
   {
     name: 'ssh_remote_ignores_clock_skew_arms_seen_first_then_yields_on_change',
-    node: { agentId: 'claude', remoteHostId: 'prod-ssh', modelChoice: { model: 'opus', effort: 'high', at: 500 } },
+    node: {
+      agentId: 'claude',
+      remoteHostId: 'prod-ssh',
+      modelChoice: { model: 'opus', effort: 'high', at: 500 },
+    },
     res: { model: 'claude-sonnet-5-5', effort: 'medium', source: 'session', at: 999999 },
     models: claudeModels,
   },
@@ -880,7 +1107,10 @@ const chosenShownCases = [
   };
 });
 
-const withModelVersionCases = [
+const withModelVersionInputs: Array<{
+  shown: { model: string; source: string };
+  reported: string[];
+}> = [
   { shown: { model: 'opus', source: 'chosen' }, reported: [] },
   { shown: { model: 'Opus[1m]', source: 'chosen' }, reported: ['claude-opus-4-7'] },
   { shown: { model: 'opus[1m]', source: 'chosen' }, reported: ['claude-opus-5-5[1m]'] },
@@ -888,7 +1118,9 @@ const withModelVersionCases = [
   { shown: { model: 'haiku', source: 'chosen' }, reported: [] },
   { shown: { model: 'fable[1M]', source: 'chosen' }, reported: [] },
   { shown: { model: 'claude-opus-5-5', source: 'session' }, reported: ['claude-opus-4-8'] },
-].map((c) => {
+];
+
+const withModelVersionCases = withModelVersionInputs.map((c) => {
   context.__wv = c;
   return {
     ...c,
@@ -899,28 +1131,50 @@ const withModelVersionCases = [
 // ---------------------------------------------------------------------------
 // 8. Live Pick, Action & ChatView Planning across all 12 cataloged agents
 // ---------------------------------------------------------------------------
-const discoveredByAgent = {
-  cursor: groupCursorModelsSim(),
-  antigravity: [
-    { id: 'gemini-4-argon', label: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high', 'max'], options: vm.runInContext("createAntigravityCatalogOptions(['low','medium','high','max'])", context) },
-    { id: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)', options: [] },
-  ],
-  muse: [
-    { id: 'muse-spark-1.3', label: 'Muse Spark 1.3', options: vm.runInContext("createMuseCatalogOptions(['minimal','low','medium','high','max'], 'high')", context) },
-  ],
-  opencode: [
-    { id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', options: [] },
-  ],
-  pi: [
-    { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', options: vm.runInContext("createPiCatalogOptions(['off','low','medium','high'])", context) },
-  ],
-};
-
-function groupCursorModelsSim() {
+function groupCursorModelsSim(): unknown {
   return vm.runInContext(`groupCursorModels(${JSON.stringify(cursorParsedRows)})`, context);
 }
 
-function makeInitialLaunchSig(agentId, sessionOptions = null, discovered = null, command = agentId) {
+const discoveredByAgent = {
+  cursor: groupCursorModelsSim(),
+  antigravity: [
+    {
+      id: 'gemini-4-argon',
+      label: 'Gemini 4 Argon',
+      efforts: ['low', 'medium', 'high', 'max'],
+      options: vm.runInContext(
+        "createAntigravityCatalogOptions(['low','medium','high','max'])",
+        context,
+      ) as unknown,
+    },
+    { id: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)', options: [] },
+  ],
+  muse: [
+    {
+      id: 'muse-spark-1.3',
+      label: 'Muse Spark 1.3',
+      options: vm.runInContext(
+        "createMuseCatalogOptions(['minimal','low','medium','high','max'], 'high')",
+        context,
+      ) as unknown,
+    },
+  ],
+  opencode: [{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', options: [] }],
+  pi: [
+    {
+      id: 'claude-sonnet-4-5',
+      label: 'Claude Sonnet 4.5',
+      options: vm.runInContext("createPiCatalogOptions(['off','low','medium','high'])", context) as unknown,
+    },
+  ],
+};
+
+function makeInitialLaunchSig(
+  agentId: string,
+  sessionOptions: Record<string, unknown> | null = null,
+  discovered: unknown = null,
+  command: string = agentId,
+): unknown {
   context.__init = { agentId, sessionOptions, discovered, command };
   return vm.runInContext(
     `(() => {
@@ -932,7 +1186,7 @@ function makeInitialLaunchSig(agentId, sessionOptions = null, discovered = null,
   );
 }
 
-const livePickScenarios = [
+const livePickScenarios: LivePickScenario[] = [
   // Claude: /model (applied, rejected, unknown), /effort, /fast action, reset to default, busy, offline
   {
     name: 'claude_live_model_applied_adopts_without_launch_stale',
@@ -942,7 +1196,12 @@ const livePickScenarios = [
     claudeOutcome: 'applied',
     optionId: 'model',
     value: 'opus',
-    node: { agentId: 'claude', agentCommand: 'claude', sessionOptions: { model: 'sonnet', effort: 'high' }, launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }) },
+    node: {
+      agentId: 'claude',
+      agentCommand: 'claude',
+      sessionOptions: { model: 'sonnet', effort: 'high' },
+      launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }),
+    },
   },
   {
     name: 'claude_live_model_rejected_keeps_previous_choice',
@@ -952,7 +1211,12 @@ const livePickScenarios = [
     claudeOutcome: 'rejected',
     optionId: 'model',
     value: 'opus',
-    node: { agentId: 'claude', agentCommand: 'claude', sessionOptions: { model: 'sonnet', effort: 'high' }, launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }) },
+    node: {
+      agentId: 'claude',
+      agentCommand: 'claude',
+      sessionOptions: { model: 'sonnet', effort: 'high' },
+      launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }),
+    },
   },
   {
     name: 'claude_live_model_unknown_saves_choice_and_marks_stale',
@@ -962,7 +1226,12 @@ const livePickScenarios = [
     claudeOutcome: 'unknown',
     optionId: 'model',
     value: 'opus',
-    node: { agentId: 'claude', agentCommand: 'claude', sessionOptions: { model: 'sonnet', effort: 'high' }, launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }) },
+    node: {
+      agentId: 'claude',
+      agentCommand: 'claude',
+      sessionOptions: { model: 'sonnet', effort: 'high' },
+      launchSig: makeInitialLaunchSig('claude', { model: 'sonnet', effort: 'high' }),
+    },
   },
   {
     name: 'claude_switching_to_haiku_drops_incompatible_effort',
@@ -972,7 +1241,12 @@ const livePickScenarios = [
     claudeOutcome: 'applied',
     optionId: 'model',
     value: 'haiku',
-    node: { agentId: 'claude', agentCommand: 'claude', sessionOptions: { model: 'opus', effort: 'max' }, launchSig: makeInitialLaunchSig('claude', { model: 'opus', effort: 'max' }) },
+    node: {
+      agentId: 'claude',
+      agentCommand: 'claude',
+      sessionOptions: { model: 'opus', effort: 'max' },
+      launchSig: makeInitialLaunchSig('claude', { model: 'opus', effort: 'max' }),
+    },
   },
   {
     name: 'claude_live_effort_without_prior_choice_anchors_effective_model',
@@ -991,7 +1265,12 @@ const livePickScenarios = [
     paneBusy: false,
     optionId: 'model',
     value: null,
-    node: { agentId: 'claude', agentCommand: 'claude', sessionOptions: { model: 'opus', effort: 'high' }, launchSig: makeInitialLaunchSig('claude', { model: 'opus', effort: 'high' }) },
+    node: {
+      agentId: 'claude',
+      agentCommand: 'claude',
+      sessionOptions: { model: 'opus', effort: 'high' },
+      launchSig: makeInitialLaunchSig('claude', { model: 'opus', effort: 'high' }),
+    },
   },
   {
     name: 'claude_action_fast_toggle',
@@ -1030,7 +1309,12 @@ const livePickScenarios = [
     discovered: discoveredByAgent.cursor,
     optionId: 'model',
     value: 'claude-opus-5',
-    node: { agentId: 'cursor', agentCommand: 'cursor-agent', chatView: true, launchSig: makeInitialLaunchSig('cursor', null, discoveredByAgent.cursor, 'cursor-agent') },
+    node: {
+      agentId: 'cursor',
+      agentCommand: 'cursor-agent',
+      chatView: true,
+      launchSig: makeInitialLaunchSig('cursor', null, discoveredByAgent.cursor, 'cursor-agent'),
+    },
   },
   {
     name: 'cursor_live_effort_pick_opens_picker_and_closes_chat_view',
@@ -1041,7 +1325,12 @@ const livePickScenarios = [
     agentModel: { model: 'gpt-5.3-codex-high-fast', source: 'screen' },
     optionId: 'effort',
     value: 'low',
-    node: { agentId: 'cursor', agentCommand: 'cursor-agent', chatView: true, launchSig: makeInitialLaunchSig('cursor', null, discoveredByAgent.cursor, 'cursor-agent') },
+    node: {
+      agentId: 'cursor',
+      agentCommand: 'cursor-agent',
+      chatView: true,
+      launchSig: makeInitialLaunchSig('cursor', null, discoveredByAgent.cursor, 'cursor-agent'),
+    },
   },
   {
     name: 'cursor_offline_model_pick_saves_session_options',
@@ -1072,7 +1361,11 @@ const livePickScenarios = [
     paneBusy: false,
     discovered: discoveredByAgent.opencode,
     optionId: 'model',
-    node: { agentId: 'opencode', agentCommand: 'opencode', sessionOptions: { model: 'anthropic/claude-sonnet-4-5' } },
+    node: {
+      agentId: 'opencode',
+      agentCommand: 'opencode',
+      sessionOptions: { model: 'anthropic/claude-sonnet-4-5' },
+    },
   },
   // Grok: live /model & /effort
   {
@@ -1082,7 +1375,12 @@ const livePickScenarios = [
     paneBusy: false,
     optionId: 'model',
     value: 'grok-4.6',
-    node: { agentId: 'grok', agentCommand: 'grok', sessionOptions: { model: 'grok-4.5', effort: 'high' }, launchSig: makeInitialLaunchSig('grok', { model: 'grok-4.5', effort: 'high' }) },
+    node: {
+      agentId: 'grok',
+      agentCommand: 'grok',
+      sessionOptions: { model: 'grok-4.5', effort: 'high' },
+      launchSig: makeInitialLaunchSig('grok', { model: 'grok-4.5', effort: 'high' }),
+    },
   },
   // Antigravity: variant id strips effort suffix via composeModelValue when effort is present
   {
@@ -1093,7 +1391,17 @@ const livePickScenarios = [
     discovered: discoveredByAgent.antigravity,
     optionId: 'model',
     value: 'gemini-4-argon-high',
-    node: { agentId: 'antigravity', agentCommand: 'agy', sessionOptions: { model: 'gemini-4-argon', effort: 'low' }, launchSig: makeInitialLaunchSig('antigravity', { model: 'gemini-4-argon', effort: 'low' }, discoveredByAgent.antigravity, 'agy') },
+    node: {
+      agentId: 'antigravity',
+      agentCommand: 'agy',
+      sessionOptions: { model: 'gemini-4-argon', effort: 'low' },
+      launchSig: makeInitialLaunchSig(
+        'antigravity',
+        { model: 'gemini-4-argon', effort: 'low' },
+        discoveredByAgent.antigravity,
+        'agy',
+      ),
+    },
   },
   // Muse: live /effort command
   {
@@ -1104,7 +1412,16 @@ const livePickScenarios = [
     discovered: discoveredByAgent.muse,
     optionId: 'effort',
     value: 'max',
-    node: { agentId: 'muse', agentCommand: 'muse', sessionOptions: { model: 'muse-spark-1.3', effort: 'high' }, launchSig: makeInitialLaunchSig('muse', { model: 'muse-spark-1.3', effort: 'high' }, discoveredByAgent.muse) },
+    node: {
+      agentId: 'muse',
+      agentCommand: 'muse',
+      sessionOptions: { model: 'muse-spark-1.3', effort: 'high' },
+      launchSig: makeInitialLaunchSig(
+        'muse',
+        { model: 'muse-spark-1.3', effort: 'high' },
+        discoveredByAgent.muse,
+      ),
+    },
   },
   // Pi: action /thinking picker
   {
@@ -1115,7 +1432,11 @@ const livePickScenarios = [
     paneBusy: false,
     discovered: discoveredByAgent.pi,
     optionId: 'effort',
-    node: { agentId: 'pi', agentCommand: 'pi', sessionOptions: { model: 'claude-sonnet-4-5' } },
+    node: {
+      agentId: 'pi',
+      agentCommand: 'pi',
+      sessionOptions: { model: 'claude-sonnet-4-5' },
+    },
   },
   // Amp, Kimi, Copilot: restart-only
   {
@@ -1143,7 +1464,12 @@ const livePickScenarios = [
     paneBusy: false,
     optionId: 'effort',
     value: 'xhigh',
-    node: { agentId: 'copilot', agentCommand: 'copilot', sessionOptions: { model: 'gpt-5.5' }, launchSig: makeInitialLaunchSig('copilot', { model: 'gpt-5.5' }) },
+    node: {
+      agentId: 'copilot',
+      agentCommand: 'copilot',
+      sessionOptions: { model: 'gpt-5.5' },
+      launchSig: makeInitialLaunchSig('copilot', { model: 'gpt-5.5' }),
+    },
   },
   // Busy guard & unsupported agent
   {
@@ -1227,7 +1553,7 @@ const livePickScenarios = [
 ];
 
 const livePickCases = livePickScenarios.map((sc) => {
-  const slimScenario = { ...sc };
+  const slimScenario: LivePickScenario = { ...sc };
   if (slimScenario.discovered === discoveredByAgent.cursor) {
     delete slimScenario.discovered;
     slimScenario.useCursorFixtureModels = true;
@@ -1247,7 +1573,8 @@ const livePickCases = livePickScenarios.map((sc) => {
 const claudeSwitchCheckInputs = [
   {
     name: 'ansi_cursor_positioned_success_with_resolved_version',
-    buffer: '\u001b]0;Claude Code\u0007\u001b[2K\u001b[1GSet\u001b[5Gmodel\u001b[11Gto\u001b[14GOpus 5.5 (1M context)',
+    buffer:
+      '\u001b]0;Claude Code\u0007\u001b[2K\u001b[1GSet\u001b[5Gmodel\u001b[11Gto\u001b[14GOpus 5.5 (1M context)',
     modelLabel: 'Opus',
   },
   {
@@ -1257,7 +1584,8 @@ const claudeSwitchCheckInputs = [
   },
   {
     name: 'cached_conversation_confirmation_prompt',
-    buffer: '\u001b[1mSwitch model?\u001b[0m\r\nThis conversation is cached for the current model. Switching will rebuild cache.',
+    buffer:
+      '\u001b[1mSwitch model?\u001b[0m\r\nThis conversation is cached for the current model. Switching will rebuild cache.',
     modelLabel: 'Opus',
   },
   {
@@ -1282,12 +1610,22 @@ const claudeSwitchCheckInputs = [
   },
 ].map((c) => {
   context.__cb = c;
+  const stripped: unknown = vm.runInContext('stripAnsi(__cb.buffer)', context);
+  const confirmation: unknown = vm.runInContext(
+    'hasClaudeModelSwitchConfirmation(__cb.buffer)',
+    context,
+  );
+  const success: unknown = vm.runInContext(
+    'hasClaudeModelSwitchSuccess(__cb.buffer, __cb.modelLabel)',
+    context,
+  );
+  const rejection: unknown = vm.runInContext('hasClaudeModelSwitchRejection(__cb.buffer)', context);
   return {
     ...c,
-    stripped: vm.runInContext('stripAnsi(__cb.buffer)', context),
-    confirmation: vm.runInContext('hasClaudeModelSwitchConfirmation(__cb.buffer)', context),
-    success: vm.runInContext('hasClaudeModelSwitchSuccess(__cb.buffer, __cb.modelLabel)', context),
-    rejection: vm.runInContext('hasClaudeModelSwitchRejection(__cb.buffer)', context),
+    stripped,
+    confirmation,
+    success,
+    rejection,
   };
 });
 
@@ -1318,30 +1656,39 @@ const cursorScreenCases = [
 ].map((c) => {
   context.__cl = c.lines;
   context.__cm = discoveredByAgent.cursor;
+  const pickerShown: unknown = vm.runInContext('cursorPickerShown(__cl)', context);
   return {
     ...c,
-    pickerShown: vm.runInContext('cursorPickerShown(__cl)', context),
+    pickerShown,
     modelOnScreen: clone(vm.runInContext('cursorModelOnScreen(__cl, __cm)', context)),
     contextOnScreen: clone(vm.runInContext('cursorContextOnScreen(__cl, __cm)', context)),
   };
 });
 
-const cursorFilterCases = [
+const cursorFilterInputs: Array<{ id: string; label: string } | null> = [
   null,
   { id: 'auto', label: 'Auto' },
   { id: 'claude-opus-5-thinking', label: 'Claude Opus 5 1M (NO ZDR)' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex 272K' },
   { id: 'unsafe', label: 'Bad/Slash$Name' },
-].map((row) => {
+];
+
+const cursorFilterCases = cursorFilterInputs.map((row) => {
   context.__row = row;
-  return { row, expected: vm.runInContext('cursorPickerFilter(__row)', context) };
+  const expected: unknown = vm.runInContext('cursorPickerFilter(__row)', context);
+  return { row, expected };
 });
 
 const codexModels = clone(vm.runInContext("catalogModelsFor('codex', null)", context));
 const codexScreenCases = [
   {
     name: 'modern_footer_under_prompt_box',
-    lines: ['• Completed step', '› Ask Codex anything', '', '  GPT-5.6 Sol xhigh fast · C:\\Tessel-rust  '],
+    lines: [
+      '• Completed step',
+      '› Ask Codex anything',
+      '',
+      '  GPT-5.6 Sol xhigh fast · C:\\Tessel-rust  ',
+    ],
     models: codexModels,
   },
   {
@@ -1375,7 +1722,7 @@ const codexScreenCases = [
   };
 });
 
-const agyModels = [
+const agyModels: Array<{ id: string; label: string; efforts?: string[] }> = [
   { id: 'gemini-4-argon', label: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high', 'max'] },
   { id: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -1410,19 +1757,23 @@ const antigravityScreenCases = [
   };
 });
 
-const antigravityListedCases = [
+const antigravityListedInputs: Array<{ idOrLabel: string; effort: string | null }> = [
   { idOrLabel: 'gemini-4-argon-high', effort: null },
   { idOrLabel: 'gemini-4-argon-high', effort: 'low' },
   { idOrLabel: 'GPT-OSS 120B (Medium)', effort: null },
   { idOrLabel: 'Gemini 4 Argon (Max)', effort: null },
   { idOrLabel: 'unknown-model', effort: 'high' },
-].map((c) => {
+];
+
+const antigravityListedCases = antigravityListedInputs.map((c) => {
   context.__agm = agyModels;
   context.__agi = c;
   return {
     ...c,
     models: agyModels,
-    expected: clone(vm.runInContext('antigravityListed(__agm, __agi.idOrLabel, __agi.effort)', context)),
+    expected: clone(
+      vm.runInContext('antigravityListed(__agm, __agi.idOrLabel, __agi.effort)', context),
+    ),
   };
 });
 
@@ -1454,9 +1805,10 @@ const screenModelCases = [
   },
 ].map((c) => {
   context.__sm = c;
+  const expected: unknown = vm.runInContext('modelFromScreen(__sm)', context);
   return {
     ...c,
-    expected: vm.runInContext('modelFromScreen(__sm)', context),
+    expected,
   };
 });
 
@@ -1476,7 +1828,8 @@ const switchLineCases = [
   'Kept model as sonnet',
 ].map((line) => {
   context.__sl = line;
-  return { line, expected: vm.runInContext('modelFromSwitchLine(__sl)', context) };
+  const expected: unknown = vm.runInContext('modelFromSwitchLine(__sl)', context);
+  return { line, expected };
 });
 
 const fixture = {
@@ -1490,7 +1843,7 @@ const fixture = {
   },
   validPaneCases,
   launchValuesCases,
-  launchSignatureCases,
+  launchSignatureCases: mappedLaunchSignatureCases,
   effectiveAgentCases,
   savedModelCases,
   sessionChoiceErrorCases,
@@ -1511,13 +1864,12 @@ const fixture = {
   switchLineCases,
 };
 
-const outPath = path.join(__dirname, '..', 'tests', 'fixtures', 'pane_session_model.json');
 fs.writeFileSync(outPath, JSON.stringify(fixture, null, 2) + '\n');
 console.log(
   `Wrote ${path.basename(outPath)} (${
     validPaneCases.length +
     launchValuesCases.length +
-    launchSignatureCases.length +
+    mappedLaunchSignatureCases.length +
     effectiveAgentCases.length +
     savedModelCases.length +
     sessionChoiceErrorCases.length +

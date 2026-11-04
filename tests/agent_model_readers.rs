@@ -1288,3 +1288,79 @@ fn adversarial_json_depth_utf16_surrogate_caps_and_debug_redaction() {
     };
     assert!(!format!("{ph_inputs:?}").contains("sk-live-super-secret"));
 }
+
+#[test]
+fn claude_muse_and_openclaw_preserve_js_insertion_and_duplicate_key_order() {
+    // 1. Case-variant keys in Claude `modelSettings`: first inserted entry wins.
+    let lower_then_upper = [
+        r#"{"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("claude-opus-4-8"), &lower_then_upper).as_deref(),
+        Some("high")
+    );
+    let upper_then_lower = [
+        r#"{"modelSettings":{"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"high"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("claude-opus-4-8"), &upper_then_lower).as_deref(),
+        Some("low")
+    );
+
+    // 2. Family alias (`opus`) matches the first inserted matching family entry (`claude-opus-5-5`),
+    //    not the lexicographically smallest (`claude-opus-4-8`).
+    let alias_order = [
+        r#"{"modelSettings":{"claude-opus-5-5":{"effortLevel":"max"},"claude-opus-4-8":{"effortLevel":"low"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("opus"), &alias_order).as_deref(),
+        Some("max")
+    );
+
+    // 3. Exact duplicate JSON keys update the first occurrence's slot in place with the last value.
+    let duplicate_wins_in_first_slot = [
+        r#"{"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"max"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("claude-opus-4-8"), &duplicate_wins_in_first_slot).as_deref(),
+        Some("max")
+    );
+
+    // 4. Exact duplicate JSON key overwritten with an invalid effort skips slot 0 and falls through to slot 1.
+    let duplicate_invalid_falls_through = [
+        r#"{"modelSettings":{"claude-opus-4-8":{"effortLevel":"max"},"CLAUDE-OPUS-4-8":{"effortLevel":"low"},"claude-opus-4-8":{"effortLevel":"bogus"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("claude-opus-4-8"), &duplicate_invalid_falls_through)
+            .as_deref(),
+        Some("low")
+    );
+
+    // 5. ECMA-262 integer indices (`< u32::MAX`, canonical digits) precede normal keys in numeric order,
+    //    while `"01"` and `"4294967295"` remain normal insertion-ordered string keys.
+    let ecma_indices = [
+        r#"{"modelSettings":{"01-opus-1":{"effortLevel":"low"},"4294967295-opus-1":{"effortLevel":"medium"},"10":{"effortLevel":"high"},"2":{"effortLevel":"max"}}}"#,
+    ];
+    assert_eq!(
+        claude_settings_effort(Some("opus"), &ecma_indices).as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        claude_settings_effort(Some("2"), &ecma_indices).as_deref(),
+        Some("max")
+    );
+
+    // 6. Muse `model_reasoning_efforts` preserves insertion order for trimmed-key collisions and 100-entry cap.
+    let muse_trimmed = r#"{"model":"muse-spark-1.3","model_reasoning_efforts":{"muse-spark-1.3":"max"," muse-spark-1.3 ":"low"}}"#;
+    let parsed_muse = muse_settings_model(muse_trimmed).expect("valid muse settings");
+    assert_eq!(parsed_muse.effort.as_deref(), Some("low"));
+
+    // 7. OpenClaw `sessions.json` tie on `updatedAt` keeps the first inserted session (`z-first`).
+    let openclaw_tie = r#"{"z-first":{"model":"claude-opus-5-5","updatedAt":100},"a-second":{"model":"gpt-5.4","updatedAt":100}}"#;
+    assert_eq!(
+        openclaw_index_model(openclaw_tie, None, None)
+            .map(|f| f.model)
+            .as_deref(),
+        Some("claude-opus-5-5")
+    );
+}

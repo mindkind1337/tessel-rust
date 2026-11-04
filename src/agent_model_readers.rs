@@ -627,6 +627,245 @@ fn parse_strict_object(text: &str) -> Option<serde_json::Map<String, Value>> {
     }
 }
 
+/// Canonical ECMA-262 array index (`0 <= n < u32::MAX` with no leading zeros or signs).
+fn ecma_array_index(key: &str) -> Option<u32> {
+    if key.is_empty() || key.len() > 10 {
+        return None;
+    }
+    if key.len() > 1 && key.as_bytes()[0] == b'0' {
+        return None;
+    }
+    if !key.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    key.parse::<u32>().ok().filter(|&n| n < u32::MAX)
+}
+
+/// Local insertion-ordered JSON object matching V8 `JSON.parse` + `Object.entries`
+/// without enabling `serde_json/preserve_order` globally across the crate.
+#[derive(Clone, Default)]
+struct OrderedObject {
+    entries: Vec<(String, OrderedJson)>,
+    positions: std::collections::BTreeMap<String, usize>,
+}
+
+impl OrderedObject {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(cap),
+            positions: Default::default(),
+        }
+    }
+
+    /// Matches `JSON.parse` (`CreateDataProperty`): exact duplicate keys update the
+    /// existing property's value in place while keeping the first occurrence's slot.
+    fn insert(&mut self, key: String, value: OrderedJson) {
+        if let Some(&index) = self.positions.get(&key) {
+            self.entries[index].1 = value;
+        } else {
+            self.positions.insert(key.clone(), self.entries.len());
+            self.entries.push((key, value));
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&OrderedJson> {
+        self.positions.get(key).map(|&index| &self.entries[index].1)
+    }
+
+    /// Yields own entries in ECMA-262 `[[OwnPropertyKeys]]` order: canonical array
+    /// indices `< u32::MAX` in ascending numeric order, then all remaining string
+    /// keys in chronological first-insertion order.
+    fn own_entries(&self) -> Vec<(&str, &OrderedJson)> {
+        let mut indices: Vec<(u32, &str, &OrderedJson)> = Vec::new();
+        let mut strings: Vec<(&str, &OrderedJson)> = Vec::with_capacity(self.entries.len());
+        for (k, v) in &self.entries {
+            if let Some(idx) = ecma_array_index(k) {
+                indices.push((idx, k.as_str(), v));
+            } else {
+                strings.push((k.as_str(), v));
+            }
+        }
+        indices.sort_by_key(|&(idx, _, _)| idx);
+        let mut out = Vec::with_capacity(self.entries.len());
+        for (_, k, v) in indices {
+            out.push((k, v));
+        }
+        out.extend(strings);
+        out
+    }
+}
+
+#[derive(Clone)]
+enum OrderedJson {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<OrderedJson>),
+    Object(OrderedObject),
+}
+
+impl OrderedJson {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    fn as_object(&self) -> Option<&OrderedObject> {
+        match self {
+            Self::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    fn to_scalar_value(&self) -> Option<Value> {
+        match self {
+            Self::Null => Some(Value::Null),
+            Self::Bool(b) => Some(Value::Bool(*b)),
+            Self::Number(n) => Some(Value::Number(n.clone())),
+            Self::String(s) => Some(Value::String(s.clone())),
+            Self::Array(_) | Self::Object(_) => None,
+        }
+    }
+
+    /// Matches JS `val && typeof val === 'object' ? Object.entries(val) : null`.
+    fn js_object_entries(&self) -> Option<Vec<(String, &OrderedJson)>> {
+        match self {
+            Self::Object(o) => Some(
+                o.own_entries()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            ),
+            Self::Array(arr) => Some(
+                arr.iter()
+                    .enumerate()
+                    .map(|(i, v)| (i.to_string(), v))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OrderedJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OrderedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OrderedVisitor {
+            type Value = OrderedJson;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("any valid JSON value")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Bool(v))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Number(v.into()))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Number(v.into()))
+            }
+
+            fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+                Ok(serde_json::Number::from_f64(v).map_or(OrderedJson::Null, OrderedJson::Number))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OrderedJson::String(v.to_owned()))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+                Ok(OrderedJson::String(v))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Null)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(1_024));
+                while let Some(elem) = seq.next_element()? {
+                    vec.push(elem);
+                }
+                Ok(OrderedJson::Array(vec))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut obj = OrderedObject::with_capacity(map.size_hint().unwrap_or(0).min(1_024));
+                while let Some((k, v)) = map.next_entry::<String, OrderedJson>()? {
+                    obj.insert(k, v);
+                }
+                Ok(OrderedJson::Object(obj))
+            }
+        }
+
+        deserializer.deserialize_any(OrderedVisitor)
+    }
+}
+
+fn parse_loose_ordered_json(text: &str) -> Option<OrderedJson> {
+    if text.is_empty() || text.len() > MAX_DOCUMENT_BYTES {
+        return None;
+    }
+    if within_json_depth(text, MAX_JSON_DEPTH)
+        && let Ok(v) = serde_json::from_str::<OrderedJson>(text)
+    {
+        return Some(v);
+    }
+    let plain = strip_jsonc_comments_and_trailing_commas(text);
+    if !within_json_depth(&plain, MAX_JSON_DEPTH) {
+        return None;
+    }
+    serde_json::from_str::<OrderedJson>(&plain).ok()
+}
+
+fn parse_loose_ordered_object(text: &str) -> Option<OrderedObject> {
+    match parse_loose_ordered_json(text)? {
+        OrderedJson::Object(map) => Some(map),
+        _ => None,
+    }
+}
+
+fn parse_strict_ordered_object(text: &str) -> Option<OrderedObject> {
+    if text.len() > MAX_DOCUMENT_BYTES || !within_json_depth(text, MAX_JSON_DEPTH) {
+        return None;
+    }
+    match serde_json::from_str::<OrderedJson>(text).ok()? {
+        OrderedJson::Object(map) => Some(map),
+        _ => None,
+    }
+}
+
 /// Parses an ISO-8601 / RFC-3339 date string into epoch milliseconds (`Date.parse`).
 #[must_use]
 pub fn parse_iso_ms(raw: &str) -> Option<i64> {
@@ -2118,30 +2357,51 @@ pub fn openclaw_index_model(
     session_tail: Option<&str>,
     session_head: Option<&str>,
 ) -> Option<FoundModel> {
-    let map = parse_strict_object(index_json)?;
-    let mut best: Option<&serde_json::Map<String, Value>> = None;
+    let map = parse_strict_ordered_object(index_json)?;
+    let mut best: Option<&OrderedObject> = None;
     let mut best_updated = i64::MIN;
-    for val in map.values().take(1_024) {
+    for (_, val) in map.own_entries().into_iter().take(1_024) {
         let Some(obj) = val.as_object() else {
             continue;
         };
-        if obj.get("model").and_then(model_id_val).is_none() {
+        if obj
+            .get("model")
+            .and_then(OrderedJson::as_str)
+            .and_then(valid_model_id)
+            .is_none()
+        {
             continue;
         }
-        let updated = obj.get("updatedAt").and_then(num_i64).unwrap_or(0);
+        let updated = obj
+            .get("updatedAt")
+            .and_then(OrderedJson::to_scalar_value)
+            .as_ref()
+            .and_then(num_i64)
+            .unwrap_or(0);
         if best.is_none() || updated > best_updated {
             best = Some(obj);
             best_updated = updated;
         }
     }
     let best = best?;
-    let raw_model = best.get("model").and_then(model_id_val)?;
-    let model = match best.get("modelProvider").and_then(str_val) {
+    let raw_model = best
+        .get("model")
+        .and_then(OrderedJson::as_str)
+        .and_then(valid_model_id)
+        .map(str::to_string)?;
+    let provider = best
+        .get("modelProvider")
+        .and_then(OrderedJson::as_str)
+        .and_then(trimmed_non_empty);
+    let model = match provider {
         Some(p) if !raw_model.contains('/') => format!("{p}/{raw_model}"),
         _ => raw_model,
     };
     let from_file = session_tail.and_then(|t| pi_model_from_wire(t, session_head.unwrap_or("")));
-    let at = best.get("updatedAt").and_then(time_of_value);
+    let at = best
+        .get("updatedAt")
+        .and_then(OrderedJson::to_scalar_value)
+        .and_then(|v| time_of_value(&v));
     Some(FoundModel {
         model: from_file.as_ref().map_or(model, |f| f.model.clone()),
         name: None,
@@ -2729,24 +2989,26 @@ pub fn claude_settings_effort<S: AsRef<str>>(
     docs_in_priority_order: &[S],
 ) -> Option<String> {
     let id = model
-        .map(|m| strip_1m_suffix(m).to_ascii_lowercase())
+        .map(|m| strip_1m_suffix(m).to_lowercase())
         .unwrap_or_default();
     let id_is_alpha = !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase());
     let mut general: Option<String> = None;
 
     for doc in docs_in_priority_order {
-        let Some(o) = parse_loose_object(doc.as_ref()) else {
+        let Some(o) = parse_loose_ordered_object(doc.as_ref()) else {
             continue;
         };
         if !id.is_empty()
-            && let Some(per) = o.get("modelSettings").and_then(Value::as_object)
+            && let Some(entries) = o
+                .get("modelSettings")
+                .and_then(OrderedJson::js_object_entries)
         {
-            for (key, value) in per {
+            for (key, value) in entries {
                 let level = value
                     .as_object()
                     .and_then(|vo| vo.get("effortLevel"))
-                    .and_then(Value::as_str);
-                let k = key.to_ascii_lowercase();
+                    .and_then(OrderedJson::as_str);
+                let k = key.to_lowercase();
                 let hit = k == id || (id_is_alpha && k.contains(&format!("-{id}-")));
                 if hit && let Some(lvl) = level.filter(|l| is_claude_effort(l)) {
                     return Some(lvl.to_string());
@@ -2756,7 +3018,7 @@ pub fn claude_settings_effort<S: AsRef<str>>(
         if general.is_none()
             && let Some(lvl) = o
                 .get("effortLevel")
-                .and_then(Value::as_str)
+                .and_then(OrderedJson::as_str)
                 .filter(|l| is_claude_effort(l))
         {
             general = Some(lvl.to_string());
@@ -2959,8 +3221,8 @@ pub fn antigravity_settings_model(json_text: &str) -> Option<FoundModel> {
 /// Parses Muse Code's `~/.config/muse/settings.json` (`museSettingsModel`).
 #[must_use]
 pub fn muse_settings_model(json_text: &str) -> Option<MuseSettingsModel> {
-    let o = parse_strict_object(json_text)?;
-    let nested = o.get("model").and_then(Value::as_object);
+    let o = parse_strict_ordered_object(json_text)?;
+    let nested = o.get("model").and_then(OrderedJson::as_object);
     let model = [
         o.get("model"),
         o.get("model_id"),
@@ -2971,13 +3233,16 @@ pub fn muse_settings_model(json_text: &str) -> Option<MuseSettingsModel> {
     ]
     .into_iter()
     .flatten()
-    .filter_map(Value::as_str)
+    .filter_map(OrderedJson::as_str)
     .find_map(valid_muse_model_id)
     .map(str::to_string);
 
     let mut efforts = BTreeMap::new();
-    if let Some(map) = o.get("model_reasoning_efforts").and_then(Value::as_object) {
-        for (id, tier) in map.iter().take(MAX_MUSE_EFFORT_ENTRIES) {
+    if let Some(map) = o
+        .get("model_reasoning_efforts")
+        .and_then(OrderedJson::as_object)
+    {
+        for (id, tier) in map.own_entries().into_iter().take(MAX_MUSE_EFFORT_ENTRIES) {
             if let (Some(clean_id), Some(clean_tier)) = (
                 valid_muse_model_id(id),
                 tier.as_str().and_then(valid_muse_effort),
@@ -2994,7 +3259,7 @@ pub fn muse_settings_model(json_text: &str) -> Option<MuseSettingsModel> {
     ]
     .into_iter()
     .flatten()
-    .filter_map(Value::as_str)
+    .filter_map(OrderedJson::as_str)
     .find_map(valid_muse_effort);
 
     if model.is_none() && efforts.is_empty() && all_effort.is_none() {

@@ -4234,6 +4234,38 @@
         "muse-spark-1.3"
       ],
       "expected": null
+    },
+    {
+      "name": "trimmed-key-collision-later-inserted-key-wins",
+      "json": "{\"model\":\"muse-spark-1.3\",\"model_reasoning_efforts\":{\"muse-spark-1.3\":\"max\",\" muse-spark-1.3 \":\"low\"}}",
+      "probeIds": [
+        "muse-spark-1.3"
+      ],
+      "expected": {
+        "model": "muse-spark-1.3",
+        "effort": "low",
+        "effortsByProbe": {
+          "muse-spark-1.3": "low"
+        }
+      }
+    },
+    {
+      "name": "slice-first-100-uses-insertion-order-not-lexicographic",
+      "json": "{\"model_reasoning_efforts\":{\"z-entry-000\":\"medium\",\"z-entry-001\":\"medium\",\"z-entry-002\":\"medium\",\"z-entry-003\":\"medium\",\"z-entry-004\":\"medium\",\"z-entry-005\":\"medium\",\"z-entry-006\":\"medium\",\"z-entry-007\":\"medium\",\"z-entry-008\":\"medium\",\"z-entry-009\":\"medium\",\"z-entry-010\":\"medium\",\"z-entry-011\":\"medium\",\"z-entry-012\":\"medium\",\"z-entry-013\":\"medium\",\"z-entry-014\":\"medium\",\"z-entry-015\":\"medium\",\"z-entry-016\":\"medium\",\"z-entry-017\":\"medium\",\"z-entry-018\":\"medium\",\"z-entry-019\":\"medium\",\"z-entry-020\":\"medium\",\"z-entry-021\":\"medium\",\"z-entry-022\":\"medium\",\"z-entry-023\":\"medium\",\"z-entry-024\":\"medium\",\"z-entry-025\":\"medium\",\"z-entry-026\":\"medium\",\"z-entry-027\":\"medium\",\"z-entry-028\":\"medium\",\"z-entry-029\":\"medium\",\"z-entry-030\":\"medium\",\"z-entry-031\":\"medium\",\"z-entry-032\":\"medium\",\"z-entry-033\":\"medium\",\"z-entry-034\":\"medium\",\"z-entry-035\":\"medium\",\"z-entry-036\":\"medium\",\"z-entry-037\":\"medium\",\"z-entry-038\":\"medium\",\"z-entry-039\":\"medium\",\"z-entry-040\":\"medium\",\"z-entry-041\":\"medium\",\"z-entry-042\":\"medium\",\"z-entry-043\":\"medium\",\"z-entry-044\":\"medium\",\"z-entry-045\":\"medium\",\"z-entry-046\":\"medium\",\"z-entry-047\":\"medium\",\"z-entry-048\":\"medium\",\"z-entry-049\":\"medium\",\"z-entry-050\":\"medium\",\"z-entry-051\":\"medium\",\"z-entry-052\":\"medium\",\"z-entry-053\":\"medium\",\"z-entry-054\":\"medium\",\"z-entry-055\":\"medium\",\"z-entry-056\":\"medium\",\"z-entry-057\":\"medium\",\"z-entry-058\":\"medium\",\"z-entry-059\":\"medium\",\"z-entry-060\":\"medium\",\"z-entry-061\":\"medium\",\"z-entry-062\":\"medium\",\"z-entry-063\":\"medium\",\"z-entry-064\":\"medium\",\"z-entry-065\":\"medium\",\"z-entry-066\":\"medium\",\"z-entry-067\":\"medium\",\"z-entry-068\":\"medium\",\"z-entry-069\":\"medium\",\"z-entry-070\":\"medium\",\"z-entry-071\":\"medium\",\"z-entry-072\":\"medium\",\"z-entry-073\":\"medium\",\"z-entry-074\":\"medium\",\"z-entry-075\":\"medium\",\"z-entry-076\":\"medium\",\"z-entry-077\":\"medium\",\"z-entry-078\":\"medium\",\"z-entry-079\":\"medium\",\"z-entry-080\":\"medium\",\"z-entry-081\":\"medium\",\"z-entry-082\":\"medium\",\"z-entry-083\":\"medium\",\"z-entry-084\":\"medium\",\"z-entry-085\":\"medium\",\"z-entry-086\":\"medium\",\"z-entry-087\":\"medium\",\"z-entry-088\":\"medium\",\"z-entry-089\":\"medium\",\"z-entry-090\":\"medium\",\"z-entry-091\":\"medium\",\"z-entry-092\":\"medium\",\"z-entry-093\":\"medium\",\"z-entry-094\":\"medium\",\"z-entry-095\":\"medium\",\"z-entry-096\":\"medium\",\"z-entry-097\":\"medium\",\"z-entry-098\":\"medium\",\"z-entry-099\":\"medium\",\"a-after-100\":\"xhigh\"}}",
+      "probeIds": [
+        "z-entry-000",
+        "z-entry-099",
+        "a-after-100"
+      ],
+      "expected": {
+        "model": null,
+        "effort": null,
+        "effortsByProbe": {
+          "z-entry-000": "medium",
+          "z-entry-099": "medium",
+          "a-after-100": null
+        }
+      }
     }
   ],
   "geminiCases": [
@@ -4836,6 +4868,55 @@
         "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
       ],
       "expected": "medium"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "docs": [
+        "{\"modelSettings\":{\"claude-opus-4-8\":{\"effortLevel\":\"high\"},\"CLAUDE-OPUS-4-8\":{\"effortLevel\":\"low\"}}}"
+      ],
+      "expected": "high"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "docs": [
+        "{\"modelSettings\":{\"CLAUDE-OPUS-4-8\":{\"effortLevel\":\"low\"},\"claude-opus-4-8\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "low"
+    },
+    {
+      "model": "opus",
+      "docs": [
+        "{\"modelSettings\":{\"claude-opus-5-5\":{\"effortLevel\":\"max\"},\"claude-opus-4-8\":{\"effortLevel\":\"low\"}}}"
+      ],
+      "expected": "max"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "docs": [
+        "{\"modelSettings\":{\"claude-opus-4-8\":{\"effortLevel\":\"high\"},\"CLAUDE-OPUS-4-8\":{\"effortLevel\":\"low\"},\"claude-opus-4-8\":{\"effortLevel\":\"max\"}}}"
+      ],
+      "expected": "max"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "docs": [
+        "{\"modelSettings\":{\"claude-opus-4-8\":{\"effortLevel\":\"max\"},\"CLAUDE-OPUS-4-8\":{\"effortLevel\":\"low\"},\"claude-opus-4-8\":{\"effortLevel\":\"bogus\"}}}"
+      ],
+      "expected": "low"
+    },
+    {
+      "model": "opus[1m]",
+      "docs": [
+        "{\n  // JSONC comment + trailing commas + duplicate inner effortLevel\n  \"modelSettings\": {\n    \"claude-opus-4-8\": { \"effortLevel\": \"low\", \"effortLevel\": \"xhigh\", },\n    \"CLAUDE-OPUS-4-8\": { \"effortLevel\": \"medium\" },\n  },\n}"
+      ],
+      "expected": "xhigh"
+    },
+    {
+      "model": "2",
+      "docs": [
+        "{\"modelSettings\":{\"z\":{\"effortLevel\":\"low\"},\"10\":{\"effortLevel\":\"high\"},\"2\":{\"effortLevel\":\"max\"}}}"
+      ],
+      "expected": "max"
     }
   ],
   "agentModelCases": [
@@ -4878,6 +4959,23 @@
       "expected": {
         "found": null,
         "chosenEffort": "xhigh"
+      }
+    },
+    {
+      "name": "claude-model-settings-insertion-and-duplicate-key-order",
+      "inputs": {
+        "agentId": "claude",
+        "command": "claude",
+        "claudeSettingsDocs": [
+          "{\"model\":\"opus\",\"modelSettings\":{\"claude-opus-5-5\":{\"effortLevel\":\"high\"},\"CLAUDE-OPUS-4-8\":{\"effortLevel\":\"low\"},\"claude-opus-5-5\":{\"effortLevel\":\"max\"}}}"
+        ]
+      },
+      "expected": {
+        "found": {
+          "model": "opus",
+          "effort": "max",
+          "source": "settings"
+        }
       }
     },
     {
