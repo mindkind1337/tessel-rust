@@ -38,10 +38,14 @@ jobs:
           $meta = Invoke-RestMethod https://api.github.com/meta -Headers @{'User-Agent'='Tessel-Rust-CI'}
           [IO.File]::WriteAllLines($knownHosts, @($meta.ssh_keys | ForEach-Object { 'github.com ' + $_ }), [Text.UTF8Encoding]::new($false))
           $ssh = (Join-Path $env:WINDIR 'System32/OpenSSH/ssh.exe').Replace('\', '/')
-          $sshCommand = '"' + $ssh + '" -i "' + $keyPath.Replace('\', '/') + '" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="' + $knownHosts.Replace('\', '/') + '"'
+          $sshCommand = '"' + $ssh + '" -i "' + $keyPath.Replace('\', '/') + '" -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="' + $knownHosts.Replace('\', '/') + '"'
+          $env:GIT_SSH_COMMAND = $sshCommand
           "GIT_SSH_COMMAND=$sshCommand" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           git config --global url.'git@github.com:mindkind1337/tessel-host'.insteadOf 'https://github.com/mindkind1337/tessel-host'
           if ($LASTEXITCODE -ne 0) { throw 'Cannot configure the private dependency URL.' }
+          # Verify real access before any cache can hide an invalid deploy key.
+          git ls-remote --exit-code https://github.com/mindkind1337/tessel-host HEAD | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'The CI deploy key cannot read tessel-host. Check its read-only deploy key and TESSEL_HOST_DEPLOY_KEY pairing.' }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
