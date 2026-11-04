@@ -80,7 +80,24 @@ pub struct Query<'a> {
 /// Verifies a saved ID even outside discovery's thirty-day window. A filename
 /// alone is not evidence: its first metadata record must match both ID and cwd.
 pub fn verify(root: &Path, cwd: &Path, id: &str) -> Result<bool, String> {
-    if !crate::claude::valid_uuid(id) || !cwd.is_absolute() {
+    open_verified(root, cwd, id).map(|file| file.is_some())
+}
+
+/// Open the exact conversation whose first record matches this profile, ID and
+/// cwd. A model reader must keep this handle rather than reopen its pathname:
+/// another process can rename or replace the pathname after verification.
+/// Worker-only; the returned cursor is after the bounded metadata read.
+pub fn open_verified(root: &Path, cwd: &Path, id: &str) -> Result<Option<fs::File>, String> {
+    open_verified_bounded(root, cwd, id, MAX_BYTES)
+}
+
+fn open_verified_bounded(
+    root: &Path,
+    cwd: &Path,
+    id: &str,
+    byte_budget: u64,
+) -> Result<Option<fs::File>, String> {
+    if !crate::claude::valid_uuid(id) || !root.is_absolute() || !cwd.is_absolute() {
         return Err("Invalid saved Codex conversation.".into());
     }
     let want = normalized(cwd.to_str().ok_or("Invalid conversation folder.")?);
@@ -90,6 +107,7 @@ pub fn verify(root: &Path, cwd: &Path, id: &str) -> Result<bool, String> {
         (root.join("archived_sessions"), 0),
     ];
     let mut count = 0;
+    let mut bytes_read = 0;
     while let Some((dir, depth)) = pending.pop() {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -116,23 +134,41 @@ pub fn verify(root: &Path, cwd: &Path, id: &str) -> Result<bool, String> {
             if !kind.is_file() || !name.starts_with("rollout-") || !name.ends_with(&suffix) {
                 continue;
             }
-            let file = match fs::File::open(entry.path()) {
+            let mut file = match fs::File::open(entry.path()) {
                 Ok(file) => file,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(_) => return Err("Cannot read saved Codex metadata.".into()),
             };
+            if !file
+                .metadata()
+                .map_err(|_| "Cannot inspect saved Codex metadata.")?
+                .is_file()
+            {
+                continue;
+            }
+            if bytes_read >= byte_budget {
+                return Err("Codex verification byte limit reached.".into());
+            }
             let mut line = Vec::new();
-            BufReader::new(file.take(MAX_LINE + 1))
+            // Count actual IO, including BufReader read-ahead, against the
+            // aggregate budget as well as the per-record bound.
+            let limit = (MAX_LINE + 1).min(byte_budget - bytes_read);
+            let mut bounded = (&mut file).take(limit);
+            BufReader::new(&mut bounded)
                 .read_until(b'\n', &mut line)
                 .map_err(|_| "Cannot read saved Codex metadata.")?;
+            bytes_read += limit - bounded.limit();
             if parse_metadata(&line)
                 .is_some_and(|meta| meta.id == id && normalized(&meta.cwd) == want)
             {
-                return Ok(true);
+                return Ok(Some(file));
+            }
+            if bytes_read >= byte_budget {
+                return Err("Codex verification byte limit reached.".into());
             }
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Matches source's thirty-day window, five-second launch slack, and excluded IDs.
@@ -269,6 +305,61 @@ mod tests {
     const FIRST: &str = "12345678-1234-4234-8234-123456789abc";
     const SECOND: &str = "22345678-1234-4234-8234-123456789abc";
     #[test]
+    fn verified_handle_keeps_the_conversation_when_its_path_is_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("archived_sessions");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join(format!("rollout-{FIRST}.jsonl"));
+        let mut bytes = line(FIRST, temp.path(), 1_700_000_000_000);
+        bytes.extend_from_slice(
+            b"\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"model-original\"}}\n",
+        );
+        fs::write(&path, &bytes).unwrap();
+        let mut verified = open_verified(temp.path(), temp.path(), FIRST)
+            .unwrap()
+            .unwrap();
+        fs::rename(&path, dir.join("moved.jsonl")).unwrap();
+        fs::write(&path, line(SECOND, temp.path(), 1_700_000_000_000)).unwrap();
+        let tail = crate::pane_model_worker::read_jsonl_tail_file(&mut verified, 4096).unwrap();
+        assert_eq!(tail.as_bytes(), bytes);
+        assert!(
+            open_verified(temp.path(), temp.path(), FIRST)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            open_verified(temp.path(), &temp.path().join("other"), SECOND)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verification_exhaustion_is_an_error_not_a_missing_conversation() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("archived_sessions");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join(format!("rollout-{FIRST}.jsonl"));
+        fs::write(&path, vec![b'x'; 128]).unwrap();
+        assert_eq!(
+            open_verified_bounded(temp.path(), temp.path(), FIRST, 64)
+                .err()
+                .as_deref(),
+            Some("Codex verification byte limit reached.")
+        );
+        fs::write(&path, line(FIRST, temp.path(), 1_700_000_000_000)).unwrap();
+        assert!(
+            open_verified(temp.path(), &temp.path().join("other"), FIRST)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            open_verified(&temp.path().join("other-profile"), temp.path(), FIRST)
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
     fn verifies_old_and_archived_ids_without_trusting_names_or_other_projects() {
         let temp = tempfile::tempdir().unwrap();
         for relative in ["sessions/2020/01/02", "archived_sessions"] {
@@ -283,6 +374,7 @@ mod tests {
             fs::remove_file(path).unwrap();
         }
         assert!(verify(temp.path(), temp.path(), "../bad").is_err());
+        assert!(open_verified(Path::new("relative-profile"), temp.path(), FIRST).is_err());
         assert!(!verify(temp.path(), temp.path(), FIRST).unwrap());
     }
     #[test]

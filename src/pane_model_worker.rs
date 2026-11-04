@@ -137,10 +137,15 @@ pub fn read_document(path: &Path) -> Result<String, Failure> {
 /// Read complete JSONL records from a bounded tail. Drop the first partial
 /// record and any unfinished final record (another process may be appending).
 pub fn read_jsonl_tail(path: &Path, limit: usize) -> Result<String, Failure> {
+    read_jsonl_tail_file(&mut regular_file(path)?, limit)
+}
+
+/// Same bounded read from an already verified handle. This avoids reopening a
+/// provider pathname between checking conversation metadata and reading a turn.
+pub fn read_jsonl_tail_file(file: &mut File, limit: usize) -> Result<String, Failure> {
     if limit == 0 || limit > MAX_READ {
         return Err(Failure::TooLarge);
     }
-    let mut file = regular_file(path)?;
     let length = file.metadata().map_err(|_| Failure::Io)?.len();
     let start = length.saturating_sub(limit as u64);
     // One byte before the window distinguishes a record boundary from a suffix.

@@ -21,6 +21,8 @@ synthetic session identifiers and paths only.
 The bounded Codex metadata discovery in `src/codex_sessions.rs` adapts the folder,
 launch-time and exclusion policy in Tessel's `src/main/agentSessions.js`.
 Its tests use temporary synthetic rollouts, not user conversation records.
+The reverse log scan in `src/pane_model_log.rs` adapts Tessel's
+`src/main/latestInFile.js`, retaining its 512 KiB chunks and 64 MiB scan limit.
 
 The pure per-pane model state and planners in `src/pane_session_model.rs` adapt
 Tessel's `agentSessionOptions.js`, `agentPrefs.js`, `paneLastModel.js`, model and
