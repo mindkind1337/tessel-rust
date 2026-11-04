@@ -5,6 +5,25 @@ aarch64 musl executables in `~/.tessel-server`, installed without root. No chang
 to the running Electron checkout. This is part of full Tessel parity, not a
 replacement for the remaining desktop work.
 
+Review: Darwin approved gates 1–3 on 2026-11-03 with the amendments below.
+The protocol foundation now lives in `crates/host-protocol`; daemon, PTY,
+installation and desktop transport integration are not implemented yet.
+
+Ownership handoff: Halley takes gates 1–7; Hopper returns to desktop UI parity.
+The foundation has seven passing tests on Windows MSVC and Ubuntu 24.04 WSL
+(Rust 1.99.1), plus strict Windows Clippy. It covers bounded framing, fragmented
+reads, malformed messages, negotiation, budget intersection and connection-state
+ordering. It does NOT yet cover stream/chunk messages, structured wire errors,
+cancel/dedup lifetimes across reconnects, property fuzzing or any daemon behavior.
+`cargo test --locked -j 2 -p tessel-host-protocol` runs only this lightweight crate.
+Workspace default-members remains the desktop; existing desktop commands retain
+their scope. The lockfile adds only the local crate, no dependency upgrades.
+
+Local Linux validation uses isolated CARGO_HOME/RUSTUP_HOME below
+`~/.local/share/tessel-host-validation/` and a separate target directory there.
+No shell profile or global PATH was changed. musl and arm64 build/runtime
+acceptance remain outstanding; Windows+WSL tests do not prove those targets.
+
 ## Evidence and scope
 
 At b121, `src/remote.rs` uses verified OpenSSH SFTP with conflict-aware writes;
@@ -32,14 +51,25 @@ transport authority; browser credentials and host vaults are never exported.
   single-instance lock. Refuse symlink-controlled runtime directories. No public
   TCP listener. Client-side Live Share capabilities remain separate from SSH
   host authority; guests cannot request arbitrary host connections or terminals.
+- Use a new daemon-owned runtime directory, not the existing `run/` directory or
+  `<flavour>-<sha1>.sock` sockets. Protocol v1 coexists with the JavaScript MCP
+  shim, inverse tunnel, TESSEL_* environment and hooks. Do not remove that shim
+  until a separately verified `tunnel.reverse` capability replaces its behavior.
 - Detect architecture, upload a temporary versioned executable, verify its
   release-manifest digest, chmod and atomically install. Fixed bootstrap command
   only; no downloaded shell script. Validate executable version before attach.
+- Support upload through an existing Files exec channel: coreutils/BusyBox
+  `cat`, checksum verification, `chmod` and `mv` are sufficient. No remote curl,
+  package manager, sudo or Node installation is required.
 - Keep an old daemon alive while it owns terminals. Upgrades start another
   versioned socket for new sessions; reconnect routes existing IDs to their
   daemon epoch. A daemon crash or machine reboot reports terminal loss, never a
   fake successful resume. Rootless persistence also depends on host login-session
   policy; test this explicitly rather than assuming `setsid` defeats a user cgroup.
+- Inspect `loginctl` Linger and effective KillUserProcesses policy and expose
+  persistence capability to the client. Use a user systemd scope when supported,
+  but verify actual logout survival; missing/unknown support must produce an
+  explicit warning rather than a promise of persistent sessions.
 
 ## Wire contract v1
 
@@ -48,10 +78,14 @@ transport authority; browser credentials and host vaults are never exported.
   chunks use base64 with a 64 KiB decoded maximum; bounded JSON nesting and string
   lengths. Linux filename bytes use explicit base64 path components, not lossy
   UTF-8 conversion. Display labels are separate from filesystem identity.
-- Envelope: `version`, `kind`, `request_id`, optional `stream_id`, `seq`, and typed
-  `body`. First exchange is `hello`/`hello_ok` with supported versions,
+- Foundation envelope: `version`, JavaScript-safe monotonic `request_id`, and
+  `message: { kind, body }`. Stream fields will be specified with PTY messages.
+  First exchange is `hello`/`hello_ok` with supported versions,
   capabilities, host epoch and advertised limits. Unsupported major versions
   fail before any mutation; unsupported optional capabilities are explicit.
+- Negotiate `pty`, `tree`, `git`, `editor` and `tunnel.reverse` independently.
+  Vue may adopt tree+git while keeping tmux and the MCP shim. A golden JSON
+  fixture exercises exactly this path without requiring PTY/tunnel support.
 - Each request receives one terminal reply or structured error. Cancellation
   targets a request ID. IDs and stream sequence numbers have bounded lifetimes;
   unknown/duplicate IDs never cause repeated process creation or file writes.
@@ -75,10 +109,12 @@ Requests: `terminal.create`, `attach`, `detach`, `input`, `resize`, `signal`,
   Read-only observers cannot input, resize, signal or close. One writer lease
   determines input/resize authority; attachment alone does not grant it.
 - PTY reading continues while disconnected. Maintain a bounded VT screen model
-  plus a sequenced output ring, initially 8 MiB per terminal and 64 MiB aggregate.
+  plus a sequenced output ring. Negotiate host-specific budgets; the slow-host
+  default is 2 MiB per terminal and 16 MiB aggregate, capped at 64 MiB aggregate.
   Budget exhaustion evicts replay history, not the running process, and marks a
   gap. Define main/alternate screen, cursor, colors, modes, Unicode width and
   scrollback representation before claiming snapshot fidelity.
+- `terminal.list` reports daemon RSS and retained replay bytes separately.
 - Reattach under a sequence barrier: snapshot at S or retained bytes after the
   client's S, then events S+1 onward without duplication. Snapshot application
   must not execute OSC clipboard, shell integration or device-response side
@@ -108,6 +144,9 @@ Requests: `root.open`, `tree.subscribe`, `tree.unsubscribe`, `file.read`,
   Reconcile only affected subtrees when possible. A bounded explicit resync is
   required after overflow; the promise of no repeated full refresh must never
   suppress recovery or fabricate a complete tree. No fallback polling loop.
+- Announce default exclusions for node_modules, .git/objects and caches. Read
+  fs.inotify.max_user_watches at startup; cap watches/depth and oversized directory
+  enumeration. Uncovered subtrees are explicitly stale-on-demand, not empty.
 - Read files as original bytes in cancelable chunks. Saves carry the original
   content digest and expected revision; validate again before atomic rename of a
   same-directory temporary file. Concurrent edits produce a conflict, never a
@@ -123,6 +162,10 @@ make Git's own index scan incremental. Do not claim constant-cost status.
 - One worker per canonical repository, bounded host-wide concurrency (initially
   one Git job), low OS priority and a separate queue from PTYs. Group filesystem
   changes for 300 ms, maximum two seconds under continuous activity.
+- Apply nice 10 and idle-class ionice where available. Detect existing
+  core.untrackedCache/fsmonitor support, but never enable either in user config
+  without authorization. Compare strategies using at least 300,000 synthetic
+  untracked files before choosing large-tree defaults.
 - Cache porcelain-v2 status keyed by repository epoch, index/HEAD generation and
   dirty paths. Watch worktree paths plus gitdir, common-dir, index, refs and ignore
   metadata, including linked worktrees. Push revisioned diffs to subscribers;
