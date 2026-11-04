@@ -2,7 +2,7 @@
 
 Status: approved by Darwin. The client, installer commands and release assets are now
 published as host `v0.1.0` (`4354459`), following accepted gates 1–6 (`7358969`).
-The desktop still pins the earlier protocol until client integration is validated.
+The desktop pins the client, installer and protocol at 8293994. Gate 7A now has an explicit preview connection; terminal/editor/tree/Git adapters remain pending.
 No real user server is part of unattended validation.
 
 ## 7A — One verified connection per host

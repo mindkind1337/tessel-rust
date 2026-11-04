@@ -5418,9 +5418,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessel-host"
+version = "0.1.0"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=8293994e321250a7d68b056e53b55a0416c794d8#8293994e321250a7d68b056e53b55a0416c794d8"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tessel-host-protocol",
+ "vt100",
+ "vte",
+]
+
+[[package]]
+name = "tessel-host-client"
+version = "0.1.0"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=8293994e321250a7d68b056e53b55a0416c794d8#8293994e321250a7d68b056e53b55a0416c794d8"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tessel-host-protocol",
+]
+
+[[package]]
 name = "tessel-host-protocol"
 version = "0.1.0"
-source = "git+https://github.com/mindkind1337/tessel-host?rev=35f41cd68849e60d42bca14b3449222fad1e7ace#35f41cd68849e60d42bca14b3449222fad1e7ace"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=8293994e321250a7d68b056e53b55a0416c794d8#8293994e321250a7d68b056e53b55a0416c794d8"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5460,6 +5485,8 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+ "tessel-host",
+ "tessel-host-client",
  "tessel-host-protocol",
  "tokio",
  "url",

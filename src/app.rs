@@ -403,6 +403,8 @@ pub struct Tessel {
     agents_panel: crate::agents_panel::AgentsPanel,
     agents_notice: Option<String>,
     host_panel: crate::ssh_hosts_panel::SshHostsPanel,
+    native_hosts: crate::native_host_manager::Manager,
+    native_host_panel: crate::native_host_panel::Panel,
     host_notice: Option<(String, bool)>,
     host_import: Option<Receiver<crate::ssh_config::Discovery>>,
     tasks_board: crate::tasks_board_panel::TasksBoard,
@@ -508,6 +510,8 @@ impl Tessel {
             agents_panel: Default::default(),
             agents_notice: None,
             host_panel: Default::default(),
+            native_hosts: Default::default(),
+            native_host_panel: Default::default(),
             host_notice: None,
             host_import: None,
             tasks_board: Default::default(),
@@ -635,6 +639,15 @@ impl Tessel {
             if std::env::args().any(|a| a == "--settings-fixture") {
                 app.overlay = Some(Overlay::Settings);
             }
+            if std::env::args().any(|a| a == "--native-host-fixture") {
+                app.overlay = Some(Overlay::Settings);
+                app.settings_section = SettingsSection::Hosts;
+                app.state.hosts = vec![Host {
+                    alias: "fixture-host".into(),
+                    folder: "/demo".into(),
+                }];
+                app.native_host_panel = crate::native_host_panel::Panel::fixture();
+            }
             if std::env::args().any(|a| a == "--help-fixture") {
                 app.open_help();
             }
@@ -646,7 +659,9 @@ impl Tessel {
         let models_fixture = std::env::args().any(|arg| arg == "--models-fixture");
         #[cfg(not(feature = "visual-test"))]
         let models_fixture = false;
-        if !models_fixture {
+        let native_host_fixture =
+            cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--native-host-fixture");
+        if !models_fixture && !native_host_fixture {
             app.detect_agents();
         }
         #[cfg(feature = "visual-test")]
@@ -3041,6 +3056,8 @@ impl Tessel {
                 capabilities,
             },
         );
+        self.native_host_panel
+            .show(ui, &self.state.hosts, &mut self.native_hosts);
         let to_host = |host: SshHostSpec| Host {
             alias: host.alias,
             folder: host.folder,
@@ -4063,6 +4080,7 @@ impl eframe::App for Tessel {
             }
         }
 
+        self.native_hosts.poll();
         self.poll();
         let previous_panels = self.state.panels;
         let terminal_focused = self.view == View::Work

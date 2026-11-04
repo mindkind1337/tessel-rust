@@ -261,3 +261,27 @@ The installed Codex app-server schema describes reasoning effort as a nonempty a
 Native chat pane menus now use the model/effort catalogue with independent Settings fallback and transactional override saves. Codex applies choices on the next turn, Claude on the next connection. Protocol-observed active model chips and live Claude switching remain pending.
 
 Password dialog groundwork: the pure metadata/import/DOM-decision model and source-derived synthetic fixtures are present, including streaming CSV column limits, bounded batches and duplicate IDs, independent HTTPS proof construction and Live Share decisions. This model is not yet connected to a new vault worker or dialog; the owner-only runtime retains its independently validated isolated-world fill.
+
+
+## Native host gate 7A integration
+
+The desktop now pins the protocol, client and installer to host commit `8293994`.
+The explicit Settings > SSH preview action installs or reuses the embedded v0.1.0
+release, checks its remote digest/version and opens one managed connection per
+validated alias. No connection or installation runs automatically on startup.
+Workers and captured command output are bounded. Cancellation covers upload and
+initial/reconnecting handshakes; cleanup has a separate short deadline. Late
+results are closed, and process reaping stays off the UI thread. Windows bridge
+processes use kill-on-close jobs; Unix bridge processes use their own process group.
+Errors use fixed messages instead of forwarding remote output.
+
+This is connection groundwork, not daemon-backed terminal/editor/tree/Git parity.
+Those adapters remain pending. Existing SSH/SFTP sessions retain their backend.
+Real user-server acceptance has not been performed. Local integration validation: 12 installer tests and 8 manager/transport tests pass
+(one synthetic child entry point is intentionally ignored outside its parent tests).
+The transport tests execute real harmless child processes, including a descendant
+that holds stdout open, stalled stdin, output flooding, cancellation and early
+nonzero exit. Strict all-target/all-feature Clippy with warnings denied and formatting pass.
+Native French screenshots pass at normal and compact window sizes using an empty
+isolated profile and the synthetic `--native-host-fixture`; no SSH connection is
+started by that fixture. Screenshots were inspected for wrapping and visible controls.

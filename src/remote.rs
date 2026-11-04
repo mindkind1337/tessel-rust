@@ -579,10 +579,13 @@ mod tests {
 }
 
 #[cfg(windows)]
-struct ProcessJob(windows::Win32::Foundation::HANDLE);
+pub(crate) struct ProcessJob(windows::Win32::Foundation::HANDLE);
+// Windows job handles are kernel objects without thread affinity; ownership is unique.
+#[cfg(windows)]
+unsafe impl Send for ProcessJob {}
 #[cfg(windows)]
 impl ProcessJob {
-    fn attach(process: std::os::windows::io::RawHandle) -> Result<Self, String> {
+    pub(crate) fn attach(process: std::os::windows::io::RawHandle) -> Result<Self, String> {
         use windows::{
             Win32::{Foundation::HANDLE, System::JobObjects::*},
             core::PCWSTR,

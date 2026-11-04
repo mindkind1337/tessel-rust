@@ -359,3 +359,13 @@ Native-chat model options now apply independently per field: an explicit pane mo
 Native chat pane menus now open the shared model/effort picker. Native choices use a separate transactional save path, preserve independent per-field inheritance, and never invoke terminal slash commands. The EN/FR note distinguishes the next Codex turn from the next Claude connection; terminal-only options are hidden. The configured menu label is not a protocol observation: verified native-chat header telemetry and live Claude switching are still pending.
 
 Password dialog A1: browser_passwords_model.rs and its TypeScript reference fixture cover metadata-only views, search/pagination, confirmations, CSV/import reconciliation and owner/guest/page/form boundaries. The source fixture was regenerated against Vue b1803 after the form-destination fixes. A2 egui dialog and worker integration remain pending.
+
+
+### Native host connection preview
+
+Settings > SSH has an explicit, collapsible native-host preview with saved/active
+aliases, connect/cancel/disconnect, observed connection states and granted
+capabilities. Removing a saved alias does not hide an active connection's disconnect
+control. Failure dismissals free retained entries. It does not claim that existing
+terminals, editors or file lists have moved to the native daemon. Native French screenshots at normal and compact sizes have been inspected using
+an isolated synthetic profile. Full gate 7B/7C integration remains pending.
