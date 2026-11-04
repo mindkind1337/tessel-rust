@@ -189,7 +189,15 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
 }
 
 fn frame(terminal: &mut Terminal, ctx: &egui::Context, enabled: bool, events: Vec<egui::Event>) {
-    let _ = ctx.run(
+    let _ = frame_output(terminal, ctx, enabled, events);
+}
+fn frame_output(
+    terminal: &mut Terminal,
+    ctx: &egui::Context,
+    enabled: bool,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -207,7 +215,65 @@ fn frame(terminal: &mut Terminal, ctx: &egui::Context, enabled: bool, events: Ve
                 terminal.show(ui, 14.0);
             });
         },
-    );
+    )
+}
+
+#[test]
+fn host_persistence_and_resynchronization_reach_the_native_pane_not_just_the_pure_panel() {
+    use crate::native_host_info::{Probe, Source};
+    use tessel_host_protocol::{Persistence, Survival};
+    struct Report(Survival);
+    impl Source for Report {
+        fn epoch(&self) -> Option<Epoch> {
+            Some(Epoch::from_bytes([7; 16]))
+        }
+        fn persistence(&self) -> Option<Persistence> {
+            Some(Persistence {
+                survives_logout: self.0,
+                ..Persistence::UNKNOWN
+            })
+        }
+    }
+    let ctx = egui::Context::default();
+    let (mut terminal, client, _received) = fixture(&ctx);
+    for (survival, expected) in [
+        (Survival::Yes, false),
+        (Survival::No, true),
+        (Survival::Unknown, true),
+    ] {
+        let mut probe = Probe::default();
+        probe.poll(&Report(survival));
+        let Backend::Native(native) = &mut terminal.backend else {
+            unreachable!()
+        };
+        native.host = native.host.clone().with_info(probe.cache());
+        native.feed.as_mut().unwrap().resynchronized = true;
+        frame(&mut terminal, &ctx, true, vec![]);
+        let output = frame_output(&mut terminal, &ctx, true, vec![]);
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts.iter().any(|text| text.contains("end on logout")
+                || text.contains("persistence could not be verified")
+                || text.contains("se ferment à la déconnexion")
+                || text.contains("persistance après déconnexion")),
+            expected
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Output resynchronized")
+                    || text.contains("Sortie resynchronisée"))
+        );
+    }
+    drop(terminal);
+    client.close();
 }
 
 #[test]
@@ -337,13 +403,15 @@ fn opening_a_modal_releases_a_previously_held_remote_mouse_button() {
     let ctx = egui::Context::default();
     let (mut terminal, client, received) = fixture(&ctx);
     terminal.parser.process(b"\x1b[?1000h\x1b[?1006h");
-    let pos = egui::pos2(40.0, 40.0);
+    // Click the live terminal below the logout-policy notice, not its overlay.
+    let pos = egui::pos2(40.0, 300.0);
     frame(
         &mut terminal,
         &ctx,
         true,
         vec![egui::Event::PointerMoved(pos)],
     );
+    assert!(!terminal.native_panel.pointer_over_overlay(pos));
     frame(
         &mut terminal,
         &ctx,

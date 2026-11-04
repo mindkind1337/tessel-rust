@@ -14,11 +14,24 @@ use tessel_host_protocol::{DedupKey, Epoch, LeaseKey, TerminalId};
 pub struct HostConnection {
     pub client: Client,
     timeout: Duration,
+    info: crate::native_host_info::Cache,
 }
 impl HostConnection {
     /// Pass the request timeout actually used to construct this client.
     pub fn new(client: Client, timeout: Duration) -> Self {
-        Self { client, timeout }
+        Self {
+            client,
+            timeout,
+            info: Default::default(),
+        }
+    }
+    pub fn with_info(mut self, info: crate::native_host_info::Cache) -> Self {
+        self.info = info;
+        self
+    }
+    pub fn persistence(&self) -> tessel_host_protocol::Persistence {
+        let epoch = self.client.link().ok().and_then(|_| self.client.epoch());
+        self.info.read(epoch.as_ref())
     }
 }
 fn host_error(error: ClientError) -> HostError {

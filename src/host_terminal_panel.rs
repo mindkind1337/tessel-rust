@@ -1252,10 +1252,10 @@ impl HostTerminalPanel {
             if !self.dismissed_persistence_epochs.contains(&epoch_key) {
                 let text = match (pw.survives_logout, fr) {
                     (SurvivesLogout::No, false) => format!(
-                        "Sessions on {host} end on logout (user lingering is disabled on this host)."
+                        "Sessions on {host} end on logout under this host's current policy."
                     ),
                     (SurvivesLogout::No, true) => format!(
-                        "Les sessions sur {host} se ferment à la déconnexion (la persistance utilisateur est désactivée sur cet hôte)."
+                        "Les sessions sur {host} se ferment à la déconnexion selon la politique actuelle de cet hôte."
                     ),
                     (SurvivesLogout::Unknown, false) => format!(
                         "Logout persistence could not be verified on {host} — this session may end when you log out."

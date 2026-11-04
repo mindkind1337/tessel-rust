@@ -142,6 +142,7 @@ impl Terminal {
         }
         let phase = native.phase();
         let epoch = native.host.client.epoch();
+        let persistence = native.host.persistence().survives_logout;
         let input = HostTerminalInput {
             id_salt: response.id.with("host-overlay"),
             host_label: &native.alias,
@@ -150,8 +151,31 @@ impl Terminal {
             capabilities: native.capabilities(),
             terminal_focused: response.has_focus() && ui.is_enabled(),
             lease_save: native.lease_access(),
-            persistence_warning: None,
-            skipped_output: None,
+            persistence_warning: epoch.as_ref().and_then(|epoch| {
+                use crate::host_terminal_panel::{PersistenceWarningInput, SurvivesLogout};
+                use tessel_host_protocol::Survival;
+                match persistence {
+                    Survival::Yes => None,
+                    Survival::No => Some(PersistenceWarningInput::new(
+                        epoch.as_str(),
+                        SurvivesLogout::No,
+                    )),
+                    Survival::Unknown => Some(PersistenceWarningInput::new(
+                        epoch.as_str(),
+                        SurvivesLogout::Unknown,
+                    )),
+                }
+            }),
+            skipped_output: native
+                .feed
+                .as_ref()
+                .filter(|feed| feed.resynchronized)
+                .and(native.slot.as_ref())
+                .map(|slot| {
+                    crate::host_terminal_panel::SkippedOutputInput::resynchronized(
+                        slot.epoch.as_str(),
+                    )
+                }),
             scrollback_lines: self.parser.screen().scrollback(),
             french: crate::i18n::is_french(),
         };

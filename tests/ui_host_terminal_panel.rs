@@ -1500,8 +1500,8 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
     for (survives, en_expected, fr_expected) in [
         (
             SurvivesLogout::No,
-            "Sessions on prod-db end on logout (user lingering is disabled on this host).",
-            "Les sessions sur prod-db se ferment à la déconnexion (la persistance utilisateur est désactivée sur cet hôte).",
+            "Sessions on prod-db end on logout under this host's current policy.",
+            "Les sessions sur prod-db se ferment à la déconnexion selon la politique actuelle de cet hôte.",
         ),
         (
             SurvivesLogout::Unknown,

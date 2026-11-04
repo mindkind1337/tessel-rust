@@ -521,7 +521,8 @@ impl Tessel {
             return;
         };
         let terminal = Terminal::spawn_native(
-            HostConnection::new(client.clone(), client.options().request_timeout),
+            HostConnection::new(client.clone(), client.options().request_timeout)
+                .with_info(connection.info_cache()),
             target,
             self.native_terminals
                 .runtime

@@ -16,6 +16,8 @@ pub struct Connection {
     client: Client,
     pub installation: HostInstall,
     close: Option<mpsc::Sender<()>>,
+    info: crate::native_host_info::Cache,
+    info_stop: Option<mpsc::Sender<()>>,
 }
 impl Connection {
     pub fn client(&self) -> &Client {
@@ -24,9 +26,16 @@ impl Connection {
     pub fn state(&self) -> ConnectionState {
         self.client.state()
     }
+    pub fn info_cache(&self) -> crate::native_host_info::Cache {
+        self.info.clone()
+    }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
+        self.info.close();
+        if let Some(stop) = self.info_stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(close) = self.close.take() {
             let _ = close.send(());
         } else {
@@ -123,10 +132,20 @@ impl Manager {
                         let client = connection.client.clone();
                         let (close, closing) = mpsc::channel();
                         connection.close = Some(close);
+                        let info = crate::native_host_info::Worker::start(
+                            client.clone(),
+                            connection.info.clone(),
+                        );
+                        connection.info_stop = info
+                            .as_ref()
+                            .map(crate::native_host_info::Worker::stop_sender);
                         // SendError drops its payload, signalling this worker too.
                         let _ = sender.send(Ok(connection));
                         let _ = closing.recv();
                         client.close();
+                        if let Some(info) = info {
+                            info.finish();
+                        }
                     }
                     Err(error) => {
                         let _ = sender.send(Err(error));
@@ -226,6 +245,8 @@ fn connect(
         client,
         installation,
         close: None,
+        info: Default::default(),
+        info_stop: None,
     };
     cancelled()?;
     Ok(connection)

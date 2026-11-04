@@ -375,15 +375,24 @@ cases ignored). All seven picker suites now pass, including real wheel scrolling
 280x320 viewport and clipped-text visibility. Review fixes disable underlying
 settings and toolbar controls, replace a restarted native pane in place, reuse
 matching saved identities and restore project/maximized-pane focus. This does not establish real-server or full
-desktop visual acceptance. Host-info logout-persistence warnings and retained
-pre-resynchronization history rendering still need integration.
+desktop visual acceptance. Retained pre-resynchronization history rendering still needs integration.
 
-Next acceptance work: cache `host.info` persistence by the exact current daemon
-epoch rather than interpreting `HelloOk` as a persistence report. The existing
-long-lived connection worker is a suitable place for this bounded request;
-frames should only read a non-secret cache. An absent, failed, disconnected or
-stale-epoch report must produce Unknown, never a survival guarantee. Reuse the
-worker's existing close channel and capacity ownership; do not create a worker
-per pane or issue requests from terminal rendering. Tests must cover epoch
-changes during the request, failed reads, cancellation and multiple panes
-sharing the same cached report.
+
+Host-info integration follow-up: persistence metadata is read once per observed
+live daemon epoch (and again after an observed disconnection), validated, and
+shared by every pane of that connection. A separate metadata worker keeps the
+original connection worker available to close the client and interrupt an
+in-flight request immediately. Both the metadata worker pool and connection
+manager are bounded at eight; the parent retains its connection permit until its
+metadata child has actually ended. UI owners only invalidate the cache and send
+stop/close signals. They never join a worker or issue a request. Closed caches
+cannot publish late replies, and a report for another epoch is never displayed.
+Yes suppresses the warning; No and Unknown show distinct policy messages. No
+longer infers that user lingering is disabled. Resync flags now reach the actual
+pane's dismissible output notice without claiming a missing-byte count.
+
+Six metadata tests pass, including real in-process client pipes, pool saturation
+and cancellation of silent requests well before their 30-second deadlines.
+Seven native pane/client rendering and input tests and eleven pure panel suites
+pass, including policy notices, resynchronization notices, modal isolation and
+mouse-button release. Strict scoped all-feature Clippy passes.
