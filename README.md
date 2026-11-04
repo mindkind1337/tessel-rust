@@ -39,7 +39,7 @@ The target is the same appearance, layout, menus, shortcuts and behavior as Tess
 
 ### Terminals, agents and SSH
 
-- Codex, Cursor, Antigravity and Muse terminal footers can supply an observed model/effort chip in the pane header. Clicking it opens the existing launch-choice picker. The chip hides in narrow panes; its tooltip identifies the observation source. Reading scrollback does not replace the current observation, and replacing the terminal clears its observation cache. Managed local Codex panes also read the model and effort from their verified conversation on a background worker when no current footer is visible. Reads use the profile captured at launch, debounce terminal output and refresh periodically; stale results from a different conversation are discarded and temporary read failures preserve the last observation. Custom command wrappers do not infer a profile for file reading. The last observed model survives application restarts as a saved placeholder until fresh telemetry arrives. Changed observations are saved once; storage failures retain the previous saved value and retries are bounded. Other provider transcript/configuration readers and complete refresh orchestration are still being integrated.
+- Codex, Cursor, Antigravity and Muse terminal footers can supply an observed model/effort chip in the pane header. Clicking it opens the existing launch-choice picker. The chip hides in narrow panes; its tooltip identifies the observation source. Reading scrollback does not replace the current observation, and replacing the terminal clears its observation cache. Managed local Codex, Claude and OpenClaude panes also read the model and effort from their verified conversation on a background worker when no current footer is visible. Claude-compatible transcripts must contain a matching conversation ID and working directory; secondary-agent records are ignored. Reads use the profile captured at launch, debounce terminal output and refresh periodically; stale results from a different conversation are discarded and temporary read failures preserve the last observation. Custom command wrappers do not infer a profile for file reading. The last observed model survives application restarts as a saved placeholder until fresh telemetry arrives. Changed observations are saved once; storage failures retain the previous saved value and retries are bounded. Other provider transcript/configuration readers and complete refresh orchestration are still being integrated.
 
 - The toolbar launcher and Ctrl+Shift+Space open a compact terminal/agent menu with keyboard selection. Available CLIs and native chats are grouped separately; unavailable choices explain why they cannot launch. Choose automatic placement or split left, right or below the selected pane in the active project. Launching a native chat creates a new independent pane, including another instance of the same provider.
 - Real PTYs (ConPTY on Windows) in independent panes and persistent project split grids. Split right/down from a pane's `⋯` menu or its title's context menu or Ctrl+Shift+E/O, drag or keyboard-resize dividers, maximize/restore a pane, and move focus with Alt+Arrow. The Layout menu can arrange existing panes automatically or into columns. Switching projects keeps existing sessions running and drains their output; restored sessions stay asleep.
@@ -180,8 +180,8 @@ The browser check creates a local HTTP fixture and temporary browser profile, do
 ### Fixture development (optional)
 
 The application and its Cargo build remain native Rust. Source-comparison fixture
-generators are separate development tools. The catalogue, listed-model and
-model-option generators now use strict TypeScript (`scripts/*.cts`); the eight
+generators are separate development tools. The catalogue, listed-model,
+model-option and model-reader generators use strict TypeScript (`scripts/*.cts`); the eight
 other existing CommonJS generators are still being converted.
 
 Use Node 24.12 or newer within the Node 24 series:
@@ -192,6 +192,7 @@ npm run check:scripts
 node scripts/model-catalog-fixture.cts path/to/reference/src/shared/agentSessionOptions.js
 node scripts/model-listed-fixture.cts path/to/reference/src/shared
 node scripts/model-options-fixture.cts path/to/reference/src/shared/agentSessionOptions.js
+node scripts/agent-model-readers-fixture.cts path/to/reference
 ```
 
 The generators read the reference source and rewrite only their Rust-side JSON

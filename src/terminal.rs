@@ -992,6 +992,42 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    fn claude_header_reads_the_captured_profile_without_a_footer() {
+        let _guard = crate::pane_model_worker::TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("profile/projects/synthetic");
+        std::fs::create_dir_all(&project).unwrap();
+        let id = "12345678-1234-4234-8234-123456789abc";
+        let turn = serde_json::json!({"type":"assistant", "sessionId":id, "cwd":dir.path(),
+            "message":{"model":"claude-opus-4-8"}, "perTurnEffort":"high"});
+        std::fs::write(project.join(format!("{id}.jsonl")), format!("{turn}\n")).unwrap();
+        let mut command = CommandBuilder::new("synthetic-profile");
+        command.env_clear();
+        command.cwd(dir.path());
+        command.env("CLAUDE_CONFIG_DIR", dir.path().join("profile"));
+        let mut terminal = Terminal::spawn().unwrap();
+        terminal.model_profile =
+            crate::pane_model_profile::Profile::capture("claude", &command, dir.path());
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let seen = loop {
+            if let Some(model) = terminal.header_model("claude", &[], Some(id), &ctx) {
+                break model;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(seen.model, "claude-opus-4-8");
+        assert_eq!(seen.effort.as_deref(), Some("high"));
+        assert_eq!(seen.source, crate::pane_session_model::ModelSource::Session);
+        assert!(
+            terminal
+                .header_model("openclaude", &[], Some(id), &ctx)
+                .is_none()
+        );
+    }
+    #[test]
+    #[cfg(windows)]
     fn restart_stop_accepts_a_process_that_exited_with_code_259() {
         let mut command = portable_pty::CommandBuilder::new("powershell.exe");
         command.args(["-NoProfile", "-Command", "exit 259"]);

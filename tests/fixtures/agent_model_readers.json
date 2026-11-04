@@ -1,0 +1,5545 @@
+{
+  "sources": [
+    {
+      "file": "main/fileRead.js",
+      "sha256": "19d82cae7dffeb0548077727acbd59f093fd0eb7cae884ccf2e5dc9760f9b41c"
+    },
+    {
+      "file": "main/latestInFile.js",
+      "sha256": "c146fd69343b6ed3ba8d805bdc915dcd0d6715c03d6a578a68e19c04abf6bd91"
+    },
+    {
+      "file": "renderer/src/components/TerminalPane.vue",
+      "sha256": "e5b755ec53758de5c221f730e22eae7cf91a8baacd6a3ba6bab65683ecfab818"
+    },
+    {
+      "file": "shared/__tests__/fixtures/cursor-list-models.txt",
+      "sha256": "d0ac19e38a97c6adba08100025fda044f26593bb32c17ea4e048c9c3b533fa22"
+    },
+    {
+      "file": "shared/cursorModels.js",
+      "sha256": "6f4668b590a4eb29df432ba23bd7f19bf05af5429d8eccdaa243e0a84f44d3e2"
+    },
+    {
+      "file": "shared/antigravityModels.js",
+      "sha256": "6017393398012c4b3f1ec9f43ad83bc1bdf937504d93a6f7fe7a5e149e69b7c1"
+    },
+    {
+      "file": "shared/agentSessionOptions.js",
+      "sha256": "6fbb1dc110e2dfbe34109f781e487aa21066a9f8bab4207cdafb95bf3de87e1e"
+    },
+    {
+      "file": "shared/agentModelProbe.js",
+      "sha256": "7d216d3216a09371cfdc425db57c6edcfb24757ae007643c690045bf08976676"
+    },
+    {
+      "file": "shared/modelLabel.js",
+      "sha256": "27619aec0f9842de9176837384884728143fbcbe85794dd08d46ecb02186cd8c"
+    },
+    {
+      "file": "shared/codexScreen.js",
+      "sha256": "0c3afd516073185d9d97e985dfdae625fbbf65e4ca2e1808ddbf2f9ce6f45fd9"
+    },
+    {
+      "file": "shared/screenModel.js",
+      "sha256": "8d533be2d061cc3df657904fbc24fc01d514ca59953a7a9af338dfb130fd872d"
+    },
+    {
+      "file": "shared/claudePricing.js",
+      "sha256": "e9297030df6eed0680b0b82cab404f265caeaa3958570443be9f14210692f0f5"
+    },
+    {
+      "file": "renderer/src/paneLastModel.js",
+      "sha256": "218cf74b7e5e6ac973b1e70fbf048919e75df6a9ee29d8630489eeeeab4d35ea"
+    },
+    {
+      "file": "renderer/src/chat/orca/native-chat-session-option-labels.js",
+      "sha256": "ab86dfe546b73f66e067b803be4364c943b73873b8c954a08e1e4a849e152ed0"
+    },
+    {
+      "file": "renderer/src/sessionOptionLabels.js",
+      "sha256": "096ff18764fe91fc6a40477542de7384d63bc477dd5e7a4720e7a87c0181862e"
+    },
+    {
+      "file": "main/museSessions.js",
+      "sha256": "9ba0a4f56812b1e866df71454a7f4ccbe90136efb0e876b70eb3a2798aace6d9"
+    },
+    {
+      "file": "main/agentModelSources.js",
+      "sha256": "d0e74b0e2c9746ff91ab08d8328b7da5c1ddcbf8e9bfd8fa05fd7387a2561d52"
+    },
+    {
+      "file": "main/agentModel.js",
+      "sha256": "1a46f92e6e1f644afb3619ad2f959ba471ff53ad0d173a88143993cc288e8566"
+    }
+  ],
+  "catalogs": {
+    "cursor": [
+      {
+        "id": "auto",
+        "label": "Auto",
+        "options": [],
+        "variants": [
+          {
+            "id": "auto",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "isDefault": true
+      },
+      {
+        "id": "claude-fable-5-1",
+        "label": "Claude Fable 5.1 1M (NO ZDR)",
+        "variants": [
+          {
+            "id": "claude-fable-5-1-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-1-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-1-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-1-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-1-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-1-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-1-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-1-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-1-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-1-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-fable-5",
+        "label": "Claude Fable 5 1M (NO ZDR)",
+        "variants": [
+          {
+            "id": "claude-fable-5-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-fable-5-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-fable-5-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-opus-5-5",
+        "label": "Claude Opus 5.5 1M",
+        "variants": [
+          {
+            "id": "claude-opus-5-5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-5-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-opus-5",
+        "label": "Claude Opus 5 1M",
+        "variants": [
+          {
+            "id": "claude-opus-5-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-5-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-5-thinking-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": true,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-opus-4-8",
+        "label": "Claude Opus 4.8 1M",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ],
+        "variants": [
+          {
+            "id": "claude-opus-4-8-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-8-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-8-thinking-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": true,
+        "hasThinking": true,
+        "defaultThinking": false
+      },
+      {
+        "id": "claude-opus-4-7",
+        "label": "Claude Opus 4.7 1M",
+        "variants": [
+          {
+            "id": "claude-opus-4-7-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "claude-opus-4-7-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-opus-4-7-thinking-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "xhigh",
+        "hasFast": true,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "xhigh"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-4.6-opus",
+        "label": "Claude Opus 4.6 1M",
+        "variants": [
+          {
+            "id": "claude-4.6-opus-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4.6-opus-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4.6-opus-high-thinking",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-4.6-opus-max-thinking",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-4.5-opus",
+        "label": "Claude Opus 4.5",
+        "variants": [
+          {
+            "id": "claude-4.5-opus-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4.5-opus-high-thinking",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "high"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "label": "Claude Sonnet 5.5",
+        "variants": [
+          {
+            "id": "claude-sonnet-5-5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-5-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-5-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-sonnet-5",
+        "label": "Claude Sonnet 5 1M",
+        "variants": [
+          {
+            "id": "claude-sonnet-5-thinking-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-sonnet-5-thinking-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-sonnet-5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-sonnet-5-thinking-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-sonnet-5-thinking-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          },
+          {
+            "id": "claude-sonnet-5-thinking-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-4.6-sonnet",
+        "label": "Claude Sonnet 4.6 1M",
+        "variants": [
+          {
+            "id": "claude-4.6-sonnet-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4.6-sonnet-medium-thinking",
+            "effort": "medium",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [
+          "medium"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-4.5-sonnet",
+        "label": "Claude Sonnet 4.5",
+        "variants": [
+          {
+            "id": "claude-4.5-sonnet",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4.5-sonnet-thinking",
+            "effort": "",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-4-sonnet",
+        "label": "Claude Sonnet 4",
+        "variants": [
+          {
+            "id": "claude-4-sonnet",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "claude-4-sonnet-thinking",
+            "effort": "",
+            "fast": false,
+            "thinking": true
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": true,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "category": "model_config",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "label": "GPT-5.6 Luna 1M",
+        "variants": [
+          {
+            "id": "gpt-5.6-luna-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-none-fast",
+            "effort": "none",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-luna-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "label": "GPT-5.6 Sol 1M",
+        "variants": [
+          {
+            "id": "gpt-5.6-sol-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-none-fast",
+            "effort": "none",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-sol-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "label": "GPT-5.6 Terra 1M",
+        "variants": [
+          {
+            "id": "gpt-5.6-terra-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-none-fast",
+            "effort": "none",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.6-terra-max-fast",
+            "effort": "max",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.5",
+        "label": "GPT-5.5 1M",
+        "variants": [
+          {
+            "id": "gpt-5.5-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-none-fast",
+            "effort": "none",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-extra-high",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.5-extra-high-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.4",
+        "label": "GPT-5.4 1M",
+        "variants": [
+          {
+            "id": "gpt-5.4-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "label": "GPT-5.4 Mini",
+        "variants": [
+          {
+            "id": "gpt-5.4-mini-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-mini-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-mini-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-mini-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-mini-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "label": "GPT-5.4 Nano",
+        "variants": [
+          {
+            "id": "gpt-5.4-nano-none",
+            "effort": "none",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-nano-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-nano-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-nano-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.4-nano-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "none",
+                  "label": "None"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "label": "Codex 5.3",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ],
+        "variants": [
+          {
+            "id": "gpt-5.3-codex-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.3-codex-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false
+      },
+      {
+        "id": "gpt-5.2",
+        "label": "GPT-5.2",
+        "variants": [
+          {
+            "id": "gpt-5.2",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.2-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.1",
+        "label": "GPT-5.1",
+        "variants": [
+          {
+            "id": "gpt-5.1-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.1",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gpt-5.1-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5-mini",
+        "label": "GPT-5 Mini",
+        "variants": [
+          {
+            "id": "gpt-5-mini",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": []
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "label": "Gemini 3.8 Flash",
+        "variants": [
+          {
+            "id": "gemini-3.8-flash-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.8-flash-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.8-flash-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "label": "Gemini 3.7 Flash",
+        "variants": [
+          {
+            "id": "gemini-3.7-flash-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.7-flash-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.7-flash-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gemini-3.6-flash",
+        "label": "Gemini 3.6 Flash",
+        "variants": [
+          {
+            "id": "gemini-3.6-flash-minimal",
+            "effort": "minimal",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.6-flash-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.6-flash-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "gemini-3.6-flash-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "gemini-3.5-flash",
+        "label": "Gemini 3.5 Flash",
+        "variants": [
+          {
+            "id": "gemini-3.5-flash",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": []
+      },
+      {
+        "id": "gemini-3.1-pro",
+        "label": "Gemini 3.1 Pro",
+        "variants": [
+          {
+            "id": "gemini-3.1-pro",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": []
+      },
+      {
+        "id": "gemini-3-flash",
+        "label": "Gemini 3 Flash",
+        "variants": [
+          {
+            "id": "gemini-3-flash",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": []
+      },
+      {
+        "id": "grok-4.7",
+        "label": "Grok 4.7",
+        "variants": [
+          {
+            "id": "grok-4.7-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "grok-4.7-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "medium",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "cursor-grok-4.6",
+        "label": "Grok 4.6",
+        "variants": [
+          {
+            "id": "cursor-grok-4.6-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.6-xhigh-fast",
+            "effort": "xhigh",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "cursor-grok-4.5",
+        "label": "Grok 4.5",
+        "variants": [
+          {
+            "id": "cursor-grok-4.5-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.5-high-fast",
+            "effort": "high",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.5-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.5-low-fast",
+            "effort": "low",
+            "fast": true,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.5-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "cursor-grok-4.5-medium-fast",
+            "effort": "medium",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "composer-2.5",
+        "label": "Composer 2.5",
+        "variants": [
+          {
+            "id": "composer-2.5",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "composer-2.5-fast",
+            "effort": "",
+            "fast": true,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": true,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "kimi-k3",
+        "label": "Kimi K3",
+        "variants": [
+          {
+            "id": "kimi-k3-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "kimi-k3-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "kimi-k3-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "max",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "max"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "label": "Kimi K2.7 Code",
+        "variants": [
+          {
+            "id": "kimi-k2.7-code",
+            "effort": "",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [],
+        "defaultEffort": "",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": []
+      },
+      {
+        "id": "glm-5.2",
+        "label": "GLM 5.2",
+        "variants": [
+          {
+            "id": "glm-5.2-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "glm-5.2-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "muse-spark-1.3",
+        "label": "Muse Spark 1.3 1M",
+        "variants": [
+          {
+            "id": "muse-spark-1.3-minimal",
+            "effort": "minimal",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "muse-spark-1.3-low",
+            "effort": "low",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "muse-spark-1.3-medium",
+            "effort": "medium",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "muse-spark-1.3-high",
+            "effort": "high",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "muse-spark-1.3-xhigh",
+            "effort": "xhigh",
+            "fast": false,
+            "thinking": false
+          },
+          {
+            "id": "muse-spark-1.3-max",
+            "effort": "max",
+            "fast": false,
+            "thinking": false
+          }
+        ],
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "hasFast": false,
+        "hasThinking": false,
+        "defaultThinking": false,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "composedIntoModel": true
+            }
+          }
+        ]
+      }
+    ],
+    "codex": [
+      {
+        "id": "gpt-5.6-sol",
+        "label": "GPT-5.6 Sol",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Reasoning effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                },
+                {
+                  "value": "ultra",
+                  "label": "Ultra"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "agent-picker",
+                "command": "/model",
+                "delivery": "type"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "label": "GPT-5.6 Terra",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Reasoning effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                },
+                {
+                  "value": "ultra",
+                  "label": "Ultra"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "agent-picker",
+                "command": "/model",
+                "delivery": "type"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "label": "GPT-5.6 Luna",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Reasoning effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "agent-picker",
+                "command": "/model",
+                "delivery": "type"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.5",
+        "label": "GPT-5.5",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Reasoning effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "agent-picker",
+                "command": "/model",
+                "delivery": "type"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.2-codex",
+        "label": "GPT-5.2 Codex",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Reasoning effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "minimal",
+                  "label": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                }
+              ],
+              "defaultValue": "medium"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "agent-picker",
+                "command": "/model",
+                "delivery": "type"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "claude": [
+      {
+        "id": "fable",
+        "label": "Fable",
+        "description": "Most capable for the hardest, longest-running tasks",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "command"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "opus",
+        "label": "Opus",
+        "description": "Best for everyday, complex tasks",
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "command"
+              }
+            }
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast mode",
+            "category": "mode",
+            "kind": {
+              "type": "boolean",
+              "defaultValue": false
+            },
+            "apply": {
+              "midSession": {
+                "kind": "toggle-command",
+                "command": "/fast"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "description": "Efficient for routine tasks",
+        "isDefault": true,
+        "options": [
+          {
+            "id": "effort",
+            "label": "Effort",
+            "category": "thought_level",
+            "kind": {
+              "type": "select",
+              "choices": [
+                {
+                  "value": "low",
+                  "label": "Low"
+                },
+                {
+                  "value": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "value": "high",
+                  "label": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "label": "Extra high"
+                },
+                {
+                  "value": "max",
+                  "label": "Max"
+                }
+              ],
+              "defaultValue": "high"
+            },
+            "apply": {
+              "midSession": {
+                "kind": "command"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "haiku",
+        "label": "Haiku",
+        "description": "Fastest for quick answers",
+        "options": []
+      }
+    ],
+    "antigravity": [
+      {
+        "id": "gemini-4-argon",
+        "label": "Gemini 4 Argon",
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "isDefault": true
+      },
+      {
+        "id": "claude-sonnet-4-6-thinking",
+        "label": "Claude Sonnet 4.6 (Thinking)"
+      }
+    ],
+    "kimi": [
+      {
+        "id": "kimi-code/kimi-for-coding",
+        "label": "Kimi K2.6",
+        "options": [],
+        "isDefault": true
+      }
+    ],
+    "muse": [
+      {
+        "id": "muse-wonder-1.0",
+        "label": "muse-wonder-1.0",
+        "isDefault": true
+      }
+    ]
+  },
+  "claudeTurnCases": [
+    {
+      "name": "empty",
+      "text": "",
+      "expectedTurn": null,
+      "expectedModel": null
+    },
+    {
+      "name": "latest-real-answer-skips-synthetic-sidechain-and-cut-tail",
+      "text": "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5\"}}\n{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"high\",\"perTurnEffort\":\"high\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"effort\":\"low\",\"perTurnEffort\":\"low\",\"message\":{\"model\":\"claude-haiku-4-5\"},\"isSidechain\":true}\n{\"type\":\"assistant\",\"message\":{\"model\":\"<synthetic>\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"cut",
+      "expectedTurn": {
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "at": 1790877408645
+      },
+      "expectedModel": "claude-opus-5-5"
+    },
+    {
+      "name": "bogus-effort-ignored",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"bogus\",\"perTurnEffort\":\"bogus\",\"message\":{\"model\":\"claude-fable-5-1\"}}",
+      "expectedTurn": {
+        "model": "claude-fable-5-1",
+        "effort": null,
+        "at": 1790877408645
+      },
+      "expectedModel": "claude-fable-5-1"
+    },
+    {
+      "name": "slash-model-haiku-clears-effort",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>haiku</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Haiku 4.5` and saved as your default for new sessions</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "haiku",
+        "effort": null,
+        "at": 1790877480000
+      },
+      "expectedModel": "haiku"
+    },
+    {
+      "name": "slash-model-sonnet-and-effort-medium",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>haiku</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Haiku 4.5` and saved as your default for new sessions</local-command-stdout>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>sonnet</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Sonnet 5.5` and saved as your default for new sessions</local-command-stdout>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/effort</command-name>\\n            <command-message>effort</command-message>\\n            <command-args>medium</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set effort level to medium (saved as your default for new sessions): Balanced approach</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "sonnet",
+        "effort": "medium",
+        "at": 1790877540000
+      },
+      "expectedModel": "sonnet"
+    },
+    {
+      "name": "bare-effort-picker-stdout-only-names-level",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/effort</command-name>\\n            <command-message>effort</command-message>\\n            <command-args></command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set effort level to medium (saved as your default for new sessions): Balanced approach</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "at": 1790877480000
+      },
+      "expectedModel": "claude-opus-5-5"
+    },
+    {
+      "name": "stdout-set-effort-without-command-line-in-tail",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set effort level to low</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "claude-opus-5-5",
+        "effort": "low",
+        "at": 1790877480000
+      },
+      "expectedModel": "claude-opus-5-5"
+    },
+    {
+      "name": "bare-model-picker-uses-printed-family-and-keeps-effort",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args></command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "sonnet",
+        "effort": "xhigh",
+        "at": 1790877480000
+      },
+      "expectedModel": "sonnet"
+    },
+    {
+      "name": "refused-slash-model-changes-nothing",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>nonsense</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Invalid model</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "at": 1790877408645
+      },
+      "expectedModel": "claude-opus-5-5"
+    },
+    {
+      "name": "assistant-answer-after-slash-command-wins",
+      "text": "{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:56:48.645Z\",\"effort\":\"xhigh\",\"perTurnEffort\":\"xhigh\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>\"},\"isMeta\":true}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>haiku</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Haiku 4.5` and saved as your default for new sessions</local-command-stdout>\"}}\n{\"type\":\"assistant\",\"timestamp\":\"2026-10-01T17:59:00.000Z\",\"effort\":null,\"perTurnEffort\":null,\"message\":{\"model\":\"claude-haiku-4-5\"}}",
+      "expectedTurn": {
+        "model": "claude-haiku-4-5",
+        "effort": null,
+        "at": 1790877540000
+      },
+      "expectedModel": "claude-haiku-4-5"
+    },
+    {
+      "name": "slash-model-before-any-answer",
+      "text": "{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name>\\n            <command-message>model</command-message>\\n            <command-args>opus</command-args>\"}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Set model to `Opus 5.5`</local-command-stdout>\"}}",
+      "expectedTurn": {
+        "model": "opus",
+        "effort": null,
+        "at": 1790877480000
+      },
+      "expectedModel": "opus"
+    },
+    {
+      "name": "array-content-blocks-in-user-command",
+      "text": "{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<command-name>/model</command-name><command-args>fable</command-args>\"}]}}\n{\"type\":\"user\",\"timestamp\":\"2026-10-01T17:58:00.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<local-command-stdout>Set model to `Fable 5.1`</local-command-stdout>\"}]}}",
+      "expectedTurn": {
+        "model": "fable",
+        "effort": null,
+        "at": 1790877480000
+      },
+      "expectedModel": "fable"
+    }
+  ],
+  "codexTurnCases": [
+    {
+      "name": "empty",
+      "text": "",
+      "expected": null
+    },
+    {
+      "name": "thread-settings-applied-overrides-earlier-turn-context",
+      "text": "{\"type\":\"world_state\",\"payload\":{\"state\":{\"collaboration_mode\":{\"model\":\"gpt-6-sol\"}}}}\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6-sol\",\"effort\":\"high\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_settings\":{\"model\":\"gpt-6-astra\"}}}",
+      "expected": {
+        "model": "gpt-6-astra",
+        "effort": null
+      }
+    },
+    {
+      "name": "turn-context-with-effort",
+      "text": "{\"type\":\"world_state\",\"payload\":{\"state\":{\"collaboration_mode\":{\"model\":\"gpt-6-sol\"}}}}\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6-sol\",\"effort\":\"high\"}}",
+      "expected": {
+        "model": "gpt-6-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "name": "collaboration-mode-reasoning-effort-and-timestamp",
+      "text": "{\"timestamp\":\"2026-10-14T01:54:31.711Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6-astra\",\"collaboration_mode\":{\"mode\":\"default\",\"settings\":{\"model\":\"gpt-6-astra\",\"reasoning_effort\":\"xhigh\"}}}}",
+      "expected": {
+        "model": "gpt-6-astra",
+        "effort": "xhigh",
+        "at": 1791942871711
+      }
+    },
+    {
+      "name": "thread-settings-reasoning-effort",
+      "text": "{\"timestamp\":\"2026-10-14T01:54:31.600Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_settings\":{\"model\":\"gpt-6-astra\",\"reasoning_effort\":\"xhigh\"}}}",
+      "expected": {
+        "model": "gpt-6-astra",
+        "effort": "xhigh",
+        "at": 1791942871600
+      }
+    }
+  ],
+  "uuidV7Cases": [
+    {
+      "id": "01a0d616-11e1-7202-9d2b-4b4172f348e9",
+      "expected": 1790298165729
+    },
+    {
+      "id": "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b",
+      "expected": 1761661963614
+    },
+    {
+      "id": "6da350a1-326a-4f43-b9cc-9fae8081edcc",
+      "expected": null
+    },
+    {
+      "id": "00000000-0000-7000-8000-000000000000",
+      "expected": null
+    },
+    {
+      "id": "not-a-uuid",
+      "expected": null
+    }
+  ],
+  "copilotCases": [
+    {
+      "name": "empty",
+      "text": "",
+      "expected": null
+    },
+    {
+      "name": "answer-inherits-latest-model-change-effort",
+      "text": "{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"auto\",\"reasoningEffort\":\"medium\"},\"id\":\"e1\",\"timestamp\":\"2026-10-16T10:00:01.000Z\",\"parentId\":null}\n{\"type\":\"assistant.message\",\"data\":{\"model\":\"gpt-6-luna\",\"content\":\"Hi\"},\"id\":\"e2\",\"timestamp\":\"2026-10-16T10:00:02.000Z\",\"parentId\":null}",
+      "expected": {
+        "model": "gpt-6-luna",
+        "effort": "medium",
+        "at": 1792144802000
+      }
+    },
+    {
+      "name": "model-change-after-answer-wins",
+      "text": "{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"auto\",\"reasoningEffort\":\"medium\"},\"id\":\"e1\",\"timestamp\":\"2026-10-16T10:00:01.000Z\",\"parentId\":null}\n{\"type\":\"assistant.message\",\"data\":{\"model\":\"gpt-6-luna\",\"content\":\"Hi\"},\"id\":\"e2\",\"timestamp\":\"2026-10-16T10:00:02.000Z\",\"parentId\":null}\n{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"claude-sonnet-5\",\"previousModel\":\"auto\",\"reasoningEffort\":\"high\"},\"id\":\"e3\",\"timestamp\":\"2026-10-16T10:00:03.000Z\",\"parentId\":null}",
+      "expected": {
+        "model": "claude-sonnet-5",
+        "effort": "high",
+        "at": 1792144803000
+      }
+    },
+    {
+      "name": "answer-only-without-model-change",
+      "text": "{\"type\":\"assistant.message\",\"data\":{\"model\":\"mai-code-1.1-flash\"},\"id\":\"e4\",\"timestamp\":\"2026-10-16T10:00:04.000Z\",\"parentId\":null}",
+      "expected": {
+        "model": "mai-code-1.1-flash",
+        "effort": null,
+        "at": 1792144804000
+      }
+    }
+  ],
+  "antigravityCases": [
+    {
+      "name": "first-prompt-model-selection",
+      "text": "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_REQUEST>\\nhello\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (High). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}",
+      "expected": {
+        "model": "Gemini 4 Argon (High)",
+        "name": "Gemini 4 Argon",
+        "effort": "high",
+        "at": 1792066311000
+      }
+    },
+    {
+      "name": "later-prompt-overrides-earlier",
+      "text": "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_REQUEST>\\nhello\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (High). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}\n{\"step_index\":7,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"created_at\":\"2026-10-15T12:20:05Z\",\"content\":\"ok\"}\n{\"step_index\":6,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:20:00Z\",\"content\":\"<USER_REQUEST>\\nnext\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from Gemini 4 Argon (High) to Gemini 3.8 Flash (Medium). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}\n{\"step_index\":7,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"created_at\":\"2026-10-15T12:20:05Z\",\"content\":\"ok\"}",
+      "expected": {
+        "model": "Gemini 3.8 Flash (Medium)",
+        "name": "Gemini 3.8 Flash",
+        "effort": "medium",
+        "at": 1792066800000
+      }
+    },
+    {
+      "name": "thinking-note-preserved-when-not-effort",
+      "text": "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Claude Sonnet 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}",
+      "expected": {
+        "model": "Claude Sonnet 4.6 (Thinking)",
+        "name": "Claude Sonnet 4.6 (Thinking)",
+        "effort": null,
+        "at": 1792066311000
+      }
+    },
+    {
+      "name": "user-request-spoofing-rejected",
+      "text": "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Fake Model (High). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\\n</USER_REQUEST>\"}",
+      "expected": null
+    },
+    {
+      "name": "planner-response-spoofing-rejected",
+      "text": "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (Low). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}",
+      "expected": null
+    },
+    {
+      "name": "multiple-changes-in-one-user-input-picks-last",
+      "text": "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from Gemini 3.8 Flash (Low) to Claude Opus 5.5 (High). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}",
+      "expected": {
+        "model": "Claude Opus 5.5 (High)",
+        "name": "Claude Opus 5.5",
+        "effort": "high",
+        "at": 1792066311000
+      }
+    }
+  ],
+  "antigravityTimeline": {
+    "lines": [
+      "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:11:51Z\",\"content\":\"<USER_REQUEST>\\nhello\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (High). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}",
+      "{\"step_index\":7,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"created_at\":\"2026-10-15T12:20:05Z\",\"content\":\"ok\"}",
+      "{\"step_index\":6,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-15T12:20:00Z\",\"content\":\"<USER_REQUEST>\\nnext\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from Gemini 4 Argon (High) to Gemini 3.8 Flash (Medium). No need to comment on this change if the user doesn't ask about it.\\n</USER_SETTINGS_CHANGE>\"}"
+    ],
+    "expected": [
+      {
+        "t": 1792066311000,
+        "model": "Gemini 4 Argon",
+        "effort": "high"
+      },
+      {
+        "t": 1792066800000,
+        "model": "Gemini 3.8 Flash",
+        "effort": "medium"
+      }
+    ]
+  },
+  "museCases": [
+    {
+      "name": "configured-and-reconfigured-with-effort",
+      "tail": "{\"record_type\":\"event\",\"payload_type\":\"runtime.session.metadata\",\"recorded_at\":1760529600000000,\"payload\":{\"record\":{\"workspace_root\":\"C:\\\\Proj\",\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}\n{\"record_type\":\"event\",\"payload_type\":\"run.model.configured\",\"recorded_at\":\"2026-10-15T14:00:00Z\",\"payload\":{\"record\":{\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}\n{\"record_type\":\"event\",\"payload_type\":\"runtime.model_reconfigure.completed\",\"recorded_at\":\"2026-10-15T14:10:00Z\",\"payload\":{\"record\":{\"effective\":{\"model_id\":\"muse-spark-1.3-contributor\"}}}}\n{\"record_type\":\"event\",\"payload_type\":\"runtime.reasoning_effort_reconfigure.completed\",\"recorded_at\":\"2026-10-15T14:11:00Z\",\"payload\":{\"record\":{\"reasoning_effort\":\"max\"}}}",
+      "head": "",
+      "expected": {
+        "model": "muse-spark-1.3-contributor",
+        "effort": "max",
+        "at": 1792073460000
+      }
+    },
+    {
+      "name": "batch-children-record-json-unwrapped",
+      "tail": "{\"children\":[{\"record_json\":\"{\\\"record_type\\\":\\\"event\\\",\\\"payload_type\\\":\\\"run.model.configured\\\",\\\"recorded_at\\\":\\\"2026-10-15T14:00:00Z\\\",\\\"payload\\\":{\\\"record\\\":{\\\"model_id\\\":\\\"muse-wonder-1.0\\\",\\\"reasoning_effort\\\":\\\"medium\\\"}}}\"}]}",
+      "head": "",
+      "expected": {
+        "model": "muse-wonder-1.0",
+        "effort": "medium",
+        "at": 1792072800000
+      }
+    },
+    {
+      "name": "fallback-used-model-when-not-configured",
+      "tail": "{\"record_type\":\"event\",\"payload_type\":\"runtime.session\",\"recorded_at\":\"2026-10-15T14:05:00Z\",\"payload\":{\"event\":{\"kind\":\"model_completed\",\"model\":\"muse-wonder-full\"}}}",
+      "head": "",
+      "expected": {
+        "model": "muse-wonder-full",
+        "effort": null
+      }
+    },
+    {
+      "name": "long-log-merges-tail-model-with-head-effort",
+      "tail": "{\"record_type\":\"event\",\"payload_type\":\"runtime.model_reconfigure.completed\",\"recorded_at\":\"2026-10-15T15:00:00Z\",\"payload\":{\"record\":{\"effective\":{\"model_id\":\"muse-wonder\"}}}}",
+      "head": "{\"record_type\":\"event\",\"payload_type\":\"runtime.session.metadata\",\"recorded_at\":1760529600000000,\"payload\":{\"record\":{\"workspace_root\":\"C:\\\\Proj\",\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}\n{\"record_type\":\"event\",\"payload_type\":\"run.model.configured\",\"recorded_at\":\"2026-10-15T14:00:00Z\",\"payload\":{\"record\":{\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}",
+      "expected": {
+        "model": "muse-wonder",
+        "effort": "high",
+        "at": 1792076400000
+      }
+    }
+  ],
+  "museTimeline": {
+    "text": "{\"record_type\":\"event\",\"payload_type\":\"runtime.session.metadata\",\"recorded_at\":1760529600000000,\"payload\":{\"record\":{\"workspace_root\":\"C:\\\\Proj\",\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}\n{\"record_type\":\"event\",\"payload_type\":\"run.model.configured\",\"recorded_at\":\"2026-10-15T14:00:00Z\",\"payload\":{\"record\":{\"model_id\":\"muse-spark-1.3\",\"reasoning_effort\":\"high\"}}}\n{\"record_type\":\"event\",\"payload_type\":\"runtime.model_reconfigure.completed\",\"recorded_at\":\"2026-10-15T14:10:00Z\",\"payload\":{\"record\":{\"effective\":{\"model_id\":\"muse-spark-1.3-contributor\"}}}}\n{\"record_type\":\"event\",\"payload_type\":\"runtime.reasoning_effort_reconfigure.completed\",\"recorded_at\":\"2026-10-15T14:11:00Z\",\"payload\":{\"record\":{\"reasoning_effort\":\"max\"}}}",
+    "expected": [
+      {
+        "t": 1760529600000,
+        "model": "muse-spark-1.3",
+        "effort": "high"
+      },
+      {
+        "t": 1792073400000,
+        "model": "muse-spark-1.3-contributor",
+        "effort": "high"
+      },
+      {
+        "t": 1792073460000,
+        "model": "muse-spark-1.3-contributor",
+        "effort": "max"
+      }
+    ]
+  },
+  "museSettingsCases": [
+    {
+      "name": "muse-1-4-10-per-model-efforts-and-bad-entries-filtered",
+      "json": "{\"schema_version\":1,\"provider\":\"meta\",\"model\":\"muse-wonder-1.0\",\"model_reasoning_efforts\":{\"muse-wonder-1.0\":\"medium\",\"muse-spark-1.3\":\"xhigh\",\"bad id;\":\"low\",\"muse-spark-1.2\":\"turbo\"}}",
+      "probeIds": [
+        "muse-wonder-1.0",
+        "muse-spark-1.3",
+        "muse-spark-1.2",
+        "bad id;"
+      ],
+      "expected": {
+        "model": "muse-wonder-1.0",
+        "effort": "medium",
+        "effortsByProbe": {
+          "muse-wonder-1.0": "medium",
+          "muse-spark-1.3": "xhigh",
+          "muse-spark-1.2": null,
+          "bad id;": null
+        }
+      }
+    },
+    {
+      "name": "nested-model-object-with-global-reasoning-effort",
+      "json": "{\"model\":{\"id\":\"muse-spark-1.3\"},\"reasoning_effort\":\"high\"}",
+      "probeIds": [
+        "muse-spark-1.3",
+        "other-model"
+      ],
+      "expected": {
+        "model": "muse-spark-1.3",
+        "effort": "high",
+        "effortsByProbe": {
+          "muse-spark-1.3": "high",
+          "other-model": "high"
+        }
+      }
+    },
+    {
+      "name": "effort-map-without-default-model",
+      "json": "{\"model_reasoning_efforts\":{\"muse-spark-1.3\":\"ultra\"}}",
+      "probeIds": [
+        "muse-spark-1.3",
+        "unknown"
+      ],
+      "expected": {
+        "model": null,
+        "effort": null,
+        "effortsByProbe": {
+          "muse-spark-1.3": "ultra",
+          "unknown": null
+        }
+      }
+    },
+    {
+      "name": "non-model-object-returns-null",
+      "json": "{\"schema_version\":1,\"model\":{\"theme\":\"dark\"}}",
+      "probeIds": [
+        "muse-spark-1.3"
+      ],
+      "expected": null
+    }
+  ],
+  "geminiCases": [
+    {
+      "name": "latest-gemini-answer-ignores-user-and-metadata",
+      "text": "{\"sessionId\":\"3f2a9c4e-8b1d-4e6f-9a7c-5d4e3b2a1f00\",\"startTime\":\"2026-10-16T10:00:00.000Z\"}\n{\"id\":\"u1\",\"timestamp\":\"2026-10-16T10:00:01.000Z\",\"type\":\"user\",\"content\":[{\"text\":\"Use gemini-2.5-flash\"}]}\n{\"id\":\"g1\",\"timestamp\":\"2026-10-16T10:00:02.000Z\",\"type\":\"gemini\",\"content\":\"On it.\",\"model\":\"gemini-3-pro-preview\"}\n{\"$set\":{\"lastUpdated\":\"2026-10-16T10:00:03.000Z\"}}",
+      "expected": {
+        "model": "gemini-3-pro-preview",
+        "effort": null,
+        "at": 1792144802000
+      }
+    },
+    {
+      "name": "user-only-returns-null",
+      "text": "{\"type\":\"user\",\"content\":\"gemini-3-flash\"}",
+      "expected": null
+    }
+  ],
+  "qwenCases": [
+    {
+      "name": "latest-assistant-answer",
+      "text": "{\"type\":\"user\",\"timestamp\":\"2026-10-16T10:00:01.000Z\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"timestamp\":\"2026-10-16T10:00:02.000Z\",\"model\":\"qwen3-coder-plus\",\"message\":{\"role\":\"model\"}}",
+      "expected": {
+        "model": "qwen3-coder-plus",
+        "effort": null,
+        "at": 1792144802000
+      }
+    }
+  ],
+  "kimiWireCases": [
+    {
+      "name": "bind-then-model-and-effort-updates",
+      "tail": "{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1792144800000}\n{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"profileName\":\"default\",\"thinkingEffort\":\"high\",\"systemPrompt\":\"You are Kimi Code.\",\"disallowedTools\":[],\"time\":1792144800000}\n{\"type\":\"config.update\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/kimi-k2-turbo\",\"thinkingEffort\":\"high\",\"time\":1792144805000}\n{\"type\":\"config.update\",\"agentId\":\"main\",\"thinkingEffort\":\"max\",\"time\":1792144809000}",
+      "head": "",
+      "expected": {
+        "model": "kimi-code/kimi-k2-turbo",
+        "effort": "max",
+        "at": 1792144809000
+      }
+    },
+    {
+      "name": "thinking-off-maps-to-none",
+      "tail": "{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"profileName\":\"default\",\"thinkingEffort\":\"off\",\"systemPrompt\":\"You are Kimi Code.\",\"disallowedTools\":[],\"time\":1792144800000}",
+      "head": "",
+      "expected": {
+        "model": "kimi-code/kimi-for-coding",
+        "effort": "none",
+        "at": 1792144800000
+      }
+    },
+    {
+      "name": "thinking-on-maps-to-null",
+      "tail": "{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"my/model\",\"profileName\":\"default\",\"thinkingEffort\":\"on\",\"systemPrompt\":\"You are Kimi Code.\",\"disallowedTools\":[],\"time\":1792144800000}",
+      "head": "",
+      "expected": {
+        "model": "my/model",
+        "effort": null,
+        "at": 1792144800000
+      }
+    },
+    {
+      "name": "truncated-head-bind-plus-tail-effort-update",
+      "tail": "{\"type\":\"config.update\",\"agentId\":\"main\",\"thinkingEffort\":\"high\",\"time\":1792144801000}",
+      "head": "{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"profileName\":\"default\",\"thinkingEffort\":\"low\",\"systemPrompt\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+      "expected": {
+        "model": "kimi-code/kimi-for-coding",
+        "effort": "high",
+        "at": 1792144801000
+      }
+    },
+    {
+      "name": "truncated-head-bind-alone",
+      "tail": "",
+      "head": "{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"profileName\":\"default\",\"thinkingEffort\":\"low\",\"systemPrompt\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+      "expected": {
+        "model": "kimi-code/kimi-for-coding",
+        "effort": "low"
+      }
+    }
+  ],
+  "kimiConfigCases": [
+    {
+      "name": "full-config-with-thinking-and-display-name",
+      "toml": "default_model = \"kimi-code/kimi-for-coding\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"node x.cjs\"\n\n[thinking]\nenabled = true\neffort = \"high\" # its default\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\ndisplay_name = \"Kimi K2.6\"\nmax_context_size = 262144",
+      "expected": {
+        "model": "kimi-code/kimi-for-coding",
+        "name": "Kimi K2.6",
+        "effort": "high"
+      }
+    },
+    {
+      "name": "thinking-disabled-maps-to-none",
+      "toml": "default_model = \"x\"\n[thinking]\nenabled = false\n",
+      "expected": {
+        "model": "x",
+        "effort": "none"
+      }
+    },
+    {
+      "name": "no-default-model-returns-null",
+      "toml": "[thinking]\neffort = \"high\"\n",
+      "expected": null
+    }
+  ],
+  "piWireCases": [
+    {
+      "name": "initial-session-and-assistant-answer",
+      "tail": "{\"type\":\"session\",\"version\":3,\"id\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"cwd\":\"C:\\\\Proj\"}\n{\"type\":\"model_change\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"provider\":\"openai-codex\",\"modelId\":\"gpt-5.4\"}\n{\"type\":\"thinking_level_change\",\"id\":\"e2\",\"parentId\":\"e1\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"thinkingLevel\":\"low\"}\n{\"type\":\"message\",\"id\":\"e3\",\"parentId\":\"e2\",\"timestamp\":\"2026-10-16T10:00:05.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Switch to claude-opus-5\"}]}}\n{\"type\":\"message\",\"id\":\"e4\",\"parentId\":\"e3\",\"timestamp\":\"2026-10-16T10:00:09.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}],\"provider\":\"openai-codex\",\"model\":\"gpt-5.4\"}}",
+      "head": "",
+      "expected": {
+        "model": "openai-codex/gpt-5.4",
+        "effort": "low",
+        "at": 1792144809000
+      }
+    },
+    {
+      "name": "later-model-and-thinking-off",
+      "tail": "{\"type\":\"session\",\"version\":3,\"id\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"cwd\":\"C:\\\\Proj\"}\n{\"type\":\"model_change\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"provider\":\"openai-codex\",\"modelId\":\"gpt-5.4\"}\n{\"type\":\"thinking_level_change\",\"id\":\"e2\",\"parentId\":\"e1\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"thinkingLevel\":\"low\"}\n{\"type\":\"message\",\"id\":\"e3\",\"parentId\":\"e2\",\"timestamp\":\"2026-10-16T10:00:05.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Switch to claude-opus-5\"}]}}\n{\"type\":\"message\",\"id\":\"e4\",\"parentId\":\"e3\",\"timestamp\":\"2026-10-16T10:00:09.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}],\"provider\":\"openai-codex\",\"model\":\"gpt-5.4\"}}\n{\"type\":\"model_change\",\"timestamp\":\"2026-10-16T10:00:20.000Z\",\"provider\":\"anthropic\",\"modelId\":\"claude-opus-5-5\"}\n{\"type\":\"thinking_level_change\",\"timestamp\":\"2026-10-16T10:00:21.000Z\",\"thinkingLevel\":\"off\"}",
+      "head": "",
+      "expected": {
+        "model": "anthropic/claude-opus-5-5",
+        "effort": "none",
+        "at": 1792144821000
+      }
+    },
+    {
+      "name": "long-session-keeps-head-thinking-level",
+      "tail": "{\"type\":\"message\",\"id\":\"e4\",\"parentId\":\"e3\",\"timestamp\":\"2026-10-16T10:00:09.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}],\"provider\":\"openai-codex\",\"model\":\"gpt-5.4\"}}",
+      "head": "{\"type\":\"session\",\"version\":3,\"id\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"cwd\":\"C:\\\\Proj\"}\n{\"type\":\"model_change\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"provider\":\"openai-codex\",\"modelId\":\"gpt-5.4\"}\n{\"type\":\"thinking_level_change\",\"id\":\"e2\",\"parentId\":\"e1\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"thinkingLevel\":\"low\"}",
+      "expected": {
+        "model": "openai-codex/gpt-5.4",
+        "effort": "low",
+        "at": 1792144809000
+      }
+    }
+  ],
+  "piTimeline": {
+    "lines": [
+      "{\"type\":\"session\",\"version\":3,\"id\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"cwd\":\"C:\\\\Proj\"}",
+      "{\"type\":\"model_change\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"provider\":\"openai-codex\",\"modelId\":\"gpt-5.4\"}",
+      "{\"type\":\"thinking_level_change\",\"id\":\"e2\",\"parentId\":\"e1\",\"timestamp\":\"2026-10-16T10:00:00.000Z\",\"thinkingLevel\":\"low\"}",
+      "{\"type\":\"message\",\"id\":\"e3\",\"parentId\":\"e2\",\"timestamp\":\"2026-10-16T10:00:05.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Switch to claude-opus-5\"}]}}",
+      "{\"type\":\"message\",\"id\":\"e4\",\"parentId\":\"e3\",\"timestamp\":\"2026-10-16T10:00:09.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}],\"provider\":\"openai-codex\",\"model\":\"gpt-5.4\"}}",
+      "{\"type\":\"model_change\",\"timestamp\":\"2026-10-16T10:00:20.000Z\",\"provider\":\"anthropic\",\"modelId\":\"claude-opus-5-5\"}",
+      "{\"type\":\"thinking_level_change\",\"timestamp\":\"2026-10-16T10:00:21.000Z\",\"thinkingLevel\":\"off\"}"
+    ],
+    "expected": [
+      {
+        "t": 1792144800000,
+        "model": "openai-codex/gpt-5.4",
+        "effort": null
+      },
+      {
+        "t": 1792144800000,
+        "model": "openai-codex/gpt-5.4",
+        "effort": "low"
+      },
+      {
+        "t": 1792144820000,
+        "model": "anthropic/claude-opus-5-5",
+        "effort": "low"
+      },
+      {
+        "t": 1792144821000,
+        "model": "anthropic/claude-opus-5-5",
+        "effort": "none"
+      }
+    ]
+  },
+  "opencodeSessionCases": [
+    {
+      "name": "assistant-message-inherits-column-effort-when-same-model",
+      "column": "{\"id\":\"deepseek-v4.1-flash-free\",\"providerID\":\"opencode\",\"variant\":\"high\"}",
+      "rows": [
+        {
+          "data": "{\"role\":\"assistant\",\"modelID\":\"deepseek-v4.1-flash-free\",\"providerID\":\"opencode\",\"mode\":\"build\"}",
+          "time_created": 5
+        }
+      ],
+      "updated": null,
+      "expected": {
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "effort": "high",
+        "at": 5
+      }
+    },
+    {
+      "name": "user-message-default-variant-clears-effort",
+      "column": "{\"id\":\"deepseek-v4.1-flash-free\",\"providerID\":\"opencode\",\"variant\":\"high\"}",
+      "rows": [
+        {
+          "data": "{\"role\":\"user\",\"model\":{\"providerID\":\"opencode\",\"modelID\":\"big-pickle\",\"variant\":\"default\"}}",
+          "time_created": 6
+        }
+      ],
+      "updated": null,
+      "expected": {
+        "model": "opencode/big-pickle",
+        "effort": null,
+        "at": 6
+      }
+    },
+    {
+      "name": "empty-messages-falls-back-to-session-column",
+      "column": "{\"id\":\"deepseek-v4.1-flash-free\",\"providerID\":\"opencode\",\"variant\":\"high\"}",
+      "rows": [],
+      "updated": 7,
+      "expected": {
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "effort": "high",
+        "at": 7
+      }
+    }
+  ],
+  "clineCases": [
+    {
+      "name": "prefers-matching-cwd-over-newer-other-folder",
+      "cwd": "C:/Proj/",
+      "expected": {
+        "model": "deepseek/deepseek-v4-flash",
+        "effort": null,
+        "at": 1790449200000
+      }
+    },
+    {
+      "name": "falls-back-to-running-other-folder",
+      "cwd": "C:\\Nowhere",
+      "expected": {
+        "model": "other-folder",
+        "effort": null,
+        "at": 1790450940000
+      }
+    }
+  ],
+  "continueCases": [
+    {
+      "name": "default-picks-first-chat-model-skipping-embed",
+      "selected": null,
+      "yaml": "name: Local Config\nversion: 1.0.0\nschema: v1\nmodels:\n  - name: \"Embedder\"\n    provider: ollama\n    model: nomic-embed-text\n    roles: [embed]\n  - name: Claude Opus 4.6\n    provider: anthropic\n    model: claude-opus-4-6\n    roles:\n      - chat\n      - edit\n  - name: Autodetect\n    provider: ollama\n    model: AUTODETECT",
+      "expected": {
+        "model": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "effort": null
+      }
+    },
+    {
+      "name": "autodetect-uses-display-name-as-model",
+      "selected": "Autodetect",
+      "yaml": "name: Local Config\nversion: 1.0.0\nschema: v1\nmodels:\n  - name: \"Embedder\"\n    provider: ollama\n    model: nomic-embed-text\n    roles: [embed]\n  - name: Claude Opus 4.6\n    provider: anthropic\n    model: claude-opus-4-6\n    roles:\n      - chat\n      - edit\n  - name: Autodetect\n    provider: ollama\n    model: AUTODETECT",
+      "expected": {
+        "model": "Autodetect",
+        "name": "Autodetect",
+        "effort": null
+      }
+    },
+    {
+      "name": "unlisted-selected-name-used-directly",
+      "selected": "Custom Pick",
+      "yaml": "name: Local Config\nversion: 1.0.0\nschema: v1\nmodels:\n  - name: \"Embedder\"\n    provider: ollama\n    model: nomic-embed-text\n    roles: [embed]\n  - name: Claude Opus 4.6\n    provider: anthropic\n    model: claude-opus-4-6\n    roles:\n      - chat\n      - edit\n  - name: Autodetect\n    provider: ollama\n    model: AUTODETECT",
+      "expected": {
+        "model": "Custom Pick",
+        "name": "Custom Pick",
+        "effort": null
+      }
+    }
+  ],
+  "miscConfigCases": {
+    "piSettings": {
+      "model": "anthropic/claude-sonnet-5",
+      "effort": "medium"
+    },
+    "openclawString": {
+      "model": "anthropic/claude-opus-5",
+      "effort": null
+    },
+    "openclawPrimary": {
+      "model": "openai-codex/gpt-5.4",
+      "effort": null
+    },
+    "droidSettings": {
+      "model": "gpt-5.1-codex",
+      "effort": "high"
+    },
+    "crushConfig": {
+      "model": "gpt-5.1",
+      "effort": "high"
+    },
+    "gooseConfig": {
+      "model": "claude-sonnet-4-5",
+      "effort": null
+    },
+    "aiderConfig": {
+      "model": "o4-mini",
+      "effort": "high"
+    },
+    "vibeConfig": {
+      "model": "devstral-2",
+      "effort": null
+    },
+    "grokSummary": {
+      "model": "grok-4-code",
+      "effort": "high",
+      "at": 1792144812000
+    },
+    "grokCatalog": {
+      "name": "Grok 4 Code",
+      "effort": "medium"
+    },
+    "grokConfig": {
+      "model": "grok-4-code",
+      "effort": "xhigh"
+    }
+  },
+  "commandCases": [
+    {
+      "command": "claude --model opus --effort high",
+      "model": "opus",
+      "claudeEffort": "high",
+      "museEffort": "high",
+      "effortFlag": "high",
+      "ampMode": null
+    },
+    {
+      "command": "gemini -m gemini-3-pro",
+      "model": "gemini-3-pro",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "opencode --model=\"anthropic/claude-sonnet-5\"",
+      "model": "anthropic/claude-sonnet-5",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "aider -m 'o4-mini' --reasoning-effort low",
+      "model": "o4-mini",
+      "claudeEffort": null,
+      "museEffort": "low",
+      "effortFlag": "low",
+      "ampMode": null
+    },
+    {
+      "command": "codex --no-daemon",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "my-mcp-tool",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "ollama run glm-5.2:cloud",
+      "model": "glm-5.2:cloud",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "\"C:\\x\\ollama.exe\" run --keepalive 5m --verbose qwen3:8b hi",
+      "model": "qwen3:8b",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "claude ollama launch claude --model glm-5.2:cloud",
+      "model": "glm-5.2:cloud",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "ollama serve",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "claude --effort=MAX",
+      "model": null,
+      "claudeEffort": "max",
+      "museEffort": "max",
+      "effortFlag": "max",
+      "ampMode": null
+    },
+    {
+      "command": "claude --effort banana",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "muse --reasoning-effort none",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": "none",
+      "effortFlag": "none",
+      "ampMode": null
+    },
+    {
+      "command": "muse --effort=ULTRA",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": "ultra",
+      "effortFlag": "ultra",
+      "ampMode": null
+    },
+    {
+      "command": "muse --effort turbo",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "copilot --reasoning-effort=high",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": "high",
+      "effortFlag": "high",
+      "ampMode": null
+    },
+    {
+      "command": "pi --model openai/gpt-5.4 --thinking xhigh",
+      "model": "openai/gpt-5.4",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": "xhigh",
+      "ampMode": null
+    },
+    {
+      "command": "agent --thinking --model x",
+      "model": "x",
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": null
+    },
+    {
+      "command": "amp --mode deep --effort medium",
+      "model": null,
+      "claudeEffort": "medium",
+      "museEffort": "medium",
+      "effortFlag": "medium",
+      "ampMode": "deep"
+    },
+    {
+      "command": "amp --mode=free",
+      "model": null,
+      "claudeEffort": null,
+      "museEffort": null,
+      "effortFlag": null,
+      "ampMode": "free"
+    }
+  ],
+  "sameClaudeCases": [
+    {
+      "a": "claude-fable-5-1",
+      "b": "fable",
+      "expected": true
+    },
+    {
+      "a": "opus[1m]",
+      "b": "OPUS",
+      "expected": true
+    },
+    {
+      "a": "claude-opus-5-5[1m]",
+      "b": "opus[1m]",
+      "expected": true
+    },
+    {
+      "a": "claude-opus-5-5",
+      "b": "sonnet",
+      "expected": false
+    },
+    {
+      "a": "",
+      "b": "opus",
+      "expected": false
+    }
+  ],
+  "codexTomlCases": [
+    {
+      "name": "top-level-model-and-effort-ignores-profile-section",
+      "toml": "model = \"gpt-6-astra\"\nmodel_reasoning_effort = \"medium\"\n[profiles.x]\nmodel = \"o\"",
+      "expected": {
+        "model": "gpt-6-astra",
+        "effort": "medium"
+      }
+    },
+    {
+      "name": "profile-only-returns-null",
+      "toml": "[profiles.x]\nmodel = \"o\"",
+      "expected": null
+    }
+  ],
+  "cursorConfigCases": [
+    {
+      "name": "luna-272k-medium",
+      "text": "{\"model\":{\"modelId\":\"gpt-5.6-luna\",\"displayName\":\"GPT-5.6 Luna 272K Medium\"}}",
+      "expected": {
+        "model": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "effort": "medium"
+      }
+    },
+    {
+      "name": "sol-1m-extra-high-fast",
+      "text": "{\"model\":{\"modelId\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6 Sol 1M Extra High Fast\"}}",
+      "expected": {
+        "model": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol Fast",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "name": "auto-default",
+      "text": "{\"model\":{\"modelId\":\"default\",\"displayName\":\"Auto\"}}",
+      "expected": {
+        "model": "default",
+        "name": "Auto",
+        "effort": null
+      }
+    },
+    {
+      "name": "invalid-json",
+      "text": "not json",
+      "expected": null
+    },
+    {
+      "name": "bad-model-id",
+      "text": "{\"model\":{\"modelId\":\"bad id!\"}}",
+      "expected": null
+    }
+  ],
+  "claudeSettingsEffortCases": [
+    {
+      "model": "claude-fable-5-1",
+      "docs": [
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "high"
+    },
+    {
+      "model": "fable",
+      "docs": [
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "high"
+    },
+    {
+      "model": "opus[1m]",
+      "docs": [
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "xhigh"
+    },
+    {
+      "model": null,
+      "docs": [
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "xhigh"
+    },
+    {
+      "model": "sonnet",
+      "docs": [
+        "{\"modelSettings\":{\"claude-sonnet-5-5\":{\"effortLevel\":\"low\"}}}",
+        "{\"effortLevel\":\"medium\"}",
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "low"
+    },
+    {
+      "model": "opus",
+      "docs": [
+        "{\"modelSettings\":{\"claude-sonnet-5-5\":{\"effortLevel\":\"low\"}}}",
+        "{\"effortLevel\":\"medium\"}",
+        "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+      ],
+      "expected": "medium"
+    }
+  ],
+  "agentModelCases": [
+    {
+      "name": "claude-session-1m-promotion-and-different-chosen-effort",
+      "inputs": {
+        "agentId": "claude",
+        "session": {
+          "model": "claude-opus-5-5",
+          "effort": null,
+          "at": 1790877408645
+        },
+        "command": "claude",
+        "chosenModel": "fable",
+        "claudeSettingsDocs": [
+          "{\"model\":\"opus[1m]\",\"effortLevel\":\"xhigh\",\"modelSettings\":{\"claude-fable-5-1\":{\"effortLevel\":\"high\"}}}"
+        ]
+      },
+      "expected": {
+        "found": {
+          "model": "claude-opus-5-5[1m]",
+          "effort": "xhigh",
+          "chosenEffort": "high",
+          "source": "session",
+          "at": 1790877408645
+        },
+        "chosenEffort": "high"
+      }
+    },
+    {
+      "name": "claude-chosen-effort-without-any-resolved-model",
+      "inputs": {
+        "agentId": "claude",
+        "command": "claude",
+        "chosenModel": "opus",
+        "claudeSettingsDocs": [
+          "{\"effortLevel\":\"xhigh\"}"
+        ]
+      },
+      "expected": {
+        "found": null,
+        "chosenEffort": "xhigh"
+      }
+    },
+    {
+      "name": "antigravity-effort-flag-alone-uses-saved-settings-model",
+      "inputs": {
+        "agentId": "antigravity",
+        "command": "agy --effort low",
+        "antigravitySettingsJson": "{\"model\":\"Gemini 4 Argon (High)\"}"
+      },
+      "expected": {
+        "found": {
+          "model": "Gemini 4 Argon",
+          "name": "Gemini 4 Argon",
+          "effort": "low",
+          "source": "command"
+        }
+      }
+    },
+    {
+      "name": "antigravity-session-beats-command-and-settings",
+      "inputs": {
+        "agentId": "antigravity",
+        "session": {
+          "model": "Claude Opus 5.5 (Medium)",
+          "name": "Claude Opus 5.5",
+          "effort": "medium",
+          "at": 1792066311000
+        },
+        "command": "agy --model gemini-4-argon",
+        "antigravitySettingsJson": "{\"model\":\"Gemini 4 Argon (High)\"}"
+      },
+      "expected": {
+        "found": {
+          "model": "Claude Opus 5.5 (Medium)",
+          "name": "Claude Opus 5.5",
+          "effort": "medium",
+          "source": "session",
+          "at": 1792066311000
+        }
+      }
+    },
+    {
+      "name": "muse-session-without-effort-inherits-per-model-settings-effort",
+      "inputs": {
+        "agentId": "muse",
+        "session": {
+          "model": "muse-spark-1.3",
+          "effort": null,
+          "at": 1792072800000
+        },
+        "command": "muse",
+        "museSettingsJson": "{\"model\":\"muse-wonder-1.0\",\"model_reasoning_efforts\":{\"muse-wonder-1.0\":\"medium\",\"muse-spark-1.3\":\"xhigh\"}}"
+      },
+      "expected": {
+        "found": {
+          "model": "muse-spark-1.3",
+          "effort": "xhigh",
+          "source": "session",
+          "at": 1792072800000
+        }
+      }
+    },
+    {
+      "name": "cline-newer-settings-mtime-overrides-older-live-session",
+      "inputs": {
+        "agentId": "cline",
+        "session": {
+          "model": "old/session-model",
+          "effort": null,
+          "at": 1790449200000
+        },
+        "clineProvidersDoc": {
+          "text": "{\"version\":1,\"lastUsedProvider\":\"cline\",\"providers\":{\"cline\":{\"settings\":{\"model\":\"cline-free/deepseek-v4.1-flash\",\"reasoning\":{\"enabled\":true,\"effort\":\"medium\"}}}}}",
+          "mtimeMs": 1790452800000
+        }
+      },
+      "expected": {
+        "found": {
+          "model": "cline-free/deepseek-v4.1-flash",
+          "effort": "medium",
+          "source": "settings"
+        }
+      }
+    },
+    {
+      "name": "opencode-picked-after-session-message-beats-session-and-command",
+      "inputs": {
+        "agentId": "opencode",
+        "session": {
+          "model": "opencode/mimo",
+          "effort": "max",
+          "at": 1760000040000
+        },
+        "command": "opencode --model opencode/other",
+        "launchedAtMs": 1760000010000,
+        "picked": {
+          "model": "opencode/big-pickle",
+          "effort": "high",
+          "mtimeMs": 1760000050000
+        }
+      },
+      "expected": {
+        "found": {
+          "model": "opencode/big-pickle",
+          "effort": "high",
+          "source": "picked"
+        }
+      }
+    },
+    {
+      "name": "kimi-session-wire-enriched-with-config-toml-display-name",
+      "inputs": {
+        "agentId": "kimi",
+        "session": {
+          "model": "kimi-code/kimi-k2-turbo",
+          "effort": "low",
+          "at": 1792144804000
+        },
+        "kimiConfigToml": "default_model = \"kimi-code/kimi-for-coding\"\n[models.\"kimi-code/kimi-k2-turbo\"]\ndisplay_name = \"Kimi K2 Turbo\"\n"
+      },
+      "expected": {
+        "found": {
+          "model": "kimi-code/kimi-k2-turbo",
+          "name": "Kimi K2 Turbo",
+          "effort": "low",
+          "source": "session",
+          "at": 1792144804000
+        }
+      }
+    },
+    {
+      "name": "amp-mode-from-command-and-effort-flag",
+      "inputs": {
+        "agentId": "amp",
+        "command": "amp --mode deep --effort high"
+      },
+      "expected": {
+        "found": {
+          "model": "deep",
+          "effort": "high",
+          "source": "command"
+        }
+      }
+    },
+    {
+      "name": "copilot-chunk-merge-answer-inherits-effort-across-512k-boundary",
+      "inputs": {
+        "agentId": "copilot",
+        "copilotChunksNewestFirst": [
+          "{\"type\":\"assistant.message\",\"data\":{\"model\":\"gpt-6-luna\",\"content\":\"Done\"},\"id\":\"e3\",\"timestamp\":\"2026-10-16T10:00:03.000Z\",\"parentId\":null}",
+          "{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"auto\",\"reasoningEffort\":\"high\"},\"id\":\"e1\",\"timestamp\":\"2026-10-16T10:00:01.000Z\",\"parentId\":null}"
+        ]
+      },
+      "expected": {
+        "found": {
+          "model": "gpt-6-luna",
+          "effort": "high",
+          "source": "session",
+          "at": 1792144803000
+        }
+      }
+    },
+    {
+      "name": "opencode-jsonc-comments-url-and-trailing-comma",
+      "inputs": {
+        "agentId": "opencode",
+        "opencodeConfigDocs": [
+          "{\n  // user config with URL https://example.com//keep-this\n  \"$schema\": \"https://opencode.ai/config.json\",\n  /* block comment */\n  \"model\": \"anthropic/claude-sonnet-5\",\n  \"agent\": { \"build\": { \"variant\": \"high\", }, },\n}"
+        ]
+      },
+      "expected": {
+        "found": {
+          "model": "anthropic/claude-sonnet-5",
+          "effort": null,
+          "source": "settings"
+        }
+      }
+    }
+  ],
+  "headerRefreshCases": [
+    {
+      "scenario": {
+        "name": "cursor-screen-overrides-session-clears-optimistic-and-keeps-separate-session-model",
+        "catalogKey": "cursor",
+        "node": {
+          "agentId": "cursor",
+          "modelChoice": {
+            "model": "auto",
+            "effort": null,
+            "at": 100
+          }
+        },
+        "screenLines": [
+          "  → Plan, search, build anything",
+          "  Composer 2.5 272K · 12.5%"
+        ],
+        "agentModelResult": {
+          "model": "default",
+          "name": "Auto",
+          "source": "settings"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "composer-2.5",
+          "name": "Composer 2.5",
+          "effort": null,
+          "source": "screen"
+        },
+        "sessionModel": "default",
+        "screenContext": {
+          "usedTokens": 34000,
+          "windowTokens": 272000,
+          "percentage": 13
+        },
+        "modelChoice": null,
+        "toSave": {
+          "model": "composer-2.5",
+          "name": "Composer 2.5"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "cursor-open-picker-freezes-previous-shown-model",
+        "catalogKey": "cursor",
+        "node": {
+          "agentId": "cursor"
+        },
+        "currentAgentModel": {
+          "model": "composer-2.5",
+          "name": "Composer 2.5",
+          "effort": null,
+          "source": "screen"
+        },
+        "screenLines": [
+          "Available models",
+          "Type to filter · Enter to select"
+        ],
+        "agentModelResult": {
+          "model": "default",
+          "name": "Auto",
+          "source": "settings"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "composer-2.5",
+          "name": "Composer 2.5",
+          "effort": null,
+          "source": "screen"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "composer-2.5",
+          "name": "Composer 2.5"
+        },
+        "frozeOnPicker": true
+      }
+    },
+    {
+      "scenario": {
+        "name": "cursor-context-cleared-on-new-conversation-placeholder",
+        "catalogKey": "cursor",
+        "node": {
+          "agentId": "cursor"
+        },
+        "currentScreenContext": {
+          "pct": null,
+          "window": "272K",
+          "hover": null
+        },
+        "screenLines": [
+          "  → Plan, search, build anything",
+          "  Auto"
+        ],
+        "agentModelResult": {
+          "model": "default",
+          "name": "Auto",
+          "source": "settings"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "auto",
+          "name": "Auto",
+          "effort": null,
+          "source": "screen"
+        },
+        "sessionModel": "default",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "auto",
+          "name": "Auto"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "codex-footer-screen-wins-and-live-share-session-model-stays-rollout-only",
+        "catalogKey": "codex",
+        "node": {
+          "agentId": "codex",
+          "modelChoice": {
+            "model": "gpt-5.4-mini",
+            "effort": "low",
+            "at": 100
+          }
+        },
+        "screenLines": [
+          "› Ask Codex anything",
+          "",
+          "GPT-5.3-Codex high · C:\\Proj"
+        ],
+        "agentModelResult": {
+          "model": "gpt-5.4",
+          "effort": "medium",
+          "source": "session"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "gpt-5.3-codex",
+          "effort": "high",
+          "source": "screen"
+        },
+        "sessionModel": "gpt-5.4",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "gpt-5.3-codex",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "antigravity-listed-enriches-variant-id-from-command",
+        "catalogKey": "antigravity",
+        "node": {
+          "agentId": "antigravity"
+        },
+        "screenLines": [],
+        "agentModelResult": {
+          "model": "gemini-4-argon-high",
+          "effort": null,
+          "source": "command"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "gemini-4-argon",
+          "effort": "high",
+          "source": "command",
+          "name": "Gemini 4 Argon"
+        },
+        "sessionModel": "gemini-4-argon-high",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "gemini-4-argon",
+          "name": "Gemini 4 Argon",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "keep-flag-preserves-current-shown-model-on-transient-failure",
+        "catalogKey": "claude",
+        "node": {
+          "agentId": "claude"
+        },
+        "currentAgentModel": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "source": "session"
+        },
+        "currentSessionModel": "claude-opus-5-5",
+        "screenLines": [],
+        "agentModelResult": {
+          "keep": true
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "source": "session"
+        },
+        "sessionModel": "claude-opus-5-5",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "keep-flag-with-no-current-model-falls-back-to-screen-banner",
+        "catalogKey": "claude",
+        "node": {
+          "agentId": "claude"
+        },
+        "currentAgentModel": null,
+        "screenLines": [
+          "Claude Code v2.1 · claude-opus-5-5"
+        ],
+        "agentModelResult": {
+          "keep": true
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "claude-opus-5-5",
+          "effort": null,
+          "source": "screen"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "claude-opus-5-5"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "non-own-name-agent-kimi-uses-catalog-label-while-muse-keeps-product-label",
+        "catalogKey": "kimi",
+        "node": {
+          "agentId": "kimi"
+        },
+        "screenLines": [],
+        "agentModelResult": {
+          "model": "kimi-code/kimi-for-coding",
+          "effort": "high",
+          "source": "session"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "kimi-code/kimi-for-coding",
+          "effort": "high",
+          "source": "session",
+          "name": "Kimi K2.6"
+        },
+        "sessionModel": "kimi-code/kimi-for-coding",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "kimi-code/kimi-for-coding",
+          "name": "Kimi K2.6",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "muse-label-equal-to-id-is-not-copied-into-name-and-footer-fills-missing-effort",
+        "catalogKey": "muse",
+        "node": {
+          "agentId": "muse"
+        },
+        "screenLines": [
+          "muse-wonder-1.0 · medium · C:\\Proj · YOLO"
+        ],
+        "agentModelResult": {
+          "model": "muse-wonder-1.0",
+          "effort": null,
+          "source": "session"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "muse-wonder-1.0",
+          "effort": "medium",
+          "source": "session"
+        },
+        "sessionModel": "muse-wonder-1.0",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "muse-wonder-1.0",
+          "effort": "medium"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "muse-footer-provides-screen-model-before-any-session-file",
+        "catalogKey": "muse",
+        "node": {
+          "agentId": "muse"
+        },
+        "screenLines": [
+          "muse-wonder-1.0 · high · C:\\Proj"
+        ],
+        "agentModelResult": null
+      },
+      "expected": {
+        "agentModel": {
+          "model": "muse-wonder-1.0",
+          "effort": "high",
+          "source": "screen"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "muse-wonder-1.0",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "claude-switched-on-screen-overrides-settings-and-promotes-version",
+        "catalogKey": "claude",
+        "node": {
+          "agentId": "claude"
+        },
+        "screenLines": [],
+        "scrollbackLines": [
+          "> /model sonnet",
+          "  ⎿  Set model to sonnet (claude-sonnet-5-5)"
+        ],
+        "agentModelResult": {
+          "model": "opus",
+          "effort": "xhigh",
+          "source": "settings"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "claude-sonnet-5-5",
+          "effort": "xhigh",
+          "source": "screen"
+        },
+        "sessionModel": "opus",
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "claude-sonnet-5-5",
+          "effort": "xhigh"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "claude-chosen-alias-promoted-by-session-version",
+        "catalogKey": "claude",
+        "node": {
+          "agentId": "claude",
+          "sessionOptions": {
+            "model": "opus"
+          }
+        },
+        "screenLines": [],
+        "scrollbackLines": [
+          "  ⎿  Set model to opus (claude-opus-5-5)"
+        ],
+        "agentModelResult": {
+          "model": null,
+          "effort": null,
+          "source": null,
+          "chosenEffort": "xhigh"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "source": "chosen"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "claude-screen-banner-inherits-chosen-effort-when-no-file-model",
+        "catalogKey": "claude",
+        "node": {
+          "agentId": "claude"
+        },
+        "screenLines": [
+          "Claude Code v2.1 · claude-opus-5-5"
+        ],
+        "agentModelResult": {
+          "model": null,
+          "effort": null,
+          "source": null,
+          "chosenEffort": "high"
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "source": "screen"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": {
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        "frozeOnPicker": false
+      }
+    },
+    {
+      "scenario": {
+        "name": "saved-placeholder-never-triggers-pane-model-to-save",
+        "catalogKey": "codex",
+        "node": {
+          "agentId": "codex"
+        },
+        "currentAgentModel": {
+          "model": "gpt-5.4",
+          "effort": "high",
+          "source": "saved"
+        },
+        "screenLines": [],
+        "agentModelResult": {
+          "keep": true
+        }
+      },
+      "expected": {
+        "agentModel": {
+          "model": "gpt-5.4",
+          "effort": "high",
+          "source": "saved"
+        },
+        "sessionModel": null,
+        "screenContext": null,
+        "modelChoice": null,
+        "toSave": null,
+        "frozeOnPicker": false
+      }
+    }
+  ]
+}

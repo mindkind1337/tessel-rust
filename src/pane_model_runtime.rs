@@ -45,7 +45,7 @@ impl Runtime {
         wake: impl FnOnce() + Send + 'static,
     ) -> Option<&ShownAgentModel> {
         let scope = profile
-            .filter(|p| p.agent() == "codex")
+            .filter(|p| matches!(p.agent(), "codex" | "claude" | "openclaude"))
             .zip(conversation.filter(|id| crate::claude::valid_uuid(id)))
             .map(|(profile, id)| (profile.clone(), id.to_owned()));
         if self.scope != scope {
@@ -68,7 +68,7 @@ impl Runtime {
             now >= self.refresh_at || (revision != self.read_revision && now >= self.quiet_at);
         if due && now >= self.retry_at && !self.worker.busy() {
             let scope = scope.clone();
-            match self.worker.start(move || read_codex(&scope), wake) {
+            match self.worker.start(move || read_session(&scope), wake) {
                 Ok(true) => {
                     self.refresh_at = now + Duration::from_secs(20);
                     self.read_revision = revision;
@@ -81,7 +81,19 @@ impl Runtime {
     }
 }
 
-fn read_codex((profile, id): &Scope) -> Result<Option<ShownAgentModel>, Failure> {
+fn read_session((profile, id): &Scope) -> Result<Option<ShownAgentModel>, Failure> {
+    if matches!(profile.agent(), "claude" | "openclaude") {
+        let Some(mut file) =
+            crate::claude_model_file::open_verified(profile.root(), profile.cwd(), id)
+                .map_err(|_| Failure::Io)?
+        else {
+            return Ok(None);
+        };
+        let text = crate::pane_model_worker::read_jsonl_tail_file(&mut file, 256 * 1024)?;
+        return Ok(
+            crate::agent_model_readers::claude_turn_from_text(&text).and_then(shown_metadata)
+        );
+    }
     let Some(mut file) = crate::codex_sessions::open_verified(profile.root(), profile.cwd(), id)
         .map_err(|_| Failure::Io)?
     else {
@@ -90,62 +102,24 @@ fn read_codex((profile, id): &Scope) -> Result<Option<ShownAgentModel>, Failure>
     crate::pane_model_log::latest(&mut file, codex_turn)
 }
 
-// Temporary integration adapter for the source codexModelFromText contract.
-// Replace with Franklin's shared reader when its differential fixture lands.
 fn codex_turn(text: &str) -> Option<ShownAgentModel> {
-    text.lines().rev().find_map(|line| {
-        if line.len() > 2 * 1024 * 1024 || !line.contains("\"model\"") {
-            return None;
-        }
-        let value: serde_json::Value = serde_json::from_str(line).ok()?;
-        let payload = value.get("payload")?;
-        let (model, effort) =
-            if value.get("type").and_then(|value| value.as_str()) == Some("turn_context") {
-                (
-                    payload.get("model")?,
-                    payload
-                        .get("effort")
-                        .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-                        .or_else(|| {
-                            payload
-                                .get("reasoning_effort")
-                                .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-                        })
-                        .or_else(|| {
-                            payload
-                                .get("collaboration_mode")?
-                                .get("settings")?
-                                .get("reasoning_effort")
-                        }),
-                )
-            } else if payload.get("type")?.as_str()? == "thread_settings_applied" {
-                let settings = payload.get("thread_settings")?;
-                (
-                    settings.get("model")?,
-                    settings
-                        .get("reasoning_effort")
-                        .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-                        .or_else(|| settings.get("effort")),
-                )
-            } else {
-                return None;
-            };
-        let clean = crate::pane_session_model::saved_pane_model(Some(
-            &serde_json::json!({"model":model,"effort":effort}),
-        ))?;
-        let at = value
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .and_then(|t| u64::try_from(t.timestamp_millis()).ok());
-        Some(ShownAgentModel {
-            model: clean.model,
-            name: None,
-            effort: clean.effort,
-            chosen_effort: None,
-            source: ModelSource::Session,
-            at,
-        })
+    crate::agent_model_readers::codex_model_from_text(text).and_then(shown_metadata)
+}
+
+fn shown_metadata(found: crate::agent_model_readers::FoundModel) -> Option<ShownAgentModel> {
+    let clean = crate::pane_session_model::saved_pane_model(Some(
+        &serde_json::json!({"model":found.model,"name":found.name,"effort":found.effort}),
+    ))?;
+    Some(ShownAgentModel {
+        model: clean.model,
+        name: clean.name,
+        effort: clean.effort,
+        chosen_effort: None,
+        source: ModelSource::Session,
+        at: found
+            .at
+            .and_then(|t| u64::try_from(t).ok())
+            .filter(|t| *t > 0),
     })
 }
 
@@ -176,7 +150,7 @@ mod tests {
     fn reads_only_the_verified_profile_and_preserves_provenance() {
         let dir = tempfile::tempdir().unwrap();
         let (profile, _) = fixture(dir.path(), "gpt-5.6-sol");
-        let model = read_codex(&(profile, ID.into())).unwrap().unwrap();
+        let model = read_session(&(profile, ID.into())).unwrap().unwrap();
         assert_eq!(model.model, "gpt-5.6-sol");
         assert_eq!(model.effort.as_deref(), Some("high"));
         assert_eq!(model.source, ModelSource::Session);
@@ -188,6 +162,39 @@ mod tests {
             codex_turn("{\"type\":\"tool_output\",\"payload\":{\"model\":\"not-a-turn\"}}")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn claude_profiles_read_only_verified_main_turns_and_sanitize_metadata() {
+        for agent in ["claude", "openclaude"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join(agent);
+            let project = root.join("projects/synthetic");
+            fs::create_dir_all(&project).unwrap();
+            let turn = serde_json::json!({"type":"assistant", "sessionId":ID, "cwd":dir.path(),
+                "message":{"model":"claude-opus-4-8"},"perTurnEffort":"high"});
+            let side = serde_json::json!({"type":"assistant", "isSidechain":true,
+                "message":{"model":"unrelated-subagent"},"perTurnEffort":"low"});
+            fs::write(
+                project.join(format!("{ID}.jsonl")),
+                format!("{turn}\n{side}\n"),
+            )
+            .unwrap();
+            let mut command = portable_pty::CommandBuilder::new("synthetic");
+            command.env_clear();
+            command.cwd(dir.path());
+            command.env("CLAUDE_CONFIG_DIR", &root);
+            let profile = Profile::capture(agent, &command, dir.path()).unwrap();
+            let found = read_session(&(profile, ID.into())).unwrap().unwrap();
+            assert_eq!(found.model, "claude-opus-4-8");
+            assert_eq!(found.effort.as_deref(), Some("high"));
+            assert_eq!(found.source, ModelSource::Session);
+        }
+        let bad_effort = format!(
+            "{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"model\",\"effort\":\"{}\"}}}}",
+            "x".repeat(1024)
+        );
+        assert!(codex_turn(&bad_effort).unwrap().effort.is_none());
     }
 
     #[test]

@@ -345,12 +345,21 @@ console.log(JSON.stringify({models:[{slug:'synthetic-model',display_name:'Synthe
         let cache = dir.path().join("cache");
         let mut state = Discovery::open(&cache);
         assert!(state.refresh("codex", shim.to_str().unwrap(), || {}));
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // Production permits 20 s for resolution, then 60 s for the listing.
+        // The outer assertion must allow both bounded phases plus cache IO,
+        // especially on Windows CI with cold process/security-scanner caches.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
         while state.active() && std::time::Instant::now() < until {
             state.poll();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(!state.active());
+        assert!(
+            !state.active(),
+            "listing worker exceeded its combined budgets: busy={}, saving={}, error={:?}",
+            state.busy("codex"),
+            state.saving(),
+            state.error("codex")
+        );
         assert_eq!(state.error("codex"), None);
         let restored = Discovery::open(&cache);
         let models = restored.models("codex").unwrap();
