@@ -40,6 +40,7 @@ mod chat;
 mod chrome;
 mod claude;
 mod claude_terminal;
+pub mod codex_sessions;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;

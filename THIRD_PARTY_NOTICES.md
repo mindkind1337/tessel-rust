@@ -18,6 +18,10 @@ The pure conversation resume planner in `src/agent_resume.rs` adapts Tessel's
 the vendored Orca `agent-session-resume.js`. Its source-comparison fixture uses
 synthetic session identifiers and paths only.
 
+The bounded Codex metadata discovery in `src/codex_sessions.rs` adapts the folder,
+launch-time and exclusion policy in Tessel's `src/main/agentSessions.js`.
+Its tests use temporary synthetic rollouts, not user conversation records.
+
 The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
 `RemoteHostForm.vue`, `remoteHosts.js`, and `remoteHosts.css`, which are ported from Orca
