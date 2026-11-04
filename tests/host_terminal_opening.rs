@@ -908,11 +908,15 @@ fn an_existing_terminal_is_never_ended_by_a_cancel_and_a_new_epoch_attaches_noth
     assert!(matches!(failed(&pending), Failure::Cancelled));
     assert_eq!(host.state().closes, 0);
 
+    let kept = LeaseKey::from_bytes([0x55; 16]);
+    store.put(&existing_slot(), &kept).unwrap();
     host.state().epoch = Some(epoch(2));
-    let pending = host_opening::open(host.clone(), store, existing(true), || {})
+    let pending = host_opening::open(host.clone(), store.clone(), existing(true), || {})
         .unwrap_or_else(|failure| panic!("{}", failure.code()));
     assert!(matches!(failed(&pending), Failure::EpochChanged));
     assert_eq!(host.state().attached_with.len(), 1, "only the first attach");
+    assert_eq!(store.lease(&existing_slot()), Some(kept));
+    assert_eq!(host.state().closes, 0);
 }
 
 // ---- Cancelling an adopted terminal -----------------------------------------------------

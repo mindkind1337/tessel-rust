@@ -396,3 +396,16 @@ and cancellation of silent requests well before their 30-second deadlines.
 Seven native pane/client rendering and input tests and eleven pure panel suites
 pass, including policy notices, resynchronization notices, modal isolation and
 mouse-button release. Strict scoped all-feature Clippy passes.
+
+Epoch cleanup follow-up: an adopted native pane observes its own live Client's
+confirmed epoch even after its event stream was rejected or closed. It drops
+input authority and hands one end proof to the lease desk, without sending a
+close RPC. Mere disconnection retains the saved access. A connector's installed
+version command is immutable; opening an old slot through a new Client refuses
+before adoption and preserves its saved lease. Bulk retain_epoch is unused in
+production and must not be called on mere discovery of a different epoch.
+SSH aliases repointed to another physical host remain an identity limitation;
+version pinning alone cannot detect that change.
+
+Eight native pane/client tests, the old-slot opening regression and strict
+scoped all-feature Clippy pass. Real-server acceptance remains pending.

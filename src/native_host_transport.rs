@@ -11,6 +11,9 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct Connector {
+    // Immutable for this Client, including the installed daemon's versioned
+    // connect path. A different installation requires a new Client: terminal
+    // epoch invalidation relies on reconnections preserving this scope.
     args: Vec<String>,
 }
 struct Guard {

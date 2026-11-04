@@ -12,7 +12,8 @@
 //! returns a lease; `get` before `attach_fresh` at start; `remove` only once an ending is
 //! confirmed (`Exit` received, `close` answered, or the terminal reported gone for another
 //! epoch), never on a mere disconnection or an ambiguous failure, so the lease can still be
-//! used to recover; `retain_epoch` when the host answers with a new epoch.
+//! used to recover. Discovering another epoch alone must not call `retain_epoch`:
+//! another daemon version may coexist with the original one.
 //! Windows only, like `crate::vault`.
 use serde::{Deserialize, Serialize};
 use std::{
@@ -455,8 +456,11 @@ impl LeaseStore {
         })
     }
 
-    /// The host `alias` answered with epoch `current`: its terminals of other epochs are gone,
-    /// so are their leases. Returns how many were forgotten.
+    /// Explicit bulk cleanup only after independently establishing that all old
+    /// epochs belong to the same physical host and daemon version and have ended.
+    /// A newly discovered epoch is insufficient: versioned daemons can coexist,
+    /// and an SSH alias can be repointed. No production caller currently uses this.
+    /// Returns how many leases were forgotten.
     pub fn retain_epoch(&self, alias: &str, current: &Epoch) -> Result<usize, LeaseStoreError> {
         crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
         self.transaction(|records| {

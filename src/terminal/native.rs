@@ -490,7 +490,16 @@ impl Native {
                 }
             }
         }
-        let mut changed = false;
+        let current_epoch = self
+            .host
+            .client
+            .link()
+            .ok()
+            .and_then(|_| self.host.client.epoch());
+        let mut changed = self.observe_epoch(current_epoch);
+        if changed {
+            query_tail.clear();
+        }
         if let Some(control) = &self.control {
             while let Some(outcome) = control.outcome() {
                 match outcome {
@@ -549,7 +558,7 @@ impl Native {
                     }
                 },
             );
-            changed = previous != feed.applied;
+            changed |= previous != feed.applied;
             if feed.has_pending_work() {
                 self.repaint.request_repaint();
             }
@@ -621,6 +630,41 @@ impl Native {
         }
         if !self.writable() || self.requested_size == Some(parser.screen().size()) {
             self.requested_size = None;
+        }
+        changed
+    }
+
+    /// A rejected/closed stream no longer receives Lost events. The live host
+    /// epoch must therefore also invalidate its old authority independently of
+    /// that stream. Disconnection alone is not proof that its program ended.
+    /// This pane retains one Client whose connector command is pinned to one
+    /// daemon version. Installing another version creates another Client; an
+    /// old slot refused during opening is never adopted here. Do not feed an
+    /// epoch discovered through a different Connection into this method.
+    fn observe_epoch(&mut self, current: Option<tessel_host_protocol::Epoch>) -> bool {
+        let Some(current) = current else {
+            return false;
+        };
+        let Some(slot) = &self.slot else {
+            return false;
+        };
+        if current == slot.epoch {
+            return false;
+        }
+        let Some(feed) = &mut self.feed else {
+            return false;
+        };
+        if matches!(feed.state, host_events::State::Exited { .. }) {
+            return false;
+        }
+        let changed = feed.state != host_events::State::Lost;
+        feed.state = host_events::State::Lost;
+        feed.lease = false;
+        self.control.take();
+        self.requested_size = None;
+        if !self.end_observed {
+            self.forget = Some(host_lease_keeper::Ended::EpochChanged { current });
+            self.end_observed = true;
         }
         changed
     }

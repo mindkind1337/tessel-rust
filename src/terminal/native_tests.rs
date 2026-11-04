@@ -191,6 +191,68 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
 fn frame(terminal: &mut Terminal, ctx: &egui::Context, enabled: bool, events: Vec<egui::Event>) {
     let _ = frame_output(terminal, ctx, enabled, events);
 }
+
+#[test]
+fn new_host_epoch_invalidates_even_rejected_or_closed_streams_but_a_disconnect_does_not() {
+    for state in [
+        host_events::State::Receiving,
+        host_events::State::Disconnected,
+        host_events::State::Rejected(host_events::Rejection::InvalidData),
+        host_events::State::Closed,
+        host_events::State::Lost,
+    ] {
+        let ctx = egui::Context::default();
+        let (mut terminal, client, received) = fixture(&ctx);
+        terminal.parser.process(b"retained screen");
+        let Backend::Native(native) = &mut terminal.backend else {
+            unreachable!()
+        };
+        native.feed.as_mut().unwrap().state = state;
+        assert!(!native.observe_epoch(None));
+        assert!(!native.observe_epoch(Some(Epoch::from_bytes([7; 16]))));
+        assert!(
+            native.forget.is_none(),
+            "neither disconnection nor rejection proves an end"
+        );
+        assert!(!native.end_observed);
+        assert!(native.control.is_some());
+        native.observe_epoch(Some(Epoch::from_bytes([8; 16])));
+        assert_eq!(
+            native.feed.as_ref().unwrap().state,
+            host_events::State::Lost
+        );
+        assert!(!native.feed.as_ref().unwrap().lease);
+        assert!(native.control.is_none());
+        assert!(native.end_observed);
+        assert!(
+            matches!(&native.forget, Some(host_lease_keeper::Ended::EpochChanged { current }) if *current == Epoch::from_bytes([8; 16]))
+        );
+        assert!(!native.observe_epoch(Some(Epoch::from_bytes([8; 16]))));
+        assert!(
+            terminal
+                .parser
+                .screen()
+                .contents()
+                .contains("retained screen")
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let seen = received
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            assert_ne!(
+                seen,
+                Seen::Close,
+                "epoch observation must never terminate a remote program"
+            );
+            if seen == Seen::Detach {
+                break;
+            }
+        }
+        drop(terminal);
+        client.close();
+    }
+}
 fn frame_output(
     terminal: &mut Terminal,
     ctx: &egui::Context,
