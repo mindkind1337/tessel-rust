@@ -51,6 +51,12 @@ pub struct Terminal {
     mouse: mouse::Mouse,
     widget_id: Option<egui::Id>,
     broadcast_outbox: Vec<BroadcastInput>,
+    agent_kind: Option<String>,
+    find_open: bool,
+    find_query: String,
+    find_index: usize,
+    find_focus_pending: bool,
+    shift_context_requested: Option<egui::Pos2>,
     #[cfg(windows)]
     native_panel: crate::host_terminal_panel::HostTerminalPanel,
     #[cfg(windows)]
@@ -70,6 +76,173 @@ impl Terminal {
     }
     pub fn take_broadcast_inputs(&mut self) -> Vec<BroadcastInput> {
         std::mem::take(&mut self.broadcast_outbox)
+    }
+
+    pub fn set_agent_kind(&mut self, agent: Option<&str>) {
+        match agent {
+            Some(a) if self.agent_kind.as_deref() != Some(a) => {
+                self.agent_kind = Some(a.to_owned());
+            }
+            None => {
+                self.agent_kind = None;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection
+            .is_some_and(|s| s.start != s.end && !self.selection_text(s).is_empty())
+    }
+
+    pub fn take_selection(&mut self) -> Option<String> {
+        let selection = self.selection.filter(|s| s.start != s.end)?;
+        let text = self.selection_text(selection);
+        if text.is_empty() {
+            return None;
+        }
+        self.selection = None;
+        Some(text)
+    }
+
+    pub fn copy_selection(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(text) = self.take_selection() {
+            ctx.copy_text(text);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn paste_text(&mut self, text: &str) {
+        if !self.accepts_broadcast_input() || text.is_empty() {
+            return;
+        }
+        if text.len() > 65536 {
+            self.status = "Paste limit: 64 KiB".into();
+            return;
+        }
+        if !crate::layout_broadcast_ui::is_terminal_reply(text.as_bytes()) {
+            self.broadcast_outbox
+                .push(BroadcastInput::Paste(text.to_owned()));
+        }
+        let bytes = if self.parser.screen().bracketed_paste() {
+            format!("\x1b[200~{text}\x1b[201~").into_bytes()
+        } else {
+            text.as_bytes().to_vec()
+        };
+        self.back_to_live();
+        if let Err(error) = self.send(bytes) {
+            self.status = error;
+        }
+    }
+
+    pub fn paste_from_clipboard(&mut self) {
+        if let Some(text) = read_system_clipboard() {
+            self.paste_text(&text);
+        }
+    }
+
+    pub fn clear_screen(&mut self) {
+        self.selection = None;
+        self.parser.set_scrollback(0);
+        self.parser.process(b"\x1b[2J\x1b[3J\x1b[H");
+        self.model_dirty = true;
+    }
+
+    pub fn reset_modes(&mut self) {
+        let release = self
+            .mouse
+            .release(self.parser.screen().mouse_protocol_encoding());
+        if self.backend.writable() && !release.is_empty() {
+            let _ = self.send(release);
+        }
+        self.parser.process(
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m",
+        );
+        self.composing = false;
+        self.composition.clear();
+        self.selection = None;
+        self.back_to_live();
+    }
+
+    pub fn open_find(&mut self) {
+        self.find_open = true;
+        self.find_focus_pending = true;
+    }
+
+    pub fn is_find_open(&self) -> bool {
+        self.find_open
+    }
+
+    pub fn take_context_menu_request(&mut self) -> Option<egui::Pos2> {
+        self.shift_context_requested.take()
+    }
+
+    fn search_matches(&mut self, needle: &str) -> Vec<(usize, u16, u16, u16)> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let needle_lower = needle.to_lowercase();
+        let needle_chars = needle_lower.chars().count().max(1) as u16;
+        let saved_sb = self.parser.screen().scrollback();
+        self.parser.set_scrollback(usize::MAX);
+        let max_sb = self.parser.screen().scrollback();
+        let (rows, cols) = self.parser.screen().size();
+        let total_lines = max_sb + usize::from(rows);
+        let mut hits = Vec::new();
+        for abs_line in 0..total_lines {
+            // To view `abs_line` at row 0 when possible:
+            let sb = max_sb.saturating_sub(abs_line);
+            let row = if abs_line <= max_sb {
+                0
+            } else {
+                (abs_line - max_sb) as u16
+            };
+            if row >= rows {
+                continue;
+            }
+            self.parser.set_scrollback(sb);
+            let line = self.parser.screen().contents_between(row, 0, row, cols);
+            if line.is_empty() {
+                continue;
+            }
+            let lower = line.to_lowercase();
+            let mut byte_from = 0usize;
+            while let Some(rel) = lower[byte_from..].find(&needle_lower) {
+                let match_byte = byte_from + rel;
+                let start_col = (lower[..match_byte].chars().count() as u16).min(cols);
+                let end_col = start_col.saturating_add(needle_chars).min(cols);
+                hits.push((sb, row, start_col, end_col));
+                byte_from =
+                    match_byte + lower[match_byte..].chars().next().map_or(1, char::len_utf8);
+            }
+        }
+        self.parser.set_scrollback(saved_sb);
+        hits
+    }
+
+    fn jump_to_find_match(&mut self, step: isize) -> usize {
+        let hits = self.search_matches(&self.find_query.clone());
+        if hits.is_empty() {
+            self.find_index = 0;
+            return 0;
+        }
+        let len = hits.len();
+        if step == 0 {
+            self.find_index = self.find_index.min(len - 1);
+        } else if step > 0 {
+            self.find_index = (self.find_index + 1) % len;
+        } else {
+            self.find_index = (self.find_index + len - 1) % len;
+        }
+        let (sb, row, start_col, end_col) = hits[self.find_index];
+        self.parser.set_scrollback(sb);
+        self.selection = Some(Selection {
+            start: (row, start_col),
+            end: (row, end_col),
+        });
+        len
     }
 
     pub fn accepts_broadcast_input(&self) -> bool {
@@ -514,6 +687,12 @@ impl Terminal {
             mouse: Default::default(),
             widget_id: None,
             broadcast_outbox: Vec::new(),
+            agent_kind: None,
+            find_open: false,
+            find_query: String::new(),
+            find_index: 0,
+            find_focus_pending: false,
+            shift_context_requested: None,
             #[cfg(windows)]
             native_panel: Default::default(),
             #[cfg(windows)]
@@ -586,8 +765,108 @@ impl Terminal {
     }
     pub fn show_with_id(&mut self, ui: &mut egui::Ui, font_size: f32, id: Option<egui::Id>) {
         self.broadcast_outbox.clear();
+        let is_floating = id.is_some();
         if !self.status.is_empty() && matches!(self.backend, backend::Backend::Local(_)) {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
+        }
+        let mut refocus_terminal = false;
+        if self.find_open {
+            let french = crate::i18n::is_french();
+            let hint = if french {
+                "Rechercher dans le terminal…"
+            } else {
+                "Find in terminal…"
+            };
+            let prev_tip = if french {
+                "Précédent (Maj+Entrée)"
+            } else {
+                "Previous (Shift+Enter)"
+            };
+            let next_tip = if french {
+                "Suivant (Entrée)"
+            } else {
+                "Next (Enter)"
+            };
+            let close_tip = if french {
+                "Fermer (Échap)"
+            } else {
+                "Close (Esc)"
+            };
+            let mut close_find = false;
+            let mut step_dir: Option<isize> = None;
+            let total_matches = self.search_matches(&self.find_query.clone()).len();
+            ui.horizontal(|ui| {
+                let find_id = ui.id().with("terminal-find-input");
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut self.find_query)
+                        .id(find_id)
+                        .char_limit(256)
+                        .desired_width((ui.available_width() - 128.0).max(80.0))
+                        .hint_text(hint),
+                );
+                if self.find_focus_pending {
+                    edit.request_focus();
+                    if !ui.is_sizing_pass() {
+                        self.find_focus_pending = false;
+                    }
+                }
+                if edit.changed() {
+                    self.find_index = 0;
+                    step_dir = Some(0);
+                }
+                if edit.has_focus() || edit.lost_focus() {
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                        close_find = true;
+                    } else if ui
+                        .input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter))
+                    {
+                        step_dir = Some(-1);
+                        edit.request_focus();
+                    } else if ui
+                        .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                    {
+                        step_dir = Some(1);
+                        edit.request_focus();
+                    }
+                }
+                let badge = if self.find_query.is_empty() {
+                    String::new()
+                } else if total_matches == 0 {
+                    "0/0".to_owned()
+                } else {
+                    format!(
+                        "{}/{total_matches}",
+                        self.find_index.min(total_matches - 1) + 1
+                    )
+                };
+                if !badge.is_empty() {
+                    ui.weak(badge);
+                }
+                if ui
+                    .add_enabled(total_matches > 0, egui::Button::new("↑").small())
+                    .on_hover_text(prev_tip)
+                    .clicked()
+                {
+                    step_dir = Some(-1);
+                }
+                if ui
+                    .add_enabled(total_matches > 0, egui::Button::new("↓").small())
+                    .on_hover_text(next_tip)
+                    .clicked()
+                {
+                    step_dir = Some(1);
+                }
+                if ui.small_button("×").on_hover_text(close_tip).clicked() {
+                    close_find = true;
+                }
+            });
+            if let Some(dir) = step_dir {
+                let _ = self.jump_to_find_match(dir);
+            }
+            if close_find {
+                self.find_open = false;
+                refocus_terminal = true;
+            }
         }
         let font = egui::FontId::monospace(font_size);
         let cell_width = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
@@ -648,7 +927,8 @@ impl Terminal {
         if ui.is_enabled()
             && !overlay_pointer
             && !focus_blocked
-            && (response.clicked()
+            && (refocus_terminal
+                || response.clicked()
                 || response.drag_started()
                 || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))
         {
@@ -770,23 +1050,49 @@ impl Terminal {
             }
         }
         if !overlay_pointer && !focus_blocked && (!tracking || shift) {
-            response.context_menu(|ui| {
-                if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
-                    if let Some(selection) = self.selection {
-                        ui.ctx().copy_text(self.selection_text(selection));
-                    }
-                    ui.close();
+            if shift {
+                if is_floating {
+                    response.context_menu(|ui| {
+                        if self.has_selection() && ui.button(tr("Copy selection")).clicked() {
+                            let _ = self.copy_selection(ui.ctx());
+                            ui.close();
+                        }
+                        if accepts_input && ui.button(tr("Paste")).clicked() {
+                            self.paste_from_clipboard();
+                            ui.close();
+                        }
+                        if ui.button(tr("Copy visible text")).clicked() {
+                            ui.ctx().copy_text(self.visible_text());
+                            ui.close();
+                        }
+                        if ui.button(tr("Find")).clicked() {
+                            self.open_find();
+                            ui.close();
+                        }
+                        if ui.button(tr("Clear")).clicked() {
+                            self.clear_screen();
+                            ui.close();
+                        }
+                        if ui.button(tr("Reset Terminal")).clicked() {
+                            self.reset_modes();
+                            ui.close();
+                        }
+                        if ui.button(tr("Back to live output")).clicked() {
+                            self.back_to_live();
+                            ui.close();
+                        }
+                    });
+                } else if response.secondary_clicked() {
+                    self.shift_context_requested = ui
+                        .input(|i| i.pointer.interact_pos())
+                        .or_else(|| Some(rect.center()));
                 }
-
-                if ui.button(tr("Copy visible text")).clicked() {
-                    ui.ctx().copy_text(self.visible_text());
-                    ui.close();
-                }
-                if ui.button(tr("Back to live output")).clicked() {
-                    self.back_to_live();
-                    ui.close();
-                }
-            });
+            } else if response.secondary_clicked()
+                && !self.copy_selection(ui.ctx())
+                && accepts_input
+            {
+                self.paste_from_clipboard();
+            }
         }
         // A wheel event above can enter the archive in the same frame as a key.
         // Keep the terminal focus lock, but re-evaluate actual input permission.
@@ -973,11 +1279,7 @@ impl Terminal {
                         }
                     },
                     egui::Event::Copy => {
-                        if let Some(selection) = self.selection.filter(|s| s.start != s.end) {
-                            ui.ctx().copy_text(self.selection_text(selection));
-                            Vec::new()
-                        } else if ui.input(|i| i.modifiers.shift) {
-                            ui.ctx().copy_text(self.visible_text());
+                        if self.copy_selection(ui.ctx()) || ui.input(|i| i.modifiers.shift) {
                             Vec::new()
                         } else {
                             vec![3]
@@ -998,6 +1300,7 @@ impl Terminal {
                     }
                     egui::Event::Key {
                         key,
+                        physical_key,
                         pressed: true,
                         modifiers,
                         ..
@@ -1005,33 +1308,96 @@ impl Terminal {
                         if self.composing {
                             continue;
                         }
+                        if modifiers.ctrl && modifiers.shift && !modifiers.alt {
+                            match key {
+                                egui::Key::F => {
+                                    self.open_find();
+                                    continue;
+                                }
+                                egui::Key::V => {
+                                    if accepts_input {
+                                        self.paste_from_clipboard();
+                                    }
+                                    continue;
+                                }
+                                egui::Key::C => {
+                                    let _ = self.copy_selection(ui.ctx());
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         if key == egui::Key::C
                             && modifiers.ctrl
-                            && (modifiers.shift || self.selection.is_some_and(|s| s.start != s.end))
+                            && !modifiers.shift
+                            && !modifiers.alt
+                            && self.copy_selection(ui.ctx())
                         {
-                            ui.ctx().copy_text(
-                                self.selection
-                                    .map(|s| self.selection_text(s))
-                                    .unwrap_or_else(|| self.visible_text()),
-                            );
                             continue;
                         }
-                        let mut bytes = key_bytes(key, modifiers);
-                        if bytes.len() == 3
-                            && bytes[0] == 27
-                            && bytes[1] == b'['
-                            && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                        if modifiers.shift
+                            && !modifiers.ctrl
+                            && !modifiers.alt
+                            && matches!(key, egui::Key::PageUp | egui::Key::PageDown)
                         {
-                            bcast_item = Some(BroadcastInput::CursorKey(bytes[2]));
+                            let delta = if key == egui::Key::PageUp {
+                                i64::from(rows)
+                            } else {
+                                -i64::from(rows)
+                            };
+                            self.scroll_by(delta);
+                            continue;
                         }
-                        if self.parser.screen().application_cursor()
-                            && bytes.len() == 3
-                            && bytes[0] == 27
-                            && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                        let key_input = egui_to_key_input(key, physical_key, modifiers);
+                        let is_alt_arrow = modifiers.alt
+                            && !modifiers.ctrl
+                            && !modifiers.shift
+                            && matches!(
+                                key,
+                                egui::Key::ArrowLeft
+                                    | egui::Key::ArrowRight
+                                    | egui::Key::ArrowUp
+                                    | egui::Key::ArrowDown
+                            );
+                        let extra_app_chord = modifiers.ctrl
+                            && modifiers.shift
+                            && !modifiers.alt
+                            && matches!(key, egui::Key::T | egui::Key::J | egui::Key::Space);
+                        if !(is_floating && is_alt_arrow)
+                            && (extra_app_chord
+                                || crate::shortcuts::is_terminal_app_shortcut(&key_input))
                         {
-                            bytes[1] = b'O';
+                            continue;
                         }
-                        bytes
+                        if key == egui::Key::Enter
+                            && modifiers.shift
+                            && !modifiers.ctrl
+                            && !modifiers.alt
+                            && let Some(agent) = self.agent_kind.as_deref()
+                        {
+                            if cfg!(windows) && matches!(agent, "claude" | "codex") {
+                                b"\x1b\r".to_vec()
+                            } else {
+                                b"\n".to_vec()
+                            }
+                        } else {
+                            let mut bytes = key_bytes(key, modifiers);
+                            if bytes.len() == 3
+                                && bytes[0] == 27
+                                && bytes[1] == b'['
+                                && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                            {
+                                bcast_item = Some(BroadcastInput::CursorKey(bytes[2]));
+                            }
+                            if self.parser.screen().application_cursor()
+                                && bytes.len() == 3
+                                && bytes[0] == 27
+                                && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+                            {
+                                bytes[1] = b'O';
+                            }
+                            bytes
+                        }
                     }
                     _ => Vec::new(),
                 };
@@ -1093,6 +1459,157 @@ impl Selection {
         screen.contents_between(start.0, start.1, end.0, end.1)
     }
 }
+
+fn egui_to_key_input(
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    modifiers: egui::Modifiers,
+) -> crate::shortcuts::KeyInput {
+    use egui::Key::*;
+    let key_str = match key {
+        A => "a",
+        B => "b",
+        C => "c",
+        D => "d",
+        E => "e",
+        F => "f",
+        G => "g",
+        H => "h",
+        I => "i",
+        J => "j",
+        K => "k",
+        L => "l",
+        M => "m",
+        N => "n",
+        O => "o",
+        P => "p",
+        Q => "q",
+        R => "r",
+        S => "s",
+        T => "t",
+        U => "u",
+        V => "v",
+        W => "w",
+        X => "x",
+        Y => "y",
+        Z => "z",
+        Backtick => "`",
+        Equals => "=",
+        Plus => "+",
+        Minus => "-",
+        Num0 => "0",
+        Comma => ",",
+        PageUp => "PageUp",
+        PageDown => "PageDown",
+        ArrowLeft => "ArrowLeft",
+        ArrowRight => "ArrowRight",
+        ArrowUp => "ArrowUp",
+        ArrowDown => "ArrowDown",
+        F1 => "F1",
+        Space => " ",
+        Enter => "Enter",
+        Escape => "Escape",
+        _ => "",
+    };
+    let code_str = match physical_key {
+        Some(Backtick) => "Backquote",
+        Some(Num0) => "Digit0",
+        Some(Plus) => "NumpadAdd",
+        Some(Minus) => "NumpadSubtract",
+        _ => "",
+    };
+    crate::shortcuts::KeyInput {
+        key: key_str.to_owned(),
+        code: code_str.to_owned(),
+        ctrl: modifiers.ctrl,
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        meta: modifiers.mac_cmd,
+        repeat: false,
+    }
+}
+
+#[cfg(windows)]
+fn read_system_clipboard() -> Option<String> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn OpenClipboard(hwnd_new_owner: *mut core::ffi::c_void) -> i32;
+        fn CloseClipboard() -> i32;
+        fn GetClipboardData(u_format: u32) -> *mut core::ffi::c_void;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalLock(h_mem: *mut core::ffi::c_void) -> *const u16;
+        fn GlobalUnlock(h_mem: *mut core::ffi::c_void) -> i32;
+        fn GlobalSize(h_mem: *mut core::ffi::c_void) -> usize;
+    }
+    const CF_UNICODETEXT: u32 = 13;
+    unsafe {
+        if OpenClipboard(core::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let handle = GetClipboardData(CF_UNICODETEXT);
+        if handle.is_null() {
+            let _ = CloseClipboard();
+            return None;
+        }
+        let max_units = GlobalSize(handle) / core::mem::size_of::<u16>();
+        let ptr = GlobalLock(handle);
+        let result = if ptr.is_null() || max_units == 0 {
+            None
+        } else {
+            let capped = max_units.min(65537);
+            let slice = core::slice::from_raw_parts(ptr, capped);
+            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+            Some(String::from_utf16_lossy(&slice[..len]))
+        };
+        let _ = GlobalUnlock(handle);
+        let _ = CloseClipboard();
+        result.filter(|s| !s.is_empty())
+    }
+}
+
+#[cfg(not(windows))]
+fn read_system_clipboard() -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+pub fn trigger_voice_typing() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VIRTUAL_KEY,
+    };
+    let key_ev = |vk: u16, up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    KEYBD_EVENT_FLAGS(0)
+                },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    // VK_LWIN = 0x5B, 'H' = 0x48
+    let inputs = [
+        key_ev(0x5B, false),
+        key_ev(0x48, false),
+        key_ev(0x48, true),
+        key_ev(0x5B, true),
+    ];
+    unsafe {
+        let _ = SendInput(&inputs, core::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn trigger_voice_typing() {}
 
 fn key_bytes(key: egui::Key, modifiers: egui::Modifiers) -> Vec<u8> {
     use egui::Key::*;

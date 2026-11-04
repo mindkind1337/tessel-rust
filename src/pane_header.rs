@@ -34,6 +34,7 @@ pub fn button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui:
     response.on_hover_text(label)
 }
 
+#[derive(Default)]
 pub struct MenuState<'a> {
     pub model_choice: bool,
     pub model_pending: bool,
@@ -47,11 +48,23 @@ pub struct MenuState<'a> {
     pub multiple_panes: bool,
     pub terminal_output: bool,
     pub can_rename: bool,
+    pub is_agent: bool,
+    pub sleeping: bool,
+    pub exited: bool,
+    pub asks_approval: bool,
+    pub activity: Option<pane_menu_model::PaneAgentActivity>,
+    pub needs_you: bool,
+    pub worktree: Option<(String, String)>,
+    pub has_selection: bool,
+    pub voice_typing: bool,
+    pub other_panes: Vec<pane_menu_model::OtherPaneTarget>,
     pub language: PaneMenuLang,
 }
 
-fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
-    pane_menu_model::build_pane_actions_menu(
+fn build_filtered(
+    state: &MenuState<'_>,
+) -> (Vec<pane_menu_model::PaneMenuFact>, Vec<PaneMenuEntry>) {
+    let built = pane_menu_model::build_pane_actions_menu(
         &PaneActionsMenuInput {
             pane_title: state.title.into(),
             session_id: state.session_id.map(str::to_owned),
@@ -60,6 +73,19 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
             can_arrange_panes: state.multiple_panes,
             has_model_choice: state.model_choice,
             model_text: state.model_text.clone(),
+            is_agent: state.is_agent,
+            sleeping: state.sleeping,
+            exited: state.exited,
+            asks_approval: state.asks_approval,
+            activity: state.activity,
+            needs_you: state.needs_you,
+            worktree: state.worktree.clone(),
+            has_selection: state.has_selection,
+            other_panes: if state.terminal_output {
+                state.other_panes.clone()
+            } else {
+                Vec::new()
+            },
             disabled_reasons: if state.model_pending {
                 [(
                     "menuModel".into(),
@@ -80,87 +106,158 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
             ..Default::default()
         },
         state.language,
-    )
-    .entries
-    .into_iter()
-    .filter(|entry| match entry {
-        PaneMenuEntry::Item { action, .. } => match action {
-            PaneMenuAction::CopyOutput => state.terminal_output,
-            PaneMenuAction::Restart | PaneMenuAction::RestartApplySettings => state.can_restart,
-            PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
-            PaneMenuAction::Rename => state.can_rename,
-            PaneMenuAction::ChooseModel => state.model_choice,
-            PaneMenuAction::ToggleMaximize
-            | PaneMenuAction::ArrangeGrid
-            | PaneMenuAction::SplitRight
-            | PaneMenuAction::SplitDown
-            | PaneMenuAction::ClosePane => true,
+    );
+
+    let raw_entries: Vec<PaneMenuEntry> = built
+        .entries
+        .into_iter()
+        .filter(|entry| match entry {
+            PaneMenuEntry::Separator => true,
+            PaneMenuEntry::SectionLabel(label) => {
+                // Keep "Send selection to" header when terminal_output + other_panes exist;
+                // skip "Ask to review..." since AskReview is not wired yet.
+                state.terminal_output
+                    && !state.other_panes.is_empty()
+                    && (label == "Send selection to" || label == "Envoyer la sélection à")
+            }
+            PaneMenuEntry::Item { action, .. } => match action {
+                PaneMenuAction::Copy
+                | PaneMenuAction::Paste
+                | PaneMenuAction::CopyOutput
+                | PaneMenuAction::Clear
+                | PaneMenuAction::ResetTerminal
+                | PaneMenuAction::Find => state.terminal_output,
+                PaneMenuAction::VoiceTyping => state.voice_typing && state.terminal_output,
+                PaneMenuAction::SendSelectionTo(_) => {
+                    state.terminal_output && !state.other_panes.is_empty()
+                }
+                PaneMenuAction::Restart | PaneMenuAction::RestartApplySettings => state.can_restart,
+                PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
+                PaneMenuAction::Rename => state.can_rename,
+                PaneMenuAction::ChooseModel => state.model_choice,
+                PaneMenuAction::OpenHere
+                | PaneMenuAction::ToggleMaximize
+                | PaneMenuAction::ArrangeGrid
+                | PaneMenuAction::SplitRight
+                | PaneMenuAction::SplitDown
+                | PaneMenuAction::ClosePane => true,
+                _ => false,
+            },
             _ => false,
-        },
-        _ => false,
-    })
-    .collect()
+        })
+        .collect();
+
+    // Collapse leading, trailing, and consecutive separators cleanly:
+    let mut cleaned: Vec<PaneMenuEntry> = Vec::with_capacity(raw_entries.len());
+    for entry in raw_entries {
+        if matches!(entry, PaneMenuEntry::Separator)
+            && (cleaned.is_empty() || matches!(cleaned.last(), Some(PaneMenuEntry::Separator)))
+        {
+            continue;
+        }
+        cleaned.push(entry);
+    }
+    while matches!(cleaned.last(), Some(PaneMenuEntry::Separator)) {
+        cleaned.pop();
+    }
+
+    (built.facts, cleaned)
+}
+
+#[cfg(test)]
+fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
+    build_filtered(state).1
 }
 
 pub fn show(ui: &mut egui::Ui, state: &MenuState<'_>) -> Option<PaneMenuAction> {
+    let (facts, entries) = build_filtered(state);
     ui.strong(state.title);
+    if !facts.is_empty() {
+        ui.add_space(2.0);
+        for fact in &facts {
+            let row = ui.horizontal(|ui| {
+                ui.weak(&fact.label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(&fact.value).size(11.5).strong());
+                });
+            });
+            if !fact.tooltip.is_empty() {
+                row.response.on_hover_text(&fact.tooltip);
+            }
+        }
+    }
     ui.separator();
     let mut selected = None;
-    for entry in entries(state) {
-        if let PaneMenuEntry::Item {
-            action,
-            label,
-            enabled,
-            danger,
-            shortcut,
-            tooltip,
-        } = entry
-        {
-            if danger {
-                ui.separator();
-            }
-            let text = if danger {
-                egui::RichText::new(label).color(ui.visuals().error_fg_color)
-            } else {
-                egui::RichText::new(label)
-            };
-            let mut button = egui::Button::new(text);
-            if let Some(shortcut) = shortcut {
-                if action == PaneMenuAction::ChooseModel {
-                    let mut job = egui::text::LayoutJob::single_section(
-                        shortcut,
-                        egui::TextFormat {
-                            font_id: egui::FontId::proportional(11.0),
-                            color: ui.visuals().weak_text_color(),
-                            italics: state.model_manual,
-                            ..Default::default()
-                        },
-                    );
-                    job.wrap = egui::text::TextWrapping {
-                        max_width: 150.0,
-                        max_rows: 1,
-                        break_anywhere: true,
-                        overflow_character: Some('…'),
-                    };
-                    button = button.shortcut_text(ui.fonts_mut(|fonts| fonts.layout_job(job)));
-                } else {
-                    button = button.shortcut_text(shortcut);
+    let mut last_was_sep = true;
+    for entry in entries {
+        match entry {
+            PaneMenuEntry::Separator => {
+                if !last_was_sep {
+                    ui.separator();
+                    last_was_sep = true;
                 }
             }
-            let response = ui.add_enabled(enabled, button);
-            let response = if let Some(tooltip) = tooltip {
-                if enabled {
-                    response.on_hover_text(tooltip)
-                } else {
-                    response.on_disabled_hover_text(tooltip)
-                }
-            } else {
-                response
-            };
-            if response.clicked() {
-                selected = Some(action);
-                ui.close();
+            PaneMenuEntry::SectionLabel(label) => {
+                ui.add_space(2.0);
+                ui.weak(egui::RichText::new(label).size(11.0));
+                last_was_sep = false;
             }
+            PaneMenuEntry::Item {
+                action,
+                label,
+                enabled,
+                danger,
+                shortcut,
+                tooltip,
+            } => {
+                if danger && !last_was_sep {
+                    ui.separator();
+                }
+                last_was_sep = false;
+                let text = if danger {
+                    egui::RichText::new(label).color(ui.visuals().error_fg_color)
+                } else {
+                    egui::RichText::new(label)
+                };
+                let mut button = egui::Button::new(text);
+                if let Some(shortcut) = shortcut {
+                    if action == PaneMenuAction::ChooseModel {
+                        let mut job = egui::text::LayoutJob::single_section(
+                            shortcut,
+                            egui::TextFormat {
+                                font_id: egui::FontId::proportional(11.0),
+                                color: ui.visuals().weak_text_color(),
+                                italics: state.model_manual,
+                                ..Default::default()
+                            },
+                        );
+                        job.wrap = egui::text::TextWrapping {
+                            max_width: 150.0,
+                            max_rows: 1,
+                            break_anywhere: true,
+                            overflow_character: Some('…'),
+                        };
+                        button = button.shortcut_text(ui.fonts_mut(|fonts| fonts.layout_job(job)));
+                    } else {
+                        button = button.shortcut_text(shortcut);
+                    }
+                }
+                let response = ui.add_enabled(enabled, button);
+                let response = if let Some(tooltip) = tooltip {
+                    if enabled {
+                        response.on_hover_text(tooltip)
+                    } else {
+                        response.on_disabled_hover_text(tooltip)
+                    }
+                } else {
+                    response
+                };
+                if response.clicked() {
+                    selected = Some(action);
+                    ui.close();
+                }
+            }
+            _ => {}
         }
     }
     selected
@@ -172,19 +269,9 @@ mod tests {
     #[test]
     fn native_menu_only_exposes_actions_supported_by_the_pane() {
         let mut state = MenuState {
-            model_choice: false,
-            model_pending: false,
-            model_manual: false,
-            model_text: None,
             title: "Chat",
-            session_id: None,
-            can_restart: false,
-            launch_stale: false,
-            maximized: false,
-            multiple_panes: false,
-            terminal_output: false,
-            can_rename: false,
             language: PaneMenuLang::Fr,
+            ..Default::default()
         };
         let actions = |state: &MenuState<'_>| {
             entries(state)
@@ -199,6 +286,7 @@ mod tests {
             actions(&state),
             vec![
                 PaneMenuAction::ToggleMaximize,
+                PaneMenuAction::OpenHere,
                 PaneMenuAction::SplitRight,
                 PaneMenuAction::SplitDown,
                 PaneMenuAction::ClosePane
@@ -211,10 +299,31 @@ mod tests {
         assert!(actions(&state).contains(&PaneMenuAction::Rename));
         state.multiple_panes = true;
         state.terminal_output = true;
+        state.voice_typing = true;
+        state.has_selection = true;
+        state.is_agent = true;
+        state.other_panes = vec![pane_menu_model::OtherPaneTarget {
+            id: "2".into(),
+            title: "Bohr".into(),
+            where_hint: String::new(),
+            is_agent: true,
+        }];
+        let (facts, _) = build_filtered(&state);
+        assert!(
+            facts
+                .iter()
+                .any(|f| f.kind == pane_menu_model::PaneFactKind::State)
+        );
         let menu = actions(&state);
+        assert!(menu.contains(&PaneMenuAction::Copy));
+        assert!(menu.contains(&PaneMenuAction::Paste));
         assert!(menu.contains(&PaneMenuAction::CopyOutput));
+        assert!(menu.contains(&PaneMenuAction::Clear));
+        assert!(menu.contains(&PaneMenuAction::ResetTerminal));
+        assert!(menu.contains(&PaneMenuAction::Find));
+        assert!(menu.contains(&PaneMenuAction::VoiceTyping));
+        assert!(menu.contains(&PaneMenuAction::SendSelectionTo("2".into())));
         assert!(menu.contains(&PaneMenuAction::ArrangeGrid));
-        assert!(!menu.contains(&PaneMenuAction::Paste));
         assert!(!menu.contains(&PaneMenuAction::SwitchYolo));
         assert!(!menu.contains(&PaneMenuAction::Restart));
         state.can_restart = true;

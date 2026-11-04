@@ -228,6 +228,16 @@ impl Chat {
             resume: String::new(),
         }
     }
+
+    pub fn append_composer(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if !self.composer.is_empty() && !self.composer.ends_with('\n') {
+            self.composer.push('\n');
+        }
+        self.composer.push_str(text);
+    }
     fn request(&mut self, method: &str, params: Value) -> Result<(), String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -820,9 +830,12 @@ impl Chat {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
+        let jump_waiting = ui.is_enabled()
+            && (!self.approvals.is_empty() || !self.questions.is_empty())
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::A));
         if let Some(approval) = self.approvals.front().cloned() {
             let can_accept = self.approval_has_details(&approval);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            let card = egui::Frame::group(ui.style()).show(ui, |ui| {
                 if !can_accept {ui.colored_label(egui::Color32::YELLOW,"Cannot allow: action details are missing or this permission scope is unsupported.");}
                 ui.strong(tr("Approval requested — no action until you choose"));
                 ui.label(&approval.method);
@@ -838,8 +851,15 @@ impl Chat {
                         ui.monospace(serde_json::to_string_pretty(&details).unwrap_or_default());
                     });
                 ui.horizontal_wrapped(|ui| {
+                    let mut focused_btn = false;
                     for (label, decision) in [("Deny", "decline"), ("Allow once", "accept")] {
-                        if ui.add_enabled(decision=="decline" || can_accept,egui::Button::new(tr(label))).clicked()
+                        let enabled = decision == "decline" || can_accept;
+                        let btn = ui.add_enabled(enabled, egui::Button::new(tr(label)));
+                        if jump_waiting && enabled && !focused_btn {
+                            btn.request_focus();
+                            focused_btn = true;
+                        }
+                        if btn.clicked()
                             && let Some(rpc) = &self.rpc
                         {
                             match rpc.send(json!({"id":approval.id,"result":{"decision":decision}}))
@@ -853,16 +873,24 @@ impl Chat {
                     }
                 });
             });
+            if jump_waiting {
+                card.response.scroll_to_me(Some(egui::Align::Center));
+            }
         }
-        if let Some(question) = self.questions.front_mut()
-            && let Some(answer) = question.show(ui)
-            && let Some(rpc) = &self.rpc
-        {
-            match rpc.send(json!({"id":question.id,"result":answer})) {
-                Ok(()) => {
-                    self.questions.pop_front();
+        if let Some(question) = self.questions.front_mut() {
+            let card = ui.scope(|ui| question.show(ui));
+            if jump_waiting && self.approvals.is_empty() {
+                card.response.scroll_to_me(Some(egui::Align::Center));
+            }
+            if let Some(answer) = card.inner
+                && let Some(rpc) = &self.rpc
+            {
+                match rpc.send(json!({"id":question.id,"result":answer})) {
+                    Ok(()) => {
+                        self.questions.pop_front();
+                    }
+                    Err(e) => self.error = e,
                 }
-                Err(e) => self.error = e,
             }
         }
         if self.history_cursor.is_some()

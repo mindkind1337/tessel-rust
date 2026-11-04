@@ -19,6 +19,12 @@ struct Scan {
     result: Receiver<Result<ProjectFileList, String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinderAction {
+    OpenFile(PathBuf),
+    InsertInTerminal(PathBuf),
+}
+
 #[derive(Default)]
 pub struct Finder {
     open: bool,
@@ -120,7 +126,19 @@ impl Finder {
         }
     }
 
+    #[cfg(test)]
     pub fn show(&mut self, ctx: &egui::Context, active_root: Option<&Path>) -> Option<PathBuf> {
+        match self.show_action(ctx, active_root) {
+            Some(FinderAction::OpenFile(path) | FinderAction::InsertInTerminal(path)) => Some(path),
+            None => None,
+        }
+    }
+
+    pub fn show_action(
+        &mut self,
+        ctx: &egui::Context,
+        active_root: Option<&Path>,
+    ) -> Option<FinderAction> {
         if !self.open {
             return None;
         }
@@ -128,7 +146,7 @@ impl Finder {
             self.close();
             return None;
         }
-        let mut selected = None;
+        let mut selected: Option<(String, bool)> = None;
         let response = egui::Modal::new(egui::Id::new("file-finder")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 40.0).clamp(240.0, 650.0));
             ui.heading(tr("Find a file"));
@@ -170,8 +188,18 @@ impl Finder {
                 if up {
                     self.state.selected = (self.state.selected + count - 1) % count;
                 }
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-                    selected = self.results.get(self.state.selected).cloned();
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)) {
+                    selected = self
+                        .results
+                        .get(self.state.selected)
+                        .cloned()
+                        .map(|p| (p, true));
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                    selected = self
+                        .results
+                        .get(self.state.selected)
+                        .cloned()
+                        .map(|p| (p, false));
                 }
             } else if self.scan.is_none() && self.error.is_empty() {
                 ui.label(tr("No matching files."));
@@ -182,18 +210,28 @@ impl Finder {
                     for (index, path) in self.results.iter().enumerate() {
                         let row = ui.selectable_label(self.state.selected == index, path);
                         if row.clicked() {
-                            selected = Some(path.clone());
+                            let insert = ui.input(|i| i.modifiers.ctrl);
+                            selected = Some((path.clone(), insert));
                         }
                         if (up || down) && self.state.selected == index {
                             row.scroll_to_me(Some(egui::Align::Center));
                         }
                     }
                 });
+            ui.separator();
+            ui.weak(tr("Enter to open · Ctrl+Enter to insert path in terminal"));
         });
         if selected.is_some() || response.should_close() {
             self.close();
         }
-        selected.map(|relative| self.root.join(relative))
+        selected.map(|(relative, insert)| {
+            let full = self.root.join(relative);
+            if insert {
+                FinderAction::InsertInTerminal(full)
+            } else {
+                FinderAction::OpenFile(full)
+            }
+        })
     }
 }
 
@@ -322,5 +360,71 @@ mod tests {
         );
         assert!(!finder.is_open());
         assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn ctrl_enter_in_finder_returns_insert_in_terminal_action() {
+        let root = tempfile::tempdir().unwrap();
+        let state = FileFinderState::new(
+            vec!["README.md".into(), "src/terminal.rs".into()],
+            false,
+            false,
+        );
+        let mut finder = Finder {
+            open: true,
+            root: root.path().to_owned(),
+            results: state.results().to_vec(),
+            state,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut frame = |events: Vec<egui::Event>, ctrl: bool| {
+            let mut action = None;
+            let modifiers = egui::Modifiers {
+                ctrl,
+                command: ctrl,
+                ..Default::default()
+            };
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 520.0),
+                    )),
+                    focused: true,
+                    modifiers,
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    action = finder.show_action(ctx, Some(root.path()));
+                },
+            );
+            action
+        };
+        frame(vec![], false);
+        frame(vec![], false);
+        assert!(frame(vec![egui::Event::Text("term".into())], false).is_none());
+        let inserted = frame(
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Default::default()
+                },
+            }],
+            true,
+        );
+        assert_eq!(
+            inserted,
+            Some(FinderAction::InsertInTerminal(
+                root.path().join("src/terminal.rs")
+            ))
+        );
+        assert!(!finder.is_open());
     }
 }

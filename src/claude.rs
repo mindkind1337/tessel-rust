@@ -133,6 +133,15 @@ impl Chat {
             status: "Not connected".into(),
         }
     }
+    pub fn append_composer(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if !self.composer.is_empty() && !self.composer.ends_with('\n') {
+            self.composer.push('\n');
+        }
+        self.composer.push_str(text);
+    }
     fn commit_options(&mut self) {
         self.options.normalize();
         if self.options.valid_for("claude") {
@@ -527,8 +536,11 @@ impl Chat {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
+        let jump_waiting = ui.is_enabled()
+            && (!self.approvals.is_empty() || self.questions.is_some())
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::A));
         if let Some(approval) = self.approvals.front().cloned() {
-            ui.group(|ui| {
+            let card = ui.group(|ui| {
                 ui.strong(format!("{}: {}", tr("Approval required"), approval.tool));
                 egui::ScrollArea::vertical()
                     .id_salt("claude-approval")
@@ -542,7 +554,11 @@ impl Chat {
                         );
                     });
                 ui.horizontal(|ui| {
-                    if ui.button(tr("Allow once")).clicked() {
+                    let allow = ui.button(tr("Allow once"));
+                    if jump_waiting {
+                        allow.request_focus();
+                    }
+                    if allow.clicked() {
                         self.respond(&approval.id, true);
                     }
                     if ui.button(tr("Deny")).clicked() {
@@ -550,15 +566,22 @@ impl Chat {
                     }
                 });
             });
+            if jump_waiting {
+                card.response.scroll_to_me(Some(egui::Align::Center));
+            }
         }
-        if let Some(questions) = &mut self.questions
-            && let Some(answer) = questions.show(ui)
-        {
-            let id = questions.id.clone();
-            self.questions = None;
-            if let Err(error) = self.answer(&id, answer) {
-                self.error = error;
-                self.stop();
+        if let Some(questions) = &mut self.questions {
+            let card = ui.scope(|ui| questions.show(ui));
+            if jump_waiting && self.approvals.is_empty() {
+                card.response.scroll_to_me(Some(egui::Align::Center));
+            }
+            if let Some(answer) = card.inner {
+                let id = questions.id.clone();
+                self.questions = None;
+                if let Err(error) = self.answer(&id, answer) {
+                    self.error = error;
+                    self.stop();
+                }
             }
         }
         egui::ScrollArea::vertical()

@@ -528,3 +528,21 @@ embedded-Browser navigation, address copy, and re-scanned creation-time-verified
 Manager, `384px` Ports, `288px` Remote Hosts, `204px` right-click visibility
 menu) block underlying central/floating/WebView2 surfaces while open, and
 `StatusBarPreferences` persist across restarts and portable backups.
+
+Keyboard Shortcuts, Command Palette, `F1` Help and Pane Menus integration:
+37 shortcuts across all five reference groups (`Panes`, `Terminal`, `Workspaces`,
+`Editor`, `App`) are wired end-to-end and exposed in `HelpPanel` with localized
+EN/FR keycaps and contextual footer hints. Terminal panes add inline scrollback
++ screen search (`Ctrl+Shift+F`), `Ctrl+Shift+V` Win32 Unicode paste, selection
+copy on `Ctrl+C` (falling back to `SIGINT`) and `Ctrl+Shift+C`, `Shift+PageUp` /
+`Shift+PageDown`, agent `Shift+Enter` newline injection (`\x1b\r` for Claude /
+Codex on Windows, `\n` for other agents), app-shortcut withholding, plain
+right-click copy/paste vs `Shift+Right-Click` full context menu, Windows
+`Win+H` voice typing (`SendInput`), and dropped-file / `Finder` `Ctrl+Enter`
+shell-quoted path insertion. Editor tabs add inline Find (`Ctrl+F`), Replace
+(`Ctrl+H`), Go to line (`Ctrl+G`), Word wrap (`Alt+Z`), changed-hunk navigation
+(`F7` / `Shift+F7`) and `Alt+Left/Right` tab switching; `Browser` adds `Ctrl+L`
+and `Ctrl+R` / `F5`; native chats add `Alt+A` pending-request focus. Command
+Palette adds full `New`, `Project`, `Layout`, `Files`, `Task`, `Theme` and
+`Tessel` catalogs plus localized `"Nothing matches \"{{query}}\""` empty states,
+and `pane_header` renders contextual status facts and `SendSelectionTo` targets.

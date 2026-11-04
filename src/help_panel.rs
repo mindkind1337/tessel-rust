@@ -18,21 +18,25 @@ use crate::shortcuts::{
     route_help_dialog_escape, shortcut_groups,
 };
 
-/// Returns the truthful native shortcut description for `keys`, overriding reference entries whose
-/// native scope is currently narrower than Electron (`Ctrl+Shift+T` shell-only, `Ctrl+Shift+P`
-/// commands-only) without mutating the reference [`crate::shortcuts`] specification.
+/// Returns the native shortcut description for `keys` (matching the reference specification now
+/// that `Ctrl+Shift+T` launches the default agent or shell and `Ctrl+Shift+P` searches panes,
+/// workspaces, open editors, and commands).
 #[must_use]
 pub fn native_shortcut_text(
-    keys: &str,
+    _keys: &str,
     reference_text: &'static str,
-    french: bool,
+    _french: bool,
 ) -> &'static str {
-    match (keys, french) {
-        ("Ctrl+Shift+T", false) => "New pane: default shell",
-        ("Ctrl+Shift+T", true) => "Nouveau panneau : shell par défaut",
-        ("Ctrl+Shift+P", false) => "Command palette: find commands",
-        ("Ctrl+Shift+P", true) => "Palette de commandes : chercher une commande",
-        _ => reference_text,
+    reference_text
+}
+
+/// Reference footer tip displayed below the shortcut groups (`HelpDialog.vue:62-64`, `fr/app.json:82`).
+#[must_use]
+pub const fn help_footer_text(french: bool) -> &'static str {
+    if french {
+        "Déposez des fichiers sur un panneau pour coller leurs chemins. Sélectionnez du texte pour le copier, clic droit pour coller. Maj+clic droit sur un panneau pour plus d’options."
+    } else {
+        "Drop files on a pane to paste their paths. Select text to copy it, right-click to paste. Shift+right-click a pane for more."
     }
 }
 
@@ -334,7 +338,7 @@ impl HelpPanel {
         }
 
         let scroll_max_h =
-            (ui.ctx().content_rect().height() * 0.86_f32 - 125.0_f32).clamp(120.0_f32, 560.0_f32);
+            (ui.ctx().content_rect().height() * 0.86_f32 - 155.0_f32).clamp(120.0_f32, 530.0_f32);
         egui::ScrollArea::vertical()
             .id_salt("help-panel-scroll")
             .auto_shrink([false, true])
@@ -353,6 +357,15 @@ impl HelpPanel {
                     render_group_slice(ui, &shown, or_word);
                 }
             });
+
+        ui.add_space(8.0_f32);
+        ui.separator();
+        ui.add_space(4.0_f32);
+        ui.label(
+            egui::RichText::new(help_footer_text(french))
+                .size(11.5_f32)
+                .color(ui.visuals().weak_text_color()),
+        );
 
         close_requested
     }

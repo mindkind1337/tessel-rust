@@ -57,7 +57,17 @@ pub fn show(
             }
             if enter { selected = state.selected_id(&rows).map(str::to_owned); }
             egui::ScrollArea::vertical().id_salt("command-results").max_height(height-70.0).show(ui, |ui| {
-                if rows.is_empty() { ui.weak(crate::i18n::tr("No matching commands")); }
+                if rows.is_empty() {
+                    let trimmed = state.query.trim();
+                    if trimmed.is_empty() {
+                        ui.weak(crate::i18n::tr("No matching commands"));
+                    } else {
+                        ui.weak(
+                            crate::i18n::tr("Nothing matches \"{{query}}\"")
+                                .replace("{{query}}", trimmed),
+                        );
+                    }
+                }
                 for (index, row) in rows.iter().enumerate() {
                     if let Some(group) = &row.header { ui.add_space(6.0); ui.weak(group); }
                     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(),32.0), egui::Sense::CLICK);
@@ -164,5 +174,83 @@ mod tests {
         assert!(frame(&mut state, &mut focused, enter(true), &[]).is_none());
         assert!(state.open);
         assert_eq!(state.index, 0);
+    }
+
+    #[test]
+    fn unmatched_query_renders_localized_nothing_matches_empty_state() {
+        fn has_text(shapes: &[egui::epaint::ClippedShape], exact: &str) -> bool {
+            fn walk(shape: &egui::epaint::Shape, exact: &str) -> bool {
+                match shape {
+                    egui::epaint::Shape::Text(t) => t.galley.job.text == exact,
+                    egui::epaint::Shape::Vec(list) => list.iter().any(|s| walk(s, exact)),
+                    _ => false,
+                }
+            }
+            shapes.iter().any(|cs| walk(&cs.shape, exact))
+        }
+
+        let ctx = egui::Context::default();
+        let mut state = CommandPaletteState {
+            open: true,
+            query: "  xyz-unmatched  ".into(),
+            index: 0,
+        };
+        let mut focused = false;
+        let commands = vec![PaletteCommand::new(
+            "tessel:help",
+            "Tessel",
+            "Keyboard shortcuts",
+        )];
+        crate::i18n::set_language(crate::i18n::Language::English);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(800.0, 600.0),
+                )),
+                focused: true,
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = show(ctx, &mut state, &mut focused, &commands);
+            },
+        );
+        let out_en = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(800.0, 600.0),
+                )),
+                focused: true,
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = show(ctx, &mut state, &mut focused, &commands);
+            },
+        );
+        assert!(has_text(
+            &out_en.shapes,
+            "Nothing matches \"xyz-unmatched\""
+        ));
+
+        crate::i18n::set_language(crate::i18n::Language::French);
+        let out_fr = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(800.0, 600.0),
+                )),
+                focused: true,
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = show(ctx, &mut state, &mut focused, &commands);
+            },
+        );
+        assert!(has_text(
+            &out_fr.shapes,
+            "Aucun résultat pour « xyz-unmatched »"
+        ));
+        crate::i18n::set_language(crate::i18n::Language::English);
     }
 }

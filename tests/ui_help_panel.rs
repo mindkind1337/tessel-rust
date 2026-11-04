@@ -6,7 +6,8 @@ mod shortcuts;
 
 use eframe::egui;
 use help_panel::{
-    HelpPanel, filter_supported_shortcuts, is_shortcut_supported, native_shortcut_text,
+    HelpPanel, filter_supported_shortcuts, help_footer_text, is_shortcut_supported,
+    native_shortcut_text,
 };
 
 const APP_INITIAL_SUPPORTED_KEYS: &[&str] = &[
@@ -109,14 +110,14 @@ fn supported_keys_filtering_omits_unimplemented_shortcuts_and_honors_truthful_na
         APP_INITIAL_SUPPORTED_KEYS
     ));
 
-    // Truthful native descriptions override `Ctrl+Shift+T` and `Ctrl+Shift+P` without touching `shortcuts.rs`:
+    // Full parity descriptions for `Ctrl+Shift+T` and `Ctrl+Shift+P`:
     assert_eq!(
         native_shortcut_text(
             "Ctrl+Shift+T",
             "New pane: the default agent, or the default shell",
             false
         ),
-        "New pane: default shell"
+        "New pane: the default agent, or the default shell"
     );
     assert_eq!(
         native_shortcut_text(
@@ -124,7 +125,7 @@ fn supported_keys_filtering_omits_unimplemented_shortcuts_and_honors_truthful_na
             "Nouveau panneau : l'agent par défaut, ou le shell par défaut",
             true
         ),
-        "Nouveau panneau : shell par défaut"
+        "Nouveau panneau : l'agent par défaut, ou le shell par défaut"
     );
     assert_eq!(
         native_shortcut_text(
@@ -132,7 +133,7 @@ fn supported_keys_filtering_omits_unimplemented_shortcuts_and_honors_truthful_na
             "Command palette: find panes, workspaces, commands",
             false
         ),
-        "Command palette: find commands"
+        "Command palette: find panes, workspaces, commands"
     );
     assert_eq!(
         native_shortcut_text(
@@ -140,7 +141,7 @@ fn supported_keys_filtering_omits_unimplemented_shortcuts_and_honors_truthful_na
             "Palette de commandes : trouver panneaux, espaces de travail, commandes",
             true
         ),
-        "Palette de commandes : chercher une commande"
+        "Palette de commandes : trouver panneaux, espaces de travail, commandes"
     );
     assert_eq!(native_shortcut_text("F1", "This help", false), "This help");
 
@@ -160,13 +161,25 @@ fn supported_keys_filtering_omits_unimplemented_shortcuts_and_honors_truthful_na
     assert!(!all_keys.contains(&"Ctrl+Shift+B"));
     assert!(!all_keys.contains(&"Win+H"));
 
-    // Searching `"agent"` or `"workspaces"` MUST NOT match overridden `Ctrl+Shift+T` or `Ctrl+Shift+P`:
-    assert!(filter_supported_shortcuts(false, APP_INITIAL_SUPPORTED_KEYS, "agent").is_empty());
-    assert!(filter_supported_shortcuts(true, APP_INITIAL_SUPPORTED_KEYS, "agent").is_empty());
-    assert!(filter_supported_shortcuts(false, APP_INITIAL_SUPPORTED_KEYS, "workspaces").is_empty());
-    assert!(filter_supported_shortcuts(true, APP_INITIAL_SUPPORTED_KEYS, "espaces").is_empty());
+    // Searching `"agent"` or `"workspaces"` matches full parity `Ctrl+Shift+T` and `Ctrl+Shift+P`:
+    assert_eq!(
+        filter_supported_shortcuts(false, APP_INITIAL_SUPPORTED_KEYS, "agent")[0].rows[0].keys,
+        "Ctrl+Shift+T"
+    );
+    assert_eq!(
+        filter_supported_shortcuts(true, APP_INITIAL_SUPPORTED_KEYS, "agent")[0].rows[0].keys,
+        "Ctrl+Shift+T"
+    );
+    assert_eq!(
+        filter_supported_shortcuts(false, APP_INITIAL_SUPPORTED_KEYS, "workspaces")[0].rows[0].keys,
+        "Ctrl+Shift+P"
+    );
+    assert_eq!(
+        filter_supported_shortcuts(true, APP_INITIAL_SUPPORTED_KEYS, "espaces")[0].rows[0].keys,
+        "Ctrl+Shift+P"
+    );
 
-    // Searching `"shell"` / `"commands"` DOES match the truthful native labels:
+    // Searching `"shell"` / `"commands"` also matches:
     let shell_hits = filter_supported_shortcuts(false, APP_INITIAL_SUPPORTED_KEYS, "shell");
     assert_eq!(shell_hits.len(), 1);
     assert_eq!(shell_hits[0].rows[0].keys, "Ctrl+Shift+T");
@@ -223,6 +236,7 @@ fn accent_insensitive_french_and_english_search_and_multi_chord_keycaps_render_c
     assert!(has_painted_text(&out_fr.shapes, "+"));
     assert!(has_painted_text(&out_fr.shapes, "Flèches"));
     assert!(has_painted_text(&out_fr.shapes, "Échap"));
+    assert!(has_painted_text(&out_fr.shapes, help_footer_text(true)));
 
     // Verify narrow 1-column fallback and empty-state EN/FR messages:
     panel.set_query("introuvable-xyz");
@@ -283,6 +297,7 @@ fn real_egui_modal_focuses_search_and_two_step_escape_clears_query_without_closi
     assert!(has_painted_text(&out_1.shapes, "PANES"));
     assert!(has_painted_text(&out_1.shapes, "EDITOR"));
     assert!(has_painted_text(&out_1.shapes, "APP"));
+    assert!(has_painted_text(&out_1.shapes, help_footer_text(false)));
 
     // Frame 2: type `"split"` directly (proving search `TextEdit` has focus without mouse click!).
     let (closed_2, _, _, out_2) = run_modal_frame(

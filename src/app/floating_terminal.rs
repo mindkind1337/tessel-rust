@@ -112,6 +112,16 @@ impl State {
                 .process()
                 .is_some_and(|terminal| terminal.has_focus(ctx))
     }
+    pub fn paste_text(&mut self, text: &str) -> bool {
+        if let Some(terminal) = self.runtime.process()
+            && !terminal.exited()
+        {
+            terminal.paste_text(text);
+            true
+        } else {
+            false
+        }
+    }
     pub fn poll(&mut self) {
         let before = self.runtime.phase();
         self.runtime.poll();

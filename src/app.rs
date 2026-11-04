@@ -402,6 +402,8 @@ pub struct Tessel {
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     toolbar_menu_open: bool,
+    pane_context_menu: Option<(u64, egui::Pos2)>,
+    pane_context_menu_just_opened: bool,
     finder: crate::finder_panel::Finder,
     grid_room: [f64; 2],
     grid_dirty: bool,
@@ -515,6 +517,8 @@ impl Tessel {
             command_palette: Default::default(),
             command_palette_focused: false,
             toolbar_menu_open: false,
+            pane_context_menu: None,
+            pane_context_menu_just_opened: false,
             finder: Default::default(),
             grid_room: [800.0, 600.0],
             grid_dirty: false,
@@ -1538,78 +1542,210 @@ impl Tessel {
         }
         ui.separator();
     }
+    fn default_new_launch(&self) -> Launch {
+        for preferred in ["claude", "codex"] {
+            if crate::agent_preferences::enabled(&self.state, preferred)
+                && self
+                    .agents
+                    .entries()
+                    .iter()
+                    .any(|(id, installed)| *installed && id == preferred)
+            {
+                return Launch::Agent(preferred.into());
+            }
+        }
+        if let Some((id, _)) = self.agents.entries().iter().find(|(id, installed)| {
+            *installed && crate::agent_preferences::enabled(&self.state, id)
+        }) {
+            return Launch::Agent(id.clone());
+        }
+        Launch::Shell
+    }
+
+    fn cycle_workspace(&mut self, step: i32) {
+        let len = self.state.projects.len();
+        if len == 0 {
+            return;
+        }
+        let current = self
+            .state
+            .active_project
+            .and_then(|id| self.state.projects.iter().position(|p| p.id == id));
+        let next_idx = match current {
+            Some(idx) => {
+                let n = len as i32;
+                ((idx as i32 + step).rem_euclid(n)) as usize
+            }
+            None => {
+                if step < 0 {
+                    len - 1
+                } else {
+                    0
+                }
+            }
+        };
+        if let Some(proj) = self.state.projects.get(next_idx)
+            && self.state.active_project != Some(proj.id)
+        {
+            self.state.active_project = Some(proj.id);
+            self.view = View::Work;
+            self.refresh_project();
+            self.save();
+        }
+    }
+
+    fn zoom_font(&mut self, delta: i8) {
+        let next = if delta == 0 {
+            15.0_f32
+        } else {
+            (self.state.font_size + f32::from(delta)).clamp(10.0_f32, 28.0_f32)
+        };
+        if (self.state.font_size - next).abs() > f32::EPSILON {
+            self.state.font_size = next;
+            self.save();
+        }
+    }
+
+    fn paste_into_active_terminal(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        if self.floating.ui.is_open()
+            && self.floating.ui.has_keyboard()
+            && self.floating.paste_text(text)
+        {
+            return true;
+        }
+        let target_id = self
+            .active_session
+            .filter(|id| {
+                self.sessions.iter().any(|s| {
+                    s.id == *id
+                        && s.project == self.state.active_project
+                        && s.terminal.as_ref().is_some_and(|t| !t.exited())
+                })
+            })
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|s| {
+                        s.project == self.state.active_project
+                            && s.terminal.as_ref().is_some_and(|t| !t.exited())
+                    })
+                    .map(|s| s.id)
+            });
+        if let Some(id) = target_id
+            && let Some(session) = self.sessions.iter_mut().find(|s| s.id == id)
+            && let Some(terminal) = &mut session.terminal
+        {
+            terminal.paste_text(text);
+            terminal.request_focus(ctx);
+            self.active_session = Some(id);
+            self.view = View::Work;
+            return true;
+        }
+        false
+    }
+
     fn show_command_palette(&mut self, ctx: &egui::Context) {
         if !self.command_palette.open {
             self.command_palette_focused = false;
             return;
         }
         use crate::palette::PaletteCommand;
-        let mut commands: Vec<_> = [
-            ("terminal", "Open terminal"),
-            ("floating", "Toggle floating terminal"),
-            ("launcher", "Open a terminal or agent"),
-            ("chat", "Native Codex chat"),
-            ("claude-chat", "Native Claude chat"),
-            ("files", "Files"),
-            ("finder", "Find a file"),
-            ("changes", "Changes"),
-            ("tasks", "Tasks"),
-            ("settings", "Settings"),
-            ("help", "Keyboard shortcuts"),
-            ("remote", "Remote files"),
-            ("share", "Share"),
-            #[cfg(windows)]
-            ("browser", "Browser"),
-            #[cfg(windows)]
-            ("vault", "Passwords"),
-            #[cfg(windows)]
-            ("account", "Account"),
-        ]
-        .into_iter()
-        .filter(|(id, _)| match *id {
-            "chat" => crate::agent_preferences::enabled(&self.state, "codex"),
-            "claude-chat" => crate::agent_preferences::enabled(&self.state, "claude"),
-            _ => true,
-        })
-        .map(|(id, title)| {
-            let command = PaletteCommand::new(id, "Tessel", tr(title));
-            let shortcut = match id {
-                "terminal" => "Ctrl+Shift+T",
-                "floating" => "Ctrl+`",
-                "launcher" => "Ctrl+Shift+Space",
-                "finder" => "Ctrl+Shift+J",
-                "files" => "Ctrl+Shift+X",
-                "changes" => "Ctrl+Shift+G",
-                "tasks" => "Ctrl+Shift+K",
-                "settings" => "Ctrl+,",
-                "help" => "F1",
-                _ => "",
-            };
-            if shortcut.is_empty() {
-                command
-            } else {
-                command.with_shortcut(shortcut)
-            }
-        })
-        .collect();
         let french = self.state.language == crate::i18n::Language::French;
+        let mut commands: Vec<PaletteCommand> = Vec::new();
+
+        // 1. New
+        let new_group = tr("New");
+        commands.push(
+            PaletteCommand::new("new:default", new_group, tr("New default pane"))
+                .with_shortcut("Ctrl+Shift+T"),
+        );
+        commands.push(PaletteCommand::new(
+            "terminal",
+            new_group,
+            tr("Open terminal"),
+        ));
+        commands.push(
+            PaletteCommand::new("launcher", new_group, tr("Open a terminal or agent"))
+                .with_shortcut("Ctrl+Shift+Space"),
+        );
+        for (agent_id, installed) in self.agents.entries() {
+            if *installed && crate::agent_preferences::enabled(&self.state, agent_id) {
+                let agent_name =
+                    crate::agent_catalog::find(agent_id).map_or(agent_id.as_str(), |p| p.name);
+                commands.push(PaletteCommand::new(
+                    format!("new:agent:{agent_id}"),
+                    new_group,
+                    agent_name,
+                ));
+            }
+        }
+        if crate::agent_preferences::enabled(&self.state, "codex") {
+            commands.push(PaletteCommand::new(
+                "chat",
+                new_group,
+                tr("Native Codex chat"),
+            ));
+        }
+        if crate::agent_preferences::enabled(&self.state, "claude") {
+            commands.push(PaletteCommand::new(
+                "claude-chat",
+                new_group,
+                tr("Native Claude chat"),
+            ));
+        }
+
+        // 2. Project / Workspaces
+        let proj_group = tr("Project");
+        commands.push(
+            PaletteCommand::new("project:new", proj_group, tr("Open project folder…"))
+                .with_shortcut("Ctrl+Shift+N"),
+        );
+        if self.state.projects.len() > 1 {
+            commands.push(
+                PaletteCommand::new("project:prev", proj_group, tr("Previous workspace"))
+                    .with_shortcut("Ctrl+PageUp"),
+            );
+            commands.push(
+                PaletteCommand::new("project:next", proj_group, tr("Next workspace"))
+                    .with_shortcut("Ctrl+PageDown"),
+            );
+        }
+
+        // 3. Layout
         let pane_count = self
             .sessions
             .iter()
             .filter(|s| s.project == self.state.active_project)
             .count();
-        let has_active_pane = self.active_project_work_pane().is_some();
+        let active_pane_id = self.active_project_work_pane();
+        let has_active_pane = active_pane_id.is_some();
         let can_apply_grid = pane_count > 0 || self.sessions.len() < 100;
-        commands.push(
-            PaletteCommand::new(
-                "broadcast",
-                "Tessel",
-                crate::layout_broadcast_ui::broadcast_command_title(french, self.state.broadcast),
-            )
-            .with_shortcut("Ctrl+Shift+B"),
-        );
         let layout_group = crate::layout_broadcast_ui::layout_toolbar_label(french);
+        let layout_key = crate::terminal_layout::project_key(self.state.active_project);
+        let is_maximized = self
+            .state
+            .terminal_layouts
+            .get(&layout_key)
+            .and_then(|l| l.maximized)
+            .is_some();
         if has_active_pane {
+            let max_cmd = PaletteCommand::new(
+                "layout:maximize",
+                layout_group,
+                tr(if is_maximized {
+                    "Restore pane"
+                } else {
+                    "Maximize pane"
+                }),
+            );
+            commands.push(if is_maximized {
+                max_cmd.with_shortcut("Esc")
+            } else {
+                max_cmd
+            });
             commands.push(
                 PaletteCommand::new(
                     "layout:split-right",
@@ -1649,6 +1785,36 @@ impl Tessel {
                 ));
             }
         }
+        if let Some(active_id) = active_pane_id
+            && let Some(sess) = self.sessions.iter().find(|s| s.id == active_id)
+        {
+            let prefs = match &sess.launch {
+                Launch::Agent(agent) => Some(crate::agent_preferences::for_pane_launch(
+                    &self.state,
+                    agent,
+                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                    sess.session_options.as_ref(),
+                )),
+                _ => None,
+            };
+            if sess.can_restart(prefs.as_ref()) {
+                commands.push(
+                    PaletteCommand::new(
+                        "layout:restart-active",
+                        layout_group,
+                        tr("Restart active pane"),
+                    )
+                    .with_shortcut("Ctrl+Shift+R"),
+                );
+            }
+            if sess.terminal.is_some() {
+                commands.push(PaletteCommand::new(
+                    "layout:reset-terminal",
+                    layout_group,
+                    tr("Reset active terminal"),
+                ));
+            }
+        }
         if has_active_pane {
             commands.push(
                 PaletteCommand::new(
@@ -1659,6 +1825,147 @@ impl Tessel {
                 .with_shortcut("Ctrl+Shift+W"),
             );
         }
+        commands.push(
+            PaletteCommand::new("floating", layout_group, tr("Toggle floating terminal"))
+                .with_shortcut("Ctrl+`"),
+        );
+        commands.push(PaletteCommand::new(
+            "layout:toggle-left",
+            layout_group,
+            tr(if self.state.panels.left_open {
+                "Hide left sidebar"
+            } else {
+                "Show left sidebar"
+            }),
+        ));
+        commands.push(PaletteCommand::new(
+            "layout:toggle-right",
+            layout_group,
+            tr(if self.state.panels.right_open {
+                "Hide right panel"
+            } else {
+                "Show right panel"
+            }),
+        ));
+        commands.push(PaletteCommand::new(
+            "layout:toggle-status-bar",
+            layout_group,
+            tr(if self.state.status_bar.visible {
+                "Hide status bar"
+            } else {
+                "Show status bar"
+            }),
+        ));
+
+        // 4. Files & Git
+        let files_group = tr("Files");
+        commands.push(
+            PaletteCommand::new("finder", files_group, tr("Find a file"))
+                .with_shortcut("Ctrl+Shift+J"),
+        );
+        let files_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Files;
+        commands.push(
+            PaletteCommand::new(
+                "files",
+                files_group,
+                tr(if files_showing {
+                    "Hide file explorer"
+                } else {
+                    "Show file explorer"
+                }),
+            )
+            .with_shortcut("Ctrl+Shift+X"),
+        );
+        let changes_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Changes;
+        commands.push(
+            PaletteCommand::new(
+                "changes",
+                files_group,
+                tr(if changes_showing {
+                    "Hide Git changes"
+                } else {
+                    "Show Git changes"
+                }),
+            )
+            .with_shortcut("Ctrl+Shift+G"),
+        );
+        commands.push(PaletteCommand::new(
+            "remote",
+            files_group,
+            tr("Remote files"),
+        ));
+
+        // 5. Task
+        let task_group = tr("Task");
+        let tasks_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Tasks;
+        commands.push(
+            PaletteCommand::new(
+                "tasks",
+                task_group,
+                tr(if tasks_showing {
+                    "Hide task board"
+                } else {
+                    "Show task board"
+                }),
+            )
+            .with_shortcut("Ctrl+Shift+K"),
+        );
+        if self.state.active_project.is_some() {
+            commands.push(PaletteCommand::new("task:new", task_group, tr("New task…")));
+        }
+
+        // 6. Theme
+        let theme_group = tr("Theme");
+        let current_theme = crate::theme::active(ctx);
+        for theme_id in &crate::theme_palettes::THEMES {
+            let cmd = PaletteCommand::new(
+                format!("theme:{}", theme_id.as_str()),
+                theme_group,
+                theme_id.label(french),
+            );
+            commands.push(if *theme_id == current_theme {
+                cmd.with_hint(tr("Active"))
+            } else {
+                cmd
+            });
+        }
+
+        // 7. Tessel / App
+        commands.push(
+            PaletteCommand::new(
+                "broadcast",
+                "Tessel",
+                crate::layout_broadcast_ui::broadcast_command_title(french, self.state.broadcast),
+            )
+            .with_shortcut("Ctrl+Shift+B"),
+        );
+        commands
+            .push(PaletteCommand::new("zoom:in", "Tessel", tr("Zoom in")).with_shortcut("Ctrl+="));
+        commands.push(
+            PaletteCommand::new("zoom:out", "Tessel", tr("Zoom out")).with_shortcut("Ctrl+-"),
+        );
+        commands.push(
+            PaletteCommand::new("zoom:reset", "Tessel", tr("Reset text size"))
+                .with_shortcut("Ctrl+0"),
+        );
+        commands.push(PaletteCommand::new("share", "Tessel", tr("Share")));
+        #[cfg(windows)]
+        commands.push(PaletteCommand::new("browser", "Tessel", tr("Browser")));
+        #[cfg(windows)]
+        commands.push(PaletteCommand::new("vault", "Tessel", tr("Passwords")));
+        #[cfg(windows)]
+        commands.push(PaletteCommand::new("account", "Tessel", tr("Account")));
+        commands.push(
+            PaletteCommand::new("settings", "Tessel", tr("Settings")).with_shortcut("Ctrl+,"),
+        );
+        commands.push(
+            PaletteCommand::new("help", "Tessel", tr("Keyboard shortcuts")).with_shortcut("F1"),
+        );
+
+        // 8. Go to workspace / Go to pane / Open editors
         commands.extend(self.state.projects.iter().map(|project| {
             PaletteCommand::new(
                 format!("project:{}", project.id),
@@ -1694,6 +2001,7 @@ impl Tessel {
             )
             .with_hint(document.path.display().to_string())
         }));
+
         let selected = crate::command_palette_panel::show(
             ctx,
             &mut self.command_palette,
@@ -1703,19 +2011,26 @@ impl Tessel {
         if let Some(id) = selected {
             self.command_palette.close();
             match id.as_str() {
+                "new:default" => {
+                    let launch = self.default_new_launch();
+                    self.new_session(launch);
+                }
                 "terminal" => self.new_session(Launch::Shell),
                 "floating" => self.toggle_floating(ctx),
                 "launcher" => self.open_launcher(),
                 "chat" => self.new_session(Launch::CodexChat),
                 "claude-chat" => self.new_session(Launch::ClaudeChat),
+                "project:new" => self.choose_project(),
+                "project:prev" => self.cycle_workspace(-1),
+                "project:next" => self.cycle_workspace(1),
                 "finder" => self.open_finder(),
-                "files" | "changes" | "tasks" => {
+                "files" => self.state.panels.toggle_right(RightTab::Files),
+                "changes" => self.state.panels.toggle_right(RightTab::Changes),
+                "tasks" => self.state.panels.toggle_right(RightTab::Tasks),
+                "task:new" => {
                     self.state.panels.right_open = true;
-                    self.state.panels.right_tab = match id.as_str() {
-                        "changes" => RightTab::Changes,
-                        "tasks" => RightTab::Tasks,
-                        _ => RightTab::Files,
-                    };
+                    self.state.panels.right_tab = RightTab::Tasks;
+                    self.tasks_board.focus_input(ctx);
                 }
                 "settings" => self.overlay = Some(Overlay::Settings),
                 "help" => self.open_help(),
@@ -1723,6 +2038,57 @@ impl Tessel {
                 "share" => self.overlay = Some(Overlay::Share),
                 "broadcast" => {
                     self.state.broadcast = !self.state.broadcast;
+                    self.save();
+                }
+                "zoom:in" => self.zoom_font(1),
+                "zoom:out" => self.zoom_font(-1),
+                "zoom:reset" => self.zoom_font(0),
+                "layout:maximize" => {
+                    if let Some(active_id) = active_pane_id {
+                        let layout = self.state.terminal_layouts.entry(layout_key).or_default();
+                        layout.maximized = if layout.maximized == Some(active_id) {
+                            None
+                        } else {
+                            Some(active_id)
+                        };
+                        self.grid_dirty = true;
+                        self.save();
+                    }
+                }
+                "layout:restart-active" => {
+                    if let Some(active_id) = active_pane_id
+                        && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
+                    {
+                        let prefs = match &session.launch {
+                            Launch::Agent(agent) => {
+                                Some(crate::agent_preferences::for_pane_launch(
+                                    &self.state,
+                                    agent,
+                                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                                    session.session_options.as_ref(),
+                                ))
+                            }
+                            _ => None,
+                        };
+                        session.restart(prefs);
+                    }
+                }
+                "layout:reset-terminal" => {
+                    if let Some(active_id) = active_pane_id
+                        && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
+                        && let Some(terminal) = &mut session.terminal
+                    {
+                        terminal.reset_modes();
+                    }
+                }
+                "layout:toggle-left" => {
+                    self.state.panels.left_open = !self.state.panels.left_open;
+                }
+                "layout:toggle-right" => {
+                    self.state.panels.right_open = !self.state.panels.right_open;
+                }
+                "layout:toggle-status-bar" => {
+                    self.state.status_bar.visible = !self.state.status_bar.visible;
                     self.save();
                 }
                 "layout:split-right" => {
@@ -1753,6 +2119,28 @@ impl Tessel {
                         ) == id_str
                     }) {
                         self.apply_grid_preset(preset);
+                    }
+                }
+                id_str if id_str.starts_with("new:agent:") => {
+                    if let Some(agent_id) = id_str.strip_prefix("new:agent:")
+                        && crate::agent_preferences::enabled(&self.state, agent_id)
+                        && self
+                            .agents
+                            .entries()
+                            .iter()
+                            .any(|(known, installed)| *installed && known == agent_id)
+                    {
+                        self.new_session(Launch::Agent(agent_id.into()));
+                    }
+                }
+                id_str if id_str.starts_with("theme:") => {
+                    if let Some(theme_id) = id_str
+                        .strip_prefix("theme:")
+                        .and_then(crate::theme_palettes::ThemeId::from_id)
+                    {
+                        self.state.theme = Some(theme_id);
+                        crate::theme::apply(ctx, self.state.dark, Some(theme_id));
+                        self.save();
                     }
                 }
                 #[cfg(windows)]
@@ -2326,6 +2714,7 @@ impl Tessel {
         let geometry = pane_grid::grid_layout(layout.tree.as_ref());
         if maximized.is_none()
             && ui.is_enabled()
+            && !self.floating.ui.has_keyboard()
             && (!ui.ctx().wants_keyboard_input()
                 || self
                     .sessions
@@ -2424,6 +2813,8 @@ impl Tessel {
         let mut maximize = None;
         let mut arrange = false;
         let mut model_choice = None;
+        let mut send_selection: Option<(String, String)> = None;
+        let mut open_here: Option<u64> = None;
         let mut observed_updates = Vec::new();
         let mut native_options_changed = false;
         #[cfg(windows)]
@@ -2433,6 +2824,45 @@ impl Tessel {
         let mut broadcast_membership_changed = false;
         let mut broadcast_batches: Vec<(u64, Vec<crate::terminal::BroadcastInput>)> = Vec::new();
         let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
+        let workspace_targets: Vec<crate::pane_menu_model::OtherPaneTarget> = self
+            .sessions
+            .iter()
+            .filter(|s| s.project == self.state.active_project)
+            .map(|s| crate::pane_menu_model::OtherPaneTarget {
+                id: s.id.to_string(),
+                title: s.label().to_owned(),
+                where_hint: String::new(),
+                is_agent: matches!(
+                    s.launch,
+                    Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+                ),
+            })
+            .collect();
+        let waiting_chat_panes: std::collections::HashSet<u64> = self
+            .chats
+            .iter()
+            .filter(|c| c.waiting_for_user())
+            .map(|c| c.pane)
+            .chain(
+                self.claude_chats
+                    .iter()
+                    .filter(|c| c.waiting_for_user())
+                    .map(|c| c.pane),
+            )
+            .collect();
+        let working_chat_panes: std::collections::HashSet<u64> = self
+            .chats
+            .iter()
+            .filter(|c| c.working())
+            .map(|c| c.pane)
+            .chain(
+                self.claude_chats
+                    .iter()
+                    .filter(|c| c.working())
+                    .map(|c| c.pane),
+            )
+            .collect();
+        let ctx_menu_was_just_opened = std::mem::take(&mut self.pane_context_menu_just_opened);
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
                 continue;
@@ -2529,6 +2959,16 @@ impl Tessel {
                                     }
                                     _ => None,
                                 };
+                                let is_agent_pane = matches!(
+                                    session.launch,
+                                    Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+                                );
+                                let id_str_self = id.to_string();
+                                let peer_targets: Vec<_> = workspace_targets
+                                    .iter()
+                                    .filter(|t| t.id != id_str_self)
+                                    .cloned()
+                                    .collect();
                                 let menu = crate::pane_header::MenuState {
                                     model_choice: session.has_model_choice(),
                                     model_pending: !session.can_pick_model(),
@@ -2554,7 +2994,28 @@ impl Tessel {
                                     maximized: maximized.is_some(),
                                     multiple_panes: ids.len() > 1,
                                     terminal_output: session.terminal.is_some(),
-                                    can_rename: session.pane_name.is_some(),
+                                    can_rename: true,
+                                    is_agent: is_agent_pane,
+                                    sleeping: session.terminal.is_none()
+                                        && session.loading.is_none()
+                                        && session.restarting.is_none()
+                                        && session.launch.native_chat().is_none(),
+                                    exited: session
+                                        .terminal
+                                        .as_ref()
+                                        .is_some_and(Terminal::exited),
+                                    asks_approval: waiting_chat_panes.contains(&id),
+                                    activity: if working_chat_panes.contains(&id) {
+                                        Some(crate::pane_menu_model::PaneAgentActivity::Busy)
+                                    } else {
+                                        None
+                                    },
+                                    has_selection: session
+                                        .terminal
+                                        .as_ref()
+                                        .is_some_and(Terminal::has_selection),
+                                    voice_typing: cfg!(windows),
+                                    other_panes: peer_targets,
                                     language: if self.state.language
                                         == crate::i18n::Language::French
                                     {
@@ -2562,6 +3023,7 @@ impl Tessel {
                                     } else {
                                         crate::pane_menu_model::PaneMenuLang::En
                                     },
+                                    ..Default::default()
                                 };
                                 let mut action = None;
                                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -2679,17 +3141,42 @@ impl Tessel {
                                     if let Some(selected) = crate::pane_header::show(ui, &menu) {
                                         action = Some(selected);
                                     }
-                                    if session.restarting.is_none()
-                                        && session.loading.is_none()
-                                        && session.native_host.is_none()
-                                        && session.launch.native_chat().is_none()
-                                        && ui.button(tr("Sleep")).clicked()
-                                    {
-                                        session.terminal = None;
-                                        session.loading = None;
-                                        ui.close();
-                                    }
                                 });
+                                if let Some((ctx_id, ctx_pos)) = self.pane_context_menu
+                                    && ctx_id == id
+                                {
+                                    let area_resp = egui::Area::new(egui::Id::new((
+                                        "pane-shift-ctx-menu",
+                                        id,
+                                    )))
+                                    .order(egui::Order::Foreground)
+                                    .fixed_pos(ctx_pos)
+                                    .constrain(true)
+                                    .show(ui.ctx(), |ui| {
+                                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                            ui.set_min_width(210.0);
+                                            if let Some(selected) =
+                                                crate::pane_header::show(ui, &menu)
+                                            {
+                                                action = Some(selected);
+                                                self.pane_context_menu = None;
+                                            }
+                                        });
+                                    });
+                                    let escape = ui
+                                        .ctx()
+                                        .input(|i| i.key_pressed(egui::Key::Escape));
+                                    let clicked_outside = !ctx_menu_was_just_opened
+                                        && ui.ctx().input(|i| {
+                                            i.pointer.any_pressed()
+                                                && i.pointer.interact_pos().is_some_and(|pos| {
+                                                    !area_resp.response.rect.contains(pos)
+                                                })
+                                        });
+                                    if escape || clicked_outside {
+                                        self.pane_context_menu = None;
+                                    }
+                                }
                                 if let Some(action) = action {
                                     use crate::pane_menu_model::PaneMenuAction;
                                     match action {
@@ -2705,10 +3192,50 @@ impl Tessel {
                                                 ui.ctx().copy_text(id.clone());
                                             }
                                         }
+                                        PaneMenuAction::Copy => {
+                                            if let Some(terminal) = &mut session.terminal {
+                                                let _ = terminal.copy_selection(ui.ctx());
+                                            }
+                                        }
+                                        PaneMenuAction::Paste => {
+                                            if let Some(terminal) = &mut session.terminal {
+                                                terminal.paste_from_clipboard();
+                                            }
+                                        }
                                         PaneMenuAction::CopyOutput => {
                                             if let Some(terminal) = &session.terminal {
                                                 ui.ctx().copy_text(terminal.output());
                                             }
+                                        }
+                                        PaneMenuAction::Clear => {
+                                            if let Some(terminal) = &mut session.terminal {
+                                                terminal.clear_screen();
+                                            }
+                                        }
+                                        PaneMenuAction::ResetTerminal => {
+                                            if let Some(terminal) = &mut session.terminal {
+                                                terminal.reset_modes();
+                                            }
+                                        }
+                                        PaneMenuAction::Find => {
+                                            if let Some(terminal) = &mut session.terminal {
+                                                terminal.open_find();
+                                            }
+                                        }
+                                        PaneMenuAction::VoiceTyping => {
+                                            crate::terminal::trigger_voice_typing();
+                                        }
+                                        PaneMenuAction::SendSelectionTo(target_id) => {
+                                            if let Some(text) = session
+                                                .terminal
+                                                .as_mut()
+                                                .and_then(Terminal::take_selection)
+                                            {
+                                                send_selection = Some((target_id, text));
+                                            }
+                                        }
+                                        PaneMenuAction::OpenHere => {
+                                            open_here = Some(id);
                                         }
                                         PaneMenuAction::ToggleMaximize => maximize = Some(id),
                                         PaneMenuAction::ArrangeGrid => arrange = true,
@@ -2719,7 +3246,7 @@ impl Tessel {
                                             split = Some((id, SplitDir::Col))
                                         }
                                         PaneMenuAction::ClosePane => close = Some(id),
-                                        PaneMenuAction::Rename if session.pane_name.is_some() => {
+                                        PaneMenuAction::Rename => {
                                             rename = Some((id, session.label().to_owned()))
                                         }
                                         _ => {}
@@ -2822,7 +3349,16 @@ impl Tessel {
                                         }
                                     });
                             } else if let Some(terminal) = &mut session.terminal {
+                                let agent_kind = match &session.launch {
+                                    Launch::Agent(agent) => Some(agent.as_str()),
+                                    _ => None,
+                                };
+                                terminal.set_agent_kind(agent_kind);
                                 ui.add_enabled_ui(!picker_was_open && !session.model_picker.is_open(), |ui| terminal.show(ui, self.state.font_size));
+                                if let Some(pos) = terminal.take_context_menu_request() {
+                                    self.pane_context_menu = Some((id, pos));
+                                    self.pane_context_menu_just_opened = true;
+                                }
                                 let batch = terminal.take_broadcast_inputs();
                                 if self.state.broadcast
                                     && session.broadcast
@@ -2871,6 +3407,38 @@ impl Tessel {
         #[cfg(windows)]
         if let Some(id) = native_wake {
             self.wake_native_terminal(id, ui.ctx());
+        }
+        if let Some(target_pane) = open_here {
+            self.active_session = Some(target_pane);
+            self.open_launcher();
+        }
+        if let Some((target_id_str, text)) = send_selection
+            && let Ok(target_id) = target_id_str.parse::<u64>()
+            && let Some(peer) = self.sessions.iter_mut().find(|s| s.id == target_id)
+        {
+            if let Some(terminal) = &mut peer.terminal {
+                terminal.paste_text(&text);
+                terminal.request_focus(ui.ctx());
+                self.active_session = Some(target_id);
+            } else {
+                match peer.launch {
+                    Launch::CodexChat => {
+                        if let Some(chat) = self.chats.iter_mut().find(|c| c.pane == target_id) {
+                            chat.append_composer(&text);
+                            self.active_session = Some(target_id);
+                        }
+                    }
+                    Launch::ClaudeChat => {
+                        if let Some(chat) =
+                            self.claude_chats.iter_mut().find(|c| c.pane == target_id)
+                        {
+                            chat.append_composer(&text);
+                            self.active_session = Some(target_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         if self.state.broadcast && !broadcast_batches.is_empty() {
             for (source_id, batch) in &broadcast_batches {
@@ -3093,23 +3661,59 @@ impl Tessel {
                     link = preview.show(ui);
                 });
         } else {
-            egui::ScrollArea::both()
-                .id_salt((&d.path, "source"))
-                .show(ui, |ui| {
-                    if ui
-                        .add(
-                            egui::TextEdit::multiline(&mut d.text)
-                                .code_editor()
-                                .font(egui::FontId::monospace(self.state.font_size))
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(30)
-                                .lock_focus(true),
-                        )
-                        .changed()
-                    {
-                        d.preview = None;
+            show_editor_bars(ui, d);
+            let font = egui::FontId::monospace(self.state.font_size);
+            let row_height = ui.fonts_mut(|f| f.row_height(&font)).max(14.0_f32);
+            let mut scroll = if d.tools.word_wrap {
+                egui::ScrollArea::vertical()
+            } else {
+                egui::ScrollArea::both()
+            }
+            .id_salt((&d.path, "source"));
+            if let Some(target_line) = d.tools.pending_scroll_line.take() {
+                scroll = scroll.vertical_scroll_offset(
+                    ((target_line as f32) * row_height - 60.0_f32).max(0.0_f32),
+                );
+            }
+            scroll.show(ui, |ui| {
+                let wrap_width = if d.tools.word_wrap {
+                    ui.available_width().max(80.0_f32)
+                } else {
+                    f32::INFINITY
+                };
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                    let mut job = egui::text::LayoutJob::simple(
+                        buf.as_str().to_owned(),
+                        font.clone(),
+                        ui.visuals().text_color(),
+                        wrap_width,
+                    );
+                    job.wrap.break_anywhere = d.tools.word_wrap;
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
+                let mut out = egui::TextEdit::multiline(&mut d.text)
+                    .code_editor()
+                    .font(font.clone())
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(30)
+                    .lock_focus(true)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                if let Some((sc, ec)) = d.tools.pending_char_range.take() {
+                    let range = egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(sc),
+                        egui::text::CCursor::new(ec),
+                    );
+                    out.state.cursor.set_char_range(Some(range));
+                    out.state.store(ui.ctx(), out.response.id);
+                    if !d.tools.find_open && !d.tools.goto_open {
+                        out.response.request_focus();
                     }
-                });
+                }
+                if out.response.changed() {
+                    d.preview = None;
+                }
+            });
         }
         let resolved = link.map(|href| {
             crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
@@ -3245,6 +3849,8 @@ impl Tessel {
         self.host_panel.reset();
         self.host_notice = None;
         self.rename_agent = None;
+        self.pane_context_menu = None;
+        self.pane_context_menu_just_opened = false;
         self.next_session = self.state.next_pane_id();
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
@@ -4247,11 +4853,25 @@ impl Tessel {
             self.overlay = None;
             return;
         };
+        let is_agent = self
+            .sessions
+            .iter()
+            .find(|s| s.id == draft.pane)
+            .is_some_and(|s| {
+                matches!(
+                    s.launch,
+                    Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+                )
+            });
         let mut submit = false;
         let mut cancel = false;
         let response = egui::Modal::new(egui::Id::new("rename-agent")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 48.0).clamp(220.0, 420.0));
-            ui.heading(tr("Rename agent"));
+            ui.heading(tr(if is_agent {
+                "Rename agent"
+            } else {
+                "Rename pane"
+            }));
             let field = ui.add(egui::TextEdit::singleline(&mut draft.draft).char_limit(60).desired_width(ui.available_width()));
             if !draft.focused { field.request_focus(); draft.focused = true; }
             if field.changed() { draft.error.clear(); }
@@ -4290,12 +4910,37 @@ impl Tessel {
     }
 
     fn rename_agent_saved(&mut self, pane: u64, expected: &str, name: &str) -> Result<(), String> {
-        if !self
-            .sessions
-            .iter()
-            .any(|s| s.id == pane && s.pane_name.as_deref() == Some(expected))
-        {
+        let Some(target) = self.sessions.iter().find(|s| s.id == pane) else {
             return Err(tr("Agent changed; reopen its menu.").into());
+        };
+        if target.label() != expected {
+            return Err(tr("Agent changed; reopen its menu.").into());
+        }
+        let is_agent = matches!(
+            target.launch,
+            Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+        );
+        if !is_agent {
+            let trimmed = name.trim();
+            if trimmed.is_empty()
+                || trimmed.chars().count() > 60
+                || trimmed.chars().any(char::is_control)
+            {
+                return Err(tr("Choose a valid pane name (1–60 characters).").into());
+            }
+            let new_title = trimmed.to_owned();
+            if let Some(store) = &self.store {
+                let mut next = self.state.clone();
+                if let Some(saved) = next.sessions.iter_mut().find(|s| s.id == pane) {
+                    saved.title = new_title.clone();
+                }
+                store.save(&next)?;
+                self.state.sessions = next.sessions;
+            }
+            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane) {
+                session.title = new_title;
+            }
+            return Ok(());
         }
         let mut names: Vec<_> = self
             .sessions
@@ -4409,27 +5054,7 @@ impl Tessel {
                 close |= self.help.show(
                     ui,
                     self.state.language == crate::i18n::Language::French,
-                    &[
-                        "Ctrl+`",
-                        "Ctrl+Shift+T",
-                        "Ctrl+Shift+W",
-                        "Ctrl+Shift+R",
-                        "Ctrl+Shift+B",
-                        "Ctrl+Shift+Space",
-                        "Ctrl+Shift+P",
-                        "Ctrl+Shift+J",
-                        "Ctrl+Shift+E",
-                        "Ctrl+Shift+O",
-                        "Alt+Arrows",
-                        "Esc",
-                        "Ctrl+S",
-                        "Ctrl+W",
-                        "Ctrl+Shift+K",
-                        "Ctrl+Shift+X",
-                        "Ctrl+Shift+G",
-                        "Ctrl+,",
-                        "F1",
-                    ],
+                    SUPPORTED_HELP_SHORTCUT_KEYS,
                 );
             } else {
                 egui::ScrollArea::vertical()
@@ -5049,6 +5674,26 @@ impl eframe::App for Tessel {
         }
         if self.overlay.is_some() || self.command_palette.open || confirmation_open {
             self.status_bar.close_popovers();
+            self.pane_context_menu = None;
+        }
+        let dropped_paths: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if !dropped_paths.is_empty()
+            && self.overlay.is_none()
+            && !self.command_palette.open
+            && !confirmation_open
+        {
+            let joined = dropped_paths
+                .iter()
+                .map(|p| shell_quote_path(p))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = self.paste_into_active_terminal(ctx, &joined);
         }
         let picker_escape = self.sessions.iter_mut().fold(false, |consumed, session| {
             session.model_picker.handle_escape(ctx) | consumed
@@ -5061,6 +5706,7 @@ impl eframe::App for Tessel {
         let keyboard_free = !picker_escape
             && !status_bar_escape
             && !self.status_bar.has_open_popover()
+            && self.pane_context_menu.is_none()
             && (!ctx.wants_keyboard_input() || terminal_focused)
             && !self.sessions.iter().any(|s| s.model_picker.is_open());
         if !confirmation_open
@@ -5094,6 +5740,78 @@ impl eframe::App for Tessel {
             {
                 self.command_palette.toggle();
             }
+            if !self.command_palette.open {
+                // Global zoom & workspace cycling shortcuts work from editor, terminal, or body:
+                let zoom_in = ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::CTRL, egui::Key::Equals)
+                        || i.consume_key(egui::Modifiers::CTRL, egui::Key::Plus)
+                        || i.consume_key(
+                            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                            egui::Key::Plus,
+                        )
+                        || i.consume_key(
+                            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                            egui::Key::Equals,
+                        )
+                });
+                let zoom_out =
+                    ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Minus));
+                let zoom_reset = ctx.input_mut(|i| {
+                    if i.consume_key(egui::Modifiers::CTRL, egui::Key::Num0) {
+                        return true;
+                    }
+                    let phys_zero = i.events.iter().any(|ev| {
+                        matches!(
+                            ev,
+                            egui::Event::Key {
+                                physical_key: Some(egui::Key::Num0),
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } if modifiers.ctrl && !modifiers.shift && !modifiers.alt
+                        )
+                    });
+                    if phys_zero {
+                        i.events.retain(|ev| {
+                            !matches!(
+                                ev,
+                                egui::Event::Key {
+                                    physical_key: Some(egui::Key::Num0),
+                                    pressed: true,
+                                    modifiers,
+                                    ..
+                                } if modifiers.ctrl && !modifiers.shift && !modifiers.alt
+                            )
+                        });
+                    }
+                    phys_zero
+                });
+                if zoom_in {
+                    self.zoom_font(1);
+                } else if zoom_out {
+                    self.zoom_font(-1);
+                } else if zoom_reset {
+                    self.zoom_font(0);
+                }
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::PageUp)) {
+                    self.cycle_workspace(-1);
+                }
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::PageDown)) {
+                    self.cycle_workspace(1);
+                }
+                if self.view == View::Files && self.documents.len() > 1 {
+                    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowLeft))
+                    {
+                        let len = self.documents.len();
+                        self.active_document = (self.active_document + len - 1) % len;
+                    } else if ctx
+                        .input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowRight))
+                    {
+                        let len = self.documents.len();
+                        self.active_document = (self.active_document + 1) % len;
+                    }
+                }
+            }
             if keyboard_free && !self.command_palette.open {
                 if ctx.input_mut(|i| {
                     i.consume_key(
@@ -5108,15 +5826,22 @@ impl eframe::App for Tessel {
                 }) {
                     self.open_finder();
                 }
-                for (key, dir) in [
-                    (egui::Key::E, crate::pane_grid::SplitDir::Row),
-                    (egui::Key::O, crate::pane_grid::SplitDir::Col),
-                ] {
-                    if ctx.input_mut(|i| {
-                        i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
-                    }) && let Some(target) = self.active_session
-                    {
-                        self.new_session_placed(Launch::Shell, Some((target, dir)));
+                if ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::N)
+                }) {
+                    self.choose_project();
+                }
+                if !self.floating.ui.has_keyboard() {
+                    for (key, dir) in [
+                        (egui::Key::E, crate::pane_grid::SplitDir::Row),
+                        (egui::Key::O, crate::pane_grid::SplitDir::Col),
+                    ] {
+                        if ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
+                        }) && let Some(target) = self.active_session
+                        {
+                            self.new_session_placed(Launch::Shell, Some((target, dir)));
+                        }
                     }
                 }
                 #[cfg(windows)]
@@ -5153,7 +5878,8 @@ impl eframe::App for Tessel {
                 if ctx.input_mut(|i| {
                     i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
                 }) {
-                    self.new_session(Launch::Shell);
+                    let launch = self.default_new_launch();
+                    self.new_session(launch);
                 }
             }
         }
@@ -5457,11 +6183,19 @@ impl eframe::App for Tessel {
         });
         #[cfg_attr(not(windows), allow(unused_variables))]
         let floating_rect = self.show_floating(ctx, central.response.rect);
-        if let Some(path) = self
+        if let Some(action) = self
             .finder
-            .show(ctx, self.state.active().map(|p| p.path.as_path()))
+            .show_action(ctx, self.state.active().map(|p| p.path.as_path()))
         {
-            self.open_document(path);
+            match action {
+                crate::finder_panel::FinderAction::OpenFile(path) => self.open_document(path),
+                crate::finder_panel::FinderAction::InsertInTerminal(path) => {
+                    let quoted = shell_quote_path(&path);
+                    if !self.paste_into_active_terminal(ctx, &quoted) {
+                        self.open_document(path);
+                    }
+                }
+            }
         }
         self.show_overlay(ctx);
         self.show_command_palette(ctx);
@@ -5482,12 +6216,13 @@ impl eframe::App for Tessel {
                         maximized: false,
                         multiple_panes: true,
                         terminal_output: true,
-                        can_rename: false,
+                        can_rename: true,
                         language: if self.state.language == crate::i18n::Language::French {
                             crate::pane_menu_model::PaneMenuLang::Fr
                         } else {
                             crate::pane_menu_model::PaneMenuLang::En
                         },
+                        ..Default::default()
                     },
                 );
             });
@@ -5600,7 +6335,267 @@ fn take_fresh_shortcut(
     })
 }
 
+pub const SUPPORTED_HELP_SHORTCUT_KEYS: &[&str] = &[
+    // Panes
+    "Ctrl+Shift+T",
+    "Ctrl+Shift+Space",
+    "Ctrl+Shift+P",
+    "Ctrl+Shift+J",
+    "Ctrl+Shift+E",
+    "Ctrl+Shift+O",
+    "Ctrl+Shift+W",
+    "Ctrl+Shift+R",
+    "Alt+Arrows",
+    "Esc",
+    "Ctrl+`",
+    // Terminal
+    "Ctrl+Shift+F",
+    "Ctrl+Shift+C",
+    "Ctrl+Shift+V",
+    "Ctrl+=",
+    "Ctrl+-",
+    "Ctrl+0",
+    "Shift+PageUp",
+    "Shift+PageDown",
+    // Workspaces
+    "Ctrl+Shift+N",
+    "Ctrl+PageUp",
+    "Ctrl+PageDown",
+    // Editor
+    "Ctrl+S",
+    "Ctrl+W",
+    "Ctrl+F",
+    "Ctrl+H",
+    "Ctrl+G",
+    "Alt+Z",
+    "F7 / Shift+F7",
+    // App
+    "Ctrl+Shift+B",
+    "Alt+A",
+    "Ctrl+Shift+K",
+    "Ctrl+Shift+X",
+    "Ctrl+Shift+G",
+    "Ctrl+,",
+    #[cfg(windows)]
+    "Win+H",
+    "F1",
+];
+
+pub fn shell_quote_path(path: &std::path::Path) -> String {
+    let raw = path.display().to_string();
+    let needs_quote = raw.is_empty()
+        || raw.chars().any(|c| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '\'' | '"' | '$' | '`' | '&' | '|' | ';' | '(' | ')' | '<' | '>'
+                )
+        });
+    if !needs_quote {
+        raw
+    } else {
+        format!("'{}'", raw.replace('\'', "''"))
+    }
+}
+
+fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
+    if d.tools.goto_open {
+        ui.horizontal(|ui| {
+            ui.label(tr("Go to line"));
+            let input = ui.add(
+                egui::TextEdit::singleline(&mut d.tools.goto_line)
+                    .desired_width(180.0)
+                    .hint_text(tr("Go to line (e.g. 42 or 42:10)…")),
+            );
+            if d.tools.focus_goto {
+                input.request_focus();
+                d.tools.focus_goto = false;
+            }
+            let enter = (input.has_focus() || input.lost_focus())
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let go_clicked = ui.small_button(tr("Go")).clicked();
+            if (enter || go_clicked)
+                && let Some((char_pos, line_0)) =
+                    crate::files::goto_line_char_offset(&d.text, &d.tools.goto_line)
+            {
+                d.tools.pending_char_range = Some((char_pos, char_pos));
+                d.tools.pending_scroll_line = Some(line_0);
+                d.tools.goto_open = false;
+            }
+            let esc = input.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if esc || ui.small_button("×").clicked() {
+                d.tools.goto_open = false;
+            }
+        });
+    }
+    if d.tools.find_open {
+        let mut matches = crate::files::find_char_matches(&d.text, &d.tools.find_query);
+        if matches.is_empty() {
+            d.tools.match_index = 0;
+        } else {
+            d.tools.match_index %= matches.len();
+        }
+        let mut step_dir: Option<isize> = None;
+        let mut do_replace_one = false;
+        let mut do_replace_all = false;
+        let mut close_find = false;
+        ui.horizontal_wrapped(|ui| {
+            let find_input = ui.add(
+                egui::TextEdit::singleline(&mut d.tools.find_query)
+                    .desired_width(180.0)
+                    .hint_text(tr("Find in file…")),
+            );
+            if d.tools.focus_find {
+                find_input.request_focus();
+                d.tools.focus_find = false;
+            }
+            if find_input.changed() {
+                d.tools.match_index = 0;
+                matches = crate::files::find_char_matches(&d.text, &d.tools.find_query);
+                if let Some(&(sc, ec, line)) = matches.first() {
+                    d.tools.pending_char_range = Some((sc, ec));
+                    d.tools.pending_scroll_line = Some(line);
+                }
+            }
+            let count_text = if d.tools.find_query.is_empty() {
+                String::new()
+            } else if matches.is_empty() {
+                "0 / 0".to_string()
+            } else {
+                format!("{} / {}", d.tools.match_index + 1, matches.len())
+            };
+            if !count_text.is_empty() {
+                ui.weak(count_text);
+            }
+            if ui
+                .add_enabled(!matches.is_empty(), egui::Button::new("↑").small())
+                .clicked()
+            {
+                step_dir = Some(-1);
+            }
+            if ui
+                .add_enabled(!matches.is_empty(), egui::Button::new("↓").small())
+                .clicked()
+            {
+                step_dir = Some(1);
+            }
+            if find_input.has_focus() || find_input.lost_focus() {
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)) {
+                    step_dir = Some(-1);
+                    find_input.request_focus();
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                    step_dir = Some(1);
+                    find_input.request_focus();
+                }
+            }
+            if d.tools.replace_open {
+                let rep_input = ui.add(
+                    egui::TextEdit::singleline(&mut d.tools.replace_text)
+                        .desired_width(160.0)
+                        .hint_text(tr("Replace with…")),
+                );
+                if (rep_input.has_focus() || rep_input.lost_focus())
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                {
+                    do_replace_one = true;
+                    rep_input.request_focus();
+                }
+                if ui
+                    .add_enabled(
+                        !matches.is_empty(),
+                        egui::Button::new(tr("Replace")).small(),
+                    )
+                    .clicked()
+                {
+                    do_replace_one = true;
+                }
+                if ui
+                    .add_enabled(
+                        !matches.is_empty(),
+                        egui::Button::new(tr("Replace all")).small(),
+                    )
+                    .clicked()
+                {
+                    do_replace_all = true;
+                }
+            }
+            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if esc || ui.small_button("×").clicked() {
+                close_find = true;
+            }
+        });
+        if let Some(dir) = step_dir
+            && !matches.is_empty()
+        {
+            let len = matches.len() as isize;
+            d.tools.match_index =
+                (((d.tools.match_index as isize + dir) % len + len) % len) as usize;
+            let (sc, ec, line) = matches[d.tools.match_index];
+            d.tools.pending_char_range = Some((sc, ec));
+            d.tools.pending_scroll_line = Some(line);
+        }
+        if do_replace_one && let Some(&(sc, ec, line)) = matches.get(d.tools.match_index) {
+            let (sb, eb) = crate::files::char_range_to_byte_range(&d.text, sc, ec);
+            d.text.replace_range(sb..eb, &d.tools.replace_text);
+            d.preview = None;
+            let rep_chars = d.tools.replace_text.chars().count();
+            d.tools.pending_char_range = Some((sc, sc + rep_chars));
+            d.tools.pending_scroll_line = Some(line);
+        } else if do_replace_all && !matches.is_empty() {
+            for &(sc, ec, _) in matches.iter().rev() {
+                let (sb, eb) = crate::files::char_range_to_byte_range(&d.text, sc, ec);
+                d.text.replace_range(sb..eb, &d.tools.replace_text);
+            }
+            d.preview = None;
+            d.tools.match_index = 0;
+        }
+        if close_find {
+            d.tools.find_open = false;
+            d.tools.replace_open = false;
+        }
+    }
+}
+
 fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool {
+    let source_mode = !d.media && !(readable && d.preview_mode);
+    if ui.is_enabled() && source_mode {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+            d.tools.find_open = true;
+            d.tools.focus_find = true;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::H)) {
+            d.tools.find_open = true;
+            d.tools.replace_open = true;
+            d.tools.focus_find = true;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::G)) {
+            d.tools.goto_open = true;
+            d.tools.focus_goto = true;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::Z)) {
+            d.tools.word_wrap = !d.tools.word_wrap;
+        }
+        let prev_hunk = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F7));
+        let next_hunk =
+            !prev_hunk && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F7));
+        if (prev_hunk || next_hunk)
+            && let Some(orig) = d.original_text()
+        {
+            let hunks = crate::files::changed_line_hunks(orig, &d.text);
+            if !hunks.is_empty() {
+                let len = hunks.len();
+                d.tools.diff_hunk_index = if prev_hunk {
+                    (d.tools.diff_hunk_index + len - 1) % len
+                } else {
+                    (d.tools.diff_hunk_index + 1) % len
+                };
+                let (char_pos, line_0) = hunks[d.tools.diff_hunk_index];
+                d.tools.pending_char_range = Some((char_pos, char_pos));
+                d.tools.pending_scroll_line = Some(line_0);
+            }
+        }
+    }
     ui.horizontal(|ui| {
         if !d.media {
             let save_clicked = ui.button(tr("Save (Ctrl+S)")).clicked();
@@ -5614,6 +6609,17 @@ fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool
         if readable {
             ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
             ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
+        }
+        if source_mode {
+            ui.toggle_value(&mut d.tools.word_wrap, tr("Word wrap"));
+            if ui.button(tr("Find…")).clicked() {
+                d.tools.find_open = true;
+                d.tools.focus_find = true;
+            }
+            if ui.button(tr("Go to line")).clicked() {
+                d.tools.goto_open = true;
+                d.tools.focus_goto = true;
+            }
         }
         let close = ui.button(tr("Close")).clicked()
             || take_close_shortcut(ui.ctx(), ui.is_enabled(), egui::Modifiers::CTRL);
@@ -6383,6 +7389,37 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         assert!(
             (top.width - 1200.0).abs() < 1.0 && bottom.top > top.top,
             "1 x 2 preset must stay stacked vertically across workspace sync: top={top:?}, bottom={bottom:?}"
+        );
+    }
+
+    #[test]
+    fn supported_help_shortcuts_populate_all_five_groups_and_shell_quote_escapes_paths() {
+        for french in [false, true] {
+            let groups = crate::help_panel::filter_supported_shortcuts(
+                french,
+                SUPPORTED_HELP_SHORTCUT_KEYS,
+                "",
+            );
+            assert_eq!(
+                groups.len(),
+                5,
+                "all 5 shortcut reference groups must be populated (french={french})"
+            );
+            let total_rows: usize = groups.iter().map(|g| g.rows.len()).sum();
+            assert_eq!(total_rows, SUPPORTED_HELP_SHORTCUT_KEYS.len());
+        }
+
+        assert_eq!(
+            shell_quote_path(std::path::Path::new("src/main.rs")),
+            "src/main.rs"
+        );
+        assert_eq!(
+            shell_quote_path(std::path::Path::new("C:\\My Docs\\file name.txt")),
+            "'C:\\My Docs\\file name.txt'"
+        );
+        assert_eq!(
+            shell_quote_path(std::path::Path::new("it's a test.sh")),
+            "'it''s a test.sh'"
         );
     }
 }

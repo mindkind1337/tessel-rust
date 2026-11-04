@@ -412,6 +412,13 @@ impl Browser {
             }
             return;
         }
+        let focus_url =
+            ui.is_enabled() && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
+        let reload_shortcut = ui.is_enabled()
+            && ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::F5)
+            });
         ui.horizontal(|ui| {
             if let Some(view) = &self.view {
                 if ui.button("←").clicked() {
@@ -420,7 +427,7 @@ impl Browser {
                 if ui.button("→").clicked() {
                     let _ = view.go_forward();
                 }
-                if ui.button(tr("Reload")).clicked() {
+                if ui.button(tr("Reload")).clicked() || reload_shortcut {
                     let _ = view.reload();
                 }
             }
@@ -428,6 +435,9 @@ impl Browser {
                 egui::TextEdit::singleline(&mut self.address)
                     .desired_width((ui.available_width() - 140.0).max(100.0)),
             );
+            if focus_url {
+                response.request_focus();
+            }
             if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 || ui.button(tr("Go")).clicked()
             {
