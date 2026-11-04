@@ -586,3 +586,16 @@ icon tints, italic preview tabs (`Keep open`), deleted-file strikethrough, and
 `Close others` / `Close all` / `Copy path`. `EmptyState` adds `No project
 folder` fallback, `PowerShell` / `CMD` / `WSL` shell pills and `Remember for new
 projects` (`LauncherPreferences`).
+
+Editor syntax highlighting, synchronized line gutter and confirmed missing-agent
+installation: `syntax.rs` provides zero-dependency lexical highlighting across
+all seven themes plus Classic light mode (12 language families, `512 KiB`
+fast-fallback guard, `SyntaxCache` galley memoization) and `paint_editor_gutter`
+(1-based logical line numbers skipping wrapped sub-rows + `2.5px` modified-line
+accent bars), persisted via `EditorPreferences`. `agent_installs` + `agents_panel`
++ `app` implement `plan_agent_install`, `install_chain` (`TESSEL-INSTALL-OK` /
+`TESSEL-INSTALL-FAILED` split markers), `Action::Install`, the modal confirmation
+dialog (`show_install_confirm_modal` blocking underlying Settings/WebView2),
+non-broadcast terminal execution (`Terminal::send_installer_line`), automatic
+post-install `detect_agents` refresh, and the launcher footer jump to Settings >
+Agents.

@@ -1355,6 +1355,7 @@ pub enum LaunchMenuItem {
     Browser,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchMenuAction {
     MoveSelection(usize),
@@ -1363,6 +1364,7 @@ pub enum LaunchMenuAction {
         placement: LaunchPlacement,
         in_worktree: bool,
     },
+    OpenAgentSettings,
     Close,
     Noop,
 }

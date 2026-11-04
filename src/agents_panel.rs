@@ -31,6 +31,7 @@ pub enum Action {
     NativeChat(String),
     Docs(String),
     CopyInstall(String),
+    Install(String),
 }
 
 #[derive(Default)]
@@ -56,6 +57,9 @@ impl AgentsPanel {
     }
     pub fn take_save(&mut self) -> Option<(String, crate::agent_preferences::Preferences)> {
         self.pending_save.take()
+    }
+    pub fn reveal_missing(&mut self) {
+        self.missing_open = true;
     }
     pub fn save_open_draft(&mut self) {
         self.model_ui.close_popup();
@@ -369,14 +373,19 @@ impl AgentsPanel {
                             ui.label(RichText::new(preset.name).strong());
                             if crate::agent_installs::find(preset.id)
                                 .is_some_and(|entry| entry.install.is_some())
-                                && ui
+                            {
+                                if ui.button(tr("Install", "Installer")).clicked() {
+                                    action = Some(Action::Install(preset.id.into()));
+                                }
+                                if ui
                                     .button(tr(
                                         "Copy install command",
                                         "Copier la commande d’installation",
                                     ))
                                     .clicked()
-                            {
-                                action = Some(Action::CopyInstall(preset.id.into()));
+                                {
+                                    action = Some(Action::CopyInstall(preset.id.into()));
+                                }
                             }
                             if (preset.docs.is_some()
                                 || crate::agent_installs::find(preset.id)
@@ -658,6 +667,93 @@ fn paint_line(ui: &Ui, rect: egui::Rect, text: &str, font: egui::FontId, color: 
         galley,
         color,
     );
+}
+
+/// Renders the native missing-agent installation confirmation modal (`ConfirmDialog.vue` parity).
+/// Returns `(decision, open_source_url)` where `decision` is `Some(true)` on confirm,
+/// `Some(false)` on cancel/Escape, or `None` while the modal stays open.
+pub fn show_install_confirm_modal(
+    ctx: &egui::Context,
+    spec: &crate::agent_installs::InstallConfirmSpec,
+    french: bool,
+) -> (Option<bool>, Option<String>) {
+    let mut decision = None;
+    let mut open_url = None;
+    let resp = egui::Modal::new(egui::Id::new("agent-install-confirm")).show(ctx, |ui| {
+        ui.set_width((ctx.content_rect().width() - 48.0_f32).clamp(260.0_f32, 520.0_f32));
+        ui.heading(&spec.title);
+        ui.add_space(6.0_f32);
+        ui.label(&spec.description);
+        ui.add_space(8.0_f32);
+        egui::Frame::NONE
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
+            ))
+            .inner_margin(10)
+            .corner_radius(6)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&spec.code)
+                            .monospace()
+                            .size(12.0_f32)
+                            .color(ui.visuals().strong_text_color()),
+                    )
+                    .wrap(),
+                );
+            });
+        ui.add_space(8.0_f32);
+        egui::Grid::new("agent-install-confirm-details")
+            .num_columns(2)
+            .spacing([12.0_f32, 4.0_f32])
+            .show(ui, |ui| {
+                ui.weak("Shell");
+                ui.label(RichText::new(&spec.shell_label).strong());
+                ui.end_row();
+                if let Some(src) = &spec.source_url {
+                    ui.weak("Source");
+                    if ui
+                        .link(src)
+                        .on_hover_text(if french {
+                            "Ouvrir la source dans le navigateur"
+                        } else {
+                            "Open source in browser"
+                        })
+                        .clicked()
+                    {
+                        open_url = Some(src.clone());
+                    }
+                    ui.end_row();
+                }
+            });
+        ui.add_space(12.0_f32);
+        ui.horizontal(|ui| {
+            if ui.button(&spec.cancel_label).clicked() {
+                decision = Some(false);
+            }
+            let accent = ui.visuals().selection.bg_fill;
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(&spec.confirm_label)
+                            .color(ui.visuals().selection.stroke.color)
+                            .strong(),
+                    )
+                    .fill(accent),
+                )
+                .clicked()
+            {
+                decision = Some(true);
+            }
+        });
+    });
+    if decision.is_none() && resp.should_close() {
+        decision = Some(false);
+    }
+    (decision, open_url)
 }
 
 #[cfg(test)]
@@ -1021,6 +1117,10 @@ mod tests {
             Some(Action::Docs("kiro".into()))
         );
         assert_eq!(
+            click(&ctx, &mut panel, "Install", false, true),
+            Some(Action::Install("aider".into()))
+        );
+        assert_eq!(
             click(&ctx, &mut panel, "Copy install command", false, true),
             Some(Action::CopyInstall("aider".into()))
         );
@@ -1093,5 +1193,117 @@ mod tests {
         assert!(right <= 300.0);
         frame(&ctx, &mut panel, vec![key(true)], true, true, 300.0);
         assert!(!ctx.input(|i| i.key_pressed(egui::Key::Escape)));
+    }
+
+    #[test]
+    fn install_confirm_modal_handles_cancel_escape_source_link_and_confirm() {
+        let ctx = egui::Context::default();
+        let spec = match crate::agent_installs::plan_agent_install(
+            "kimi",
+            Some("powershell"),
+            true,
+            true,
+            true,
+        )
+        .unwrap()
+        {
+            crate::agent_installs::PlannedAgentInstall::NeedsConfirmation(s) => s,
+            other => panic!("expected confirmation, got {other:?}"),
+        };
+
+        let run_modal = |events: Vec<egui::Event>| {
+            let mut decision = None;
+            let mut opened_url = None;
+            let out = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    let (d, u) = show_install_confirm_modal(ctx, &spec, true);
+                    decision = d;
+                    opened_url = u;
+                },
+            );
+            (out, decision, opened_url)
+        };
+
+        let find_text = |out: &egui::FullOutput, label: &str| -> egui::Pos2 {
+            fn walk(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+                match shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                    }
+                    egui::Shape::Vec(v) => v.iter().find_map(|s| walk(s, label)),
+                    _ => None,
+                }
+            }
+            out.shapes
+                .iter()
+                .find_map(|cs| walk(&cs.shape, label))
+                .unwrap_or_else(|| panic!("missing modal text {label:?}"))
+        };
+
+        let _ = run_modal(vec![]);
+        let (out, decision, opened) = run_modal(vec![]);
+        assert_eq!(decision, None);
+        assert_eq!(opened, None);
+
+        // Source link click
+        let src_url = spec.source_url.as_deref().unwrap();
+        let src_pos = find_text(&out, src_url);
+        let (_, decision, opened) = run_modal(vec![
+            egui::Event::PointerMoved(src_pos),
+            egui::Event::PointerButton {
+                pos: src_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: src_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(decision, None);
+        assert_eq!(opened.as_deref(), Some(src_url));
+
+        // Escape cancels
+        let (_, decision, _) = run_modal(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(decision, Some(false));
+
+        // Re-settle then click Confirm ("Installer")
+        let _ = run_modal(vec![]);
+        let (out, _, _) = run_modal(vec![]);
+        let confirm_pos = find_text(&out, "Installer");
+        let (_, decision, _) = run_modal(vec![
+            egui::Event::PointerMoved(confirm_pos),
+            egui::Event::PointerButton {
+                pos: confirm_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: confirm_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(decision, Some(true));
     }
 }

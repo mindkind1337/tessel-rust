@@ -4,8 +4,9 @@
 //! `LaunchPlacement`, `LauncherLang`, `where_text`) and [`crate::icons`] (`Icon::Terminal`)
 //! with **zero** process spawning and **zero** filesystem or environment I/O inside the widget:
 //! - Renders only the caller-injected [`LauncherEntry`] catalog grouped into `Terminals`,
-//!   `Native chats`, and `AI agents` (plus `Browser` if injected), never advertising unimplemented
-//!   worktree, multi-account, Live Share host, or agent-installer controls.
+//!   `Native chats`, and `AI agents` (plus `Browser` if injected), plus the `Install agents or add
+//!   your own…` footer link to Settings > Agents, never advertising unimplemented worktree or
+//!   multi-account controls.
 //! - Renders the segmented placement selector (`Auto` / `Left` / `Right` / `Below`) with the exact
 //!   `LaunchMenu.vue` `16×16` shaded-split vector geometry and localized `where_text` summary.
 //! - Supports `↑` / `↓` / `Enter` / `Esc` keyboard navigation and pointer clicks, strictly skipping
@@ -569,7 +570,9 @@ impl LauncherPanel {
                 }
             });
 
-        self.render_footer(ui, input.lang);
+        if self.render_footer(ui, input.lang) {
+            action = Some(LaunchMenuAction::OpenAgentSettings);
+        }
         action
     }
 
@@ -842,9 +845,15 @@ impl LauncherPanel {
         }
     }
 
-    fn render_footer(&self, ui: &mut egui::Ui, lang: LauncherLang) {
+    fn render_footer(&self, ui: &mut egui::Ui, lang: LauncherLang) -> bool {
         ui.add_space(4.0_f32);
         ui.separator();
+        ui.add_space(2.0_f32);
+        let tools_label = match lang {
+            LauncherLang::En => "Install agents or add your own…",
+            LauncherLang::Fr => "Installer des agents ou ajouter le vôtre…",
+        };
+        let open_tools = ui.small_button(tools_label).clicked();
         ui.add_space(2.0_f32);
         let weak = ui.visuals().weak_text_color();
         let (move_lbl, enter_key, open_lbl, esc_key, close_lbl) = match lang {
@@ -867,5 +876,6 @@ impl LauncherPanel {
             render_keycap(ui, esc_key);
             ui.colored_label(weak, egui::RichText::new(close_lbl).size(10.5_f32));
         });
+        open_tools
     }
 }

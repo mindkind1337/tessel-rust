@@ -143,6 +143,25 @@ impl Terminal {
         }
     }
 
+    #[must_use]
+    pub fn screen_contains(&self, needle: &str) -> bool {
+        !needle.is_empty() && self.parser.screen().contents().contains(needle)
+    }
+
+    pub fn send_installer_line(&mut self, line: &str) -> Result<(), String> {
+        if !self.accepts_broadcast_input() || line.is_empty() {
+            return Err("Terminal is not ready for input.".into());
+        }
+        if line.len() > 65536 {
+            return Err("Installer command exceeds 64 KiB.".into());
+        }
+        let mut bytes = Vec::with_capacity(line.len() + 1);
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\r');
+        self.back_to_live();
+        self.send(bytes)
+    }
+
     pub fn clear_screen(&mut self) {
         self.selection = None;
         self.parser.set_scrollback(0);

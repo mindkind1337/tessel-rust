@@ -475,5 +475,8 @@
   "Working tree": "Arbre de travail",
   "Untracked": "Non suivi",
   "No diff output for this file.": "Aucune diff\u00e9rence pour ce fichier.",
-  "Task title cannot be empty.": "Le titre de la t\u00e2che ne peut pas \u00eatre vide."
+  "Task title cannot be empty.": "Le titre de la t\u00e2che ne peut pas \u00eatre vide.",
+  "Line numbers": "Num\u00e9ros de ligne",
+  "Syntax highlighting": "Coloration syntaxique",
+  "Install": "Installer"
 }

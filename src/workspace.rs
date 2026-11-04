@@ -123,6 +123,33 @@ pub struct LauncherPreferences {
     pub remember_default: Option<String>,
 }
 
+const fn default_tab_size() -> u8 {
+    4
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorPreferences {
+    #[serde(default = "default_true")]
+    pub syntax_highlighting: bool,
+    #[serde(default = "default_true")]
+    pub line_numbers: bool,
+    pub word_wrap: bool,
+    #[serde(default = "default_tab_size")]
+    pub tab_size: u8,
+}
+
+impl Default for EditorPreferences {
+    fn default() -> Self {
+        Self {
+            syntax_highlighting: true,
+            line_numbers: true,
+            word_wrap: false,
+            tab_size: 4,
+        }
+    }
+}
+
 impl Default for Panels {
     fn default() -> Self {
         Self {
@@ -235,6 +262,7 @@ pub struct Workspace {
     pub panels: Panels,
     pub sidebar: SidebarPreferences,
     pub launcher_prefs: LauncherPreferences,
+    pub editor_prefs: EditorPreferences,
     pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
@@ -265,6 +293,7 @@ impl Default for Workspace {
             panels: Default::default(),
             sidebar: Default::default(),
             launcher_prefs: Default::default(),
+            editor_prefs: Default::default(),
             status_bar: Default::default(),
             floating: Default::default(),
             terminal_layouts: Default::default(),
@@ -307,6 +336,9 @@ impl Workspace {
         }
         if self.projects.len() > 1000 || self.hosts.len() > 1000 || self.tasks.len() > 10000 {
             return Err("Workspace exceeds supported limits.".into());
+        }
+        if !(1..=8).contains(&self.editor_prefs.tab_size) {
+            return Err("Invalid editor tab size.".into());
         }
         if let Some(shell) = &self.launcher_prefs.preferred_shell
             && !matches!(shell.as_str(), "powershell" | "cmd" | "wsl" | "sh")

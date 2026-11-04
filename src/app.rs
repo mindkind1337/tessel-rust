@@ -398,6 +398,13 @@ struct RenameAgent {
     error: String,
     focused: bool,
 }
+struct ActiveAgentInstall {
+    session_id: u64,
+    agent_name: String,
+    pending_command: Option<String>,
+    attached_at: Option<std::time::Instant>,
+    finished: bool,
+}
 
 pub struct Tessel {
     #[cfg(windows)]
@@ -464,6 +471,8 @@ pub struct Tessel {
         Vec<String>,
         crate::explorer_scm_model::DiscardConfirmationCopy,
     )>,
+    pending_agent_install: Option<crate::agent_installs::InstallConfirmSpec>,
+    active_agent_installs: Vec<ActiveAgentInstall>,
     rename_project_modal: Option<(u64, String, bool)>,
     right_fullscreen: bool,
     remember_next_project_launch: bool,
@@ -590,6 +599,8 @@ impl Tessel {
             scm_panel: Default::default(),
             commit_in_flight: false,
             pending_scm_discard: None,
+            pending_agent_install: None,
+            active_agent_installs: Vec::new(),
             rename_project_modal: None,
             right_fullscreen: false,
             remember_next_project_launch,
@@ -1328,6 +1339,7 @@ impl Tessel {
         if launch_changed {
             self.refresh_launch_status();
         }
+        self.poll_agent_installs();
         while let Ok(message) = self.receiver.try_recv() {
             match message {
                 Message::FileAction(result) => {
@@ -1397,6 +1409,7 @@ impl Tessel {
                     match result {
                         Ok(mut d) => {
                             d.unpinned_preview = !pinned;
+                            d.tools.word_wrap = self.state.editor_prefs.word_wrap;
                             let d = *d;
                             if let Some(i) = self
                                 .documents
@@ -1469,6 +1482,152 @@ impl Tessel {
     }
     fn new_session(&mut self, launch: Launch) {
         self.new_session_placed(launch, None);
+    }
+    fn request_agent_install(&mut self, id: &str) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let preferred = self.state.launcher_prefs.preferred_shell.as_deref();
+        match crate::agent_installs::plan_agent_install(
+            id,
+            preferred,
+            cfg!(windows),
+            self.wsl_available,
+            french,
+        ) {
+            Ok(crate::agent_installs::PlannedAgentInstall::Immediate(exec)) => {
+                self.start_agent_install(exec);
+            }
+            Ok(crate::agent_installs::PlannedAgentInstall::NeedsConfirmation(spec)) => {
+                self.pending_agent_install = Some(spec);
+            }
+            Err(error) => {
+                self.agents_notice = Some(error.clone());
+                self.error = error;
+            }
+        }
+    }
+    fn start_agent_install(&mut self, execution: crate::agent_installs::InstallExecution) {
+        if self.sessions.len() >= 100 {
+            self.error = "Session limit: 100".into();
+            return;
+        }
+        let cwd = self
+            .state
+            .active()
+            .map(|p| p.path.clone())
+            .unwrap_or_else(launch::default_directory);
+        let id = self.next_session;
+        let Some(next) = self.next_session.checked_add(1) else {
+            self.error = "Session identifiers exhausted".into();
+            return;
+        };
+        self.next_session = next;
+        let split_target = self
+            .sessions
+            .iter()
+            .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project)
+            .map(|s| s.id);
+        let mut s = Session {
+            native_host: None,
+            restarting: None,
+            codex_discovery: None,
+            codex_restore: None,
+            model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
+            settings_changed: false,
+            codex_seed: None,
+            conversation_id: None,
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            broadcast: false,
+            id,
+            project: self.state.active_project,
+            title: execution.agent_name.clone(),
+            launch: Launch::Shell,
+            cwd,
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        s.start_with_shell(None, Some(execution.shell_id));
+        self.sessions.push(s);
+        if let Some(target) = split_target {
+            let layout = self
+                .state
+                .terminal_layouts
+                .entry(crate::terminal_layout::project_key(
+                    self.state.active_project,
+                ))
+                .or_default();
+            layout.split(target, id, crate::pane_grid::SplitDir::Col);
+        }
+        self.active_session = Some(id);
+        self.overlay = None;
+        self.view = View::Work;
+        self.agents_notice = Some(execution.notice);
+        self.active_agent_installs.push(ActiveAgentInstall {
+            session_id: id,
+            agent_name: execution.agent_name,
+            pending_command: Some(execution.command_line),
+            attached_at: None,
+            finished: false,
+        });
+        self.save();
+    }
+    fn poll_agent_installs(&mut self) {
+        if self.active_agent_installs.is_empty() {
+            return;
+        }
+        let french = self.state.language == crate::i18n::Language::French;
+        let mut need_redetect = false;
+        let mut error_msg: Option<String> = None;
+        let mut installed_notice: Option<String> = None;
+        for inst in &mut self.active_agent_installs {
+            let Some(session) = self.sessions.iter_mut().find(|s| s.id == inst.session_id) else {
+                inst.finished = true;
+                continue;
+            };
+            if !session.error.is_empty() {
+                inst.finished = true;
+                continue;
+            }
+            let Some(term) = session.terminal.as_mut() else {
+                continue;
+            };
+            let attached = *inst.attached_at.get_or_insert_with(std::time::Instant::now);
+            if inst.pending_command.is_some() {
+                if attached.elapsed() >= Duration::from_millis(350)
+                    && term.accepts_broadcast_input()
+                    && let Some(cmd) = inst.pending_command.take()
+                    && let Err(err) = term.send_installer_line(&cmd)
+                {
+                    error_msg = Some(err);
+                    inst.finished = true;
+                }
+            } else if term.screen_contains(crate::agent_installs::MARK_OK) {
+                inst.finished = true;
+                need_redetect = true;
+                installed_notice = Some(if french {
+                    format!("{} est installé.", inst.agent_name)
+                } else {
+                    format!("{} is installed.", inst.agent_name)
+                });
+            } else if term.screen_contains(crate::agent_installs::MARK_FAILED) || term.exited() {
+                inst.finished = true;
+                need_redetect = true;
+            }
+        }
+        self.active_agent_installs.retain(|i| !i.finished);
+        if let Some(err) = error_msg {
+            self.error = err;
+        }
+        if let Some(notice) = installed_notice {
+            self.agents_notice = Some(notice);
+        }
+        if need_redetect {
+            self.detect_agents();
+        }
     }
     fn new_session_placed(
         &mut self,
@@ -2642,6 +2801,7 @@ impl Tessel {
             || self.toolbar_menu_open
             || self.pending_close.is_some()
             || self.pending_scm_discard.is_some()
+            || self.pending_agent_install.is_some()
             || self.rename_project_modal.is_some()
             || self.pending_exit
             || self.file_action.is_some()
@@ -4266,9 +4426,12 @@ impl Tessel {
             .to_lowercase();
         let readable = d.diff_title.is_none()
             && matches!(extension.as_str(), "html" | "htm" | "md" | "markdown");
-        if document_toolbar(ui, d, readable) {
+        let (close_clicked, prefs_changed) =
+            document_toolbar(ui, d, readable, &mut self.state.editor_prefs);
+        if close_clicked {
             close = Some(self.active_document);
         }
+        let mut save_prefs = prefs_changed;
         if !d.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
         }
@@ -4322,6 +4485,18 @@ impl Tessel {
             show_editor_bars(ui, d);
             let font = egui::FontId::monospace(self.state.font_size);
             let row_height = ui.fonts_mut(|f| f.row_height(&font)).max(14.0_f32);
+            let lang = crate::syntax::SyntaxLang::from_path(&d.path);
+            let theme_id = crate::theme::active(ui.ctx());
+            let spec = theme_id.spec();
+            let dark = self.state.dark;
+            let syntax_enabled = self.state.editor_prefs.syntax_highlighting;
+            let show_line_numbers = self.state.editor_prefs.line_numbers;
+            let changed_flags = d
+                .original_text()
+                .map(|orig| crate::syntax::changed_line_flags(orig, &d.text))
+                .unwrap_or_default();
+            let has_changes = changed_flags.iter().any(|&c| c);
+            let line_count = 1 + d.text.as_bytes().iter().filter(|&&b| b == b'\n').count();
             let mut scroll = if d.tools.word_wrap {
                 egui::ScrollArea::vertical()
             } else {
@@ -4334,49 +4509,101 @@ impl Tessel {
                 );
             }
             scroll.show(ui, |ui| {
-                let wrap_width = if d.tools.word_wrap {
-                    ui.available_width().max(80.0_f32)
+                let gutter_w = if show_line_numbers || has_changes {
+                    crate::syntax::editor_gutter_width(ui, &font, line_count)
                 } else {
-                    f32::INFINITY
+                    0.0_f32
                 };
-                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
-                    let mut job = egui::text::LayoutJob::simple(
-                        buf.as_str().to_owned(),
-                        font.clone(),
-                        ui.visuals().text_color(),
-                        wrap_width,
-                    );
-                    job.wrap.break_anywhere = d.tools.word_wrap;
-                    ui.fonts_mut(|f| f.layout_job(job))
-                };
-                let mut out = egui::TextEdit::multiline(&mut d.text)
-                    .code_editor()
-                    .font(font.clone())
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(30)
-                    .lock_focus(true)
-                    .layouter(&mut layouter)
-                    .show(ui);
-                if let Some((sc, ec)) = d.tools.pending_char_range.take() {
-                    let range = egui::text::CCursorRange::two(
-                        egui::text::CCursor::new(sc),
-                        egui::text::CCursor::new(ec),
-                    );
-                    out.state.cursor.set_char_range(Some(range));
-                    out.state.store(ui.ctx(), out.response.id);
-                    if !d.tools.find_open && !d.tools.goto_open {
-                        out.response.request_focus();
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0_f32;
+                    let gutter_bounds = if gutter_w > 0.0_f32 {
+                        let (r, _) = ui.allocate_exact_size(
+                            egui::vec2(gutter_w, 18.0_f32),
+                            egui::Sense::hover(),
+                        );
+                        Some((r.min.x, r.max.x))
+                    } else {
+                        None
+                    };
+                    let wrap_width = if d.tools.word_wrap {
+                        ui.available_width().max(80.0_f32)
+                    } else {
+                        f32::INFINITY
+                    };
+                    let Document {
+                        text,
+                        tools,
+                        syntax_cache,
+                        preview,
+                        unpinned_preview,
+                        ..
+                    } = d;
+                    let word_wrap = tools.word_wrap;
+                    let mut layouter =
+                        |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                            syntax_cache.layout(
+                                ui,
+                                buf.as_str(),
+                                lang,
+                                theme_id,
+                                dark,
+                                &font,
+                                wrap_width,
+                                word_wrap,
+                                syntax_enabled,
+                            )
+                        };
+                    let mut out = egui::TextEdit::multiline(text)
+                        .code_editor()
+                        .font(font.clone())
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(30)
+                        .lock_focus(true)
+                        .layouter(&mut layouter)
+                        .show(ui);
+                    if let Some((gx_min, gx_max)) = gutter_bounds {
+                        let gutter_font =
+                            egui::FontId::monospace((self.state.font_size - 1.0_f32).max(10.0_f32));
+                        let _ = crate::syntax::paint_editor_gutter(
+                            ui.painter(),
+                            gx_min,
+                            gx_max,
+                            out.galley_pos,
+                            &out.galley,
+                            &gutter_font,
+                            &changed_flags,
+                            show_line_numbers,
+                            spec.ui.text_dim,
+                            spec.ui.border,
+                            spec.ui.accent,
+                        );
                     }
-                }
-                if out.response.changed() {
-                    d.preview = None;
-                    d.unpinned_preview = false;
-                }
+                    if let Some((sc, ec)) = tools.pending_char_range.take() {
+                        let range = egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(sc),
+                            egui::text::CCursor::new(ec),
+                        );
+                        out.state.cursor.set_char_range(Some(range));
+                        out.state.store(ui.ctx(), out.response.id);
+                        if !tools.find_open && !tools.goto_open {
+                            out.response.request_focus();
+                        }
+                    }
+                    if out.response.changed() {
+                        *preview = None;
+                        *unpinned_preview = false;
+                        syntax_cache.invalidate();
+                    }
+                });
             });
         }
         let resolved = link.map(|href| {
             crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
         });
+        let _ = &mut save_prefs;
+        if save_prefs {
+            self.save();
+        }
         if let Some(result) = resolved {
             match result {
                 Ok((root, crate::preview::Link::File(path))) => self.open_document_at(root, path),
@@ -5361,6 +5588,9 @@ impl Tessel {
                     self.agents_notice = Some(tr("Install command copied.").into());
                 }
             }
+            Some(Action::Install(id)) => {
+                self.request_agent_install(&id);
+            }
             _ => {}
         }
     }
@@ -5481,6 +5711,12 @@ impl Tessel {
         );
         match action {
             Some(LaunchMenuAction::Close) => true,
+            Some(LaunchMenuAction::OpenAgentSettings) => {
+                self.settings_section = SettingsSection::Agents;
+                self.agents_panel.reveal_missing();
+                self.overlay = Some(Overlay::Settings);
+                true
+            }
             Some(LaunchMenuAction::Launch {
                 item,
                 placement,
@@ -5491,6 +5727,10 @@ impl Tessel {
                     .any(|entry| entry.available && entry.item == item)
                 {
                     return false;
+                }
+                if let LaunchMenuItem::InstallAgent { id, .. } = item {
+                    self.request_agent_install(&id);
+                    return true;
                 }
                 let launch = match item {
                     LaunchMenuItem::Shell { id, .. } if id == "default" => Launch::Shell,
@@ -5948,6 +6188,7 @@ impl Tessel {
                             ui.set_min_height((height - 32.0).max(0.0));
                             if self.native_modal_open()
                                 || self.restore_preview.is_some()
+                                || self.pending_agent_install.is_some()
                                 || host_dialog_open
                             {
                                 ui.disable();
@@ -5986,7 +6227,7 @@ impl Tessel {
                     egui::vec2(ui.available_width(), height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        if self.native_modal_open() {
+                        if self.native_modal_open() || self.pending_agent_install.is_some() {
                             ui.disable();
                         }
                         crate::settings_surface::body(ui, |ui| match self.settings_section {
@@ -6009,6 +6250,7 @@ impl Tessel {
         });
         if self.restore_preview.is_none()
             && !self.native_modal_open()
+            && self.pending_agent_install.is_none()
             && !host_dialog_open
             && !agents_escape_consumed
             && !vault_escape_consumed
@@ -6091,6 +6333,24 @@ impl Tessel {
                     }
                     Err(error) => self.error = error,
                 }
+            }
+        }
+        if let Some(spec) = self.pending_agent_install.clone() {
+            let french = self.state.language == crate::i18n::Language::French;
+            let (decision, open_url) =
+                crate::agents_panel::show_install_confirm_modal(ctx, &spec, french);
+            if let Some(url) = open_url {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
+            match decision {
+                Some(true) => {
+                    self.pending_agent_install = None;
+                    self.start_agent_install(spec.execution);
+                }
+                Some(false) => {
+                    self.pending_agent_install = None;
+                }
+                None => {}
             }
         }
         if let Some((project_id, mut draft, mut focused)) = self.rename_project_modal.clone() {
@@ -6500,6 +6760,7 @@ impl eframe::App for Tessel {
             || self.toolbar_menu_open
             || self.pending_close.is_some()
             || self.pending_scm_discard.is_some()
+            || self.pending_agent_install.is_some()
             || self.rename_project_modal.is_some()
             || self.pending_exit
             || self.file_action.is_some()
@@ -7115,6 +7376,7 @@ impl eframe::App for Tessel {
                 && !self.pending_exit
                 && self.pending_close.is_none()
                 && self.pending_scm_discard.is_none()
+                && self.pending_agent_install.is_none()
                 && self.rename_project_modal.is_none()
                 && self.file_action.is_none()
                 && self.restore_preview.is_none()
@@ -7497,8 +7759,14 @@ fn show_diff_document(ui: &mut egui::Ui, d: &Document, font_size: f32) {
         });
 }
 
-fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool {
+fn document_toolbar(
+    ui: &mut egui::Ui,
+    d: &mut Document,
+    readable: bool,
+    editor_prefs: &mut crate::workspace::EditorPreferences,
+) -> (bool, bool) {
     let source_mode = !d.media && d.diff_title.is_none() && !(readable && d.preview_mode);
+    let mut prefs_changed = false;
     if ui.is_enabled() && source_mode {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             d.tools.find_open = true;
@@ -7536,48 +7804,69 @@ fn document_toolbar(ui: &mut egui::Ui, d: &mut Document, readable: bool) -> bool
             }
         }
     }
-    ui.horizontal(|ui| {
-        if !d.media {
-            let save_clicked = ui.button(tr("Save (Ctrl+S)")).clicked();
-            if ui.is_enabled()
-                && (save_clicked
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
-            {
-                match d.save() {
-                    Ok(()) => {
-                        d.error.clear();
-                        d.unpinned_preview = false;
-                        d.deleted_on_disk = false;
+    let close = ui
+        .horizontal(|ui| {
+            if !d.media {
+                let save_clicked = ui.button(tr("Save (Ctrl+S)")).clicked();
+                if ui.is_enabled()
+                    && (save_clicked
+                        || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
+                {
+                    match d.save() {
+                        Ok(()) => {
+                            d.error.clear();
+                            d.unpinned_preview = false;
+                            d.deleted_on_disk = false;
+                        }
+                        Err(err) => d.error = err,
                     }
-                    Err(err) => d.error = err,
                 }
             }
-        }
-        if readable {
-            ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
-            ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
-        }
-        if source_mode {
-            ui.toggle_value(&mut d.tools.word_wrap, tr("Word wrap"));
-            if ui.button(tr("Find…")).clicked() {
-                d.tools.find_open = true;
-                d.tools.focus_find = true;
+            if readable {
+                ui.selectable_value(&mut d.preview_mode, false, tr("Source"));
+                ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
             }
-            if ui.button(tr("Go to line")).clicked() {
-                d.tools.goto_open = true;
-                d.tools.focus_goto = true;
+            if source_mode {
+                ui.toggle_value(&mut d.tools.word_wrap, tr("Word wrap"));
+                if ui
+                    .toggle_value(&mut editor_prefs.line_numbers, tr("Line numbers"))
+                    .changed()
+                {
+                    prefs_changed = true;
+                }
+                if ui
+                    .toggle_value(
+                        &mut editor_prefs.syntax_highlighting,
+                        tr("Syntax highlighting"),
+                    )
+                    .changed()
+                {
+                    prefs_changed = true;
+                    d.syntax_cache.invalidate();
+                }
+                if ui.button(tr("Find…")).clicked() {
+                    d.tools.find_open = true;
+                    d.tools.focus_find = true;
+                }
+                if ui.button(tr("Go to line")).clicked() {
+                    d.tools.goto_open = true;
+                    d.tools.focus_goto = true;
+                }
             }
-        }
-        let close = ui.button(tr("Close")).clicked()
-            || take_close_shortcut(ui.ctx(), ui.is_enabled(), egui::Modifiers::CTRL);
-        if let Some(diff_title) = &d.diff_title {
-            ui.small(format!("{diff_title} · {}", d.path.display()));
-        } else {
-            ui.small(d.path.display().to_string());
-        }
-        close
-    })
-    .inner
+            let close = ui.button(tr("Close")).clicked()
+                || take_close_shortcut(ui.ctx(), ui.is_enabled(), egui::Modifiers::CTRL);
+            if let Some(diff_title) = &d.diff_title {
+                ui.small(format!("{diff_title} · {}", d.path.display()));
+            } else if source_mode {
+                let lang_name = crate::syntax::SyntaxLang::from_path(&d.path).display_name();
+                ui.small(format!("{} · {lang_name}", d.path.display()));
+            } else {
+                ui.small(d.path.display().to_string());
+            }
+            close
+        })
+        .inner;
+    (close, prefs_changed)
 }
 
 fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
@@ -7864,7 +8153,8 @@ $lock.Dispose()
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
-                        close = document_toolbar(ui, &mut document, false);
+                        let mut prefs = crate::workspace::EditorPreferences::default();
+                        close = document_toolbar(ui, &mut document, false, &mut prefs).0;
                     });
                 });
             });

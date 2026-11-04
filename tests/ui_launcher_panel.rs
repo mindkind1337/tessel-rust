@@ -514,10 +514,14 @@ fn french_localization_and_strict_omission_of_unimplemented_controls() {
         "Aucun agent IA installé pour l'instant."
     ));
     assert!(has_painted_text(&out.shapes, "Par défaut"));
+    assert!(has_painted_text(
+        &out.shapes,
+        "Installer des agents ou ajouter le vôtre…"
+    ));
     assert!(has_painted_text(&out.shapes, "Entrée"));
     assert!(has_painted_text(&out.shapes, "Échap"));
 
-    // Strictly omit unimplemented worktree / accounts / host / tools controls:
+    // Strictly omit unimplemented worktree / accounts controls:
     let all_text: String = painted_texts(&out.shapes)
         .into_iter()
         .map(|(t, _)| t)
@@ -528,8 +532,6 @@ fn french_localization_and_strict_omission_of_unimplemented_controls() {
         "Separate copy",
         "Définir par défaut",
         "Set default",
-        "Installer des agents",
-        "Install agents",
     ] {
         assert!(
             !all_text.contains(forbidden),
