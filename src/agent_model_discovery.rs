@@ -95,7 +95,7 @@ impl Discovery {
             && custom.len() <= 300
             && custom
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-\\/: ".contains(&b))
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-~\\/: ".contains(&b))
         {
             custom
         } else {
@@ -328,7 +328,8 @@ mod tests {
     #[test]
     fn custom_command_with_spaces_runs_only_listing_and_restores_catalog() {
         let dir = tempfile::Builder::new()
-            .prefix("model discovery ")
+            // Windows runner TEMP paths can contain DOS short-name aliases (~1).
+            .prefix("model~discovery ")
             .tempdir()
             .unwrap();
         let shim = dir.path().join("synthetic.cmd");

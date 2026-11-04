@@ -133,7 +133,12 @@ mod tests {
         .unwrap();
         let path = std::env::join_paths([&first, &second]).unwrap();
         let results = lookup(&[name, "tessel_synthetic_missing_fixture"], &path).unwrap();
-        assert!(std::path::Path::new(&results[name]).starts_with(&first));
+        // where.exe expands DOS short names, including aliases in runner TEMP.
+        // Compare file identity after normalization, not the spelling of its path.
+        assert_eq!(
+            std::fs::canonicalize(&results[name]).unwrap(),
+            std::fs::canonicalize(first.join(format!("{name}.cmd"))).unwrap()
+        );
         assert!(!results.contains_key("tessel_synthetic_missing_fixture"));
         assert!(lookup(&["invalid;command"], &path).is_err());
         assert!(lookup(&[], &path).unwrap().is_empty());
