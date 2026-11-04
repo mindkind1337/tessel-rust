@@ -24,6 +24,8 @@ pub(super) struct Native {
     pub failure: Option<Failure>,
     pub slot: Option<host_opening::Slot>,
     pub feed: Option<host_events::Feed>,
+    pub scroll: super::host_viewport::ScrollState,
+    pub selection_invalidated: bool,
     pub control: Option<host_worker::Control>,
     pub saved: bool,
     desk: host_lease_desk::DeskHandle,
@@ -83,6 +85,8 @@ impl Native {
             failure,
             slot: None,
             feed: None,
+            scroll: Default::default(),
+            selection_invalidated: false,
             control: None,
             saved: true,
             desk,
@@ -385,6 +389,7 @@ impl Native {
         query_tail: &mut Vec<u8>,
         status: &mut String,
     ) -> bool {
+        self.selection_invalidated = false;
         if let Some(slot) = &self.slot {
             match self.desk.view(slot) {
                 host_lease_desk::View::Saved | host_lease_desk::View::Forgotten => {
@@ -533,6 +538,7 @@ impl Native {
             }
         }
         if let Some(feed) = &mut self.feed {
+            let anchor = self.scroll.before_poll(&feed.history, parser);
             let previous = feed.applied;
             let control = self.control.as_ref();
             feed.poll(
@@ -559,6 +565,10 @@ impl Native {
                 },
             );
             changed |= previous != feed.applied;
+            self.selection_invalidated = self
+                .scroll
+                .after_poll(anchor, &feed.history, parser, previous != feed.applied)
+                .clear_selection;
             if feed.has_pending_work() {
                 self.repaint.request_repaint();
             }

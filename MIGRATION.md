@@ -409,3 +409,37 @@ version pinning alone cannot detect that change.
 
 Eight native pane/client tests, the old-slot opening regression and strict
 scoped all-feature Clippy pass. Real-server acceptance remains pending.
+
+Retained-history integration: Native owns a ScrollState anchored to monotonic
+archived-row identities. Feed polling reconciles that anchor before rendering;
+selection is preserved only while its visible cells remain stable and is cleared
+on eviction, resize or a changing archive/live seam. Rendering and copy use a
+borrowed composite Viewport, including soft wraps, wide characters and clipping.
+Old cells never pass back through the emulator. Archived views keep focus and
+copying while blocking keyboard/paste/IME and mouse reports, including a wheel
+and text event in one frame. The active parser still answers live cursor queries.
+Ordinary parser scrollback retains typing-to-live behavior.
+
+The new deep-history test exposed vt100 0.15.2's subtraction overflow when a
+scrollback offset exceeds the screen height. A licensed local patch bounds the
+history iterator and saturates the live-row count; its direct regression checks
+both row count and copied text at deep, shallow and live offsets. No global
+registry files are modified. Real-server and full desktop visual acceptance
+remain pending.
+
+Validation: all 58 binary terminal-related tests pass, including 11 native
+UI/client cases, real local PTY execution, descendant shutdown and model-footer
+isolation. The history target passes seven tests and the composite viewport target
+passes nineteen (shared helper tests overlap). A four-case regression covers
+multiple snapshots in one poll with truncation and intervening live-output
+eviction. Capture metadata is bounded and records the actual visible source row,
+so aggregate capture counts cannot misidentify an evicted selection. Strict
+Clippy across all targets/features and formatting pass.
+
+An alternate-screen resync now archives the primary shell history before the
+alternate cells, with a hard wrap boundary and the same global storage limits.
+The old parser switches grids through a narrowly scoped vendored API before it
+is discarded; no synthetic escape is injected into a potentially unfinished
+OSC/DCS. Tests cover this control-string boundary, bounded large alternate
+screens, grid/RIS changes invalidating selection, and truncation clamping to the
+current capture even when an older narrow capture remains retained.

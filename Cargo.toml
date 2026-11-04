@@ -16,6 +16,7 @@ visual-test = ["eframe/__screenshot"]
 
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
+vt100 = { path = "vendor/vt100" }
 
 [dependencies]
 tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }

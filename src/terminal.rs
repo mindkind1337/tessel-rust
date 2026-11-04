@@ -10,6 +10,7 @@ pub mod host_lease_keeper;
 pub mod host_opening;
 pub mod host_runtime;
 pub mod host_terminal_list;
+pub mod host_viewport;
 pub mod host_worker;
 mod local;
 mod mouse;
@@ -176,7 +177,7 @@ impl Terminal {
                         slot.epoch.as_str(),
                     )
                 }),
-            scrollback_lines: self.parser.screen().scrollback(),
+            scrollback_lines: native.scroll.total_scrollback(&self.parser),
             french: crate::i18n::is_french(),
         };
         let layer = egui::LayerId::new(ui.layer_id().order, response.id.with("host-overlay-layer"));
@@ -193,6 +194,7 @@ impl Terminal {
             .intercept_key(ui.ctx(), &input)
             .or_else(|| self.native_panel.show_overlays(&mut overlay, rect, &input));
         let allows = ui.is_enabled() && self.native_panel.accepts_input(&phase);
+        // Replies always describe the live parser, never the archived cells.
         native.allow_replies = allows;
         match action {
             Some(Action::RetryOpening) => {
@@ -210,11 +212,75 @@ impl Terminal {
                 }
             }
             Some(Action::Detach) if native.cancel_opening(&mut self.status) => {}
-            Some(Action::BackToLiveOutput) => self.parser.set_scrollback(0),
+            Some(Action::BackToLiveOutput) => {
+                native.scroll.reset_to_live(&mut self.parser);
+                self.selection = None;
+                if self.status == tr("History: return to live output to type.") {
+                    self.status.clear();
+                }
+            }
             Some(action) => self.native_action = Some(action),
             None => {}
         }
         allows
+    }
+    fn selection_text(&self, selection: Selection) -> String {
+        self.viewport().select_text(selection.start, selection.end)
+    }
+
+    fn visible_text(&self) -> String {
+        self.viewport().contents()
+    }
+
+    fn viewport(&self) -> host_viewport::Viewport<'_> {
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &self.backend {
+            return host_viewport::Viewport::new(
+                native.feed.as_ref().map(|feed| &feed.history),
+                self.parser.screen(),
+                &native.scroll,
+            );
+        }
+        host_viewport::Viewport::new(None, self.parser.screen(), &Default::default())
+    }
+
+    fn viewing_archive(&self) -> bool {
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &self.backend {
+            return native.scroll.in_archived_history();
+        }
+        false
+    }
+
+    fn viewing_scrollback(&self) -> bool {
+        self.viewing_archive() || self.parser.screen().scrollback() > 0
+    }
+
+    fn back_to_live(&mut self) {
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &mut self.backend {
+            native.scroll.reset_to_live(&mut self.parser);
+        }
+        self.parser.set_scrollback(0);
+        self.selection = None;
+        if self.status == tr("History: return to live output to type.") {
+            self.status.clear();
+        }
+    }
+
+    fn scroll_by(&mut self, lines: i64) {
+        self.selection = None;
+        #[cfg(windows)]
+        if let backend::Backend::Native(native) = &mut self.backend {
+            native.scroll.scroll_by(
+                lines,
+                native.feed.as_ref().map(|feed| &feed.history),
+                &mut self.parser,
+            );
+            return;
+        }
+        let scroll = (self.parser.screen().scrollback() as i64).saturating_add(lines);
+        self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
     }
     pub fn output(&self) -> String {
         self.parser.screen().contents()
@@ -414,7 +480,9 @@ impl Terminal {
         #[cfg(windows)]
         if let backend::Backend::Native(native) = &mut self.backend {
             if native.poll(&mut self.parser, &mut self.query_tail, &mut self.status) {
-                self.selection = None;
+                if native.selection_invalidated {
+                    self.selection = None;
+                }
                 self.model_dirty = true;
                 self.output_revision = self.output_revision.wrapping_add(1);
             }
@@ -525,18 +593,24 @@ impl Terminal {
                 end: (1, 9),
             });
         }
-        if response.lost_focus() || !accepts_input {
+        if response.lost_focus() || !accepts_input || self.viewing_archive() {
             self.composition.clear();
             self.composing = false;
         }
-        let mode = if accepts_input && !overlay_pointer && self.parser.screen().scrollback() == 0 {
+        let mode = if accepts_input && !overlay_pointer && !self.viewing_scrollback() {
             self.parser.screen().mouse_protocol_mode()
         } else {
             vt100::MouseProtocolMode::None
         };
         let shift = ui.input(|i| i.modifiers.shift);
         let tracking = mode != vt100::MouseProtocolMode::None;
-        let release_mouse = !accepts_input || overlay_pointer;
+        let scroll_requested = !overlay_pointer
+            && !focus_blocked
+            && (!tracking || shift)
+            && response.hovered()
+            && ui.input(|i| i.smooth_scroll_delta.y != 0.0);
+        let release_mouse =
+            !accepts_input || overlay_pointer || self.viewing_archive() || scroll_requested;
         let mouse_bytes = if release_mouse {
             self.mouse
                 .release(self.parser.screen().mouse_protocol_encoding())
@@ -611,32 +685,38 @@ impl Terminal {
                 {
                     self.status = e;
                 }
-                let scroll =
-                    self.parser.screen().scrollback() as i64 + (delta / line_height).round() as i64;
-                self.selection = None;
-                self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
+                self.scroll_by((delta / line_height).round() as i64);
             }
         }
         if !overlay_pointer && !focus_blocked && (!tracking || shift) {
             response.context_menu(|ui| {
                 if self.selection.is_some() && ui.button(tr("Copy selection")).clicked() {
                     if let Some(selection) = self.selection {
-                        ui.ctx().copy_text(selection.text(self.parser.screen()));
+                        ui.ctx().copy_text(self.selection_text(selection));
                     }
                     ui.close();
                 }
 
                 if ui.button(tr("Copy visible text")).clicked() {
-                    ui.ctx().copy_text(self.parser.screen().contents());
+                    ui.ctx().copy_text(self.visible_text());
                     ui.close();
                 }
                 if ui.button(tr("Back to live output")).clicked() {
-                    self.parser.set_scrollback(0);
+                    self.back_to_live();
                     ui.close();
                 }
             });
         }
+        // A wheel event above can enter the archive in the same frame as a key.
+        // Keep the terminal focus lock, but re-evaluate actual input permission.
+        let archived = self.viewing_archive();
+        let accepts_input = accepts_input && !archived;
+        if archived {
+            self.composition.clear();
+            self.composing = false;
+        }
         let screen = self.parser.screen();
+        let viewport = self.viewport();
         let palette = crate::theme::terminal(ui.ctx());
         let painter = ui.painter().with_clip_rect(rect);
         let default_bg = color(vt100::Color::Default, false, palette);
@@ -645,7 +725,7 @@ impl Terminal {
         // erases the right half of a wide character painted immediately before it.
         for row in 0..rows {
             for col in 0..cols {
-                if let Some(cell) = screen.cell(row, col) {
+                if let Some(cell) = viewport.cell(row, col) {
                     if cell.is_wide_continuation() {
                         continue;
                     }
@@ -697,7 +777,7 @@ impl Terminal {
         }
         for row in 0..rows {
             for col in 0..cols {
-                if let Some(cell) = screen.cell(row, col) {
+                if let Some(cell) = viewport.cell(row, col) {
                     if cell.is_wide_continuation() {
                         continue;
                     }
@@ -731,7 +811,7 @@ impl Terminal {
         }
         if response.has_focus() && ui.is_enabled() {
             let (row, col) = screen.cursor_position();
-            if accepts_input && !screen.hide_cursor() && screen.scrollback() == 0 {
+            if accepts_input && !screen.hide_cursor() && !self.viewing_scrollback() {
                 let pos = rect.min
                     + egui::vec2(
                         col as f32 * cell_width,
@@ -769,6 +849,17 @@ impl Terminal {
                 let copying = matches!(&event, egui::Event::Copy)
                     || matches!(&event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.ctrl);
                 if !accepts_input && !copying {
+                    if archived
+                        && matches!(
+                            &event,
+                            egui::Event::Text(_)
+                                | egui::Event::Paste(_)
+                                | egui::Event::Key { pressed: true, .. }
+                                | egui::Event::Ime(egui::ImeEvent::Commit(_))
+                        )
+                    {
+                        self.status = tr("History: return to live output to type.").into();
+                    }
                     continue;
                 }
                 let bytes = match event {
@@ -801,10 +892,10 @@ impl Terminal {
                     },
                     egui::Event::Copy => {
                         if let Some(selection) = self.selection.filter(|s| s.start != s.end) {
-                            ui.ctx().copy_text(selection.text(self.parser.screen()));
+                            ui.ctx().copy_text(self.selection_text(selection));
                             Vec::new()
                         } else if ui.input(|i| i.modifiers.shift) {
-                            ui.ctx().copy_text(self.parser.screen().contents());
+                            ui.ctx().copy_text(self.visible_text());
                             Vec::new()
                         } else {
                             vec![3]
@@ -835,8 +926,8 @@ impl Terminal {
                         {
                             ui.ctx().copy_text(
                                 self.selection
-                                    .map(|s| s.text(self.parser.screen()))
-                                    .unwrap_or_else(|| self.parser.screen().contents()),
+                                    .map(|s| self.selection_text(s))
+                                    .unwrap_or_else(|| self.visible_text()),
                             );
                             continue;
                         }
@@ -852,9 +943,11 @@ impl Terminal {
                     }
                     _ => Vec::new(),
                 };
+                if archived && !bytes.is_empty() {
+                    self.status = tr("History: return to live output to type.").into();
+                }
                 if accepts_input && !bytes.is_empty() {
-                    self.selection = None;
-                    self.parser.set_scrollback(0);
+                    self.back_to_live();
                 }
                 if accepts_input
                     && !bytes.is_empty()
@@ -883,6 +976,7 @@ impl Selection {
             (self.end, self.start)
         }
     }
+    #[cfg(test)]
     fn text(self, screen: &vt100::Screen) -> String {
         let (start, end) = self.ordered();
         screen.contents_between(start.0, start.1, end.0, end.1)

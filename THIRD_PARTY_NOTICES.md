@@ -11,6 +11,13 @@ starts the child suspended, assigns a dedicated process job before execution,
 terminates that job, and exposes verified descendant exit accounting. The patch
 and upgrade requirements are recorded in `vendor/portable-pty/TESSEL_PATCH.md`.
 
+## vt100
+
+`vendor/vt100` contains vt100 0.15.2 by Jesse Luehrs, under the MIT license
+reproduced in `vendor/vt100/LICENSE`. Tessel bounds visible scrollback rows and
+prevents subtraction overflow when the scrollback offset exceeds the screen
+height. The patch is recorded in `vendor/vt100/TESSEL_PATCH.md`.
+
 ## Orca
 
 The pure conversation resume planner in `src/agent_resume.rs` adapts Tessel's

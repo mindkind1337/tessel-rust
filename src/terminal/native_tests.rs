@@ -157,6 +157,8 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
         failure: None,
         slot: Some(slot.clone()),
         feed: Some(host_events::Feed::new_created(events, true)),
+        scroll: Default::default(),
+        selection_invalidated: false,
         control: Some(control),
         saved: true,
         desk,
@@ -190,6 +192,193 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
 
 fn frame(terminal: &mut Terminal, ctx: &egui::Context, enabled: bool, events: Vec<egui::Event>) {
     let _ = frame_output(terminal, ctx, enabled, events);
+}
+
+fn archive_fixture_screen(terminal: &mut Terminal) {
+    terminal.parser.process(b"archived text");
+    let Backend::Native(native) = &mut terminal.backend else {
+        unreachable!()
+    };
+    native
+        .feed
+        .as_mut()
+        .unwrap()
+        .history
+        .capture(&mut terminal.parser);
+    // An alternate-screen TUI has no vt100 scrollback, yet the archive must
+    // still disable its mouse protocol and keyboard input.
+    terminal.parser = vt100::Parser::new(24, 80, 1000);
+    terminal
+        .parser
+        .process(b"\x1b[?1049h\x1b[?1000h\x1b[?1006hlive text");
+}
+
+#[test]
+fn archived_alternate_screen_copies_visible_cells_but_never_sends_user_input() {
+    use crate::terminal::Selection;
+    let ctx = egui::Context::default();
+    let (mut terminal, client, received) = fixture(&ctx);
+    archive_fixture_screen(&mut terminal);
+    terminal.scroll_by(24);
+    assert!(terminal.viewing_archive());
+    assert_eq!(terminal.parser.screen().scrollback(), 0);
+    assert!(terminal.visible_text().starts_with("archived text"));
+    assert_eq!(
+        terminal.selection_text(Selection {
+            start: (0, 8),
+            end: (0, 0)
+        }),
+        "archived"
+    );
+    frame(&mut terminal, &ctx, true, vec![]);
+    terminal.request_focus(&ctx);
+    terminal.selection = Some(Selection {
+        start: (0, 0),
+        end: (0, 8),
+    });
+    let copied = frame_output(&mut terminal, &ctx, true, vec![egui::Event::Copy]);
+    assert!(copied.platform_output.commands.iter().any(
+        |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "archived")
+    ));
+    terminal.selection = None;
+    let blocked = frame_output(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![
+            egui::Event::Text("must-not-send".into()),
+            egui::Event::Paste("must-not-paste".into()),
+            egui::Event::Ime(egui::ImeEvent::Enabled),
+            egui::Event::Ime(egui::ImeEvent::Preedit("composition".into())),
+            egui::Event::Ime(egui::ImeEvent::Commit("must-not-commit".into())),
+            egui::Event::Copy,
+            egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerMoved(egui::pos2(40.0, 300.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(40.0, 300.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    assert!(blocked.platform_output.ime.is_none());
+    assert!(terminal.composition.is_empty());
+    assert!(!terminal.composing);
+    std::thread::sleep(Duration::from_millis(80));
+    assert!(
+        received
+            .try_iter()
+            .all(|seen| !matches!(seen, Seen::Input(_) | Seen::Close))
+    );
+    terminal.back_to_live();
+    assert!(!terminal.viewing_archive());
+    frame(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![egui::Event::Text("live".into())],
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let seen = received
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        if let Seen::Input(bytes) = seen {
+            assert_eq!(bytes, b"live");
+            break;
+        }
+    }
+    drop(terminal);
+    client.close();
+}
+
+#[test]
+fn scrolling_into_archive_and_typing_in_the_same_frame_does_not_send() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, received) = fixture(&ctx);
+    archive_fixture_screen(&mut terminal);
+    terminal.parser.process(b"\x1b[?1000l");
+    frame(&mut terminal, &ctx, true, vec![]);
+    terminal.request_focus(&ctx);
+    let pos = egui::pos2(40.0, 300.0);
+    frame(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    frame(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 30.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Text("same-frame-secret".into()),
+        ],
+    );
+    assert!(terminal.viewing_archive());
+    std::thread::sleep(Duration::from_millis(80));
+    assert!(
+        received
+            .try_iter()
+            .all(|seen| !matches!(seen, Seen::Input(_)))
+    );
+    drop(terminal);
+    client.close();
+}
+
+#[test]
+fn archive_view_keeps_live_cursor_replies_enabled_without_replaying_archived_queries() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, received) = fixture(&ctx);
+    archive_fixture_screen(&mut terminal);
+    terminal.scroll_by(24);
+    frame(&mut terminal, &ctx, true, vec![]);
+    let Backend::Native(native) = &terminal.backend else {
+        unreachable!()
+    };
+    assert!(native.allow_replies);
+    assert!(
+        host_emulator::apply(
+            &mut terminal.parser,
+            &mut terminal.query_tail,
+            b"\x1b[6n",
+            native.allow_replies && native.writable(),
+            |reply| native.send(reply),
+        )
+        .is_none()
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let seen = received
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        if let Seen::Input(bytes) = seen {
+            assert_eq!(bytes, b"\x1b[1;10R");
+            break;
+        }
+    }
+    assert!(terminal.visible_text().starts_with("archived text"));
+    drop(terminal);
+    client.close();
 }
 
 #[test]
