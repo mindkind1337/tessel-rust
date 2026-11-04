@@ -31,6 +31,8 @@ No real user server is part of unattended validation.
 
 ## 7B — Persistent terminal panes
 
+Preparation: local PTY ownership, bounded I/O and process-tree cleanup now live in `src/terminal/local.rs`, while `terminal.rs` retains rendering and emulation. The local path remains active; no remote terminal or persisted lease is enabled by this extraction. Its 17 terminal tests and strict Clippy pass on Windows.
+
 - Adapt the terminal emulator input/output boundary, retaining local ConPTY support.
   Apply byte output and resize events in order; snapshots preserve existing visible
   content in local scrollback, reset the screen and restore the supplied modes.

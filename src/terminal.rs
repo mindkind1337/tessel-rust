@@ -1,18 +1,13 @@
+mod local;
 mod mouse;
 use crate::i18n::tr;
 use eframe::egui;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use std::{
-    io::{Read, Write},
-    sync::mpsc::{self, Receiver, SyncSender},
-    thread,
-};
+use portable_pty::CommandBuilder;
+#[cfg(test)]
+use std::sync::mpsc;
 
 pub struct Terminal {
-    master: Box<dyn MasterPty + Send>,
-    input: Option<SyncSender<Vec<u8>>>,
-    child: Box<dyn Child + Send + Sync>,
-    output: Receiver<Vec<u8>>,
+    backend: local::LocalPty,
     parser: vt100::Parser,
     model_dirty: bool,
     observed_model: Option<crate::pane_session_model::ShownAgentModel>,
@@ -40,37 +35,9 @@ pub struct Terminal {
 impl Terminal {
     /// Called on the restart worker. No replacement may start until this succeeds.
     pub fn stop_for_restart(&mut self) -> Result<(), String> {
-        if !cfg!(windows) {
-            return Err("Verified terminal-tree restart is unavailable on this platform.".into());
-        }
-        self.child
-            .kill()
-            .map_err(|_| "Could not stop the terminal process group.")?;
-        self.input.take();
-        let (_, empty) = mpsc::channel();
-        self.output = empty;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            let tree_done = self
-                .child
-                .process_tree_exited()
-                .map_err(|_| "Cannot verify terminal process-group termination.")?;
-            let child_done = self
-                .child
-                .try_wait()
-                .map_err(|_| "Cannot verify terminal process termination.")?
-                .is_some();
-            if tree_done && child_done {
-                self.exited = true;
-                return Ok(());
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(
-                    "Terminal processes have not stopped; replacement was not started.".into(),
-                );
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        self.backend.stop_for_restart()?;
+        self.exited = true;
+        Ok(())
     }
     pub fn exited(&self) -> bool {
         self.exited
@@ -199,48 +166,9 @@ impl Terminal {
     }
 
     pub fn spawn_command(command: CommandBuilder) -> Result<Self, Box<dyn std::error::Error>> {
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 30,
-            cols: 100,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        let mut reader = pair.master.try_clone_reader()?;
-        let mut writer = pair.master.take_writer()?;
-        let child = pair.slave.spawn_command(command)?;
-        drop(pair.slave);
-        // Bounded queue prevents a noisy subprocess from consuming unlimited memory.
-        let (sender, output) = mpsc::sync_channel(64);
-        let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(32);
-        thread::spawn(move || {
-            while let Ok(bytes) = input_rx.recv() {
-                if writer
-                    .write_all(&bytes)
-                    .and_then(|_| writer.flush())
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        thread::spawn(move || {
-            let mut buffer = [0; 8192];
-            loop {
-                match reader.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => {
-                        if sender.send(buffer[..count].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
+        let backend = local::LocalPty::spawn(command)?;
         Ok(Self {
-            master: pair.master,
-            input: Some(input),
-            child,
-            output,
+            backend,
             parser: vt100::Parser::new(30, 100, 1000),
             model_dirty: true,
             observed_model: None,
@@ -289,11 +217,7 @@ impl Terminal {
     }
 
     fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
-        self.input
-            .as_ref()
-            .ok_or("Terminal input closed")?
-            .try_send(bytes)
-            .map_err(|_| "Terminal input is busy or closed; input was not sent.".into())
+        self.backend.send(bytes)
     }
 
     pub fn poll(&mut self) {
@@ -302,12 +226,12 @@ impl Terminal {
             return;
         }
         for _ in 0..64 {
-            let Ok(bytes) = self.output.try_recv() else {
+            let Some(bytes) = self.backend.try_output() else {
                 break;
             };
             self.process_output(&bytes);
         }
-        if let Ok(Some(exit)) = self.child.try_wait() {
+        if let Some(exit) = self.backend.exit_status() {
             self.exited = true;
             self.status = format!("Shell exited: {exit}");
         }
@@ -323,17 +247,7 @@ impl Terminal {
         let available = ui.available_size();
         let cols = ((available.x / cell_width) as u16).clamp(20, 300);
         let rows = ((available.y / line_height) as u16).clamp(5, 150);
-        if self.size != (rows, cols)
-            && self
-                .master
-                .resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .is_ok()
-        {
+        if self.size != (rows, cols) && self.backend.resize(rows, cols).is_ok() {
             self.selection = None;
             self.parser.set_size(rows, cols);
             self.model_dirty = true;
@@ -849,18 +763,6 @@ fn color(
     }
 }
 
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        self.input.take();
-        // Unblock the reader before closing ConPTY; a full output queue must not
-        // deadlock window shutdown while ClosePseudoConsole waits for its pipes.
-        let (_, empty) = mpsc::channel();
-        self.output = empty;
-        let _ = self.child.wait();
-    }
-}
-
 #[cfg(windows)]
 pub fn configure_fonts(ctx: &egui::Context) {
     use std::io::Read;
@@ -1088,7 +990,7 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
                     );
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                assert!(!terminal.child.process_tree_exited().unwrap());
+                assert!(!terminal.backend.process_tree_exited());
             }
             let result = terminal.stop_for_restart();
             let exited = unsafe { WaitForSingleObject(process, 1000) };
@@ -1097,7 +999,7 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
             }
             result.unwrap();
             assert_eq!(exited, WAIT_OBJECT_0);
-            assert!(terminal.child.process_tree_exited().unwrap());
+            assert!(terminal.backend.process_tree_exited());
         }
     }
     use super::*;
@@ -1141,7 +1043,7 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
     fn disabled_terminal_cannot_receive_modal_typing_or_mouse_clicks() {
         let mut terminal = Terminal::spawn().unwrap();
         let (sender, receiver) = mpsc::sync_channel(32);
-        terminal.input = Some(sender);
+        terminal.backend.replace_input(sender);
         terminal.process_output(b"\x1b[?1000h\x1b[?1006h");
         let ctx = egui::Context::default();
         let mut render = |enabled: bool, events: Vec<egui::Event>| {
@@ -1299,8 +1201,8 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
         let mut found = false;
         while std::time::Instant::now() < deadline {
             match terminal
-                .output
-                .recv_timeout(std::time::Duration::from_millis(200))
+                .backend
+                .recv_output(std::time::Duration::from_millis(200))
             {
                 Ok(bytes) => {
                     terminal.process_output(&bytes);
@@ -1331,8 +1233,8 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
         let mut found = false;
         while std::time::Instant::now() < deadline {
             if let Ok(bytes) = terminal
-                .output
-                .recv_timeout(std::time::Duration::from_millis(200))
+                .backend
+                .recv_output(std::time::Duration::from_millis(200))
             {
                 terminal.process_output(&bytes);
                 // Require output on its own line, not just the echoed command.
