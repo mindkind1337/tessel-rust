@@ -28,6 +28,7 @@ pub mod agent_names;
 mod agent_paths;
 pub mod agent_preferences;
 pub mod agent_program;
+pub mod agent_resume;
 mod agent_tools;
 mod agents_panel;
 mod app;

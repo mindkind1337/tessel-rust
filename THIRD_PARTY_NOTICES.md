@@ -5,6 +5,11 @@ copyright and permission notices are reproduced in full.
 
 ## Orca
 
+The pure conversation resume planner in `src/agent_resume.rs` adapts Tessel's
+`agentResumeLine.js` and `remoteAgentLaunch.js`, including argument mappings from
+the vendored Orca `agent-session-resume.js`. Its source-comparison fixture uses
+synthetic session identifiers and paths only.
+
 The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
 `RemoteHostForm.vue`, `remoteHosts.js`, and `remoteHosts.css`, which are ported from Orca
