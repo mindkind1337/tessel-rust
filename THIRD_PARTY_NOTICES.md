@@ -23,6 +23,9 @@ launch-time and exclusion policy in Tessel's `src/main/agentSessions.js`.
 Its tests use temporary synthetic rollouts, not user conversation records.
 The reverse log scan in `src/pane_model_log.rs` adapts Tessel's
 `src/main/latestInFile.js`, retaining its 512 KiB chunks and 64 MiB scan limit.
+The Codex runtime adapter in `src/pane_model_runtime.rs` follows
+`src/main/agentModel.js:codexModelFromText` and the refresh policy in
+`TerminalPane.vue`.
 
 The pure per-pane model state and planners in `src/pane_session_model.rs` adapt
 Tessel's `agentSessionOptions.js`, `agentPrefs.js`, `paneLastModel.js`, model and

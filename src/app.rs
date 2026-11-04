@@ -756,6 +756,24 @@ impl Tessel {
                             terminal.enable_model_fixture();
                         }
                     }
+                    if let Some(root) = std::env::args()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .find(|args| args[0] == "--model-file-fixture")
+                        .map(|args| PathBuf::from(&args[1]))
+                    {
+                        app.overlay = None;
+                        let session = app.sessions.last_mut().expect("synthetic terminal");
+                        session.launch = Launch::Agent("codex".into());
+                        session.conversation_id =
+                            Some("12345678-1234-4234-8234-123456789abc".into());
+                        if let Some(cwd) = root.parent() {
+                            session.cwd = cwd.to_owned();
+                            if let Some(terminal) = &mut session.terminal {
+                                terminal.enable_model_file_fixture(&root, cwd);
+                            }
+                        }
+                    }
                     if std::env::args().any(|arg| arg == "--pane-model-fixture") {
                         app.overlay = None;
                         let session = app.sessions.last_mut().expect("synthetic terminal");
@@ -2101,7 +2119,7 @@ impl Tessel {
                                 };
                                 let observed_model = match &session.launch {
                                     Launch::Agent(agent) => {
-                                        session.terminal.as_mut().and_then(|terminal| terminal.observed_model(agent, &pane_models)).cloned()
+                                        session.terminal.as_mut().and_then(|terminal| terminal.header_model(agent, &pane_models, session.conversation_id.as_deref(), ui.ctx()))
                                     }
                                     _ => None,
                                 };

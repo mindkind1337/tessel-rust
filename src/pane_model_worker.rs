@@ -14,6 +14,8 @@ use std::{
 
 const MAX_WORKERS: usize = 2;
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub const MAX_READ: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +189,7 @@ mod tests {
 
     #[test]
     fn stale_results_and_aba_are_rejected_without_spawning_more_jobs() {
+        let _guard = TEST_LOCK.lock().unwrap();
         let mut worker = Worker::default();
         worker.bind("profile-a/conversation-1");
         let (finish, wait) = mpsc::channel();

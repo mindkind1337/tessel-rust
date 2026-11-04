@@ -19,6 +19,9 @@ pub struct Terminal {
     model_catalog: Vec<serde_json::Value>,
     model_agent: String,
     model_profile: Option<crate::pane_model_profile::Profile>,
+    model_runtime: crate::pane_model_runtime::Runtime,
+    model_screen_present: bool,
+    output_revision: u64,
     size: (u16, u16),
     status: String,
     exited: bool,
@@ -81,6 +84,14 @@ impl Terminal {
         let rows = self.size.0;
         self.process_output(format!("\x1b[{};1H\x1b[2K› Ask Codex anything\x1b[{};1H\x1b[2K\x1b[{};1H\x1b[2KGPT-5.6 Sol xhigh fast", rows - 2, rows - 1, rows).as_bytes());
     }
+    #[cfg(feature = "visual-test")]
+    pub fn enable_model_file_fixture(&mut self, root: &std::path::Path, cwd: &std::path::Path) {
+        let mut command = CommandBuilder::new("synthetic-model-fixture");
+        command.env_clear();
+        command.cwd(cwd);
+        command.env("CODEX_HOME", root);
+        self.model_profile = crate::pane_model_profile::Profile::capture("codex", &command, cwd);
+    }
     pub fn observed_model(
         &mut self,
         agent: &str,
@@ -94,6 +105,7 @@ impl Terminal {
         }
         if self.model_agent != agent {
             self.observed_model = None;
+            self.model_screen_present = false;
             self.model_agent = agent.to_owned();
             self.model_dirty = true;
         }
@@ -106,11 +118,38 @@ impl Terminal {
                 self.model_catalog = models.to_vec();
             }
             let lines = crate::terminal_model::live_footer(&mut self.parser);
-            if let Some(seen) = crate::terminal_model::observe(agent, &lines, models) {
+            let seen = crate::terminal_model::observe(agent, &lines, models);
+            self.model_screen_present = seen.is_some();
+            if let Some(seen) = seen {
                 self.observed_model = Some(seen);
             }
         }
         self.observed_model.as_ref()
+    }
+    pub fn header_model(
+        &mut self,
+        agent: &str,
+        models: &[serde_json::Value],
+        conversation: Option<&str>,
+        ctx: &egui::Context,
+    ) -> Option<crate::pane_session_model::ShownAgentModel> {
+        let screen = self.observed_model(agent, models).cloned();
+        let wake = ctx.clone();
+        let session = self
+            .model_runtime
+            .tick(
+                self.model_profile.as_ref().filter(|p| p.agent() == agent),
+                conversation,
+                self.output_revision,
+                std::time::Instant::now(),
+                move || wake.request_repaint(),
+            )
+            .cloned();
+        if self.model_screen_present {
+            screen
+        } else {
+            session.or(screen)
+        }
     }
     pub fn request_focus(&self, ctx: &egui::Context) {
         if let Some(id) = self.widget_id {
@@ -208,6 +247,9 @@ impl Terminal {
             model_catalog: Vec::new(),
             model_agent: String::new(),
             model_profile: None,
+            model_runtime: crate::pane_model_runtime::Runtime::default(),
+            model_screen_present: false,
+            output_revision: 0,
             size: (30, 100),
             status: String::new(),
             exited: false,
@@ -228,6 +270,7 @@ impl Terminal {
         if !bytes.is_empty() {
             self.selection = None;
             self.model_dirty = true;
+            self.output_revision = self.output_revision.wrapping_add(1);
         }
         for &byte in bytes {
             self.parser.process(&[byte]);
@@ -891,6 +934,61 @@ mod tests {
         drop(terminal);
         let mut fresh = super::Terminal::spawn().unwrap();
         assert!(fresh.observed_model("codex", &models).is_none());
+    }
+    #[test]
+    fn codex_header_prefers_current_footer_then_verified_conversation() {
+        let _guard = crate::pane_model_worker::TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("profile");
+        std::fs::create_dir_all(root.join("archived_sessions")).unwrap();
+        let id = "12345678-1234-4234-8234-123456789abc";
+        let metadata = serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":dir.path(),"timestamp":"2026-11-03T00:00:00Z"}});
+        let turn = serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-luna","effort":"medium"}});
+        std::fs::write(
+            root.join("archived_sessions")
+                .join(format!("rollout-{id}.jsonl")),
+            format!("{metadata}\n{turn}\n"),
+        )
+        .unwrap();
+        let mut command = CommandBuilder::new("synthetic-profile");
+        command.env_clear();
+        command.cwd(dir.path());
+        command.env("CODEX_HOME", root);
+        let mut terminal = Terminal::spawn().unwrap();
+        terminal.model_profile =
+            crate::pane_model_profile::Profile::capture("codex", &command, dir.path());
+        terminal.parser = vt100::Parser::new(5, 100, 100);
+        let models = crate::agent_model_catalog::models_for("codex", None);
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let seen = loop {
+            if let Some(model) = terminal.header_model("codex", &models, Some(id), &ctx) {
+                break model;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(seen.model, "gpt-5.6-luna");
+        assert_eq!(seen.source, crate::pane_session_model::ModelSource::Session);
+        terminal.process_output(
+            "\x1b[3;1H› Ask Codex anything\x1b[5;1HGPT-5.6 Sol xhigh fast".as_bytes(),
+        );
+        let seen = terminal
+            .header_model("codex", &models, Some(id), &ctx)
+            .unwrap();
+        assert_eq!(seen.model, "gpt-5.6-sol");
+        assert_eq!(seen.source, crate::pane_session_model::ModelSource::Screen);
+        terminal.process_output(b"\x1b[2J");
+        let seen = terminal
+            .header_model("codex", &models, Some(id), &ctx)
+            .unwrap();
+        assert_eq!(seen.model, "gpt-5.6-luna");
+        assert_eq!(seen.source, crate::pane_session_model::ModelSource::Session);
+        assert!(
+            terminal
+                .header_model("claude", &models, Some(id), &ctx)
+                .is_none()
+        );
     }
     #[test]
     #[cfg(windows)]
