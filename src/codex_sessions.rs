@@ -77,6 +77,64 @@ pub struct Query<'a> {
     pub active_since_ms: Option<i64>,
 }
 
+/// Verifies a saved ID even outside discovery's thirty-day window. A filename
+/// alone is not evidence: its first metadata record must match both ID and cwd.
+pub fn verify(root: &Path, cwd: &Path, id: &str) -> Result<bool, String> {
+    if !crate::claude::valid_uuid(id) || !cwd.is_absolute() {
+        return Err("Invalid saved Codex conversation.".into());
+    }
+    let want = normalized(cwd.to_str().ok_or("Invalid conversation folder.")?);
+    let suffix = format!("-{id}.jsonl");
+    let mut pending = vec![
+        (root.join("sessions"), 3),
+        (root.join("archived_sessions"), 0),
+    ];
+    let mut count = 0;
+    while let Some((dir, depth)) = pending.pop() {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("Cannot verify Codex conversation folders.".into()),
+        };
+        for entry in entries {
+            count += 1;
+            if count > MAX_ENTRIES {
+                return Err("Codex verification entry limit reached.".into());
+            }
+            let entry = entry.map_err(|_| "Cannot enumerate saved Codex conversations.")?;
+            let kind = entry
+                .file_type()
+                .map_err(|_| "Cannot inspect saved Codex metadata.")?;
+            if kind.is_dir() && depth > 0 {
+                pending.push((entry.path(), depth - 1));
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !kind.is_file() || !name.starts_with("rollout-") || !name.ends_with(&suffix) {
+                continue;
+            }
+            let file = match fs::File::open(entry.path()) {
+                Ok(file) => file,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(_) => return Err("Cannot read saved Codex metadata.".into()),
+            };
+            let mut line = Vec::new();
+            BufReader::new(file.take(MAX_LINE + 1))
+                .read_until(b'\n', &mut line)
+                .map_err(|_| "Cannot read saved Codex metadata.")?;
+            if parse_metadata(&line)
+                .is_some_and(|meta| meta.id == id && normalized(&meta.cwd) == want)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Matches source's thirty-day window, five-second launch slack, and excluded IDs.
 /// An unreadable directory or exhausted budget is an error, not a missing session.
 /// Missing/invalid timestamps are not trusted as evidence of ownership.
@@ -210,6 +268,23 @@ mod tests {
     use super::*;
     const FIRST: &str = "12345678-1234-4234-8234-123456789abc";
     const SECOND: &str = "22345678-1234-4234-8234-123456789abc";
+    #[test]
+    fn verifies_old_and_archived_ids_without_trusting_names_or_other_projects() {
+        let temp = tempfile::tempdir().unwrap();
+        for relative in ["sessions/2020/01/02", "archived_sessions"] {
+            let dir = temp.path().join(relative);
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("rollout-2020-01-02-{FIRST}.jsonl"));
+            fs::write(&path, line(SECOND, temp.path(), 1_577_923_200_000)).unwrap();
+            assert!(!verify(temp.path(), temp.path(), FIRST).unwrap());
+            fs::write(&path, line(FIRST, temp.path(), 1_577_923_200_000)).unwrap();
+            assert!(verify(temp.path(), temp.path(), FIRST).unwrap());
+            assert!(!verify(temp.path(), &temp.path().join("different"), FIRST).unwrap());
+            fs::remove_file(path).unwrap();
+        }
+        assert!(verify(temp.path(), temp.path(), "../bad").is_err());
+        assert!(!verify(temp.path(), temp.path(), FIRST).unwrap());
+    }
     #[test]
     fn directory_failures_and_lookup_limits_are_not_reported_as_absence() {
         let temp = tempfile::tempdir().unwrap();

@@ -26,9 +26,7 @@ pub fn root(
     inherited: Option<&str>,
 ) -> PathBuf {
     let env = crate::agent_env::parse(&prefs.env).unwrap_or_default();
-    let override_path = env
-        .get("CLAUDE_CONFIG_DIR")
-        .map(String::as_str)
+    let override_path = crate::agent_env::effective_value(&env, "CLAUDE_CONFIG_DIR")
         .or(inherited)
         .filter(|s| !s.is_empty());
     if let Some(path) = override_path {

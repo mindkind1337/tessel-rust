@@ -18,6 +18,7 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    codex_discovery: Option<crate::codex_terminal::Discovery>,
     restarting: Option<Restart>,
     conversation_id: Option<String>,
     settings_changed: bool,
@@ -34,6 +35,34 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn poll_conversation(&mut self, claimed: &mut std::collections::HashSet<String>) -> bool {
+        if self.terminal.is_none() || self.restarting.is_some() {
+            return false;
+        }
+        let Some(discovery) = &mut self.codex_discovery else {
+            return false;
+        };
+        let Some(result) = discovery.poll(claimed) else {
+            return false;
+        };
+        match result {
+            Ok(Some(id)) if claimed.insert(id.clone()) => {
+                self.conversation_id = Some(id);
+                self.codex_discovery = None;
+                true
+            }
+            Err(error) => {
+                self.error = error;
+                self.codex_discovery = None;
+                false
+            }
+            Ok(None) if self.terminal.as_ref().is_some_and(Terminal::exited) => {
+                self.codex_discovery = None;
+                false
+            }
+            _ => false,
+        }
+    }
     fn can_restart(&self, prefs: Option<&crate::agent_preferences::Preferences>) -> bool {
         cfg!(windows)
             && self.loading.is_none()
@@ -42,7 +71,9 @@ impl Session {
             && match (&self.launch, prefs) {
                 (Launch::Shell, _) => true,
                 (Launch::Agent(agent), Some(prefs)) => {
-                    self.conversation_id.is_some() && crate::claude_terminal::managed(agent, prefs)
+                    self.conversation_id.is_some()
+                        && (crate::claude_terminal::managed(agent, prefs)
+                            || crate::codex_terminal::managed(agent, prefs))
                 }
                 _ => false,
             }
@@ -119,7 +150,31 @@ impl Session {
                 }
             }
         }
-        let conversation = managed.then(|| self.conversation_id.clone()).flatten();
+        let codex_managed = match (&launch, &prefs) {
+            (Launch::Agent(agent), Some(prefs)) => crate::codex_terminal::managed(agent, prefs),
+            _ => false,
+        };
+        if !managed && !codex_managed && matches!(launch, Launch::Agent(_)) {
+            // Explicit session/mode arguments may select a different thread.
+            // The previous automatic ID no longer describes this process.
+            self.conversation_id = None;
+        }
+        self.codex_discovery = None;
+        if codex_managed && self.conversation_id.is_none() {
+            match crate::codex_terminal::Discovery::new(
+                prefs.as_ref().expect("Codex preferences"),
+                &self.cwd,
+            ) {
+                Ok(discovery) => self.codex_discovery = Some(discovery),
+                Err(error) => {
+                    self.error = error;
+                    return;
+                }
+            }
+        }
+        let conversation = (managed || codex_managed)
+            .then(|| self.conversation_id.clone())
+            .flatten();
         self.settings_changed = false;
         self.launch_fingerprint = match (&self.launch, &prefs) {
             (Launch::Agent(id), Some(prefs)) => crate::launch_fingerprint::for_agent(id, prefs),
@@ -131,6 +186,9 @@ impl Session {
         self.error.clear();
         thread::spawn(move || {
             let effective = match (&launch, &prefs, conversation) {
+                (Launch::Agent(agent), Some(prefs), Some(id)) if agent == "codex" => {
+                    crate::codex_terminal::prepare(prefs, &cwd, &id).map(Some)
+                }
                 (Launch::Agent(agent), Some(prefs), Some(id)) => {
                     crate::claude_terminal::prepare(agent, prefs, &cwd, &id).map(Some)
                 }
@@ -188,7 +246,10 @@ impl Session {
                     self.error.clear();
                     self.terminal = Some(t);
                 }
-                Err(e) => self.error = e,
+                Err(e) => {
+                    self.error = e;
+                    self.codex_discovery = None;
+                }
             }
         }
         if let Some(t) = &mut self.terminal {
@@ -418,6 +479,7 @@ impl Tessel {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
                 restarting: None,
+                codex_discovery: None,
                 settings_changed: false,
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
@@ -587,6 +649,7 @@ impl Tessel {
                     app.next_session += 1;
                     app.sessions.push(Session {
                         restarting: None,
+                        codex_discovery: None,
                         settings_changed: false,
                         conversation_id: None,
                         launch_fingerprint: None,
@@ -630,6 +693,7 @@ impl Tessel {
                 app.next_session += 1;
                 app.sessions.push(Session {
                     restarting: None,
+                    codex_discovery: None,
                     settings_changed: false,
                     conversation_id: None,
                     launch_fingerprint: None,
@@ -867,8 +931,14 @@ impl Tessel {
             self.save();
         }
         let mut terminal_changed = false;
+        let mut claimed: std::collections::HashSet<String> = self
+            .sessions
+            .iter()
+            .filter_map(|session| session.conversation_id.clone())
+            .collect();
         for s in &mut self.sessions {
             terminal_changed |= s.poll();
+            terminal_changed |= s.poll_conversation(&mut claimed);
         }
         if terminal_changed {
             self.save();
@@ -981,6 +1051,7 @@ impl Tessel {
         self.next_session = next;
         let mut s = Session {
             restarting: None,
+            codex_discovery: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,
@@ -2461,6 +2532,7 @@ impl Tessel {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
                 restarting: None,
+                codex_discovery: None,
                 settings_changed: false,
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
@@ -4230,6 +4302,7 @@ mod tests {
                 result: receiver,
                 preferences: None,
             }),
+            codex_discovery: None,
             conversation_id: None,
             settings_changed: false,
             launch_fingerprint: None,
@@ -4297,6 +4370,7 @@ $lock.Dispose()
         };
         let mut session = Session {
             restarting: None,
+            codex_discovery: None,
             conversation_id: None,
             settings_changed: false,
             launch_fingerprint: None,
@@ -4473,6 +4547,7 @@ $lock.Dispose()
         let prefs = crate::agent_preferences::Preferences::default();
         let mut session = Session {
             restarting: None,
+            codex_discovery: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
@@ -4510,6 +4585,7 @@ $lock.Dispose()
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
                 restarting: None,
+                codex_discovery: None,
                 settings_changed: false,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -4533,6 +4609,102 @@ $lock.Dispose()
 
     #[test]
     #[cfg(windows)]
+    fn codex_terminal_discovers_and_resumes_only_its_verified_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("synthetic codex.ps1");
+        let id = "12345678-1234-4234-8234-123456789abc";
+        std::fs::write(&script, r#"
+Set-Content -LiteralPath (Join-Path $env:SYNTHETIC_ROOT 'args.json') -Value (ConvertTo-Json -InputObject @($args))
+if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
+    $date = Get-Date
+    $folder = Join-Path $env:CODEX_HOME ('sessions/{0:0000}/{1:00}/{2:00}' -f $date.Year, $date.Month, $date.Day)
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    $meta = @{ type='session_meta'; payload=@{ id='12345678-1234-4234-8234-123456789abc'; cwd=$env:SYNTHETIC_ROOT; timestamp=[DateTime]::UtcNow.ToString('o') } }
+    $file = Join-Path $folder 'rollout-synthetic-12345678-1234-4234-8234-123456789abc.jsonl'
+    [IO.File]::WriteAllText($file, ($meta | ConvertTo-Json -Depth 3 -Compress))
+}
+"#).unwrap();
+        let mut prefs = crate::agent_preferences::Preferences {
+            command: format!("& '{}'", script.display().to_string().replace('\'', "''")),
+            env: format!(
+                "CODEX_HOME={}\nSYNTHETIC_ROOT={}",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            ..Default::default()
+        };
+        let mut session = Session {
+            codex_discovery: None,
+            restarting: None,
+            conversation_id: None,
+            settings_changed: false,
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic Codex".into(),
+            launch: Launch::Agent("codex".into()),
+            cwd: dir.path().into(),
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        session.start(Some(prefs.clone()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut claimed = std::collections::HashSet::new();
+        while session.conversation_id.is_none() {
+            session.poll();
+            session.poll_conversation(&mut claimed);
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Synthetic conversation not discovered"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(session.conversation_id.as_deref(), Some(id));
+        assert!(claimed.contains(id));
+        session.terminal = None;
+        prefs.args = "--model synthetic-next".into();
+        session.start(Some(prefs.clone()));
+        while !session.terminal.as_ref().is_some_and(Terminal::exited) {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let args: Vec<String> =
+            serde_json::from_slice(&std::fs::read(dir.path().join("args.json")).unwrap()).unwrap();
+        assert_eq!(args, ["resume", id, "--model", "synthetic-next"]);
+        session.terminal = None;
+        prefs.env = format!(
+            "CODEX_HOME={}\nSYNTHETIC_ROOT={}",
+            dir.path().join("another-profile").display(),
+            dir.path().display()
+        );
+        session.start(Some(prefs.clone()));
+        while session.loading.is_some() {
+            session.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(session.error.contains("not found in this profile"));
+        assert!(session.terminal.is_none());
+        assert_eq!(session.conversation_id.as_deref(), Some(id));
+        prefs.args = "resume explicit-user-session".into();
+        session.start(Some(prefs));
+        assert!(session.conversation_id.is_none());
+        assert!(session.codex_discovery.is_none());
+        while !session.terminal.as_ref().is_some_and(Terminal::exited) {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[test]
+    #[cfg(windows)]
     fn claude_terminal_wake_reuses_its_id_and_resumes_only_an_existing_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("synthetic cli.ps1");
@@ -4549,6 +4721,7 @@ $lock.Dispose()
         let mut session = Session {
             conversation_id: None,
             restarting: None,
+            codex_discovery: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -4594,6 +4767,7 @@ $lock.Dispose()
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
             restarting: None,
+            codex_discovery: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,
@@ -4627,6 +4801,7 @@ $lock.Dispose()
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
             restarting: None,
+            codex_discovery: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,

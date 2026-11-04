@@ -4,6 +4,19 @@ use std::collections::BTreeMap;
 
 pub const MAX_TEXT: usize = 16 * 1024;
 
+/// Match the environment actually passed by launch.rs to portable-pty: Windows
+/// keys are case-insensitive and the last BTreeMap entry applied wins.
+pub fn effective_value<'a>(env: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    if cfg!(windows) {
+        env.iter()
+            .rev()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    } else {
+        env.get(name).map(String::as_str)
+    }
+}
+
 // ECMAScript WhiteSpace + LineTerminator, deliberately not Rust's broader
 // Unicode White_Space (which includes U+0085 but excludes U+FEFF).
 pub(crate) fn js_space(c: char) -> bool {
@@ -63,6 +76,24 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn profile_override_matches_the_native_child_environment() {
+        let env = parse(
+            "CODEX_HOME=first\ncodex_home=last\nCLAUDE_CONFIG_DIR=one\nclaude_config_dir=two",
+        )
+        .unwrap();
+        let mut command = portable_pty::CommandBuilder::new("synthetic-never-executed");
+        command.env_clear();
+        for (key, value) in &env {
+            command.env(key, value);
+        }
+        for key in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+            assert_eq!(
+                effective_value(&env, key),
+                command.get_env(key).and_then(|v| v.to_str())
+            );
+        }
+    }
     #[test]
     fn matches_source_environment_fixtures() {
         let fixture: serde_json::Value =

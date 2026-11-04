@@ -222,7 +222,7 @@ impl Workspace {
         for session in &self.sessions {
             if let Some(id) = &session.conversation_id
                 && (!crate::claude::valid_uuid(id)
-                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent)))
+                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex"))
             {
                 return Err("Invalid terminal conversation metadata.".into());
             }
@@ -606,6 +606,14 @@ mod tests {
         loaded.sessions[0].conversation_id = Some(id);
         loaded.sessions[0].launch = crate::launch::Launch::Shell;
         assert!(store.save(&loaded).is_err());
+        loaded.sessions[0].launch = crate::launch::Launch::Agent("codex".into());
+        store.save(&loaded).unwrap();
+        drop(store);
+        let (_, codex_loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            codex_loaded.sessions[0].conversation_id,
+            loaded.sessions[0].conversation_id
+        );
         let mut old = serde_json::to_value(&state.sessions[0]).unwrap();
         old.as_object_mut().unwrap().remove("conversation_id");
         assert!(
