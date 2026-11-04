@@ -69,6 +69,7 @@ pub mod palette;
 pub mod pane_grid;
 mod pane_header;
 pub mod pane_menu_model;
+mod pane_model_history;
 pub mod pane_model_settings;
 pub mod pane_session_model;
 mod pdf;

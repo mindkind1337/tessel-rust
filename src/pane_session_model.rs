@@ -30,8 +30,10 @@
 //!   [`muse_footer_model`]) inspect at most [`MAX_SCREEN_LINES`] lines and skip
 //!   lines exceeding [`MAX_SCREEN_LINE_UTF16`] UTF-16 units. They suppress
 //!   detection while an interactive picker covers the prompt, and represent
-//!   heuristic TUI status-bar/banner readings ([`ModelSource::Screen`]) that
-//!   always yield to transcript/session telemetry ([`ModelSource::Session`]).
+//!   heuristic TUI status-bar/banner readings ([`ModelSource::Screen`]). Caller
+//!   precedence is provider-specific: Cursor, Codex and Antigravity footers are
+//!   consulted before files; Muse's footer supplements file telemetry. Screen
+//!   observations must never become authoritative host policy for guests.
 
 use crate::{
     agent_arg_options::safe_session_value,

@@ -113,6 +113,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
@@ -151,6 +152,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: Some("a".repeat(64)),
@@ -173,6 +175,11 @@ mod tests {
             .unwrap()
             .seed(),
         );
+        state.sessions[0].last_model = Some(crate::pane_session_model::SavedPaneModel {
+            model: "gpt-5.6-sol".into(),
+            name: None,
+            effort: Some("high".into()),
+        });
         export(&path, &state).unwrap();
         assert!(
             !std::fs::read_to_string(&path)
@@ -181,6 +188,10 @@ mod tests {
         );
         assert!(export(&path, &Workspace::default()).is_err());
         let mut imported = import(&path).unwrap();
+        assert_eq!(
+            imported.sessions[0].last_model,
+            state.sessions[0].last_model
+        );
         assert!(imported.sessions[0].codex_seed.is_none());
         assert!(imported.sessions[0].launch_fingerprint.is_none());
         assert!(

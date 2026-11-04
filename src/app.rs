@@ -18,6 +18,8 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    last_model: Option<crate::pane_session_model::SavedPaneModel>,
+    model_save_attempt: Option<std::time::Instant>,
     model_picker: crate::session_option_picker_ui::SessionOptionPickerUi,
     codex_seed: Option<crate::codex_terminal::Seed>,
     codex_restore: Option<crate::agent_preferences::Preferences>,
@@ -526,6 +528,8 @@ impl Tessel {
                 codex_discovery: None,
                 codex_restore: None,
                 model_picker: Default::default(),
+                last_model: saved.last_model.clone(),
+                model_save_attempt: None,
                 settings_changed: false,
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
@@ -699,6 +703,8 @@ impl Tessel {
                         codex_discovery: None,
                         codex_restore: None,
                         model_picker: Default::default(),
+                        last_model: None,
+                        model_save_attempt: None,
                         settings_changed: false,
                         codex_seed: None,
                         conversation_id: None,
@@ -765,6 +771,8 @@ impl Tessel {
                     codex_discovery: None,
                     codex_restore: None,
                     model_picker: Default::default(),
+                    last_model: None,
+                    model_save_attempt: None,
                     settings_changed: false,
                     codex_seed: None,
                     conversation_id: None,
@@ -832,6 +840,7 @@ impl Tessel {
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                last_model: s.last_model.clone(),
                 codex_seed: s.codex_seed.clone(),
                 conversation_id: s.conversation_id.clone(),
                 launch_fingerprint: s.launch_fingerprint.clone(),
@@ -1160,6 +1169,8 @@ impl Tessel {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -2026,6 +2037,7 @@ impl Tessel {
         let mut maximize = None;
         let mut arrange = false;
         let mut model_choice = None;
+        let mut observed_updates = Vec::new();
         let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
@@ -2083,6 +2095,14 @@ impl Tessel {
                                     }
                                     _ => None,
                                 };
+                                if let Some(snapshot) = observed_model.as_ref().and_then(crate::pane_model_history::snapshot)
+                                    && session.last_model.as_ref() != Some(&snapshot)
+                                    && session.model_save_attempt.is_none_or(|time| time.elapsed() >= Duration::from_secs(5))
+                                {
+                                    session.model_save_attempt = Some(std::time::Instant::now());
+                                    observed_updates.push((session.id, snapshot));
+                                }
+                                let observed_model = observed_model.or_else(|| session.last_model.as_ref().map(crate::pane_model_history::restored));
                                 let conversation_id = session
                                     .launch
                                     .native_chat()
@@ -2496,6 +2516,21 @@ impl Tessel {
         if let Some((id, option, value)) = model_choice {
             self.save_pane_model_choice(id, &option, value.as_ref());
         }
+        if !observed_updates.is_empty()
+            && let Some(store) = &self.store
+        {
+            match crate::pane_model_history::persist(&mut self.state, store, &observed_updates) {
+                Ok(_) => {
+                    for (id, model) in observed_updates {
+                        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+                            session.last_model = Some(model);
+                            session.model_save_attempt = None;
+                        }
+                    }
+                }
+                Err(error) => self.error = error,
+            }
+        }
         if let Some(placement) = split {
             self.new_session_placed(Launch::Shell, Some(placement));
         }
@@ -2727,6 +2762,8 @@ impl Tessel {
                 codex_discovery: None,
                 codex_restore: None,
                 model_picker: Default::default(),
+                last_model: saved.last_model.clone(),
+                model_save_attempt: None,
                 settings_changed: false,
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
@@ -4519,6 +4556,8 @@ mod tests {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             codex_seed: None,
             conversation_id: None,
             settings_changed: false,
@@ -4590,6 +4629,8 @@ $lock.Dispose()
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             codex_seed: None,
             conversation_id: None,
             settings_changed: false,
@@ -4770,6 +4811,8 @@ $lock.Dispose()
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -4811,6 +4854,8 @@ $lock.Dispose()
                 codex_discovery: None,
                 codex_restore: None,
                 model_picker: Default::default(),
+                last_model: None,
+                model_save_attempt: None,
                 settings_changed: false,
                 codex_seed: None,
                 conversation_id: None,
@@ -4863,6 +4908,8 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             restarting: None,
             codex_seed: None,
             conversation_id: None,
@@ -5003,6 +5050,8 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -5051,6 +5100,8 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
@@ -5088,6 +5139,8 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             codex_discovery: None,
             codex_restore: None,
             model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,

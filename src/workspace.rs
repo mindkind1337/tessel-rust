@@ -75,6 +75,8 @@ pub struct NativeThread {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_model: Option<crate::pane_session_model::SavedPaneModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_seed: Option<crate::codex_terminal::Seed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
@@ -222,6 +224,16 @@ impl Workspace {
             }
         }
         for session in &self.sessions {
+            if let Some(model) = &session.last_model {
+                let value =
+                    serde_json::to_value(model).map_err(|_| "Invalid saved model metadata.")?;
+                if !matches!(session.launch, crate::launch::Launch::Agent(_))
+                    || crate::pane_session_model::saved_pane_model(Some(&value)).as_ref()
+                        != Some(model)
+                {
+                    return Err("Invalid saved model metadata.".into());
+                }
+            }
             if let Some(seed) = &session.codex_seed
                 && (!seed.valid()
                     || session.conversation_id.is_some()
@@ -593,6 +605,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         let id = crate::claude::uuid().unwrap();
         state.sessions.push(SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: Some(id.clone()),
             launch_fingerprint: None,
@@ -665,6 +678,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                last_model: None,
                 codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -815,6 +829,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                last_model: None,
                 codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -850,6 +865,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                last_model: None,
                 codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -885,6 +901,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
@@ -910,6 +927,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                last_model: None,
                 codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -923,6 +941,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
@@ -986,6 +1005,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
@@ -1018,6 +1038,7 @@ mod tests {
             (4, Some("Old shell label"), crate::launch::Launch::Shell),
         ] {
             state.sessions.push(SavedSession {
+                last_model: None,
                 id,
                 codex_seed: None,
                 conversation_id: None,

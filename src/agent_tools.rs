@@ -162,6 +162,7 @@ mod tests {
             (3, second, Launch::Agent("claude".into())),
         ] {
             state.sessions.push(SavedSession {
+                last_model: None,
                 codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,

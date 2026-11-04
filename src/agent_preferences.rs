@@ -330,6 +330,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(crate::workspace::SavedSession {
+            last_model: None,
             codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
