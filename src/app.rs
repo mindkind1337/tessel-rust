@@ -544,7 +544,11 @@ impl Tessel {
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
-                session_options: saved.session_options.clone(),
+                session_options: if saved.launch.native_chat().is_some() {
+                    saved.native_options.clone()
+                } else {
+                    saved.session_options.clone()
+                },
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,
@@ -872,7 +876,16 @@ impl Tessel {
                 codex_seed: s.codex_seed.clone(),
                 conversation_id: s.conversation_id.clone(),
                 launch_fingerprint: s.launch_fingerprint.clone(),
-                session_options: s.session_options.clone(),
+                session_options: if s.launch.native_chat().is_some() {
+                    None
+                } else {
+                    s.session_options.clone()
+                },
+                native_options: if s.launch.native_chat().is_some() {
+                    s.session_options.clone()
+                } else {
+                    None
+                },
                 pane_name: s.pane_name.clone(),
                 id: s.id,
                 project: s.project,
@@ -2035,6 +2048,9 @@ impl Tessel {
                     Launch::CodexChat if !self.chats.iter().any(|c| c.pane == session.id) => {
                         let mut chat = crate::chat::Chat::new(project.id, project.path.clone());
                         chat.pane = session.id;
+                        chat.options = crate::native_chat_options::Options::from_value(
+                            session.session_options.as_ref(),
+                        );
                         if let Some(thread) =
                             self.state.native_resume(session.id, project.id, "Codex")
                         {
@@ -2053,6 +2069,9 @@ impl Tessel {
                                 .map(str::to_owned),
                         );
                         chat.pane = session.id;
+                        chat.options = crate::native_chat_options::Options::from_value(
+                            session.session_options.as_ref(),
+                        );
                         self.claude_chats.push(chat);
                     }
                     _ => {}
@@ -2066,6 +2085,7 @@ impl Tessel {
         let mut arrange = false;
         let mut model_choice = None;
         let mut observed_updates = Vec::new();
+        let mut native_options_changed = false;
         let picker_was_open = self.sessions.iter().any(|s| s.model_picker.is_open());
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
@@ -2382,7 +2402,12 @@ impl Tessel {
                                                 if let Some(chat) =
                                                     self.chats.iter_mut().find(|c| c.pane == id)
                                                 {
+                                                    chat.defaults = self.state.agent_model_defaults.get("codex").and_then(crate::agent_model_defaults::Defaults::values);
                                                     chat.show(ui);
+                                                    if std::mem::take(&mut chat.options_commit) && chat.options.value() != session.session_options {
+                                                        session.session_options = chat.options.value();
+                                                        native_options_changed = true;
+                                                    }
                                                 }
                                             }
                                             Launch::ClaudeChat => {
@@ -2391,7 +2416,12 @@ impl Tessel {
                                                     .iter_mut()
                                                     .find(|c| c.pane == id)
                                                 {
+                                                    chat.defaults = self.state.agent_model_defaults.get("claude").and_then(crate::agent_model_defaults::Defaults::values);
                                                     chat.show(ui);
+                                                    if std::mem::take(&mut chat.options_commit) && chat.options.value() != session.session_options {
+                                                        session.session_options = chat.options.value();
+                                                        native_options_changed = true;
+                                                    }
                                                 }
                                             }
                                             _ => {}
@@ -2540,6 +2570,9 @@ impl Tessel {
         }
         if let Some(id) = close {
             self.close_session(id);
+        }
+        if native_options_changed {
+            self.save();
         }
         if let Some((id, option, value)) = model_choice {
             self.save_pane_model_choice(id, &option, value.as_ref());
@@ -2796,7 +2829,11 @@ impl Tessel {
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
-                session_options: saved.session_options.clone(),
+                session_options: if saved.launch.native_chat().is_some() {
+                    saved.native_options.clone()
+                } else {
+                    saved.session_options.clone()
+                },
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,

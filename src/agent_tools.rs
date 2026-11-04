@@ -167,6 +167,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                native_options: None,
                 pane_name: Some(format!("Agent {id}")),
                 id,
                 project: Some(project),

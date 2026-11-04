@@ -24,7 +24,9 @@ pub struct Chat {
     transport: Option<transport::Transport>,
     session: String,
     resume: String,
-    model: String,
+    pub options: crate::native_chat_options::Options,
+    pub defaults: Option<Value>,
+    pub options_commit: bool,
     composer: String,
     transcript: VecDeque<(String, String)>,
     approvals: VecDeque<Approval>,
@@ -113,7 +115,9 @@ impl Chat {
             saved_session: saved,
             transport: None,
             session: String::new(),
-            model: String::new(),
+            options: Default::default(),
+            defaults: None,
+            options_commit: false,
             composer: String::new(),
             transcript: VecDeque::new(),
             approvals: VecDeque::new(),
@@ -127,6 +131,18 @@ impl Chat {
             stream_row: None,
             error: String::new(),
             status: "Not connected".into(),
+        }
+    }
+    fn commit_options(&mut self) {
+        self.options.normalize();
+        if self.options.valid_for("claude") {
+            self.options_commit = true;
+            if self.error == tr("Invalid model or effort") {
+                self.error.clear();
+            }
+        } else {
+            self.options_commit = false;
+            self.error = tr("Invalid model or effort").into();
         }
     }
     pub fn busy(&self) -> bool {
@@ -154,22 +170,24 @@ impl Chat {
         if !self.resume.is_empty() && !valid_uuid(&self.resume) {
             return Err("Resume ID must be a UUID".into());
         }
-        if self.model.len() > 100
-            || self.model.starts_with('-')
-            || self
-                .model
-                .chars()
-                .any(|c| !c.is_ascii_alphanumeric() && !"-_.:/[]".contains(c))
-        {
-            return Err("Invalid model name".into());
+        let options = self.options.effective(self.defaults.as_ref());
+        if !options.valid_for("claude") {
+            return Err(format!(
+                "{}: {} / {}",
+                tr("Invalid model or effort"),
+                options.model.chars().take(160).collect::<String>(),
+                options.effort.chars().take(20).collect::<String>()
+            ));
         }
+        self.commit_options();
         let resume = !self.resume.is_empty();
         self.session = if resume { self.resume.clone() } else { uuid()? };
         self.transport = Some(transport::Transport::start(
             &self.cwd,
             &self.session,
             resume,
-            &self.model,
+            &options.model,
+            &options.effort,
         )?);
         self.ready = false;
         self.active = false;
@@ -449,7 +467,36 @@ impl Chat {
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(self.transport.is_none(), |ui| {
                 ui.label(tr("Model"));
-                ui.add(egui::TextEdit::singleline(&mut self.model).desired_width(140.0));
+                if ui
+                    .add(egui::TextEdit::singleline(&mut self.options.model).desired_width(140.0))
+                    .lost_focus()
+                {
+                    self.commit_options();
+                }
+                egui::ComboBox::from_id_salt("claude-effort")
+                    .selected_text(if self.options.effort.is_empty() {
+                        tr("Default")
+                    } else {
+                        &self.options.effort
+                    })
+                    .show_ui(ui, |ui| {
+                        for effort in ["", "low", "medium", "high", "xhigh", "max"] {
+                            if ui
+                                .selectable_value(
+                                    &mut self.options.effort,
+                                    effort.into(),
+                                    if effort.is_empty() {
+                                        tr("Default")
+                                    } else {
+                                        effort
+                                    },
+                                )
+                                .changed()
+                            {
+                                self.commit_options();
+                            }
+                        }
+                    });
                 ui.label(tr("Resume ID"));
                 ui.add(egui::TextEdit::singleline(&mut self.resume).desired_width(220.0));
                 if ui.button(tr("Connect")).clicked()

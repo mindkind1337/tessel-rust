@@ -33,8 +33,26 @@ pub(super) struct Transport {
     job: Option<Job>,
 }
 impl Transport {
-    pub fn start(cwd: &Path, session: &str, resume: bool, model: &str) -> Result<Self, String> {
+    pub fn start(
+        cwd: &Path,
+        session: &str,
+        resume: bool,
+        model: &str,
+        effort: &str,
+    ) -> Result<Self, String> {
         let exe = executable().ok_or("Install Claude Code and sign in with its CLI first")?;
+        Self::spawn(&mut Self::command(
+            &exe, cwd, session, resume, model, effort,
+        ))
+    }
+    fn command(
+        exe: &Path,
+        cwd: &Path,
+        session: &str,
+        resume: bool,
+        model: &str,
+        effort: &str,
+    ) -> Command {
         let mut command = Command::new(exe);
         command.args([
             "-p",
@@ -62,7 +80,11 @@ impl Transport {
         if !model.is_empty() {
             command.arg("--model").arg(model);
         }
-        Self::spawn(command.current_dir(cwd))
+        if !effort.is_empty() {
+            command.arg("--effort").arg(effort);
+        }
+        command.current_dir(cwd);
+        command
     }
     fn spawn(command: &mut Command) -> Result<Self, String> {
         command
@@ -189,5 +211,51 @@ impl Drop for Job {
         unsafe {
             let _ = windows::Win32::Foundation::CloseHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn model_effort_and_resume_do_not_weaken_permissions() {
+        for resume in [false, true] {
+            let command = Transport::command(
+                Path::new("synthetic-cli"),
+                Path::new("."),
+                "synthetic-id",
+                resume,
+                "claude-opus-4-8[1m]",
+                "high",
+            );
+            let args: Vec<_> = command.get_args().map(|v| v.to_str().unwrap()).collect();
+            for pair in [
+                ["--model", "claude-opus-4-8[1m]"],
+                ["--effort", "high"],
+                ["--permission-mode", "default"],
+                ["--setting-sources", ""],
+                [
+                    if resume { "--resume" } else { "--session-id" },
+                    "synthetic-id",
+                ],
+            ] {
+                assert!(args.windows(2).any(|w| w == pair));
+            }
+            assert!(args.contains(&"--safe-mode"));
+            assert!(args.contains(&"--strict-mcp-config"));
+        }
+        let command = Transport::command(
+            Path::new("synthetic-cli"),
+            Path::new("."),
+            "id",
+            false,
+            "",
+            "",
+        );
+        assert!(
+            !command
+                .get_args()
+                .any(|a| a == "--effort" || a == "--model")
+        );
     }
 }

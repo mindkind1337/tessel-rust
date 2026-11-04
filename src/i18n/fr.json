@@ -1,4 +1,6 @@
 {
+  "Default": "Par défaut",
+  "Invalid model or effort": "Modèle ou niveau de raisonnement invalide",
   "Toggle left sidebar": "Afficher ou masquer le panneau gauche",
   "Toggle right sidebar": "Afficher ou masquer le panneau droit",
   "Open a terminal or agent": "Ouvrir un terminal ou un agent",

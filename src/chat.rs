@@ -154,8 +154,9 @@ pub struct Chat {
     turn: Option<String>,
     ready: bool,
     starting_turn: bool,
-    model: String,
-    effort: String,
+    pub options: crate::native_chat_options::Options,
+    pub defaults: Option<Value>,
+    pub options_commit: bool,
     resume: String,
 }
 
@@ -221,8 +222,9 @@ impl Chat {
             turn: None,
             ready: false,
             starting_turn: false,
-            model: String::new(),
-            effort: "medium".into(),
+            options: Default::default(),
+            defaults: None,
+            options_commit: false,
             resume: String::new(),
         }
     }
@@ -345,6 +347,17 @@ impl Chat {
     }
     fn start(&mut self) {
         self.error.clear();
+        let options = self.options.effective(self.defaults.as_ref());
+        if !options.valid_for("codex") {
+            self.error = format!(
+                "{}: {} / {}",
+                tr("Invalid model or effort"),
+                options.model.chars().take(160).collect::<String>(),
+                options.effort.chars().take(20).collect::<String>()
+            );
+            return;
+        }
+        self.commit_options();
         let Some(exe) = executable() else {
             self.error = "Native Codex executable not found. Install the Codex CLI first.".into();
             return;
@@ -373,8 +386,30 @@ impl Chat {
         self.tool_calls.clear();
         self.status = "Stopped".into();
     }
+    fn commit_options(&mut self) {
+        self.options.normalize();
+        if self.options.valid_for("codex") {
+            self.options_commit = true;
+            if self.error == tr("Invalid model or effort") {
+                self.error.clear();
+            }
+        } else {
+            self.options_commit = false;
+            self.error = tr("Invalid model or effort").into();
+        }
+    }
     pub fn busy(&self) -> bool {
         self.rpc.is_some()
+    }
+    fn turn_params(&self, input: Value, options: &crate::native_chat_options::Options) -> Value {
+        let mut params = json!({"threadId":self.thread_id,"input":input,"cwd":self.cwd,"approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":[self.cwd],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}});
+        if !options.model.is_empty() {
+            params["model"] = json!(options.model);
+        }
+        if !options.effort.is_empty() {
+            params["effort"] = json!(options.effort);
+        }
+        params
     }
     fn send_message(&mut self) {
         if !self.ready || self.composer.trim().is_empty() || self.starting_turn {
@@ -392,11 +427,18 @@ impl Chat {
                 json!({"threadId":self.thread_id,"expectedTurnId":turn,"input":input}),
             )
         } else {
-            let mut params = json!({"threadId":self.thread_id,"input":input,"cwd":self.cwd,"approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":[self.cwd],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"effort":self.effort});
-            if !self.model.trim().is_empty() {
-                params["model"] = json!(self.model.trim());
+            let options = self.options.effective(self.defaults.as_ref());
+            if !options.valid_for("codex") {
+                self.error = format!(
+                    "{}: {} / {}",
+                    tr("Invalid model or effort"),
+                    options.model,
+                    options.effort
+                );
+                return;
             }
-            self.request("turn/start", params)
+            self.commit_options();
+            self.request("turn/start", self.turn_params(input, &options))
         };
         match result {
             Ok(()) => {
@@ -837,12 +879,36 @@ impl Chat {
             });
         ui.horizontal_wrapped(|ui| {
             ui.label(tr("Model (empty = configured)"));
-            ui.text_edit_singleline(&mut self.model);
+            if ui
+                .text_edit_singleline(&mut self.options.model)
+                .lost_focus()
+            {
+                self.commit_options();
+            }
             egui::ComboBox::from_id_salt("effort")
-                .selected_text(&self.effort)
+                .selected_text(if self.options.effort.is_empty() {
+                    tr("Default")
+                } else {
+                    &self.options.effort
+                })
                 .show_ui(ui, |ui| {
-                    for effort in ["low", "medium", "high", "xhigh"] {
-                        ui.selectable_value(&mut self.effort, effort.into(), effort);
+                    for effort in [
+                        "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                    ] {
+                        if ui
+                            .selectable_value(
+                                &mut self.options.effort,
+                                effort.into(),
+                                if effort.is_empty() {
+                                    tr("Default")
+                                } else {
+                                    effort
+                                },
+                            )
+                            .changed()
+                        {
+                            self.commit_options();
+                        }
                     }
                 });
         });
@@ -913,6 +979,54 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn steering_is_independent_of_an_invalid_model_draft() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.ready = true;
+        chat.turn = Some("active-turn".into());
+        chat.composer = "Change direction".into();
+        chat.options.model = "unfinished invalid model".into();
+        chat.send_message();
+        assert_eq!(chat.error, "Codex is not connected"); // reached transport, not model validation
+        assert!(!chat.options_commit);
+    }
+
+    #[test]
+    fn model_draft_is_committed_only_after_validation() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.options.model = "valid-prefix".into();
+        assert!(!chat.options_commit);
+        chat.options.model = "valid-prefix invalid".into();
+        chat.commit_options();
+        assert!(!chat.options_commit);
+        assert!(!chat.error.is_empty());
+        chat.options.model = "  model@20250929  ".into();
+        chat.commit_options();
+        assert!(chat.options_commit);
+        assert!(chat.error.is_empty());
+        assert_eq!(chat.options.model, "model@20250929");
+    }
+
+    #[test]
+    fn native_turn_options_preserve_sandbox_and_provider_defaults() {
+        let mut chat = Chat::new(1, PathBuf::from("."));
+        chat.thread_id = Some("resumed-thread".into());
+        let params = chat.turn_params(json!([]), &Default::default());
+        assert!(params.get("model").is_none());
+        assert!(params.get("effort").is_none());
+        assert_eq!(params["sandboxPolicy"]["networkAccess"], false);
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert_eq!(params["approvalsReviewer"], "user");
+        let options = crate::native_chat_options::Options {
+            model: "pane-model".into(),
+            effort: "high".into(),
+        };
+        let params = chat.turn_params(json!([]), &options);
+        assert_eq!(params["model"], "pane-model");
+        assert_eq!(params["effort"], "high");
+        assert_eq!(params["threadId"], "resumed-thread");
+    }
+
     #[test]
     fn resumed_history_is_ordered_deduplicated_and_bounded() {
         let mut chat = Chat::new(1, PathBuf::from("."));

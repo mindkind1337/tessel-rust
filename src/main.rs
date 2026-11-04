@@ -66,6 +66,7 @@ pub mod launcher_panel;
 pub mod muse_catalog;
 pub mod muse_model_probe;
 pub mod muse_protocol;
+mod native_chat_options;
 mod office;
 pub mod palette;
 pub mod pane_grid;

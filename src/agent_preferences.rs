@@ -335,6 +335,7 @@ mod tests {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            native_options: None,
             pane_name: Some("Existing pane".into()),
             id: 1,
             project: None,

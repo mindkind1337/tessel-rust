@@ -101,3 +101,23 @@ fn questions_are_cancelled_and_cannot_arrive_after_turn_completion() {
     c.frame(request);
     assert!(c.questions.is_none());
 }
+
+#[test]
+fn model_draft_and_invalid_inherited_effort_are_explicit_without_connecting() {
+    let mut chat = Chat::new(1, PathBuf::from("."), None);
+    chat.options.model = "unfinished invalid".into();
+    chat.commit_options();
+    assert!(!chat.options_commit);
+    assert!(!chat.error.is_empty());
+    chat.options.model = "  model@20250929  ".into();
+    chat.commit_options();
+    assert!(chat.options_commit);
+    assert!(chat.error.is_empty());
+    assert_eq!(chat.options.model, "model@20250929");
+    chat.options = Default::default();
+    chat.defaults = Some(json!({"model":"inherited-model", "effort":"none"}));
+    let error = chat.connect().unwrap_err();
+    assert!(error.contains("inherited-model"));
+    assert!(error.contains("none"));
+    assert!(chat.transport.is_none());
+}

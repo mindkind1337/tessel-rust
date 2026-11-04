@@ -84,6 +84,8 @@ pub struct SavedSession {
     pub launch_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_options: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_options: Option<serde_json::Value>,
     #[serde(default)]
     pub pane_name: Option<String>,
     pub id: u64,
@@ -269,6 +271,18 @@ impl Workspace {
                     || !valid_session_options(values)
                 {
                     return Err("Invalid saved session model options.".into());
+                }
+            }
+            if let Some(values) = &session.native_options {
+                let provider = match session.launch {
+                    crate::launch::Launch::CodexChat => "codex",
+                    crate::launch::Launch::ClaudeChat => "claude",
+                    _ => return Err("Only native chats may have native options.".into()),
+                };
+                if !serde_json::from_value::<crate::native_chat_options::Options>(values.clone())
+                    .is_ok_and(|options| options.valid_for(provider))
+                {
+                    return Err("Invalid native chat model options.".into());
                 }
             }
             if session.launch.native_chat().is_some() {
@@ -610,6 +624,7 @@ mod tests {
             conversation_id: Some(id.clone()),
             launch_fingerprint: None,
             session_options: None,
+            native_options: None,
             pane_name: None,
             id: 1,
             project: None,
@@ -683,6 +698,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: Some(options),
+                native_options: None,
                 pane_name: None,
                 id,
                 project: None,
@@ -834,6 +850,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                native_options: Some(serde_json::json!({"effort":"high"})),
                 pane_name: None,
                 id,
                 project: Some(project),
@@ -847,6 +864,28 @@ mod tests {
         drop(store);
         let (_, loaded) = Store::open(dir.path()).unwrap();
         assert_eq!(loaded.sessions.len(), 2);
+        assert_eq!(
+            loaded.sessions[0].native_options,
+            Some(serde_json::json!({"effort":"high"}))
+        );
+        assert!(
+            loaded
+                .sessions
+                .iter()
+                .all(|pane| pane.session_options.is_none())
+        );
+        let mut incompatible = loaded.clone();
+        incompatible.sessions[0].native_options = Some(serde_json::json!({"effort":"bogus"}));
+        assert!(incompatible.validate().is_err());
+        incompatible = loaded.clone();
+        incompatible.sessions[1].native_options = Some(serde_json::json!({"effort":"none"}));
+        assert!(incompatible.validate().is_err());
+        let mut bad_options = loaded.clone();
+        bad_options.sessions[0].native_options = Some(serde_json::json!({"model":"--unsafe"}));
+        assert!(bad_options.validate().is_err());
+        bad_options.sessions[0].native_options = Some(serde_json::json!({"permissions":"yolo"}));
+        assert!(bad_options.validate().is_err());
+
         assert_eq!(loaded.sessions[0].launch.native_chat(), Some("Codex"));
         assert_eq!(loaded.terminal_layouts, state.terminal_layouts);
         let mut invalid = loaded.clone();
@@ -870,6 +909,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                native_options: None,
                 pane_name: None,
                 id,
                 project: None,
@@ -906,6 +946,7 @@ mod tests {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            native_options: None,
             pane_name: None,
             id: 1,
             project: None,
@@ -932,6 +973,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                native_options: None,
                 pane_name: None,
                 id,
                 project: Some(project),
@@ -946,6 +988,7 @@ mod tests {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            native_options: None,
             pane_name: None,
             id: 12,
             project: Some(project),
@@ -1010,6 +1053,7 @@ mod tests {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            native_options: None,
             pane_name: None,
             id: 11,
             project: Some(project),
@@ -1044,6 +1088,7 @@ mod tests {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                native_options: None,
                 pane_name: name.map(str::to_owned),
                 project: None,
                 title: format!("Program {id}"),
