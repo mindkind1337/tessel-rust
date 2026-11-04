@@ -105,6 +105,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            session_options: None,
             pane_name: None,
             id: 4,
             project: None,
@@ -139,6 +140,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            session_options: Some(serde_json::json!({"model":"gpt-5.6-sol","effort":"high"})),
             pane_name: Some("Custom agent".into()),
             id: 1,
             project: state.active_project,
@@ -152,6 +154,10 @@ mod tests {
         imported.migrate_native_threads();
         assert_eq!(imported.projects, state.projects);
         assert_eq!(imported.agent_prefs, state.agent_prefs);
+        assert_eq!(
+            imported.sessions[0].session_options,
+            state.sessions[0].session_options
+        );
         assert_eq!(
             imported.sessions[0].pane_name.as_deref(),
             Some("Custom agent")

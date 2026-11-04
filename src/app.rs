@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Session {
+    session_options: Option<serde_json::Value>,
     pane_name: Option<String>,
     id: u64,
     project: Option<u64>,
@@ -288,6 +289,7 @@ impl Tessel {
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
+                session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,
@@ -452,6 +454,7 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        session_options: None,
                         pane_name: None,
                         id,
                         project: app.state.active_project,
@@ -474,6 +477,7 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    session_options: None,
                     pane_name: None,
                     id,
                     project: app.state.active_project,
@@ -535,6 +539,7 @@ impl Tessel {
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                session_options: s.session_options.clone(),
                 pane_name: s.pane_name.clone(),
                 id: s.id,
                 project: s.project,
@@ -793,6 +798,7 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            session_options: None,
             pane_name: None,
             id,
             project: self.state.active_project,
@@ -804,10 +810,11 @@ impl Tessel {
             error: String::new(),
         };
         let prefs = match &s.launch {
-            Launch::Agent(id) => Some(crate::agent_preferences::for_launch_with_models(
+            Launch::Agent(id) => Some(crate::agent_preferences::for_pane_launch(
                 &self.state,
                 id,
                 self.model_discovery.as_ref().and_then(|d| d.models(id)),
+                s.session_options.as_ref(),
             )),
             _ => None,
         };
@@ -1827,12 +1834,13 @@ impl Tessel {
                             } else if ui.button(tr("Wake / reconnect")).clicked() {
                                 let prefs = match &session.launch {
                                     Launch::Agent(id) => {
-                                        Some(crate::agent_preferences::for_launch_with_models(
+                                        Some(crate::agent_preferences::for_pane_launch(
                                             &self.state,
                                             id,
                                             self.model_discovery
                                                 .as_ref()
                                                 .and_then(|d| d.models(id)),
+                                            session.session_options.as_ref(),
                                         ))
                                     }
                                     _ => None,
@@ -2175,6 +2183,7 @@ impl Tessel {
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                session_options: saved.session_options.clone(),
                 pane_name: saved.pane_name.clone(),
                 id: saved.id,
                 project: saved.project,
@@ -3980,6 +3989,7 @@ mod tests {
     fn native_panes_cannot_start_pty_workers() {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
+                session_options: None,
                 pane_name: None,
                 id: 1,
                 project: Some(1),
@@ -4000,6 +4010,7 @@ mod tests {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            session_options: None,
             pane_name: None,
             id: 1,
             project: Some(1),
@@ -4028,6 +4039,7 @@ mod tests {
     #[test]
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
+            session_options: None,
             pane_name: None,
             id,
             project: Some(1),

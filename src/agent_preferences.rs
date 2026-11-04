@@ -61,19 +61,38 @@ pub fn save(state: &mut Workspace, store: &Store, id: &str, value: Preferences) 
 pub fn for_launch(state: &Workspace, id: &str) -> Preferences {
     for_launch_with_models(state, id, None)
 }
+#[cfg(test)]
 pub fn for_launch_with_models(
     state: &Workspace,
     id: &str,
     discovered: Option<&[serde_json::Value]>,
 ) -> Preferences {
+    for_pane_launch(state, id, discovered, None)
+}
+
+/// A validated explicit pane choice replaces the whole global model choice.
+/// It must never inherit options belonging to a different global model.
+pub fn for_pane_launch(
+    state: &Workspace,
+    id: &str,
+    discovered: Option<&[serde_json::Value]>,
+    pane_values: Option<&serde_json::Value>,
+) -> Preferences {
     let mut prefs = get(state, id).cloned().unwrap_or_default();
-    if let Some(values) = state
+    let global = state
         .agent_model_defaults
         .get(id)
-        .and_then(crate::agent_model_defaults::Defaults::values)
-    {
+        .and_then(crate::agent_model_defaults::Defaults::values);
+    let values = pane_values
+        .filter(|v| {
+            v.get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|m| !m.is_empty())
+        })
+        .or(global.as_ref());
+    if let Some(values) = values {
         let models = crate::agent_model_catalog::models_for(id, discovered);
-        let flags = crate::agent_model_launch::text(id, &values, &prefs.args, Some(&models));
+        let flags = crate::agent_model_launch::text(id, values, &prefs.args, Some(&models));
         if !flags.is_empty() {
             prefs.args = format!("{flags} {}", prefs.args).trim_end().into();
         }
@@ -98,6 +117,70 @@ pub fn set_enabled(state: &mut Workspace, store: &Store, id: &str, value: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pane_choice_is_complete_and_independent_while_manual_arguments_win() {
+        use serde_json::json;
+        let mut state = Workspace::default();
+        let mut defaults = crate::agent_model_defaults::Defaults {
+            model: Some("global-model".into()),
+            ..Default::default()
+        };
+        defaults.set_option("effort", Some("high".into()));
+        state.agent_model_defaults.insert("codex".into(), defaults);
+        let models = vec![
+            json!({"id":"global-model","label":"Global","options":[{"id":"effort","kind":{"type":"select","choices":[{"value":"high","label":"High"}]},"apply":{"launchArgs":"-c model_reasoning_effort={value}"}}]}),
+            json!({"id":"pane-model","label":"Pane","options":[{"id":"effort","kind":{"type":"select","choices":[{"value":"low","label":"Low"}]},"apply":{"launchArgs":"-c model_reasoning_effort={value}"}}]}),
+        ];
+        let global = for_pane_launch(&state, "codex", Some(&models), None);
+        assert!(global.args.contains("global-model"));
+        assert!(global.args.contains("high"));
+        let pane = for_pane_launch(
+            &state,
+            "codex",
+            Some(&models),
+            Some(&json!({"model":"pane-model"})),
+        );
+        assert!(pane.args.contains("pane-model"));
+        assert!(!pane.args.contains("reasoning_effort"));
+        let other = for_pane_launch(
+            &state,
+            "codex",
+            Some(&models),
+            Some(&json!({"model":"pane-model","effort":"low"})),
+        );
+        assert!(other.args.contains("low"));
+        assert!(!other.args.contains("high"));
+        assert_eq!(
+            for_pane_launch(&state, "codex", Some(&models), Some(&json!({"model":""}))),
+            global
+        );
+        assert_eq!(
+            for_pane_launch(&state, "codex", Some(&models), None),
+            global
+        );
+        state.agent_prefs.insert(
+            "codex".into(),
+            Preferences {
+                args: "-m manual-model -c model_reasoning_effort=max".into(),
+                ..Default::default()
+            },
+        );
+        let explicit = for_pane_launch(
+            &state,
+            "codex",
+            Some(&models),
+            Some(&json!({"model":"pane-model","effort":"low"})),
+        );
+        assert_eq!(
+            explicit.args,
+            "-m manual-model -c model_reasoning_effort=max"
+        );
+        assert_eq!(
+            state.agent_model_defaults["codex"].model.as_deref(),
+            Some("global-model")
+        );
+    }
+
     #[test]
     fn discovered_options_control_launch_without_inventing_unadvertised_effort() {
         let mut state = Workspace::default();
@@ -247,6 +330,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(crate::workspace::SavedSession {
+            session_options: None,
             pane_name: Some("Existing pane".into()),
             id: 1,
             project: None,

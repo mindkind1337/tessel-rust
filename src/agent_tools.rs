@@ -162,6 +162,7 @@ mod tests {
             (3, second, Launch::Agent("claude".into())),
         ] {
             state.sessions.push(SavedSession {
+                session_options: None,
                 pane_name: Some(format!("Agent {id}")),
                 id,
                 project: Some(project),

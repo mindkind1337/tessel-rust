@@ -74,6 +74,8 @@ pub struct NativeThread {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_options: Option<serde_json::Value>,
     #[serde(default)]
     pub pane_name: Option<String>,
     pub id: u64,
@@ -220,6 +222,17 @@ impl Workspace {
                 || session.title.len() > 512
             {
                 return Err("Invalid session metadata.".into());
+            }
+            if let Some(values) = &session.session_options {
+                let agent = match &session.launch {
+                    crate::launch::Launch::Agent(agent) => agent,
+                    _ => return Err("Only agent terminals may have saved session options.".into()),
+                };
+                if crate::agent_model_catalog::find(agent).is_none()
+                    || !valid_session_options(values)
+                {
+                    return Err("Invalid saved session model options.".into());
+                }
             }
             if session.launch.native_chat().is_some() {
                 let project = session
@@ -413,6 +426,29 @@ impl Workspace {
     }
 }
 
+/// Persisted pane choices are complete, bounded model/option objects.
+/// Interactive source-compatible normalization happens before saving them.
+fn valid_session_options(value: &serde_json::Value) -> bool {
+    // The source always keeps model, plus up to ten entries encountered
+    // before model in the incoming object.
+    let Some(values) = value.as_object().filter(|v| v.len() <= 11) else {
+        return false;
+    };
+    let Some(model) = values.get("model").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let options = values
+        .iter()
+        .filter(|(key, _)| key.as_str() != "model")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    crate::agent_model_defaults::Defaults {
+        model: Some(model.into()),
+        values_by_model: std::collections::BTreeMap::from([(model.into(), options)]),
+    }
+    .validate()
+}
+
 fn valid_native_thread(provider: &str, thread: &str) -> bool {
     match provider {
         "Codex" => {
@@ -527,6 +563,76 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn pane_model_choices_roundtrip_independently_and_invalid_choices_never_replace_state() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        for (id, options) in [
+            (1, json!({"model":"pane-one"})),
+            (
+                2,
+                json!({"model":"pane-two","effort":"low","fastMode":false}),
+            ),
+        ] {
+            state.sessions.push(SavedSession {
+                session_options: Some(options),
+                pane_name: None,
+                id,
+                project: None,
+                title: "Codex".into(),
+                launch: crate::launch::Launch::Agent("codex".into()),
+                cwd: dir.path().to_owned(),
+            });
+        }
+        store.save(&state).unwrap();
+        let snapshot = std::fs::read(dir.path().join("workspace.json")).unwrap();
+        for invalid in [
+            json!({"effort":"low"}),
+            json!({"model":"bad;command"}),
+            json!({"model":"ok","effort":7}),
+            json!({"model":"ok","invalid-id":true}),
+        ] {
+            let mut next = state.clone();
+            next.sessions[0].session_options = Some(invalid);
+            assert!(store.save(&next).is_err());
+            assert_eq!(
+                std::fs::read(dir.path().join("workspace.json")).unwrap(),
+                snapshot
+            );
+        }
+        let mut shell = state.clone();
+        shell.sessions[0].launch = crate::launch::Launch::Shell;
+        assert!(shell.validate().is_err());
+        let mut many = json!({"model":"bounded"});
+        for index in 0..10 {
+            many[format!("option{index}")] = true.into();
+        }
+        let mut bounded = state.clone();
+        bounded.sessions[0].session_options = Some(many.clone());
+        assert!(bounded.validate().is_ok());
+        many["overflow"] = false.into();
+        bounded.sessions[0].session_options = Some(many);
+        assert!(bounded.validate().is_err());
+        let mut old = serde_json::to_value(&state.sessions[0]).unwrap();
+        old.as_object_mut().unwrap().remove("session_options");
+        assert!(
+            serde_json::from_value::<SavedSession>(old)
+                .unwrap()
+                .session_options
+                .is_none()
+        );
+        drop(store);
+        let (_, restored) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            restored.sessions[0].session_options,
+            state.sessions[0].session_options
+        );
+        assert_eq!(
+            restored.sessions[1].session_options,
+            state.sessions[1].session_options
+        );
+    }
+    #[test]
     fn projects_roundtrip_and_select_automatically() {
         let dir = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -616,6 +722,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                session_options: None,
                 pane_name: None,
                 id,
                 project: Some(project),
@@ -647,6 +754,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                session_options: None,
                 pane_name: None,
                 id,
                 project: None,
@@ -678,6 +786,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            session_options: None,
             pane_name: None,
             id: 1,
             project: None,
@@ -699,6 +808,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                session_options: None,
                 pane_name: None,
                 id,
                 project: Some(project),
@@ -708,6 +818,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            session_options: None,
             pane_name: None,
             id: 12,
             project: Some(project),
@@ -767,6 +878,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            session_options: None,
             pane_name: None,
             id: 11,
             project: Some(project),
@@ -796,6 +908,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 id,
+                session_options: None,
                 pane_name: name.map(str::to_owned),
                 project: None,
                 title: format!("Program {id}"),
