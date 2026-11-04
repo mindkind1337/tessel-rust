@@ -27,6 +27,9 @@ Tessel's `agentSessionOptions.js`, `agentPrefs.js`, `paneLastModel.js`, model an
 session-option labels, `claudeModelSwitch.js`, terminal screen model readers and
 `TerminalPane.vue`, including the Orca-derived option catalog and CLI mappings.
 The reference generator records source-file hashes and only synthetic inputs.
+The footer observation integration in `src/terminal_model.rs` follows Tessel
+`TerminalPane.vue` and uses the attributed parsers in `src/pane_session_model.rs`.
+
 The native per-pane picker in `src/session_option_picker_ui.rs` adapts
 `SessionOptionPicker.vue`, `TerminalPane.vue`, `PaneActionsMenu.vue` and their
 option labels and geometry under the same Tessel/Orca attribution.

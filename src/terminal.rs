@@ -14,6 +14,10 @@ pub struct Terminal {
     child: Box<dyn Child + Send + Sync>,
     output: Receiver<Vec<u8>>,
     parser: vt100::Parser,
+    model_dirty: bool,
+    observed_model: Option<crate::pane_session_model::ShownAgentModel>,
+    model_catalog: Vec<serde_json::Value>,
+    model_agent: String,
     size: (u16, u16),
     status: String,
     exited: bool,
@@ -25,6 +29,8 @@ pub struct Terminal {
     widget_id: Option<egui::Id>,
     #[cfg(feature = "visual-test")]
     fixture: bool,
+    #[cfg(feature = "visual-test")]
+    model_fixture: bool,
 }
 
 impl Terminal {
@@ -67,6 +73,37 @@ impl Terminal {
     }
     pub fn output(&self) -> String {
         self.parser.screen().contents()
+    }
+    #[cfg(feature = "visual-test")]
+    pub fn enable_model_fixture(&mut self) {
+        self.model_fixture = true;
+        let rows = self.size.0;
+        self.process_output(format!("\x1b[{};1H\x1b[2K› Ask Codex anything\x1b[{};1H\x1b[2K\x1b[{};1H\x1b[2KGPT-5.6 Sol xhigh fast", rows - 2, rows - 1, rows).as_bytes());
+    }
+    pub fn observed_model(
+        &mut self,
+        agent: &str,
+        models: &[serde_json::Value],
+    ) -> Option<&crate::pane_session_model::ShownAgentModel> {
+        if self.model_agent != agent {
+            self.observed_model = None;
+            self.model_agent = agent.to_owned();
+            self.model_dirty = true;
+        }
+        if !crate::terminal_model::supported(agent) {
+            return None;
+        }
+        if self.model_dirty || self.model_catalog != models {
+            self.model_dirty = false;
+            if self.model_catalog != models {
+                self.model_catalog = models.to_vec();
+            }
+            let lines = crate::terminal_model::live_footer(&mut self.parser);
+            if let Some(seen) = crate::terminal_model::observe(agent, &lines, models) {
+                self.observed_model = Some(seen);
+            }
+        }
+        self.observed_model.as_ref()
     }
     pub fn request_focus(&self, ctx: &egui::Context) {
         if let Some(id) = self.widget_id {
@@ -141,6 +178,10 @@ impl Terminal {
             child,
             output,
             parser: vt100::Parser::new(30, 100, 1000),
+            model_dirty: true,
+            observed_model: None,
+            model_catalog: Vec::new(),
+            model_agent: String::new(),
             size: (30, 100),
             status: String::new(),
             exited: false,
@@ -152,12 +193,15 @@ impl Terminal {
             widget_id: None,
             #[cfg(feature = "visual-test")]
             fixture: false,
+            #[cfg(feature = "visual-test")]
+            model_fixture: false,
         })
     }
 
     fn process_output(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
             self.selection = None;
+            self.model_dirty = true;
         }
         for &byte in bytes {
             self.parser.process(&[byte]);
@@ -223,7 +267,12 @@ impl Terminal {
         {
             self.selection = None;
             self.parser.set_size(rows, cols);
+            self.model_dirty = true;
             self.size = (rows, cols);
+            #[cfg(feature = "visual-test")]
+            if self.model_fixture {
+                self.enable_model_fixture();
+            }
         }
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
         self.widget_id = Some(response.id);
@@ -788,6 +837,35 @@ pub fn configure_fonts(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observed_model_cache_is_terminal_local_and_refreshes_only_from_output() {
+        let models = crate::agent_model_catalog::models_for("codex", None);
+        let mut terminal = super::Terminal::spawn().unwrap();
+        terminal.parser = vt100::Parser::new(5, 100, 100);
+        assert!(terminal.observed_model("codex", &models).is_none());
+        terminal.process_output(
+            "\x1b[3;1H› Ask Codex anything\x1b[5;1HGPT-5.6 Sol xhigh fast".as_bytes(),
+        );
+        assert_eq!(
+            terminal.observed_model("codex", &models).unwrap().model,
+            "gpt-5.6-sol"
+        );
+        assert!(!terminal.model_dirty);
+        terminal.process_output(b"\x1b[2J");
+        assert_eq!(
+            terminal.observed_model("codex", &models).unwrap().model,
+            "gpt-5.6-sol"
+        );
+        terminal
+            .process_output("\x1b[3;1H› Ask Codex anything\x1b[5;1HGPT-5.6 Luna medium".as_bytes());
+        assert_eq!(
+            terminal.observed_model("codex", &models).unwrap().model,
+            "gpt-5.6-luna"
+        );
+        drop(terminal);
+        let mut fresh = super::Terminal::spawn().unwrap();
+        assert!(fresh.observed_model("codex", &models).is_none());
+    }
     #[test]
     #[cfg(windows)]
     fn restart_stop_accepts_a_process_that_exited_with_code_259() {

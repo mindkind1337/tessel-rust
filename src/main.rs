@@ -96,6 +96,7 @@ mod task_actions;
 pub mod tasks_board_panel;
 mod terminal;
 mod terminal_layout;
+mod terminal_model;
 mod theme;
 pub mod theme_palettes;
 #[cfg(windows)]

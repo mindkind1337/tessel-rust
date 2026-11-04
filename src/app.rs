@@ -732,6 +732,14 @@ impl Tessel {
                         );
                         session.settings_changed = true;
                     }
+                    if std::env::args().any(|arg| arg == "--model-observation-fixture") {
+                        app.overlay = None;
+                        let session = app.sessions.last_mut().expect("synthetic terminal");
+                        session.launch = Launch::Agent("codex".into());
+                        if let Some(terminal) = &mut session.terminal {
+                            terminal.enable_model_fixture();
+                        }
+                    }
                     if std::env::args().any(|arg| arg == "--pane-model-fixture") {
                         app.overlay = None;
                         let session = app.sessions.last_mut().expect("synthetic terminal");
@@ -2064,6 +2072,17 @@ impl Tessel {
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             ui.horizontal(|ui| {
+                                let pane_header_width = ui.available_width();
+                                let pane_models = match &session.launch {
+                                    Launch::Agent(agent) => crate::agent_model_catalog::models_for(agent, self.model_discovery.as_ref().and_then(|d| d.models(agent))),
+                                    _ => Vec::new(),
+                                };
+                                let observed_model = match &session.launch {
+                                    Launch::Agent(agent) => {
+                                        session.terminal.as_mut().and_then(|terminal| terminal.observed_model(agent, &pane_models)).cloned()
+                                    }
+                                    _ => None,
+                                };
                                 let conversation_id = session
                                     .launch
                                     .native_chat()
@@ -2093,9 +2112,8 @@ impl Tessel {
                                     model_manual: session.session_options.is_some(),
                                     model_text: match &session.launch {
                                         Launch::Agent(agent) => {
-                                            let models = crate::agent_model_catalog::models_for(agent, self.model_discovery.as_ref().and_then(|d| d.models(agent)));
                                             let values = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
-                                            Some(crate::agent_model_defaults_ui::session_pill_label(&models, values.as_ref(), self.state.language == crate::i18n::Language::French))
+                                            Some(crate::agent_model_defaults_ui::session_pill_label(&pane_models, values.as_ref(), self.state.language == crate::i18n::Language::French))
                                         }
                                         _ => None,
                                     },
@@ -2117,7 +2135,11 @@ impl Tessel {
                                 };
                                 let mut action = None;
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let title_width = (ui.available_width() - 84.0).max(0.0);
+                                let chip_width = if observed_model.is_some() && pane_header_width > crate::session_option_picker_ui::HEADER_MODEL_CHIP_HIDE_MAX_WIDTH {
+                                    let text = crate::pane_session_model::model_text(observed_model.as_ref(), self.state.language == crate::i18n::Language::French);
+                                    (ui.painter().layout_no_wrap(text, egui::FontId::proportional(10.5), ui.visuals().text_color()).size().x + 12.0).ceil().clamp(24.0, 140.0) + 4.0
+                                } else { 0.0 };
+                                let title_width = (ui.available_width() - 84.0 - chip_width).max(0.0);
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(title_width, 22.0),
                                     egui::Layout::left_to_right(egui::Align::Center),
@@ -2182,6 +2204,17 @@ impl Tessel {
                                 .context_menu(|ui| {
                                     action = crate::pane_header::show(ui, &menu);
                                 });
+                                if let Launch::Agent(agent) = &session.launch {
+                                    let chip = crate::session_option_picker_ui::show_header_model_chip(ui, egui::Id::new(("terminal-model", id)), &crate::session_option_picker_ui::HeaderModelChipInput {
+                                        pane_header_width, is_agent: true, detected: false, agent_id: agent,
+                                        guest_runs: false, guest_model: None, agent_model: observed_model.as_ref(),
+                                        capabilities: crate::session_option_picker_ui::SessionPickerCapabilities { can_open_picker: session.can_pick_model(), ..Default::default() },
+                                        french: self.state.language == crate::i18n::Language::French,
+                                    });
+                                    if chip.clicked && let Some(rect) = chip.rect {
+                                        session.model_picker.toggle_at_chip(ui.ctx(), rect, chip.id);
+                                    }
+                                }
                                 let more = crate::pane_header::button(
                                     ui,
                                     crate::icons::Icon::PaneMore,

@@ -343,4 +343,9 @@ Terminal base colors (`themes.js:39-64`, `themePalettes.js:10,16,22,28,34`):
 ### Per-pane model picker runtime integration
 - Native terminal Model menu opens the English/French picker, with transactional per-pane launch choices, Settings inheritance, disabled startup/recovery actions and manual CLI precedence.
 - Arrow keys move one row; Escape closes only the picker and retains trigger focus during key repeat. Disabled parent controls cannot emit actions.
-- Evidence: 18 standalone picker tests, 234 integrated binary tests (three ignored), strict Clippy, and isolated native French normal/compact captures. Live command switching, observed-model header chips and native-chat integration remain outstanding.
+- Evidence for the picker: 18 standalone tests, 234 integrated binary tests (three ignored), strict Clippy, and isolated native French normal/compact captures. Live command switching and native-chat integration remain outstanding.
+
+### Observed model header integration
+- Codex/Cursor/Antigravity/Muse footer readers now feed the actual native header chip, with the existing responsive width, localized effort label, source tooltip and picker action.
+- Observations belong to a terminal instance, update after output/resize/catalog changes, preserve prior values while a footer is absent, and never read historical scrollback as the current screen. No settings-derived running model is fabricated.
+- Three additional tests cover footer structure, scrollback preservation and terminal cache refresh/replacement. Normal and compact French native captures verify the visible and hidden chip respectively. Provider-file fallback, saved lastModel and full refresh orchestration remain unimplemented.
