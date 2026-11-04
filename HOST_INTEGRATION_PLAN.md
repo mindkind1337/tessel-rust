@@ -43,6 +43,15 @@ Preparation: local PTY ownership, bounded I/O and process-tree cleanup now live 
   a changed epoch. Starting a replacement is explicit, not an automatic restart.
 - Existing SSH/tmux panes remain on their current backend until explicitly replaced.
 
+Desktop integration constraints from the client review:
+
+- Use the 0.1.1 daemon bundle and a client with `Attached.last_input`; never persist/reuse a lease against 0.1.0. Missing or exhausted numbering must fail explicitly. Input delivery is at most once; an error after a long disconnection can leave delivery uncertain and must not trigger a new-ID resend.
+- A newly started desktop has no emulator screen. Resume it with `attach_fresh` (mandatory snapshot), regardless of the stored last-applied sequence. Same-runtime reconnection may replay after the events delivered to its existing receiver. Advance the desktop's applied sequence only after emulation succeeds.
+- Rebuild a parser from defaults for a snapshot; DEC margins, origin mode and alternate-screen state make an LF-based reset unsafe. Retain previous formatted history in a bounded separate desktop history view; do not claim preserved history until that view is implemented and tested.
+- All potentially blocking terminal calls run on a terminal worker, with bounded commands and results. New input is refused during disconnection or without the writer lease. Do not send automatic cursor replies as an observer.
+- Closing a pane must cancel its local follower and prevent future resume even for a silent shell, while leaving the server process alive. Ending the server process is a distinct explicit action. The host client's detach/Drop correction is a prerequisite to enabling this path.
+- Persist only the alias, terminal ID, epoch and display metadata in workspace state. Lease storage is separate, encrypted, owner-only and excluded from portable backups; importing workspace metadata must never automatically attach or obtain control.
+
 ## 7C — Files, editor and Git subscriptions
 
 - Tree: revision-checked per-folder differences, raw path identity distinct from label,
@@ -67,3 +76,5 @@ Preparation: local PTY ownership, bounded I/O and process-tree cleanup now live 
 - Run focused tests and strict Clippy with two Cargo jobs. Package only verified host
   artifacts. Update README capabilities/limitations and report the pushed build.
 - A real user-server acceptance run remains a separate, explicitly authorized step.
+
+7B preparation in progress: bounded commands are in `src/terminal/host_commands.rs` (32 slots, whole-paste admission, preserved input/resize order, generation invalidation, zeroizing input). `src/terminal/host_history.rs` retains display cells separately (1000 rows / 300,000 cells) and creates a fresh parser for a replacement screen. These modules are not yet connected to the terminal UI; dedicated tests accompany them. The native remote path remains disabled until the worker, lease store, rendering and compatible 0.1.1 bundle are integrated and validated together.
