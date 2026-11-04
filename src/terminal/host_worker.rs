@@ -1,5 +1,11 @@
 //! Blocking terminal operations belong to this worker, never to an egui frame.
+//!
+//! A takeover's lease and a confirmed close go to the application's lease keeper: a place is
+//! held there before the request is sent (none, nothing is sent), and the answer fills it as
+//! soon as the request returns, even if the pane was closed meanwhile.
 use super::host_commands::{self, Command, Refused};
+use super::host_lease_keeper::{Ended, Keeper};
+use super::host_opening::Slot;
 use std::sync::{
     Arc,
     atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -7,7 +13,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use tessel_host_client::{Client, ConnectionState, terminal::Terminal};
-use tessel_host_protocol::{Epoch, pty::Size};
+use tessel_host_protocol::{Epoch, LeaseKey, pty::Size};
 
 const ONLINE: u8 = 1;
 const WRITER: u8 = 2;
@@ -19,6 +25,10 @@ pub enum Outcome {
     ControlTaken,
     Terminated,
     Refused,
+    /// The lease keeper had no place for what this takeover or close would answer (too many
+    /// saves waiting, another takeover of this terminal still in flight, or shutting down):
+    /// nothing was sent. Try again.
+    Busy,
     /// Some or all input may have reached the program. Never resubmit it.
     InputUncertain,
     Failed,
@@ -97,9 +107,13 @@ impl Drop for Permit {
     }
 }
 
+/// One method per command, so a lease can only come from a takeover.
 trait Driver: Send + 'static {
     fn authority(&self) -> u8;
-    fn execute(&mut self, command: &Command) -> Result<(), ()>;
+    fn input(&mut self, bytes: &[u8]) -> Result<(), ()>;
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<(), ()>;
+    fn take_control(&mut self) -> Result<LeaseKey, ()>;
+    fn terminate(&mut self) -> Result<(), ()>;
 }
 
 struct HostDriver {
@@ -125,28 +139,40 @@ impl Driver for HostDriver {
             ONLINE
         }
     }
-    fn execute(&mut self, command: &Command) -> Result<(), ()> {
-        match command {
-            Command::Input(bytes) => self.terminal.input(bytes),
-            Command::Resize { rows, cols } => self.terminal.resize(Size {
-                rows: *rows,
-                cols: *cols,
-            }),
-            Command::TakeControl => self.terminal.take_lease().map(|_| ()),
-            Command::Terminate => self.terminal.close(),
-        }
-        .map_err(|_| ())
+    fn input(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        self.terminal.input(bytes).map_err(|_| ())
     }
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<(), ()> {
+        self.terminal.resize(Size { rows, cols }).map_err(|_| ())
+    }
+    fn take_control(&mut self) -> Result<LeaseKey, ()> {
+        self.terminal.take_lease().map_err(|_| ())
+    }
+    fn terminate(&mut self) -> Result<(), ()> {
+        self.terminal.close().map_err(|_| ())
+    }
+}
+
+/// The terminal's place in the application's lease keeper (the one keeper of the app).
+struct Saving {
+    keeper: Arc<Keeper>,
+    slot: Slot,
 }
 
 /// Call on the opening worker after creating or attaching a terminal. Its event
 /// receiver remains with the UI. Dropping Control detaches, never terminates.
+/// `slot` names this terminal (its alias, epoch and id); the epoch is the one expected live.
 pub fn start(
     permit: Permit,
     client: Client,
     terminal: Terminal,
-    epoch: Epoch,
+    slot: Slot,
+    keeper: Arc<Keeper>,
 ) -> Result<Control, &'static str> {
+    if terminal.id() != &slot.terminal {
+        return Err("Remote terminal and its saved place differ");
+    }
+    let epoch = slot.epoch.clone();
     let connection = Some((client.clone(), epoch.clone()));
     spawn(
         permit,
@@ -156,13 +182,55 @@ pub fn start(
             epoch,
         },
         connection,
+        Saving { keeper, slot },
     )
+}
+
+/// Runs one command. `Ok(None)`: done, nothing to tell. `Err`: what to tell, after which the
+/// queued commands are dropped.
+fn execute(
+    driver: &mut impl Driver,
+    saving: &Saving,
+    command: &Command,
+) -> Result<Option<Outcome>, Outcome> {
+    match command {
+        Command::Input(bytes) => driver
+            .input(bytes)
+            .map(|()| None)
+            .map_err(|()| Outcome::InputUncertain),
+        Command::Resize { rows, cols } => driver
+            .resize(*rows, *cols)
+            .map(|()| None)
+            .map_err(|()| Outcome::Failed),
+        Command::TakeControl => {
+            let place = saving
+                .keeper
+                .reserve(saving.slot.clone())
+                .map_err(|_| Outcome::Busy)?;
+            // A failure drops the place: nothing to save.
+            let lease = driver.take_control().map_err(|()| Outcome::Failed)?;
+            place.keep(lease);
+            Ok(Some(Outcome::ControlTaken))
+        }
+        Command::Terminate => {
+            let place = saving
+                .keeper
+                .reserve(saving.slot.clone())
+                .map_err(|_| Outcome::Busy)?;
+            driver.terminate().map_err(|()| Outcome::Failed)?;
+            // Only an `EpochChanged` proof can be refused; a confirmed close never is.
+            let forgotten = place.forget(Ended::CloseConfirmed);
+            debug_assert!(forgotten.is_ok());
+            Ok(Some(Outcome::Terminated))
+        }
+    }
 }
 
 fn spawn(
     permit: Permit,
     mut driver: impl Driver,
     connection: Option<(Client, Epoch)>,
+    saving: Saving,
 ) -> Result<Control, &'static str> {
     let state = Arc::new(AtomicU8::new(driver.authority()));
     let worker_state = state.clone();
@@ -199,19 +267,11 @@ fn spawn(
                     worker.invalidate();
                     Some(Outcome::Refused)
                 } else {
-                    match driver.execute(&command) {
-                        Ok(()) => match command {
-                            Command::TakeControl => Some(Outcome::ControlTaken),
-                            Command::Terminate => Some(Outcome::Terminated),
-                            _ => None,
-                        },
-                        Err(()) => {
+                    match execute(&mut driver, &saving, &command) {
+                        Ok(outcome) => outcome,
+                        Err(outcome) => {
                             worker.invalidate();
-                            Some(if matches!(command, Command::Input(_)) {
-                                Outcome::InputUncertain
-                            } else {
-                                Outcome::Failed
-                            })
+                            Some(outcome)
                         }
                     }
                 };
@@ -262,16 +322,23 @@ fn send_outcome(
 
 #[cfg(test)]
 mod tests {
+    use super::super::host_lease_keeper::{LeaseWriter, MAX_QUEUE};
+    use super::super::host_opening::LocalError;
     use super::*;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
+    use tessel_host_protocol::TerminalId;
 
     struct Fake {
         authority: Arc<AtomicU8>,
         calls: mpsc::Sender<&'static str>,
         dropped: mpsc::Sender<()>,
         block_input: Option<Receiver<()>>,
+        block_control: Option<Receiver<()>>,
         fail_input: Arc<AtomicBool>,
+        fail_control: bool,
+        fail_terminate: bool,
     }
     impl Drop for Fake {
         fn drop(&mut self) {
@@ -282,24 +349,35 @@ mod tests {
         fn authority(&self) -> u8 {
             self.authority.load(Ordering::Acquire)
         }
-        fn execute(&mut self, command: &Command) -> Result<(), ()> {
-            let name = match command {
-                Command::Input(_) => "input",
-                Command::Resize { .. } => "resize",
-                Command::TakeControl => "control",
-                Command::Terminate => "terminate",
-            };
-            self.calls.send(name).unwrap();
-            if matches!(command, Command::TakeControl) {
-                self.authority.store(ONLINE | WRITER, Ordering::Release);
+        fn input(&mut self, _bytes: &[u8]) -> Result<(), ()> {
+            self.calls.send("input").unwrap();
+            if let Some(block) = self.block_input.take() {
+                block.recv_timeout(Duration::from_secs(3)).unwrap();
             }
-            if matches!(command, Command::Input(_)) {
-                if let Some(block) = self.block_input.take() {
-                    block.recv_timeout(Duration::from_secs(3)).unwrap();
-                }
-                if self.fail_input.swap(false, Ordering::AcqRel) {
-                    return Err(());
-                }
+            if self.fail_input.swap(false, Ordering::AcqRel) {
+                return Err(());
+            }
+            Ok(())
+        }
+        fn resize(&mut self, _rows: u16, _cols: u16) -> Result<(), ()> {
+            self.calls.send("resize").unwrap();
+            Ok(())
+        }
+        fn take_control(&mut self) -> Result<LeaseKey, ()> {
+            self.calls.send("control").unwrap();
+            if let Some(block) = self.block_control.take() {
+                block.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+            if self.fail_control {
+                return Err(());
+            }
+            self.authority.store(ONLINE | WRITER, Ordering::Release);
+            Ok(LeaseKey::from_bytes([7; 16]))
+        }
+        fn terminate(&mut self) -> Result<(), ()> {
+            self.calls.send("terminate").unwrap();
+            if self.fail_terminate {
+                return Err(());
             }
             Ok(())
         }
@@ -313,11 +391,53 @@ mod tests {
                 calls,
                 dropped,
                 block_input: None,
+                block_control: None,
                 fail_input: Arc::new(AtomicBool::new(false)),
+                fail_control: false,
+                fail_terminate: false,
             },
             received,
             ended,
         )
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Op {
+        Put(LeaseKey),
+        Remove,
+    }
+    #[derive(Default)]
+    struct Written(Mutex<Vec<Op>>);
+    impl Written {
+        fn ops(&self) -> Vec<Op> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+    impl LeaseWriter for Written {
+        fn put(&self, _slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+            self.0.lock().unwrap().push(Op::Put(lease.clone()));
+            Ok(())
+        }
+        fn remove(&self, _slot: &Slot) -> Result<(), LocalError> {
+            self.0.lock().unwrap().push(Op::Remove);
+            Ok(())
+        }
+    }
+    fn slot(n: u8) -> Slot {
+        Slot {
+            alias: "fixture".into(),
+            epoch: Epoch::from_bytes([1; 16]),
+            terminal: TerminalId::from_bytes([n; 16]),
+        }
+    }
+    fn saving() -> (Arc<Written>, Arc<Keeper>, Saving) {
+        let written = Arc::new(Written::default());
+        let keeper = Arc::new(Keeper::start(written.clone()).unwrap());
+        let saving = Saving {
+            keeper: keeper.clone(),
+            slot: slot(1),
+        };
+        (written, keeper, saving)
     }
     fn wait(mut ready: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -344,7 +464,8 @@ mod tests {
     #[test]
     fn commands_execute_in_order_and_termination_stops_the_worker() {
         let (driver, calls, ended) = fake(ONLINE | WRITER);
-        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
+        let (written, _keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
         control.input(b"fixture").unwrap();
         control.resize(30, 80).unwrap();
         control.terminate().unwrap();
@@ -356,13 +477,16 @@ mod tests {
         }
         wait(|| control.outcome() == Some(Outcome::Terminated));
         wait(|| !control.writable());
+        // The confirmed close forgets the saved lease.
+        wait(|| written.ops() == [Op::Remove]);
         drop(control);
         ended.recv_timeout(Duration::from_secs(3)).unwrap();
     }
     #[test]
     fn observer_can_request_control_but_cannot_type_resize_or_terminate() {
         let (driver, calls, ended) = fake(ONLINE);
-        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
+        let (written, _keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
         assert_eq!(control.input(b"fixture"), Err(Refused::Closed));
         assert_eq!(control.resize(30, 80), Err(Refused::Closed));
         assert_eq!(control.terminate(), Err(Refused::Closed));
@@ -373,6 +497,8 @@ mod tests {
         );
         wait(|| control.outcome() == Some(Outcome::ControlTaken));
         wait(|| control.writable());
+        // The lease the takeover returned is saved.
+        wait(|| written.ops() == [Op::Put(LeaseKey::from_bytes([7; 16]))]);
         drop(control);
         ended.recv_timeout(Duration::from_secs(3)).unwrap();
     }
@@ -381,7 +507,8 @@ mod tests {
         let (mut driver, calls, ended) = fake(ONLINE | WRITER);
         let (release, block) = mpsc::channel();
         driver.block_input = Some(block);
-        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
+        let (written, _keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
         control.input(b"fixture").unwrap();
         assert_eq!(calls.recv_timeout(Duration::from_secs(3)).unwrap(), "input");
         control.terminate().unwrap();
@@ -389,6 +516,7 @@ mod tests {
         release.send(()).unwrap();
         ended.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(calls.try_recv().is_err());
+        assert!(written.ops().is_empty());
     }
     #[test]
     fn uncertain_input_is_not_retried_and_queued_input_is_discarded() {
@@ -396,7 +524,8 @@ mod tests {
         let (release, block) = mpsc::channel();
         driver.block_input = Some(block);
         driver.fail_input.store(true, Ordering::Release);
-        let control = spawn(Permit::acquire().unwrap(), driver, None).unwrap();
+        let (_written, _keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
         control.input(b"first").unwrap();
         assert_eq!(calls.recv_timeout(Duration::from_secs(3)).unwrap(), "input");
         control.input(b"queued").unwrap();
@@ -408,5 +537,86 @@ mod tests {
         drop(control);
         ended.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(calls.try_recv().is_err());
+    }
+    #[test]
+    fn without_a_place_in_the_keeper_nothing_is_sent() {
+        let (driver, calls, ended) = fake(ONLINE | WRITER);
+        let (written, keeper, saving) = saving();
+        // Every place held elsewhere.
+        let held: Vec<_> = (10..10 + MAX_QUEUE as u8)
+            .map(|n| keeper.reserve(slot(n)).ok().unwrap())
+            .collect();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
+        control.take_control().unwrap();
+        wait(|| control.outcome() == Some(Outcome::Busy));
+        control.terminate().unwrap();
+        wait(|| control.outcome() == Some(Outcome::Busy));
+        assert!(calls.try_recv().is_err(), "nothing sent without a place");
+        drop(held);
+        control.take_control().unwrap();
+        assert_eq!(
+            calls.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "control"
+        );
+        wait(|| control.outcome() == Some(Outcome::ControlTaken));
+        wait(|| written.ops() == [Op::Put(LeaseKey::from_bytes([7; 16]))]);
+        drop(control);
+        ended.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+    #[test]
+    fn a_takeover_in_flight_holds_back_another_one_for_the_same_terminal() {
+        let (driver, calls, ended) = fake(ONLINE);
+        let (_written, keeper, saving) = saving();
+        let other = keeper.reserve(slot(1)).ok().unwrap();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
+        control.take_control().unwrap();
+        wait(|| control.outcome() == Some(Outcome::Busy));
+        assert!(calls.try_recv().is_err());
+        drop(other);
+        drop(control);
+        ended.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+    #[test]
+    fn a_failed_takeover_or_close_saves_nothing_and_gives_the_place_back() {
+        let (mut driver, calls, ended) = fake(ONLINE | WRITER);
+        driver.fail_control = true;
+        driver.fail_terminate = true;
+        let (written, keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
+        control.take_control().unwrap();
+        assert_eq!(
+            calls.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "control"
+        );
+        wait(|| control.outcome() == Some(Outcome::Failed));
+        control.terminate().unwrap();
+        assert_eq!(
+            calls.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "terminate"
+        );
+        wait(|| control.outcome() == Some(Outcome::Failed));
+        // Both places were given back: the slot can be reserved again.
+        assert!(keeper.reserve(slot(1)).is_ok());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(written.ops().is_empty());
+        drop(control);
+        ended.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+    #[test]
+    fn a_lease_returned_after_the_pane_closed_is_still_saved() {
+        let (mut driver, calls, ended) = fake(ONLINE);
+        let (release, block) = mpsc::channel();
+        driver.block_control = Some(block);
+        let (written, _keeper, saving) = saving();
+        let control = spawn(Permit::acquire().unwrap(), driver, None, saving).unwrap();
+        control.take_control().unwrap();
+        assert_eq!(
+            calls.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "control"
+        );
+        drop(control); // the pane closes while the takeover is in flight
+        release.send(()).unwrap();
+        ended.recv_timeout(Duration::from_secs(3)).unwrap();
+        wait(|| written.ops() == [Op::Put(LeaseKey::from_bytes([7; 16]))]);
     }
 }

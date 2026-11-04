@@ -3,6 +3,7 @@ use super::host_apply::{FRAME_BYTES, Pending};
 use super::host_history::History;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use tessel_host_client::terminal::{StreamRejection, TerminalEvent};
+use tessel_host_protocol::pty::AttachMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rejection {
@@ -40,6 +41,9 @@ pub struct Feed {
     pub lease: bool,
     pub resynchronized: bool,
     initialized: bool,
+    awaiting_snapshot: bool,
+    budget_exhausted: bool,
+    reset_live_parser: bool,
 }
 impl Feed {
     pub fn new(receiver: Receiver<TerminalEvent>, lease: bool) -> Self {
@@ -52,12 +56,20 @@ impl Feed {
             lease,
             resynchronized: false,
             initialized: false,
+            awaiting_snapshot: false,
+            budget_exhausted: false,
+            reset_live_parser: false,
         }
     }
     pub fn screen_ready(&self) -> bool {
         self.initialized
             && self.state == State::Receiving
+            && !self.awaiting_snapshot
             && !self.pending.as_ref().is_some_and(Pending::is_snapshot)
+    }
+    /// Request another frame when buffered work exceeded this frame's budget.
+    pub fn has_pending_work(&self) -> bool {
+        !self.needs_detach() && (self.pending.is_some() || self.budget_exhausted)
     }
     /// Caller must drop the command Control immediately when true, so a silent
     /// stream cannot retain authority while no further event detects receiver closure.
@@ -80,8 +92,9 @@ impl Feed {
         &mut self,
         parser: &mut vt100::Parser,
         writer: bool,
-        mut live: impl FnMut(&mut vt100::Parser, &[u8], bool),
+        mut live: impl FnMut(&mut vt100::Parser, &[u8], bool, bool),
     ) {
+        self.budget_exhausted = false;
         if matches!(
             self.state,
             State::Lost | State::Rejected(_) | State::Closed | State::Exited { .. }
@@ -89,17 +102,23 @@ impl Feed {
             return;
         }
         let mut budget = FRAME_BYTES;
-        for _ in 0..64 {
+        for iteration in 0..64 {
+            self.budget_exhausted = iteration == 63;
             if let Some(pending) = self.pending.as_mut() {
                 let count = budget.min(pending.remaining_bytes());
-                if pending.is_snapshot() {
+                let snapshot = pending.is_snapshot();
+                if snapshot {
                     pending.advance_snapshot(parser, &mut self.history, count);
                 } else {
                     pending.apply_output(count, |bytes| {
                         live(
                             parser,
                             bytes,
-                            writer && self.lease && self.state == State::Receiving,
+                            writer
+                                && self.lease
+                                && self.state == State::Receiving
+                                && !self.awaiting_snapshot,
+                            std::mem::take(&mut self.reset_live_parser),
                         )
                     });
                 }
@@ -107,17 +126,25 @@ impl Feed {
                 if let Some(sequence) = pending.completed_sequence() {
                     self.applied = Some(sequence);
                     self.initialized = true;
+                    if snapshot {
+                        self.awaiting_snapshot = false;
+                        self.reset_live_parser = true;
+                    }
                     self.pending = None;
                 } else {
                     break;
                 }
                 if budget == 0 {
+                    self.budget_exhausted = true;
                     break;
                 }
             }
             let event = match self.receiver.as_ref().expect("live receiver").try_recv() {
                 Ok(event) => event,
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => {
+                    self.budget_exhausted = false;
+                    break;
+                }
                 Err(TryRecvError::Disconnected) => {
                     self.state = State::Closed;
                     self.lease = false;
@@ -187,17 +214,23 @@ impl Feed {
                         code: exit.code,
                         signal: exit.signal,
                     };
+                    self.receiver = None;
+                    self.pending = None;
                     break;
                 }
                 TerminalEvent::LeaseLost => self.lease = false,
                 TerminalEvent::Disconnected => self.state = State::Disconnected,
-                TerminalEvent::Reattached { lease, .. } => {
+                TerminalEvent::Reattached { lease, mode } => {
                     self.lease = lease;
                     self.state = State::Receiving;
+                    self.awaiting_snapshot = mode == AttachMode::Snapshot;
+                    self.resynchronized |= self.awaiting_snapshot && self.initialized;
                 }
                 TerminalEvent::Lost => {
                     self.lease = false;
                     self.state = State::Lost;
+                    self.receiver = None;
+                    self.pending = None;
                     break;
                 }
                 TerminalEvent::StreamRejected(reason) => {

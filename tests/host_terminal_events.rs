@@ -1,6 +1,8 @@
 #[allow(dead_code)]
 #[path = "../src/terminal/host_apply.rs"]
 mod host_apply;
+#[path = "../src/terminal/host_emulator.rs"]
+mod host_emulator;
 #[allow(dead_code)]
 #[path = "../src/terminal/host_events.rs"]
 mod host_events;
@@ -11,7 +13,126 @@ mod host_history;
 use host_events::{Feed, State};
 use std::sync::mpsc;
 use tessel_host_client::terminal::{StreamRejection, TerminalEvent};
-use tessel_host_protocol::pty::{Exit, Size};
+use tessel_host_protocol::pty::{AttachMode, Exit, Size};
+
+#[test]
+fn a_snapshot_discards_a_partial_live_cursor_query() {
+    let (sender, receiver) = mpsc::channel();
+    let mut feed = Feed::new(receiver, true);
+    let mut parser = vt100::Parser::new(3, 30, 0);
+    let mut tail = Vec::new();
+    sender
+        .send(TerminalEvent::Output {
+            seq: 1,
+            data: b"\x1b[6".to_vec(),
+        })
+        .unwrap();
+    sender
+        .send(TerminalEvent::Snapshot {
+            at: 2,
+            size: Size { rows: 3, cols: 30 },
+            alternate: false,
+            resync: true,
+            data: b"new".to_vec(),
+        })
+        .unwrap();
+    sender
+        .send(TerminalEvent::Output {
+            seq: 3,
+            data: b"n".to_vec(),
+        })
+        .unwrap();
+    feed.poll(&mut parser, true, |parser, bytes, can_reply, reset| {
+        if reset {
+            tail.clear();
+        }
+        host_emulator::apply(parser, &mut tail, bytes, can_reply, |_| {
+            panic!("query cannot cross a snapshot")
+        });
+    });
+    assert_eq!(parser.screen().contents(), "newn");
+}
+
+#[test]
+fn reattachment_waits_for_the_whole_snapshot_and_requests_more_frames() {
+    let (sender, receiver) = mpsc::channel();
+    let mut feed = Feed::new(receiver, true);
+    let mut parser = vt100::Parser::new(3, 30, 0);
+    sender
+        .send(TerminalEvent::Output {
+            seq: 1,
+            data: b"previous".to_vec(),
+        })
+        .unwrap();
+    feed.poll(&mut parser, true, |p, bytes, _, _| p.process(bytes));
+    sender.send(TerminalEvent::Disconnected).unwrap();
+    sender
+        .send(TerminalEvent::Reattached {
+            mode: AttachMode::Snapshot,
+            lease: true,
+        })
+        .unwrap();
+    feed.poll(&mut parser, true, |_, _, _, _| panic!("no live bytes"));
+    assert!(!feed.screen_ready());
+    assert!(feed.resynchronized);
+    assert!(
+        !feed.has_pending_work(),
+        "wait for incoming snapshot without a busy repaint loop"
+    );
+    sender
+        .send(TerminalEvent::Snapshot {
+            at: 2,
+            size: Size { rows: 3, cols: 30 },
+            alternate: false,
+            resync: false,
+            data: vec![0; host_apply::FRAME_BYTES * 8],
+        })
+        .unwrap();
+    feed.poll(&mut parser, true, |_, _, _, _| {
+        panic!("snapshot is not live input")
+    });
+    assert!(!feed.screen_ready());
+    assert_eq!(parser.screen().contents(), "previous");
+    let mut frames = 1;
+    while feed.has_pending_work() {
+        feed.poll(&mut parser, true, |_, _, _, _| {
+            panic!("snapshot is not live input")
+        });
+        frames += 1;
+        assert!(frames <= 10);
+    }
+    assert!(frames >= 8);
+    assert!(feed.screen_ready());
+    assert_eq!(feed.applied, Some(2));
+}
+
+#[test]
+fn event_budget_requests_a_frame_and_terminal_states_release_the_receiver() {
+    for ending in [
+        TerminalEvent::Lost,
+        TerminalEvent::Exit(Exit {
+            seq: 0,
+            code: Some(0),
+            signal: None,
+        }),
+    ] {
+        let (sender, receiver) = mpsc::channel();
+        let mut feed = Feed::new(receiver, true);
+        let mut parser = vt100::Parser::new(3, 30, 0);
+        for _ in 0..65 {
+            sender.send(TerminalEvent::LeaseLost).unwrap();
+        }
+        feed.poll(&mut parser, true, |_, _, _, _| panic!("no bytes"));
+        assert!(feed.has_pending_work());
+        feed.poll(&mut parser, true, |_, _, _, _| panic!("no bytes"));
+        assert!(!feed.has_pending_work());
+        sender.send(ending).unwrap();
+        feed.poll(&mut parser, true, |_, _, _, _| panic!("no bytes"));
+        assert!(feed.needs_detach());
+        assert!(!feed.has_pending_work());
+        assert!(sender.send(TerminalEvent::LeaseLost).is_err());
+    }
+}
 
 #[test]
 fn snapshot_resize_and_live_output_remain_ordered_across_frames() {
@@ -41,14 +162,14 @@ fn snapshot_resize_and_live_output_remain_ordered_across_frames() {
         })
         .unwrap();
     let mut feed = Feed::new(receiver, true);
-    feed.poll(&mut parser, true, |_, _, _| {
+    feed.poll(&mut parser, true, |_, _, _, _| {
         panic!("snapshot must not use live replies")
     });
     assert_eq!(feed.applied, None);
     assert_eq!(parser.screen().contents(), "previous");
     assert!(!feed.screen_ready());
     let mut live_calls = 0;
-    feed.poll(&mut parser, true, |p, bytes, can_reply| {
+    feed.poll(&mut parser, true, |p, bytes, can_reply, _| {
         assert!(!can_reply);
         live_calls += 1;
         p.process(bytes);
@@ -92,8 +213,10 @@ fn rejection_and_exit_preserve_the_last_screen_and_disable_input() {
             .unwrap();
         let mut feed = Feed::new(receiver, true);
         let mut parser = vt100::Parser::new(3, 40, 0);
-        feed.poll(&mut parser, true, |p, bytes, _| p.process(bytes));
-        feed.poll(&mut parser, true, |_, _, _| panic!("terminal stream ended"));
+        feed.poll(&mut parser, true, |p, bytes, _, _| p.process(bytes));
+        feed.poll(&mut parser, true, |_, _, _, _| {
+            panic!("terminal stream ended")
+        });
         assert_eq!(parser.screen().contents(), "retained");
         assert!(!feed.lease);
         assert!(!feed.screen_ready());
@@ -122,7 +245,7 @@ fn current_authority_overrides_stale_lease_and_replays_do_not_rewind_screen() {
     sender.send(TerminalEvent::Disconnected).unwrap();
     let mut feed = Feed::new(receiver, true);
     let mut parser = vt100::Parser::new(3, 30, 0);
-    feed.poll(&mut parser, false, |p, bytes, can_reply| {
+    feed.poll(&mut parser, false, |p, bytes, can_reply, _| {
         assert!(!can_reply);
         p.process(bytes);
     });
@@ -151,7 +274,7 @@ fn an_exit_cannot_rewind_the_applied_sequence() {
             .unwrap();
         let mut feed = Feed::new(receiver, true);
         let mut parser = vt100::Parser::new(3, 30, 0);
-        feed.poll(&mut parser, true, |p, bytes, _| p.process(bytes));
+        feed.poll(&mut parser, true, |p, bytes, _, _| p.process(bytes));
         assert_eq!(parser.screen().contents(), "retained");
         assert_eq!(feed.applied, Some(exit_seq.max(4)));
         assert!(feed.needs_detach());
@@ -177,7 +300,7 @@ fn invalid_local_events_drop_receiver_and_closed_channel_is_final() {
         .unwrap();
     let mut feed = Feed::new(receiver, true);
     let mut parser = vt100::Parser::new(3, 30, 0);
-    feed.poll(&mut parser, true, |_, _, _| panic!("invalid output"));
+    feed.poll(&mut parser, true, |_, _, _, _| panic!("invalid output"));
     assert_eq!(
         feed.state,
         State::Rejected(host_events::Rejection::InvalidData)
@@ -187,8 +310,8 @@ fn invalid_local_events_drop_receiver_and_closed_channel_is_final() {
     let (sender, receiver) = mpsc::channel();
     drop(sender);
     let mut feed = Feed::new(receiver, true);
-    feed.poll(&mut parser, true, |_, _, _| panic!("closed"));
+    feed.poll(&mut parser, true, |_, _, _, _| panic!("closed"));
     assert_eq!(feed.state, State::Closed);
     assert!(feed.needs_detach());
-    feed.poll(&mut parser, true, |_, _, _| panic!("closed"));
+    feed.poll(&mut parser, true, |_, _, _, _| panic!("closed"));
 }

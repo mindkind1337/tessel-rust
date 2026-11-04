@@ -8,6 +8,9 @@ mod host_commands;
 #[path = "../src/terminal/host_handoff.rs"]
 mod host_handoff;
 #[allow(dead_code)]
+#[path = "../src/terminal/host_lease_keeper.rs"]
+mod host_lease_keeper;
+#[allow(dead_code)]
 #[path = "../src/terminal/host_opening.rs"]
 mod host_opening;
 #[allow(dead_code)]

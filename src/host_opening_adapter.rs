@@ -83,6 +83,14 @@ impl Host for HostConnection {
 /// opens the owner's encrypted store for every transaction, independent of a
 /// project or imported workspace. No configurable path can redirect authority.
 pub struct OwnerStore;
+impl crate::terminal::host_lease_keeper::LeaseWriter for OwnerStore {
+    fn put(&self, value: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+        Store::put(self, value, lease)
+    }
+    fn remove(&self, value: &Slot) -> Result<(), LocalError> {
+        Store::remove(self, value)
+    }
+}
 fn slot(value: &Slot) -> LeaseSlot {
     LeaseSlot {
         alias: value.alias.clone(),

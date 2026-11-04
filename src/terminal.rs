@@ -1,8 +1,10 @@
 pub mod host_apply;
 pub mod host_commands;
+pub mod host_emulator;
 pub mod host_events;
 pub mod host_handoff;
 pub mod host_history;
+pub mod host_lease_keeper;
 pub mod host_opening;
 pub mod host_worker;
 mod local;
@@ -207,19 +209,14 @@ impl Terminal {
             self.model_dirty = true;
             self.output_revision = self.output_revision.wrapping_add(1);
         }
-        for &byte in bytes {
-            self.parser.process(&[byte]);
-            self.query_tail.push(byte);
-            if self.query_tail.ends_with(b"\x1b[6n") {
-                let (row, col) = self.parser.screen().cursor_position();
-                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
-                if let Err(error) = self.send(reply.into_bytes()) {
-                    self.status = error;
-                }
-            }
-            if self.query_tail.len() > 4 {
-                self.query_tail.remove(0);
-            }
+        if let Some(error) = host_emulator::apply(
+            &mut self.parser,
+            &mut self.query_tail,
+            bytes,
+            true,
+            |reply| self.backend.send(reply),
+        ) {
+            self.status = error;
         }
     }
 
