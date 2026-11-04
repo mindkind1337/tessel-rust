@@ -45,7 +45,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot configure the private dependency URL.' }
           # Verify real access before any cache can hide an invalid deploy key.
           git ls-remote --exit-code https://github.com/mindkind1337/tessel-host HEAD | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'The CI deploy key cannot read tessel-host. Check its read-only deploy key and TESSEL_HOST_DEPLOY_KEY pairing.' }
+          if ($LASTEXITCODE -ne 0) {
+            # Public fingerprints and selected SSH diagnostics only; never print the key.
+            $keygen = Join-Path $env:WINDIR 'System32/OpenSSH/ssh-keygen.exe'
+            $fingerprint = & $keygen -lf $keyPath 2>$null
+            if ($LASTEXITCODE -eq 0 -and $fingerprint -match '(SHA256:[A-Za-z0-9+/]+)') {
+              Write-Output ('CI deploy key fingerprint: ' + $Matches[1])
+            }
+            & $ssh -v -T -i $keyPath -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$knownHosts" git@github.com 2>&1 |
+              ForEach-Object { [string]$_ } |
+              Where-Object { $_ -match 'Offering public key:|Server accepts key:|sign_and_send_pubkey:|Load key |bad permissions|Permission denied|Authenticated to ' }
+            throw 'The CI deploy key cannot read tessel-host. Check its read-only deploy key and TESSEL_HOST_DEPLOY_KEY pairing.'
+          }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
