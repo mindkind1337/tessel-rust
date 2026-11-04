@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [switch]$Compact,
-    [switch]$Discovered
+    [switch]$Discovered,
+    [switch]$Cursor
 )
 $ErrorActionPreference = 'Stop'
 # Requires a binary built with --features visual-test. Every run gets isolated
@@ -12,7 +13,10 @@ $captureRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $runDirectory = Join-Path $captureRoot ([Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $runDirectory -Force
 $dataDirectory = Join-Path $runDirectory 'data'
-if ($Discovered) {
+if ($Cursor) {
+    $null = New-Item -ItemType Directory -Path $dataDirectory
+    '{"cursor":{"models":[{"id":"gpt-5.3-codex-low","label":"GPT-5.3 Codex Low"},{"id":"gpt-5.3-codex-high","label":"GPT-5.3 Codex High"},{"id":"gpt-5.3-codex-high-fast","label":"GPT-5.3 Codex High Fast"}],"fetchedAt":1700000000000}}' | Set-Content -LiteralPath (Join-Path $dataDirectory 'agent-models.json') -Encoding utf8
+} elseif ($Discovered) {
     $null = New-Item -ItemType Directory -Path $dataDirectory
     '{"codex":{"models":[{"id":"gpt-5.6-sol","label":"Synthetic model fixture","effortLevels":["low","high"]}],"fetchedAt":1700000000000}}' | Set-Content -LiteralPath (Join-Path $dataDirectory 'agent-models.json') -Encoding utf8
 }
@@ -24,6 +28,7 @@ $process = $null
 try {
     $env:TESSEL_SETTLED_SCREENSHOT = $pngPath
     $arguments = @('--models-fixture', '--data-dir', ('"' + $dataDirectory + '"'))
+    if ($Cursor) { $arguments += '--cursor-models-fixture' }
     if ($Compact) { $arguments += '--compact-fixture' }
     $process = Start-Process -FilePath $binaryPath -ArgumentList $arguments -WorkingDirectory $runDirectory -WindowStyle Hidden -PassThru -RedirectStandardError $errorPath -RedirectStandardOutput $outputPath
     if (-not $process.WaitForExit(30000)) {

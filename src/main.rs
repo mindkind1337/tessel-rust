@@ -14,6 +14,7 @@ pub mod agent_installs;
 pub mod agent_model_antigravity;
 pub mod agent_model_cache;
 pub mod agent_model_catalog;
+pub mod agent_model_cursor;
 pub mod agent_model_defaults;
 pub mod agent_model_defaults_ui;
 pub mod agent_model_discovery;

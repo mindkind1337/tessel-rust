@@ -14,11 +14,11 @@ pub(crate) struct Detection {
 
 impl Detection {
     #[cfg(feature = "visual-test")]
-    pub fn model_picker_fixture() -> Self {
+    pub fn model_picker_fixture(agent: &str) -> Self {
         Self {
             entries: crate::agent_catalog::ALL
                 .iter()
-                .map(|preset| (preset.id.into(), preset.id == "codex"))
+                .map(|preset| (preset.id.into(), preset.id == agent))
                 .collect(),
             loaded: true,
             ..Self::default()

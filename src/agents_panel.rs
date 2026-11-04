@@ -48,9 +48,9 @@ pub struct AgentsPanel {
 
 impl AgentsPanel {
     #[cfg(feature = "visual-test")]
-    pub fn model_picker_fixture() -> Self {
+    pub fn model_picker_fixture(agent: &str) -> Self {
         Self {
-            open: Some("codex".into()),
+            open: Some(agent.into()),
             ..Self::default()
         }
     }

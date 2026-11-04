@@ -380,20 +380,32 @@ impl Tessel {
         }
         #[cfg(feature = "visual-test")]
         if models_fixture {
-            app.agents = crate::agent_detection::Detection::model_picker_fixture();
-            app.agents_panel = crate::agents_panel::AgentsPanel::model_picker_fixture();
+            let cursor = std::env::args().any(|a| a == "--cursor-models-fixture");
+            let agent = if cursor { "cursor" } else { "codex" };
+            app.agents = crate::agent_detection::Detection::model_picker_fixture(agent);
+            app.agents_panel = crate::agents_panel::AgentsPanel::model_picker_fixture(agent);
             app.overlay = Some(Overlay::Settings);
             app.settings_section = SettingsSection::Agents;
             app.state.language = crate::i18n::Language::French;
             crate::i18n::set_language(app.state.language);
             let mut defaults = crate::agent_model_defaults::Defaults {
-                model: Some("gpt-5.6-sol".into()),
+                model: Some(
+                    if cursor {
+                        "gpt-5.3-codex"
+                    } else {
+                        "gpt-5.6-sol"
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             };
             defaults.set_option("effort", Some("high".into()));
+            if cursor {
+                defaults.set_option("fastMode", Some(true.into()));
+            }
             app.state
                 .agent_model_defaults
-                .insert("codex".into(), defaults);
+                .insert(agent.into(), defaults);
         }
         app.refresh_project();
         #[cfg(feature = "visual-test")]

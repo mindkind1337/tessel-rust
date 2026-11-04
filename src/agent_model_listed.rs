@@ -3,11 +3,10 @@
 //! Convert sanitized discovery rows to picker metadata, without choosing defaults.
 use serde_json::{Value, json};
 
-/// Cursor's grouping is supplied separately; never expose its raw variants as
-/// grouped rows while that conversion is unavailable. Callers retain seed data.
+/// Convert listed variants to catalogue rows before source catalogue merging.
 pub fn catalog(agent: &str, rows: &[Value]) -> Option<Vec<Value>> {
     if agent == "cursor" {
-        return None;
+        return Some(crate::agent_model_cursor::group(rows));
     }
     let grouped;
     let rows = if agent == "antigravity" {
@@ -72,6 +71,6 @@ mod tests {
                 case["name"]
             );
         }
-        assert!(catalog("cursor", &[]).is_none());
+        assert_eq!(catalog("cursor", &[]), Some(Vec::new()));
     }
 }
