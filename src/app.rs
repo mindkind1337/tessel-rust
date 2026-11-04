@@ -6,6 +6,8 @@ use crate::{
     workspace::{self, Host, Store, Workspace},
 };
 use eframe::egui;
+#[path = "app/floating_terminal.rs"]
+mod floating_terminal;
 #[cfg(windows)]
 #[path = "app/native_terminals.rs"]
 mod native_terminals;
@@ -380,6 +382,7 @@ pub struct Tessel {
     store: Option<Store>,
     error: String,
     sessions: Vec<Session>,
+    floating: floating_terminal::State,
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
@@ -485,6 +488,7 @@ impl Tessel {
         let mut app = Self {
             #[cfg(windows)]
             window_frame,
+            floating: floating_terminal::State::new(&cc.egui_ctx, state.floating),
             state,
             store,
             error,
@@ -907,6 +911,10 @@ impl Tessel {
                 ],
                 vec![src, scripts],
             );
+        }
+        #[cfg(feature = "visual-test")]
+        if std::env::args().any(|arg| arg == "--floating-fixture") {
+            app.floating_fixture();
         }
         app
     }
@@ -1523,6 +1531,7 @@ impl Tessel {
         use crate::palette::PaletteCommand;
         let mut commands: Vec<_> = [
             ("terminal", "Open terminal"),
+            ("floating", "Toggle floating terminal"),
             ("launcher", "Open a terminal or agent"),
             ("chat", "Native Codex chat"),
             ("claude-chat", "Native Claude chat"),
@@ -1551,6 +1560,7 @@ impl Tessel {
             let command = PaletteCommand::new(id, "Tessel", tr(title));
             let shortcut = match id {
                 "terminal" => "Ctrl+Shift+T",
+                "floating" => "Ctrl+`",
                 "launcher" => "Ctrl+Shift+Space",
                 "finder" => "Ctrl+Shift+J",
                 "files" => "Ctrl+Shift+X",
@@ -1612,6 +1622,7 @@ impl Tessel {
             self.command_palette.close();
             match id.as_str() {
                 "terminal" => self.new_session(Launch::Shell),
+                "floating" => self.toggle_floating(ctx),
                 "launcher" => self.open_launcher(),
                 "chat" => self.new_session(Launch::CodexChat),
                 "claude-chat" => self.new_session(Launch::ClaudeChat),
@@ -3671,6 +3682,7 @@ impl Tessel {
                     ui,
                     self.state.language == crate::i18n::Language::French,
                     &[
+                        "Ctrl+`",
                         "Ctrl+Shift+T",
                         "Ctrl+Shift+W",
                         "Ctrl+Shift+Space",
@@ -3921,12 +3933,22 @@ impl Tessel {
                 }));
                 if ui.button(tr("Keep working")).clicked() {
                     self.pending_exit = false;
+                    self.floating.cancel_exit();
+                }
+                if self.floating.exit_pending { ui.label(tr("Closing the floating terminal…")); }
+                if self.floating.exit_failed {
+                    ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+                    ui.label(tr("Quit without waiting for floating terminal shutdown."));
+                    if ui.add_enabled(!self.exit_background_busy(), egui::Button::new(tr("Quit anyway"))).clicked() {
+                        self.floating.force_exit = true;
+                        self.finish_exit(ctx);
+                    }
                 }
                 if self.file_action_pending { ui.label(tr("File operation in progress…")); }
                 if self.account_busy() { ui.label(tr("Wait for the account request to finish before closing.")); }
                 if model_busy { ui.label(if self.state.language == crate::i18n::Language::French { "Attendez la fin de la recherche et de la sauvegarde des modèles avant de fermer." } else { "Wait for model discovery and saving to finish before closing." }); }
                 if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
-                if ui.add_enabled(!model_busy && !self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
+                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -3939,13 +3961,16 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
+                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.finish_exit(ctx);
                 }
             });
         }
     }
     fn finish_exit(&mut self, ctx: &egui::Context) {
+        if !self.drain_floating_for_exit() {
+            return;
+        }
         #[cfg(windows)]
         self.begin_native_exit(ctx);
         #[cfg(not(windows))]
@@ -3954,6 +3979,12 @@ impl Tessel {
             self.allow_exit = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+    }
+    fn exit_background_busy(&self) -> bool {
+        self.model_discovery.as_ref().is_some_and(|d| d.active())
+            || self.remote.busy()
+            || self.account_busy()
+            || self.file_action_pending
     }
     #[cfg(not(windows))]
     fn native_modal_open(&self) -> bool {
@@ -4206,7 +4237,13 @@ impl eframe::App for Tessel {
         if let Ok(path) = std::env::var("TESSEL_SETTLED_SCREENSHOT") {
             self.visual_frames += 1;
             if self.visual_frames == 6 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                if std::env::args().any(|arg| arg == "--floating-fixture")
+                    && !self.floating.capture_ready()
+                {
+                    self.visual_frames -= 1;
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                }
             }
             for event in ctx.input(|i| i.events.clone()) {
                 if let egui::Event::Screenshot { image, .. } = event {
@@ -4220,14 +4257,14 @@ impl eframe::App for Tessel {
                     ) {
                         self.error = e.to_string();
                     }
-                    self.allow_exit = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.finish_exit(ctx);
                 }
             }
         }
 
         self.native_hosts.poll();
         self.poll();
+        self.poll_floating(ctx);
         #[cfg(windows)]
         {
             self.poll_native_terminals(ctx);
@@ -4241,14 +4278,15 @@ impl eframe::App for Tessel {
             }
         }
         let previous_panels = self.state.panels;
-        let terminal_focused = self.view == View::Work
-            && self.sessions.iter().any(|session| {
-                session.project == self.state.active_project
-                    && session
-                        .terminal
-                        .as_ref()
-                        .is_some_and(|terminal| terminal.has_focus(ctx))
-            });
+        let terminal_focused = self.floating.terminal_focused(ctx)
+            || self.view == View::Work
+                && self.sessions.iter().any(|session| {
+                    session.project == self.state.active_project
+                        && session
+                            .terminal
+                            .as_ref()
+                            .is_some_and(|terminal| terminal.has_focus(ctx))
+                });
         if self.finder.is_open()
             && ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::J)
@@ -4263,6 +4301,10 @@ impl eframe::App for Tessel {
             || self.pending_exit
             || self.file_action.is_some()
             || self.restore_preview.is_some();
+        self.floating_shortcuts(
+            ctx,
+            confirmation_open || self.overlay.is_some() || self.command_palette.open,
+        );
         for session in &mut self.sessions {
             if self.overlay.is_some()
                 || self.command_palette.open
@@ -4344,7 +4386,10 @@ impl eframe::App for Tessel {
                 });
                 #[cfg(not(windows))]
                 let native_escape = false;
-                if !native_escape && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if !native_escape
+                    && !self.floating.ui.has_keyboard()
+                    && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                {
                     let key = crate::terminal_layout::project_key(self.state.active_project);
                     if let Some(layout) = self.state.terminal_layouts.get_mut(&key)
                         && layout.maximized.take().is_some()
@@ -4413,6 +4458,7 @@ impl eframe::App for Tessel {
             && !self.allow_exit
             && (self.documents.iter().any(Document::dirty)
                 || !self.sessions.is_empty()
+                || self.floating.busy()
                 || self.chats.iter().any(crate::chat::Chat::busy)
                 || self.claude_chats.iter().any(crate::claude::Chat::busy)
                 || self.share.hosting()
@@ -4542,11 +4588,7 @@ impl eframe::App for Tessel {
                 if chrome::icon_button(ui, Icon::Settings, tr("Settings"), false, false).clicked() {
                     self.overlay = Some(Overlay::Settings);
                 }
-                if chrome::icon_button(ui, Icon::Help, tr("Keyboard shortcuts"), false, false)
-                    .clicked()
-                {
-                    self.open_help();
-                }
+                self.floating_toolbar(ui);
             });
         egui::TopBottomPanel::bottom("status")
             .exact_height(24.0)
@@ -4628,6 +4670,7 @@ impl eframe::App for Tessel {
         self.browser.visible(
             !self.native_modal_open()
                 && !self.show_agent_browser
+                && !self.floating.ui.is_open()
                 && self.view == View::Browser
                 && !self.pending_exit
                 && self.pending_close.is_none()
@@ -4637,7 +4680,7 @@ impl eframe::App for Tessel {
                 && !self.toolbar_menu_open
                 && !self.finder.is_open(),
         );
-        egui::CentralPanel::default().show(ctx, |ui| {
+        let central = egui::CentralPanel::default().show(ctx, |ui| {
             if self.native_modal_open()
                 || self.finder.is_open()
                 || self.toolbar_menu_open
@@ -4657,6 +4700,7 @@ impl eframe::App for Tessel {
                 #[cfg(windows)]
                 View::Browser => {
                     if !self.native_modal_open()
+                        && !self.floating.ui.is_open()
                         && !self.pending_exit
                         && self.pending_close.is_none()
                         && self.file_action.is_none()
@@ -4692,6 +4736,7 @@ impl eframe::App for Tessel {
                 }
             }
         });
+        self.show_floating(ctx, central.response.rect);
         if let Some(path) = self
             .finder
             .show(ctx, self.state.active().map(|p| p.path.as_path()))
@@ -4743,11 +4788,13 @@ impl eframe::App for Tessel {
         if previous_panels != self.state.panels {
             self.save();
         }
-        ctx.request_repaint_after(Duration::from_millis(if self.sessions.is_empty() {
-            150
-        } else {
-            33
-        }));
+        ctx.request_repaint_after(Duration::from_millis(
+            if self.sessions.is_empty() && !self.floating.busy() {
+                150
+            } else {
+                33
+            },
+        ));
     }
 }
 

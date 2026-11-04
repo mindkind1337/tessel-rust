@@ -60,6 +60,11 @@ pub struct RemotePanel {
     error: String,
 }
 impl RemotePanel {
+    pub fn terminal_host(&self, hosts: &[Host]) -> Option<Host> {
+        self.host
+            .clone()
+            .or_else(|| hosts.get(self.selected).cloned())
+    }
     #[cfg(feature = "visual-test")]
     pub fn fixture() -> Self {
         let image = image::RgbaImage::from_fn(320, 160, |x, y| {

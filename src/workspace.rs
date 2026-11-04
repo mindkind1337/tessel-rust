@@ -26,6 +26,24 @@ pub struct Panels {
     pub right_tab: SideTab,
 }
 
+/// Floating-terminal preferences are separate from the project pane tree.
+/// They contain no terminal output, process authority or remote credentials.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FloatingPreferences {
+    pub open: bool,
+    pub height: f64,
+}
+
+impl Default for FloatingPreferences {
+    fn default() -> Self {
+        Self {
+            open: false,
+            height: crate::palette::FLOATING_DEFAULT_HEIGHT,
+        }
+    }
+}
+
 impl Default for Panels {
     fn default() -> Self {
         Self {
@@ -133,6 +151,7 @@ pub struct Workspace {
     pub language: crate::i18n::Language,
     pub columns: usize,
     pub panels: Panels,
+    pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
     pub next_id: u64,
@@ -158,6 +177,7 @@ impl Default for Workspace {
             language: Default::default(),
             columns: 1,
             panels: Default::default(),
+            floating: Default::default(),
             terminal_layouts: Default::default(),
             font_size: 15.0,
             next_id: 1,
@@ -184,6 +204,12 @@ impl Workspace {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if !self.floating.height.is_finite()
+            || !(crate::palette::FLOATING_MIN_HEIGHT..=crate::palette::FLOATING_MAX_HEIGHT)
+                .contains(&self.floating.height)
+        {
+            return Err("Invalid floating terminal height.".into());
+        }
         if self.schema != 1 {
             return Err(
                 "This workspace was written by an unsupported version; it will not be overwritten."
@@ -834,6 +860,26 @@ mod tests {
             fs::read(dir.path().join("workspace.json")).unwrap(),
             b"broken"
         );
+    }
+    #[test]
+    fn floating_preferences_survive_restart_without_joining_the_grid() {
+        let old: Workspace = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.floating, FloatingPreferences::default());
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state.floating = FloatingPreferences {
+            open: true,
+            height: 0.72,
+        };
+        store.save(&state).unwrap();
+        drop(store);
+        let (_, loaded) = Store::open(dir.path()).unwrap();
+        assert_eq!(loaded.floating, state.floating);
+        assert!(loaded.sessions.is_empty());
+        for height in [f64::NAN, f64::INFINITY, 0.14, 0.91] {
+            state.floating.height = height;
+            assert!(state.validate().is_err());
+        }
     }
     #[test]
     fn panel_toggles_survive_restart_and_old_settings_keep_visible_defaults() {

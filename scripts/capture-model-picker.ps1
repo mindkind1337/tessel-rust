@@ -5,7 +5,8 @@ param(
     [switch]$Discovered,
     [switch]$Cursor,
     [switch]$Restart,
-    [switch]$PaneMenu
+    [switch]$PaneMenu,
+    [switch]$Floating
 )
 $ErrorActionPreference = 'Stop'
 # Requires a binary built with --features visual-test. Every run gets isolated
@@ -22,7 +23,7 @@ if ($Cursor) {
     $null = New-Item -ItemType Directory -Path $dataDirectory
     '{"codex":{"models":[{"id":"gpt-5.6-sol","label":"Synthetic model fixture","effortLevels":["low","high"]}],"fetchedAt":1700000000000}}' | Set-Content -LiteralPath (Join-Path $dataDirectory 'agent-models.json') -Encoding utf8
 }
-$pngPath = Join-Path $runDirectory 'models-fr.png'
+$pngPath = Join-Path $runDirectory $(if ($Floating) { 'floating-terminal.png' } else { 'models-fr.png' })
 $errorPath = Join-Path $runDirectory 'stderr.txt'
 $outputPath = Join-Path $runDirectory 'stdout.txt'
 $previousCapture = $env:TESSEL_SETTLED_SCREENSHOT
@@ -33,6 +34,7 @@ try {
     if ($Cursor) { $arguments += '--cursor-models-fixture' }
     if ($Restart) { $arguments += @('--terminal-fixture', '--restart-fixture') }
     if ($PaneMenu) { $arguments += @('--terminal-fixture', '--restart-fixture', '--pane-menu-fixture') }
+    if ($Floating) { $arguments = @('--terminal-fixture', '--floating-fixture', '--data-dir', ('"' + $dataDirectory + '"')) }
     if ($Compact) { $arguments += '--compact-fixture' }
     $process = Start-Process -FilePath $binaryPath -ArgumentList $arguments -WorkingDirectory $runDirectory -WindowStyle Hidden -PassThru -RedirectStandardError $errorPath -RedirectStandardOutput $outputPath
     if (-not $process.WaitForExit(30000)) {

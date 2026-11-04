@@ -510,6 +510,9 @@ impl Terminal {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        self.show_with_id(ui, font_size, None);
+    }
+    pub fn show_with_id(&mut self, ui: &mut egui::Ui, font_size: f32, id: Option<egui::Id>) {
         if !self.status.is_empty() && matches!(self.backend, backend::Backend::Local(_)) {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
         }
@@ -542,7 +545,12 @@ impl Terminal {
             }
         }
         let (rows, cols) = self.size;
-        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        let (rect, response) = if let Some(id) = id {
+            let (_, rect) = ui.allocate_space(available);
+            (rect, ui.interact(rect, id, egui::Sense::click_and_drag()))
+        } else {
+            ui.allocate_exact_size(available, egui::Sense::click_and_drag())
+        };
         self.widget_id = Some(response.id);
         #[cfg(windows)]
         let accepts_input =

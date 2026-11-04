@@ -56,6 +56,8 @@ mod file_actions;
 mod files;
 pub mod finder_model;
 mod finder_panel;
+pub mod floating_terminal_panel;
+pub mod floating_terminal_runtime;
 mod git;
 mod git_result;
 pub mod help_panel;

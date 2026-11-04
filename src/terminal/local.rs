@@ -84,9 +84,7 @@ impl LocalPty {
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
-                return Err(
-                    "Terminal processes have not stopped; replacement was not started.".into(),
-                );
+                return Err("Terminal processes have not stopped.".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

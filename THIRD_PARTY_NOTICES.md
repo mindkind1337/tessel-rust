@@ -20,6 +20,11 @@ height. The patch is recorded in `vendor/vt100/TESSEL_PATCH.md`.
 
 ## Orca
 
+The floating terminal UI in `src/floating_terminal_panel.rs` and its application
+integration adapt Tessel's `floatingTerminal.js`, `FloatingTerminal.vue` and
+`App.vue` behavior under the same MIT attribution below. The process controller
+in `src/floating_terminal_runtime.rs` is a native Rust implementation.
+
 The pure conversation resume planner in `src/agent_resume.rs` adapts Tessel's
 `agentResumeLine.js` and `remoteAgentLaunch.js`, including argument mappings from
 the vendored Orca `agent-session-resume.js`. Its source-comparison fixture uses

@@ -443,3 +443,43 @@ is discarded; no synthetic escape is injected into a potentially unfinished
 OSC/DCS. Tests cover this control-string boundary, bounded large alternate
 screens, grid/RIS changes invalidating selection, and truncation clamping to the
 current capture even when an older narrow capture remains retained.
+
+Floating terminal integration: the drawer is separate from saved
+project sessions and pane grids. Its runtime starts and stops shells off the UI
+thread, preserves a hidden shell, and refuses replacement until shutdown is
+confirmed. The application waits for its close before continuing its existing
+native-host shutdown drain. The toolbar, command palette and physical
+Ctrl+backquote toggle share the same actions. A stable terminal widget ID lets
+the panel restore focus without a first-frame provisional-ID race.
+
+The saved open state currently restores the drawer with an explicit Open terminal
+action, not the former process: local daemon-backed reattachment remains pending.
+The remote-files context launches SSH against the selected host; ordinary project
+contexts launch the default local shell. Shell selection parity remains pending.
+Native WebView surfaces are hidden while the drawer is open until child-window
+clipping is implemented. These limitations prevent claiming full Vue parity.
+The drawer currently opens/closes immediately; Vue's 0.16-second slide transition
+is not implemented yet.
+egui's first-ever opening also has one invisible, disabled sizing frame; tests
+assert that it accepts no terminal input. Reopenings and return from dialogs are
+checked in one frame, without a settling helper.
+Validation: 31 lifecycle tests, 7 UI suites and 2 application/workspace tests
+pass, including a real Windows shell, cancellation of a pending application
+quit, and immediate handle-key navigation. Strict all-feature Clippy passes for
+the binary and both new integration suites; formatting and diff checks pass.
+The isolated native fixture renders the drawer, terminal and resize handle
+without changing the running Vue application or its profiles.
+Opening is Windows-only until Unix process-group shutdown can be verified; the
+generic controller itself remains portable. This avoids offering a shell that
+the application cannot subsequently close through its verified shutdown path.
+
+WebView clipping follow-up: the pinned wry 0.57.1 Windows extension exposes the
+child container HWND through `WebViewExtWindows::hwnd()`, and this application
+uses `build_as_child`. A window region can therefore exclude the drawer's
+physical-pixel overlap without changing the page viewport, scrolling, cookies
+or profile. Validate region ownership on SetWindowRgn success/failure, rounding
+at non-integer DPI, restoration on hide/resize, keyboard focus and pointer
+hit-testing against a synthetic isolated browser profile before enabling this.
+The [Win32 contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowrgn)
+transfers region ownership to Windows only on success; coordinates are relative
+to the window corner, and a null region restores the ordinary window shape.
