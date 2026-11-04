@@ -1804,7 +1804,18 @@ impl Tessel {
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             ui.horizontal(|ui| {
+                                let conversation_id = session
+                                    .launch
+                                    .native_chat()
+                                    .and_then(|provider| {
+                                        session.project.and_then(|project| {
+                                            self.state.native_resume(session.id, project, provider)
+                                        })
+                                    })
+                                    .or(session.conversation_id.as_deref())
+                                    .map(str::to_owned);
                                 let menu = crate::pane_header::MenuState {
+                                    session_id: conversation_id.as_deref(),
                                     title: session.pane_name.as_deref().unwrap_or(&session.title),
                                     maximized: maximized.is_some(),
                                     multiple_panes: ids.len() > 1,
@@ -1904,6 +1915,11 @@ impl Tessel {
                                 if let Some(action) = action {
                                     use crate::pane_menu_model::PaneMenuAction;
                                     match action {
+                                        PaneMenuAction::CopySessionId => {
+                                            if let Some(id) = &conversation_id {
+                                                ui.ctx().copy_text(id.clone());
+                                            }
+                                        }
                                         PaneMenuAction::CopyOutput => {
                                             if let Some(terminal) = &session.terminal {
                                                 ui.ctx().copy_text(terminal.output());
@@ -3926,6 +3942,7 @@ impl eframe::App for Tessel {
                     ui,
                     &crate::pane_header::MenuState {
                         title: "Terminal",
+                        session_id: Some("12345678-1234-4234-8234-123456789abc"),
                         maximized: false,
                         multiple_panes: true,
                         terminal_output: true,

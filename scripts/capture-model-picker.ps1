@@ -4,7 +4,8 @@ param(
     [switch]$Compact,
     [switch]$Discovered,
     [switch]$Cursor,
-    [switch]$Restart
+    [switch]$Restart,
+    [switch]$PaneMenu
 )
 $ErrorActionPreference = 'Stop'
 # Requires a binary built with --features visual-test. Every run gets isolated
@@ -31,6 +32,7 @@ try {
     $arguments = @('--models-fixture', '--data-dir', ('"' + $dataDirectory + '"'))
     if ($Cursor) { $arguments += '--cursor-models-fixture' }
     if ($Restart) { $arguments += @('--terminal-fixture', '--restart-fixture') }
+    if ($PaneMenu) { $arguments += @('--terminal-fixture', '--restart-fixture', '--pane-menu-fixture') }
     if ($Compact) { $arguments += '--compact-fixture' }
     $process = Start-Process -FilePath $binaryPath -ArgumentList $arguments -WorkingDirectory $runDirectory -WindowStyle Hidden -PassThru -RedirectStandardError $errorPath -RedirectStandardOutput $outputPath
     if (-not $process.WaitForExit(30000)) {

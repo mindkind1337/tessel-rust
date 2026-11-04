@@ -36,6 +36,7 @@ pub fn button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui:
 
 pub struct MenuState<'a> {
     pub title: &'a str,
+    pub session_id: Option<&'a str>,
     pub maximized: bool,
     pub multiple_panes: bool,
     pub terminal_output: bool,
@@ -47,6 +48,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
     pane_menu_model::build_pane_actions_menu(
         &PaneActionsMenuInput {
             pane_title: state.title.into(),
+            session_id: state.session_id.map(str::to_owned),
             is_maximized: state.maximized,
             can_arrange_panes: state.multiple_panes,
             ..Default::default()
@@ -58,6 +60,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
     .filter(|entry| match entry {
         PaneMenuEntry::Item { action, .. } => match action {
             PaneMenuAction::CopyOutput => state.terminal_output,
+            PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
             PaneMenuAction::Rename => state.can_rename,
             PaneMenuAction::ToggleMaximize
             | PaneMenuAction::ArrangeGrid
@@ -81,6 +84,7 @@ pub fn show(ui: &mut egui::Ui, state: &MenuState<'_>) -> Option<PaneMenuAction> 
             label,
             enabled,
             danger,
+            shortcut,
             ..
         } = entry
         {
@@ -92,7 +96,11 @@ pub fn show(ui: &mut egui::Ui, state: &MenuState<'_>) -> Option<PaneMenuAction> 
             } else {
                 egui::RichText::new(label)
             };
-            if ui.add_enabled(enabled, egui::Button::new(text)).clicked() {
+            let mut button = egui::Button::new(text);
+            if let Some(shortcut) = shortcut {
+                button = button.shortcut_text(shortcut);
+            }
+            if ui.add_enabled(enabled, button).clicked() {
                 selected = Some(action);
                 ui.close();
             }
@@ -108,6 +116,7 @@ mod tests {
     fn native_menu_only_exposes_actions_supported_by_the_pane() {
         let mut state = MenuState {
             title: "Chat",
+            session_id: None,
             maximized: false,
             multiple_panes: false,
             terminal_output: false,
@@ -133,6 +142,9 @@ mod tests {
             ]
         );
         state.can_rename = true;
+        state.session_id = Some("12345678-1234-4234-8234-123456789abc");
+        assert!(actions(&state).contains(&PaneMenuAction::CopySessionId));
+        assert!(entries(&state).iter().any(|entry| matches!(entry, PaneMenuEntry::Item { action: PaneMenuAction::CopySessionId, label, shortcut: Some(shortcut), .. } if label == "Copier l'ID de session" && shortcut == "12345678")));
         assert!(actions(&state).contains(&PaneMenuAction::Rename));
         state.multiple_panes = true;
         state.terminal_output = true;
