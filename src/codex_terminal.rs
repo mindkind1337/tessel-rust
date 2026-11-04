@@ -77,7 +77,65 @@ pub struct Discovery {
     pending: Option<Receiver<Result<Option<String>, String>>>,
 }
 
+/// Local recovery metadata, without a profile path or environment value.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Seed {
+    pub since_ms: i64,
+    pub scope: String,
+}
+
+impl Seed {
+    pub fn valid(&self) -> bool {
+        self.since_ms > 0
+            && self.since_ms
+                <= chrono::Utc::now()
+                    .timestamp_millis()
+                    .saturating_add(86_400_000)
+            && crate::launch_fingerprint::valid(&self.scope)
+    }
+}
+
+fn scope(root: &Path, cwd: &Path) -> String {
+    let normalized = |path: &Path| {
+        let text = path.to_string_lossy();
+        if cfg!(windows) {
+            text.replace('/', "\\")
+                .trim_end_matches('\\')
+                .to_lowercase()
+        } else {
+            text.into_owned()
+        }
+    };
+    crate::launch_fingerprint::of(&normalized(root), &normalized(cwd), &Default::default())
+}
+
 impl Discovery {
+    pub fn seed(&self) -> Seed {
+        Seed {
+            since_ms: self.since_ms,
+            scope: scope(&self.root, &self.cwd),
+        }
+    }
+
+    pub fn restore(prefs: &Preferences, cwd: &Path, seed: &Seed) -> Result<Self, String> {
+        let mut discovery = Self::new(prefs, cwd)?;
+        if !seed.valid() || seed.scope != scope(&discovery.root, cwd) {
+            return Err(
+                "The previous Codex launch belongs to a different profile or folder.".into(),
+            );
+        }
+        if seed.since_ms
+            < chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_sub(30 * 86_400_000)
+        {
+            return Err("The previous Codex launch is outside the discovery window; select its saved conversation explicitly.".into());
+        }
+        discovery.since_ms = seed.since_ms;
+        discovery.next = Instant::now();
+        Ok(discovery)
+    }
     pub fn new(prefs: &Preferences, cwd: &Path) -> Result<Self, String> {
         Ok(Self {
             root: current_root(prefs, cwd)?,
@@ -135,6 +193,37 @@ impl Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_seed_is_local_bounded_and_profile_specific() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = Preferences {
+            env: "CODEX_HOME=profile".into(),
+            ..Default::default()
+        };
+        let seed = Discovery::new(&prefs, dir.path()).unwrap().seed();
+        let encoded = serde_json::to_string(&seed).unwrap();
+        assert!(!encoded.contains("profile"));
+        let decoded: Seed = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(seed, decoded);
+        assert_eq!(
+            Discovery::restore(&prefs, dir.path(), &decoded)
+                .unwrap()
+                .since_ms,
+            seed.since_ms
+        );
+        assert!(Discovery::restore(&prefs, &dir.path().join("other"), &seed).is_err());
+        prefs.env = "CODEX_HOME=another-profile".into();
+        assert!(Discovery::restore(&prefs, dir.path(), &seed).is_err());
+        prefs.env = "CODEX_HOME=profile".into();
+        let mut invalid = seed.clone();
+        invalid.since_ms = chrono::Utc::now().timestamp_millis() - 31 * 86_400_000;
+        assert!(Discovery::restore(&prefs, dir.path(), &invalid).is_err());
+        invalid.since_ms = i64::MAX;
+        assert!(!invalid.valid());
+        invalid = seed;
+        invalid.scope = "raw profile path".into();
+        assert!(!invalid.valid());
+    }
     #[test]
     fn explicit_modes_keep_ownership_and_environment_selects_the_profile() {
         let temp = tempfile::tempdir().unwrap();

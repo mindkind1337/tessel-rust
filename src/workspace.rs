@@ -75,6 +75,8 @@ pub struct NativeThread {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_seed: Option<crate::codex_terminal::Seed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_fingerprint: Option<String>,
@@ -220,6 +222,13 @@ impl Workspace {
             }
         }
         for session in &self.sessions {
+            if let Some(seed) = &session.codex_seed
+                && (!seed.valid()
+                    || session.conversation_id.is_some()
+                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if agent == "codex"))
+            {
+                return Err("Invalid Codex recovery metadata.".into());
+            }
             if let Some(id) = &session.conversation_id
                 && (!crate::claude::valid_uuid(id)
                     || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex"))
@@ -584,6 +593,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         let id = crate::claude::uuid().unwrap();
         state.sessions.push(SavedSession {
+            codex_seed: None,
             conversation_id: Some(id.clone()),
             launch_fingerprint: None,
             session_options: None,
@@ -614,6 +624,25 @@ mod tests {
             codex_loaded.sessions[0].conversation_id,
             loaded.sessions[0].conversation_id
         );
+        let mut recovery = codex_loaded;
+        let seed = crate::codex_terminal::Discovery::new(
+            &crate::agent_preferences::Preferences {
+                env: "CODEX_HOME=synthetic".into(),
+                ..Default::default()
+            },
+            dir.path(),
+        )
+        .unwrap()
+        .seed();
+        recovery.sessions[0].codex_seed = Some(seed.clone());
+        assert!(recovery.validate().is_err()); // ID and pending discovery are exclusive.
+        recovery.sessions[0].conversation_id = None;
+        assert!(recovery.validate().is_ok());
+        let restored: Workspace =
+            serde_json::from_slice(&serde_json::to_vec(&recovery).unwrap()).unwrap();
+        assert_eq!(restored.sessions[0].codex_seed, Some(seed));
+        recovery.sessions[0].launch = crate::launch::Launch::Shell;
+        assert!(recovery.validate().is_err());
         let mut old = serde_json::to_value(&state.sessions[0]).unwrap();
         old.as_object_mut().unwrap().remove("conversation_id");
         assert!(
@@ -636,6 +665,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: Some(options),
@@ -785,6 +815,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
@@ -819,6 +850,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
@@ -853,6 +885,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -877,6 +910,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
@@ -889,6 +923,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -951,6 +986,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -983,6 +1019,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 id,
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,

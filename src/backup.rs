@@ -21,6 +21,7 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
         prefs.env.clear();
     }
     for pane in &mut portable.sessions {
+        pane.codex_seed = None;
         pane.launch_fingerprint = None;
     }
     let bytes = serde_json::to_vec_pretty(&Backup {
@@ -62,6 +63,7 @@ pub fn import(path: &Path) -> Result<Workspace> {
         prefs.reset();
     }
     for pane in &mut backup.workspace.sessions {
+        pane.codex_seed = None;
         pane.launch_fingerprint = None;
     }
     backup.workspace.validate()?;
@@ -111,6 +113,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -148,6 +151,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: Some("a".repeat(64)),
             session_options: Some(serde_json::json!({"model":"gpt-5.6-sol","effort":"high"})),
@@ -158,9 +162,26 @@ mod tests {
             launch: crate::launch::Launch::Agent("codex".into()),
             cwd: dir.path().to_owned(),
         });
+        state.sessions[0].codex_seed = Some(
+            crate::codex_terminal::Discovery::new(
+                &crate::agent_preferences::Preferences {
+                    env: "CODEX_HOME=synthetic".into(),
+                    ..Default::default()
+                },
+                dir.path(),
+            )
+            .unwrap()
+            .seed(),
+        );
         export(&path, &state).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("codex_seed")
+        );
         assert!(export(&path, &Workspace::default()).is_err());
         let mut imported = import(&path).unwrap();
+        assert!(imported.sessions[0].codex_seed.is_none());
         assert!(imported.sessions[0].launch_fingerprint.is_none());
         assert!(
             !std::fs::read_to_string(&path)
@@ -183,7 +204,10 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         value["workspace"]["sessions"][0]["launch_fingerprint"] =
             "untrusted-plaintext-signature".into();
+        value["workspace"]["sessions"][0]["codex_seed"] =
+            serde_json::json!({"since_ms": 1, "scope": "a".repeat(64)});
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(import(&path).unwrap().sessions[0].codex_seed.is_none());
         assert!(
             import(&path).unwrap().sessions[0]
                 .launch_fingerprint

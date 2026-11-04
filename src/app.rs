@@ -18,6 +18,8 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    codex_seed: Option<crate::codex_terminal::Seed>,
+    codex_restore: Option<crate::agent_preferences::Preferences>,
     codex_discovery: Option<crate::codex_terminal::Discovery>,
     restarting: Option<Restart>,
     conversation_id: Option<String>,
@@ -36,7 +38,7 @@ struct Session {
 }
 impl Session {
     fn poll_conversation(&mut self, claimed: &mut std::collections::HashSet<String>) -> bool {
-        if self.terminal.is_none() || self.restarting.is_some() {
+        if (self.terminal.is_none() && self.codex_restore.is_none()) || self.restarting.is_some() {
             return false;
         }
         let Some(discovery) = &mut self.codex_discovery else {
@@ -48,11 +50,22 @@ impl Session {
         match result {
             Ok(Some(id)) if claimed.insert(id.clone()) => {
                 self.conversation_id = Some(id);
+                self.codex_seed = None;
                 self.codex_discovery = None;
+                if let Some(prefs) = self.codex_restore.take() {
+                    self.start(Some(prefs));
+                }
                 true
             }
             Err(error) => {
                 self.error = error;
+                self.codex_discovery = None;
+                self.codex_restore = None;
+                false
+            }
+            Ok(None) if self.codex_restore.is_some() => {
+                self.error = "The previous Codex conversation could not be found; no new conversation was started.".into();
+                self.codex_restore = None;
                 self.codex_discovery = None;
                 false
             }
@@ -129,7 +142,8 @@ impl Session {
         self.pane_name.as_deref().unwrap_or(&self.title)
     }
     fn start(&mut self, prefs: Option<crate::agent_preferences::Preferences>) {
-        if self.restarting.is_some()
+        if self.codex_restore.is_some()
+            || self.restarting.is_some()
             || self.launch.native_chat().is_some()
             || self.terminal.is_some()
             || self.loading.is_some()
@@ -158,14 +172,33 @@ impl Session {
             // Explicit session/mode arguments may select a different thread.
             // The previous automatic ID no longer describes this process.
             self.conversation_id = None;
+            self.codex_seed = None;
         }
         self.codex_discovery = None;
         if codex_managed && self.conversation_id.is_none() {
+            if let Some(seed) = &self.codex_seed {
+                match crate::codex_terminal::Discovery::restore(
+                    prefs.as_ref().expect("Codex preferences"),
+                    &self.cwd,
+                    seed,
+                ) {
+                    Ok(discovery) => {
+                        self.codex_discovery = Some(discovery);
+                        self.codex_restore = prefs;
+                        self.error.clear();
+                    }
+                    Err(error) => self.error = error,
+                }
+                return;
+            }
             match crate::codex_terminal::Discovery::new(
                 prefs.as_ref().expect("Codex preferences"),
                 &self.cwd,
             ) {
-                Ok(discovery) => self.codex_discovery = Some(discovery),
+                Ok(discovery) => {
+                    self.codex_seed = Some(discovery.seed());
+                    self.codex_discovery = Some(discovery);
+                }
                 Err(error) => {
                     self.error = error;
                     return;
@@ -249,6 +282,7 @@ impl Session {
                 Err(e) => {
                     self.error = e;
                     self.codex_discovery = None;
+                    self.codex_seed = None;
                 }
             }
         }
@@ -480,7 +514,9 @@ impl Tessel {
             app.sessions.push(Session {
                 restarting: None,
                 codex_discovery: None,
+                codex_restore: None,
                 settings_changed: false,
+                codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
@@ -650,7 +686,9 @@ impl Tessel {
                     app.sessions.push(Session {
                         restarting: None,
                         codex_discovery: None,
+                        codex_restore: None,
                         settings_changed: false,
+                        codex_seed: None,
                         conversation_id: None,
                         launch_fingerprint: None,
                         session_options: None,
@@ -694,7 +732,9 @@ impl Tessel {
                 app.sessions.push(Session {
                     restarting: None,
                     codex_discovery: None,
+                    codex_restore: None,
                     settings_changed: false,
+                    codex_seed: None,
                     conversation_id: None,
                     launch_fingerprint: None,
                     session_options: None,
@@ -760,6 +800,7 @@ impl Tessel {
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                codex_seed: s.codex_seed.clone(),
                 conversation_id: s.conversation_id.clone(),
                 launch_fingerprint: s.launch_fingerprint.clone(),
                 session_options: s.session_options.clone(),
@@ -1052,7 +1093,9 @@ impl Tessel {
         let mut s = Session {
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
             settings_changed: false,
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -2176,10 +2219,18 @@ impl Tessel {
                             } else if session.restarting.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Stopping terminal processes…"));
+                            } else if session.codex_restore.is_some() {
+                                ui.spinner();
+                                ui.label(tr("Finding the previous conversation…"));
                             } else if session.loading.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Starting…"));
-                            } else if ui.button(tr("Wake / reconnect")).clicked() {
+                            } else {
+                                let wake = ui.button(tr("Wake / reconnect")).clicked();
+                                let fresh = session.codex_seed.is_some() && !session.error.is_empty()
+                                    && ui.button(tr("Start a new conversation")).clicked();
+                                if fresh { session.codex_seed = None; }
+                                if wake || fresh {
                                 let prefs = match &session.launch {
                                     Launch::Agent(id) => {
                                         Some(crate::agent_preferences::for_pane_launch(
@@ -2194,6 +2245,7 @@ impl Tessel {
                                     _ => None,
                                 };
                                 session.start(prefs);
+                                }
                             }
                         });
                 },
@@ -2472,10 +2524,12 @@ impl Tessel {
         self.host_import.is_none()
             && self.store.is_some()
             && !self.file_action_pending
-            && !self
-                .sessions
-                .iter()
-                .any(|s| s.terminal.is_some() || s.loading.is_some() || s.restarting.is_some())
+            && !self.sessions.iter().any(|s| {
+                s.terminal.is_some()
+                    || s.loading.is_some()
+                    || s.restarting.is_some()
+                    || s.codex_restore.is_some()
+            })
             && !self.chats.iter().any(|chat| chat.busy())
             && !self.claude_chats.iter().any(|chat| chat.busy())
             && !self.remote.needs_close_confirmation()
@@ -2533,7 +2587,9 @@ impl Tessel {
             self.sessions.push(Session {
                 restarting: None,
                 codex_discovery: None,
+                codex_restore: None,
                 settings_changed: false,
+                codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: saved.session_options.clone(),
@@ -4303,6 +4359,8 @@ mod tests {
                 preferences: None,
             }),
             codex_discovery: None,
+            codex_restore: None,
+            codex_seed: None,
             conversation_id: None,
             settings_changed: false,
             launch_fingerprint: None,
@@ -4371,6 +4429,8 @@ $lock.Dispose()
         let mut session = Session {
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
+            codex_seed: None,
             conversation_id: None,
             settings_changed: false,
             launch_fingerprint: None,
@@ -4548,7 +4608,9 @@ $lock.Dispose()
         let mut session = Session {
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
             settings_changed: false,
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
             session_options: None,
@@ -4586,7 +4648,9 @@ $lock.Dispose()
             let mut session = Session {
                 restarting: None,
                 codex_discovery: None,
+                codex_restore: None,
                 settings_changed: false,
+                codex_seed: None,
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
@@ -4635,7 +4699,9 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         };
         let mut session = Session {
             codex_discovery: None,
+            codex_restore: None,
             restarting: None,
+            codex_seed: None,
             conversation_id: None,
             settings_changed: false,
             launch_fingerprint: None,
@@ -4652,6 +4718,23 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         };
         session.start(Some(prefs.clone()));
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        // Simulate app closure after the CLI wrote history but before discovery.
+        let seed = session.codex_seed.clone().unwrap();
+        while !session.terminal.as_ref().is_some_and(Terminal::exited) {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session.terminal = None;
+        session.codex_discovery = None;
+        session.codex_seed =
+            Some(serde_json::from_str(&serde_json::to_string(&seed).unwrap()).unwrap());
+        assert!(session.conversation_id.is_none());
+        session.start(Some(prefs.clone()));
+        assert!(session.codex_restore.is_some());
+        assert!(session.loading.is_none());
+        assert!(session.terminal.is_none());
         let mut claimed = std::collections::HashSet::new();
         while session.conversation_id.is_none() {
             session.poll();
@@ -4665,6 +4748,16 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         }
         assert_eq!(session.conversation_id.as_deref(), Some(id));
         assert!(claimed.contains(id));
+        assert!(session.codex_seed.is_none());
+        while !session.terminal.as_ref().is_some_and(Terminal::exited) {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let recovered_args: Vec<String> =
+            serde_json::from_slice(&std::fs::read(dir.path().join("args.json")).unwrap()).unwrap();
+        assert_eq!(recovered_args, ["resume", id]);
         session.terminal = None;
         prefs.args = "--model synthetic-next".into();
         session.start(Some(prefs.clone()));
@@ -4692,10 +4785,32 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         assert!(session.error.contains("not found in this profile"));
         assert!(session.terminal.is_none());
         assert_eq!(session.conversation_id.as_deref(), Some(id));
+        session.conversation_id = None;
+        session.codex_seed = Some(seed);
+        session.start(Some(prefs.clone()));
+        assert!(session.error.contains("different profile or folder"));
+        assert!(session.loading.is_none());
+        assert!(session.codex_restore.is_none());
+        session.codex_seed = Some(
+            crate::codex_terminal::Discovery::new(&prefs, dir.path())
+                .unwrap()
+                .seed(),
+        );
+        session.start(Some(prefs.clone()));
+        while session.codex_restore.is_some() {
+            session.poll_conversation(&mut claimed);
+            assert!(session.loading.is_none());
+            assert!(session.terminal.is_none());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(session.error.contains("no new conversation was started"));
+        assert!(session.codex_seed.is_some());
         prefs.args = "resume explicit-user-session".into();
         session.start(Some(prefs));
         assert!(session.conversation_id.is_none());
         assert!(session.codex_discovery.is_none());
+        assert!(session.codex_seed.is_none());
         while !session.terminal.as_ref().is_some_and(Terminal::exited) {
             session.poll();
             assert!(session.error.is_empty(), "{}", session.error);
@@ -4719,9 +4834,11 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             ..Default::default()
         };
         let mut session = Session {
+            codex_seed: None,
             conversation_id: None,
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -4768,7 +4885,9 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         let mut session = Session {
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
             settings_changed: false,
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
@@ -4802,7 +4921,9 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         let make = |id, launch| Session {
             restarting: None,
             codex_discovery: None,
+            codex_restore: None,
             settings_changed: false,
+            codex_seed: None,
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
