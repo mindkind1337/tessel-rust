@@ -69,6 +69,7 @@ pub mod palette;
 pub mod pane_grid;
 mod pane_header;
 pub mod pane_menu_model;
+pub mod pane_session_model;
 mod pdf;
 mod preview;
 pub mod project_panel;

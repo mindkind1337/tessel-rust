@@ -1,11 +1,8 @@
 //! Opaque local launch identity. Never persist command/environment text in it.
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub fn of(command: &str, args: &str, env: &BTreeMap<String, String>) -> String {
-    let env: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    let canonical = serde_json::to_vec(&(command, args, env)).expect("string tuple encodes");
-    format!("{:x}", Sha256::digest(canonical))
+    crate::pane_session_model::LaunchSignature::of(command, args, env).into_string()
 }
 
 pub fn for_agent(id: &str, prefs: &crate::agent_preferences::Preferences) -> Option<String> {
@@ -19,10 +16,7 @@ pub fn for_agent(id: &str, prefs: &crate::agent_preferences::Preferences) -> Opt
 }
 
 pub fn valid(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    crate::pane_session_model::valid_launch_signature(value)
 }
 
 #[cfg(test)]

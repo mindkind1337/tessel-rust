@@ -22,6 +22,12 @@ The bounded Codex metadata discovery in `src/codex_sessions.rs` adapts the folde
 launch-time and exclusion policy in Tessel's `src/main/agentSessions.js`.
 Its tests use temporary synthetic rollouts, not user conversation records.
 
+The pure per-pane model state and planners in `src/pane_session_model.rs` adapt
+Tessel's `agentSessionOptions.js`, `agentPrefs.js`, `paneLastModel.js`, model and
+session-option labels, `claudeModelSwitch.js`, terminal screen model readers and
+`TerminalPane.vue`, including the Orca-derived option catalog and CLI mappings.
+The reference generator records source-file hashes and only synthetic inputs.
+
 The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
 `RemoteHostForm.vue`, `remoteHosts.js`, and `remoteHosts.css`, which are ported from Orca
