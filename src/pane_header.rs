@@ -37,6 +37,8 @@ pub fn button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui:
 pub struct MenuState<'a> {
     pub title: &'a str,
     pub session_id: Option<&'a str>,
+    pub can_restart: bool,
+    pub launch_stale: bool,
     pub maximized: bool,
     pub multiple_panes: bool,
     pub terminal_output: bool,
@@ -49,6 +51,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
         &PaneActionsMenuInput {
             pane_title: state.title.into(),
             session_id: state.session_id.map(str::to_owned),
+            launch_stale: state.can_restart && state.launch_stale,
             is_maximized: state.maximized,
             can_arrange_panes: state.multiple_panes,
             ..Default::default()
@@ -60,6 +63,7 @@ fn entries(state: &MenuState<'_>) -> Vec<PaneMenuEntry> {
     .filter(|entry| match entry {
         PaneMenuEntry::Item { action, .. } => match action {
             PaneMenuAction::CopyOutput => state.terminal_output,
+            PaneMenuAction::Restart | PaneMenuAction::RestartApplySettings => state.can_restart,
             PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
             PaneMenuAction::Rename => state.can_rename,
             PaneMenuAction::ToggleMaximize
@@ -117,6 +121,8 @@ mod tests {
         let mut state = MenuState {
             title: "Chat",
             session_id: None,
+            can_restart: false,
+            launch_stale: false,
             maximized: false,
             multiple_panes: false,
             terminal_output: false,
@@ -153,5 +159,10 @@ mod tests {
         assert!(menu.contains(&PaneMenuAction::ArrangeGrid));
         assert!(!menu.contains(&PaneMenuAction::Paste));
         assert!(!menu.contains(&PaneMenuAction::SwitchYolo));
+        assert!(!menu.contains(&PaneMenuAction::Restart));
+        state.can_restart = true;
+        state.launch_stale = true;
+        assert!(actions(&state).contains(&PaneMenuAction::Restart));
+        assert!(actions(&state).contains(&PaneMenuAction::RestartApplySettings));
     }
 }

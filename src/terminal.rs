@@ -28,6 +28,40 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    /// Called on the restart worker. No replacement may start until this succeeds.
+    pub fn stop_for_restart(&mut self) -> Result<(), String> {
+        if !cfg!(windows) {
+            return Err("Verified terminal-tree restart is unavailable on this platform.".into());
+        }
+        self.child
+            .kill()
+            .map_err(|_| "Could not stop the terminal process group.")?;
+        self.input.take();
+        let (_, empty) = mpsc::channel();
+        self.output = empty;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let tree_done = self
+                .child
+                .process_tree_exited()
+                .map_err(|_| "Cannot verify terminal process-group termination.")?;
+            let child_done = self
+                .child
+                .try_wait()
+                .map_err(|_| "Cannot verify terminal process termination.")?
+                .is_some();
+            if tree_done && child_done {
+                self.exited = true;
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(
+                    "Terminal processes have not stopped; replacement was not started.".into(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
     pub fn exited(&self) -> bool {
         self.exited
     }
@@ -754,6 +788,80 @@ pub fn configure_fonts(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(windows)]
+    fn restart_stop_accepts_a_process_that_exited_with_code_259() {
+        let mut command = portable_pty::CommandBuilder::new("powershell.exe");
+        command.args(["-NoProfile", "-Command", "exit 259"]);
+        let mut terminal = super::Terminal::spawn_command(command).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !terminal.exited() {
+            terminal.poll();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Exited process was misclassified as running"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        terminal.stop_for_restart().unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn restart_stop_owns_descendants_even_after_the_shell_exits() {
+        use windows::Win32::{
+            Foundation::{CloseHandle, WAIT_OBJECT_0},
+            System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+        };
+        for parent_exits in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let child_script = dir.path().join("child.ps1");
+            std::fs::write(&child_script, r#"[IO.File]::WriteAllText((Join-Path $env:SYNTHETIC_ROOT 'child.pid'), [string]$PID)
+while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
+            let parent = dir.path().join("parent.ps1");
+            std::fs::write(&parent, format!(r#"$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-File', ('"' + (Join-Path $env:SYNTHETIC_ROOT 'child.ps1') + '"')) -WindowStyle Hidden -PassThru
+{}
+"#, if parent_exits { "exit 0" } else { "while ($true) { Start-Sleep -Milliseconds 50 }" })).unwrap();
+            let mut command = portable_pty::CommandBuilder::new("powershell.exe");
+            command.args(["-NoProfile", "-File"]);
+            command.arg(&parent);
+            command.env("SYNTHETIC_ROOT", dir.path());
+            let mut terminal = super::Terminal::spawn_command(command).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let pid = loop {
+                terminal.poll();
+                if let Ok(text) = std::fs::read_to_string(dir.path().join("child.pid"))
+                    && let Ok(pid) = text.parse::<u32>()
+                {
+                    break pid;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Child fixture did not start"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid).unwrap() };
+            if parent_exits {
+                while !terminal.exited() {
+                    terminal.poll();
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Parent fixture did not exit"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(!terminal.child.process_tree_exited().unwrap());
+            }
+            let result = terminal.stop_for_restart();
+            let exited = unsafe { WaitForSingleObject(process, 1000) };
+            unsafe {
+                CloseHandle(process).unwrap();
+            }
+            result.unwrap();
+            assert_eq!(exited, WAIT_OBJECT_0);
+            assert!(terminal.child.process_tree_exited().unwrap());
+        }
+    }
     use super::*;
     #[test]
     fn theme_switches_defaults_and_ansi_without_rewriting_truecolor_or_extended_colors() {

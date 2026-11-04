@@ -13,7 +13,12 @@ use std::{
     time::Duration,
 };
 
+struct Restart {
+    result: Receiver<Result<(), (Terminal, String)>>,
+    preferences: Option<crate::agent_preferences::Preferences>,
+}
 struct Session {
+    restarting: Option<Restart>,
     conversation_id: Option<String>,
     settings_changed: bool,
     launch_fingerprint: Option<String>,
@@ -29,8 +34,46 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn can_restart(&self, prefs: Option<&crate::agent_preferences::Preferences>) -> bool {
+        cfg!(windows)
+            && self.loading.is_none()
+            && self.restarting.is_none()
+            && self.terminal.is_some()
+            && match (&self.launch, prefs) {
+                (Launch::Shell, _) => true,
+                (Launch::Agent(agent), Some(prefs)) => {
+                    self.conversation_id.is_some() && crate::claude_terminal::managed(agent, prefs)
+                }
+                _ => false,
+            }
+    }
+    fn restart(&mut self, prefs: Option<crate::agent_preferences::Preferences>) {
+        if !self.can_restart(prefs.as_ref()) {
+            return;
+        }
+        let Some(mut terminal) = self.terminal.take() else {
+            return;
+        };
+        let (sender, result) = mpsc::channel();
+        self.restarting = Some(Restart {
+            result,
+            preferences: prefs,
+        });
+        self.error.clear();
+        thread::spawn(move || {
+            let result = match terminal.stop_for_restart() {
+                Ok(()) => {
+                    drop(terminal);
+                    Ok(())
+                }
+                Err(error) => Err((terminal, error)),
+            };
+            let _ = sender.send(result);
+        });
+    }
     fn needs_restart(&self) -> bool {
         self.settings_changed
+            && self.restarting.is_none()
             && self.loading.is_none()
             && self
                 .terminal
@@ -38,7 +81,10 @@ impl Session {
                 .is_some_and(|terminal| !terminal.exited())
     }
     fn launch_stale(&self, current: Option<&crate::agent_preferences::Preferences>) -> bool {
-        if self.loading.is_some() || self.terminal.as_ref().is_none_or(Terminal::exited) {
+        if self.restarting.is_some()
+            || self.loading.is_some()
+            || self.terminal.as_ref().is_none_or(Terminal::exited)
+        {
             return false;
         }
         let (Launch::Agent(id), Some(before), Some(current)) =
@@ -52,7 +98,10 @@ impl Session {
         self.pane_name.as_deref().unwrap_or(&self.title)
     }
     fn start(&mut self, prefs: Option<crate::agent_preferences::Preferences>) {
-        if self.launch.native_chat().is_some() || self.terminal.is_some() || self.loading.is_some()
+        if self.restarting.is_some()
+            || self.launch.native_chat().is_some()
+            || self.terminal.is_some()
+            || self.loading.is_some()
         {
             return;
         }
@@ -95,6 +144,32 @@ impl Session {
     }
     fn poll(&mut self) -> bool {
         let mut changed = false;
+        let stopped = match self
+            .restarting
+            .as_ref()
+            .map(|pending| pending.result.try_recv())
+        {
+            Some(Ok(result)) => Some(Ok(result)),
+            Some(Err(mpsc::TryRecvError::Disconnected)) => Some(Err(
+                "Terminal restart stopped without confirmation; no replacement was started."
+                    .to_string(),
+            )),
+            _ => None,
+        };
+        if let Some(result) = stopped {
+            changed = true;
+            let pending = self.restarting.take().expect("pending restart");
+            match result {
+                Ok(Ok(())) => {
+                    self.start(pending.preferences);
+                }
+                Ok(Err((terminal, error))) => {
+                    self.terminal = Some(terminal);
+                    self.error = error;
+                }
+                Err(error) => self.error = error,
+            }
+        }
         let result = self
             .loading
             .as_ref()
@@ -342,6 +417,7 @@ impl Tessel {
         for saved in &app.state.sessions {
             app.next_session = app.next_session.max(saved.id + 1);
             app.sessions.push(Session {
+                restarting: None,
                 settings_changed: false,
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
@@ -510,6 +586,7 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        restarting: None,
                         settings_changed: false,
                         conversation_id: None,
                         launch_fingerprint: None,
@@ -529,10 +606,17 @@ impl Tessel {
                     if std::env::args().any(|arg| arg == "--restart-fixture") {
                         app.overlay = None;
                         let session = app.sessions.last_mut().expect("synthetic terminal");
-                        session.launch = Launch::Agent("codex".into());
+                        session.launch = Launch::Agent("claude".into());
+                        session.conversation_id =
+                            Some("12345678-1234-4234-8234-123456789abc".into());
                         session.title = "Synthetic agent".into();
-                        session.launch_fingerprint =
-                            crate::launch_fingerprint::for_agent("codex", &Default::default());
+                        session.launch_fingerprint = crate::launch_fingerprint::for_agent(
+                            "claude",
+                            &crate::agent_preferences::Preferences {
+                                args: "--model synthetic-previous-model".into(),
+                                ..Default::default()
+                            },
+                        );
                         session.settings_changed = true;
                     }
                 }
@@ -545,6 +629,7 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    restarting: None,
                     settings_changed: false,
                     conversation_id: None,
                     launch_fingerprint: None,
@@ -895,6 +980,7 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            restarting: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,
@@ -1814,7 +1900,22 @@ impl Tessel {
                                     })
                                     .or(session.conversation_id.as_deref())
                                     .map(str::to_owned);
+                                let pane_prefs = match &session.launch {
+                                    Launch::Agent(agent) => {
+                                        Some(crate::agent_preferences::for_pane_launch(
+                                            &self.state,
+                                            agent,
+                                            self.model_discovery
+                                                .as_ref()
+                                                .and_then(|d| d.models(agent)),
+                                            session.session_options.as_ref(),
+                                        ))
+                                    }
+                                    _ => None,
+                                };
                                 let menu = crate::pane_header::MenuState {
+                                    can_restart: session.can_restart(pane_prefs.as_ref()),
+                                    launch_stale: session.needs_restart(),
                                     session_id: conversation_id.as_deref(),
                                     title: session.pane_name.as_deref().unwrap_or(&session.title),
                                     maximized: maximized.is_some(),
@@ -1881,11 +1982,12 @@ impl Tessel {
                                             )
                                             .inner;
                                         if show_badge {
-                                            ui.label(
-                                                egui::RichText::new(badge)
-                                                    .font(font)
-                                                    .color(ui.visuals().warn_fg_color),
-                                            );
+                                            let text = egui::RichText::new(badge).font(font).color(ui.visuals().warn_fg_color);
+                                            if menu.can_restart {
+                                                if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                                                    action = Some(crate::pane_menu_model::PaneMenuAction::RestartApplySettings);
+                                                }
+                                            } else { ui.label(text); }
                                         }
                                         response
                                     },
@@ -1904,7 +2006,9 @@ impl Tessel {
                                     if let Some(selected) = crate::pane_header::show(ui, &menu) {
                                         action = Some(selected);
                                     }
-                                    if session.launch.native_chat().is_none()
+                                    if session.restarting.is_none()
+                                        && session.loading.is_none()
+                                        && session.launch.native_chat().is_none()
                                         && ui.button(tr("Sleep")).clicked()
                                     {
                                         session.terminal = None;
@@ -1915,6 +2019,10 @@ impl Tessel {
                                 if let Some(action) = action {
                                     use crate::pane_menu_model::PaneMenuAction;
                                     match action {
+                                        PaneMenuAction::Restart
+                                        | PaneMenuAction::RestartApplySettings => {
+                                            session.restart(pane_prefs);
+                                        }
                                         PaneMenuAction::CopySessionId => {
                                             if let Some(id) = &conversation_id {
                                                 ui.ctx().copy_text(id.clone());
@@ -1994,6 +2102,9 @@ impl Tessel {
                                     });
                             } else if let Some(terminal) = &mut session.terminal {
                                 terminal.show(ui, self.state.font_size);
+                            } else if session.restarting.is_some() {
+                                ui.spinner();
+                                ui.label(tr("Stopping terminal processes…"));
                             } else if session.loading.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Starting…"));
@@ -2293,7 +2404,7 @@ impl Tessel {
             && !self
                 .sessions
                 .iter()
-                .any(|s| s.terminal.is_some() || s.loading.is_some())
+                .any(|s| s.terminal.is_some() || s.loading.is_some() || s.restarting.is_some())
             && !self.chats.iter().any(|chat| chat.busy())
             && !self.claude_chats.iter().any(|chat| chat.busy())
             && !self.remote.needs_close_confirmation()
@@ -2349,6 +2460,7 @@ impl Tessel {
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                restarting: None,
                 settings_changed: false,
                 conversation_id: saved.conversation_id.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
@@ -3643,6 +3755,31 @@ impl eframe::App for Tessel {
                 }
             }
         }
+        if take_fresh_shortcut(
+            ctx,
+            keyboard_free
+                && !confirmation_open
+                && !self.command_palette.open
+                && self.overlay.is_none()
+                && self.view == View::Work,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::R,
+        ) && let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project)
+        {
+            let prefs = match &session.launch {
+                Launch::Agent(agent) => Some(crate::agent_preferences::for_pane_launch(
+                    &self.state,
+                    agent,
+                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                    session.session_options.as_ref(),
+                )),
+                _ => None,
+            };
+            session.restart(prefs);
+        }
         if take_close_pane_shortcut(
             ctx,
             keyboard_free
@@ -3943,6 +4080,8 @@ impl eframe::App for Tessel {
                     &crate::pane_header::MenuState {
                         title: "Terminal",
                         session_id: Some("12345678-1234-4234-8234-123456789abc"),
+                        can_restart: true,
+                        launch_stale: true,
                         maximized: false,
                         multiple_panes: true,
                         terminal_output: true,
@@ -3992,16 +4131,24 @@ fn take_close_pane_shortcut(ctx: &egui::Context, allowed: bool) -> bool {
 }
 
 fn take_close_shortcut(ctx: &egui::Context, allowed: bool, modifiers: egui::Modifiers) -> bool {
+    take_fresh_shortcut(ctx, allowed, modifiers, egui::Key::W)
+}
+fn take_fresh_shortcut(
+    ctx: &egui::Context,
+    allowed: bool,
+    modifiers: egui::Modifiers,
+    key: egui::Key,
+) -> bool {
     if !allowed {
         return false;
     }
     ctx.input_mut(|input| {
         let fresh = input.events.iter().any(|event| matches!(event,
-            egui::Event::Key { key: egui::Key::W, pressed: true, repeat: false, modifiers: actual, .. }
-                if actual.matches_exact(modifiers)));
+            egui::Event::Key { key: actual_key, pressed: true, repeat: false, modifiers: actual, .. }
+                if *actual_key == key && actual.matches_exact(modifiers)));
         input.events.retain(|event| !matches!(event,
-            egui::Event::Key { key: egui::Key::W, pressed: true, modifiers: actual, .. }
-                if actual.matches_exact(modifiers)));
+            egui::Event::Key { key: actual_key, pressed: true, modifiers: actual, .. }
+                if *actual_key == key && actual.matches_exact(modifiers)));
         fresh
     })
 }
@@ -4041,6 +4188,170 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restart_shortcut_requires_a_fresh_press_and_unblocked_workspace() {
+        let ctx = egui::Context::default();
+        let frame = |pressed, allowed| {
+            let mut restart = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::R,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    restart = take_fresh_shortcut(
+                        ctx,
+                        allowed,
+                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Key::R,
+                    );
+                },
+            );
+            restart
+        };
+        assert!(!frame(true, false));
+        assert!(!frame(true, true));
+        assert!(!frame(false, true));
+        assert!(frame(true, true));
+        assert!(!frame(true, true));
+    }
+    #[test]
+    fn restart_failure_restores_the_old_terminal_without_starting_a_replacement() {
+        let terminal = Terminal::spawn().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let mut session = Session {
+            restarting: Some(Restart {
+                result: receiver,
+                preferences: None,
+            }),
+            conversation_id: None,
+            settings_changed: false,
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic failure".into(),
+            launch: Launch::Shell,
+            cwd: std::env::temp_dir(),
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        assert!(!session.poll());
+        sender
+            .send(Err((terminal, "synthetic stop failure".into())))
+            .ok()
+            .unwrap();
+        assert!(session.poll());
+        assert!(session.restarting.is_none());
+        assert!(session.loading.is_none());
+        assert!(session.terminal.is_some());
+        assert_eq!(session.error, "synthetic stop failure");
+        session.terminal.take();
+        let (sender, result) = mpsc::channel();
+        session.restarting = Some(Restart {
+            result,
+            preferences: None,
+        });
+        drop(sender);
+        assert!(session.poll());
+        assert!(session.restarting.is_none());
+        assert!(session.loading.is_none());
+        assert!(session.terminal.is_none());
+        assert!(session.error.contains("without confirmation"));
+    }
+    #[test]
+    #[cfg(windows)]
+    fn restart_waits_for_old_cli_and_reuses_the_conversation_with_new_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("restart fixture.ps1");
+        std::fs::write(&script, r#"$root = $env:SYNTHETIC_ROOT
+$lock = [IO.File]::Open((Join-Path $root 'exclusive.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+if (!$lock) { exit 2 }
+Add-Content -LiteralPath (Join-Path $root 'invocations.txt') -Value $args[0]
+if ($args[0] -eq '--session-id') {
+  $project = Join-Path $root 'projects/fixture'
+  New-Item -ItemType Directory -Path $project -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $project ($args[1] + '.jsonl')) -Value 'synthetic'
+  Set-Content -LiteralPath (Join-Path $root 'ready') -Value 'ready'
+  while ($true) { Start-Sleep -Milliseconds 50 }
+}
+Set-Content -LiteralPath (Join-Path $root 'resumed.json') -Value (ConvertTo-Json -InputObject @($args))
+$lock.Dispose()
+"#).unwrap();
+        let mut prefs = crate::agent_preferences::Preferences {
+            command: format!("& '{}'", script.display().to_string().replace('\'', "''")),
+            env: format!(
+                "CLAUDE_CONFIG_DIR={}\nSYNTHETIC_ROOT={}",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            ..Default::default()
+        };
+        let mut session = Session {
+            restarting: None,
+            conversation_id: None,
+            settings_changed: false,
+            launch_fingerprint: None,
+            session_options: None,
+            pane_name: None,
+            id: 1,
+            project: None,
+            title: "Synthetic".into(),
+            launch: Launch::Agent("claude".into()),
+            cwd: dir.path().to_owned(),
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        session.start(Some(prefs.clone()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !dir.path().join("ready").exists() {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session.poll();
+        let id = session.conversation_id.clone().unwrap();
+        prefs.args = "--model synthetic".into();
+        assert!(session.can_restart(Some(&prefs)));
+        session.restart(Some(prefs.clone()));
+        assert!(session.restarting.is_some());
+        assert!(session.terminal.is_none());
+        assert!(!session.can_restart(Some(&prefs)));
+        session.restart(Some(prefs.clone())); // A repeated request cannot create a second worker.
+        loop {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            if session.terminal.as_ref().is_some_and(Terminal::exited) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(session.conversation_id.as_deref(), Some(id.as_str()));
+        let args: Vec<String> =
+            serde_json::from_slice(&std::fs::read(dir.path().join("resumed.json")).unwrap())
+                .unwrap();
+        assert_eq!(args, ["--resume", &id, "--model", "synthetic"]);
+        let runs = std::fs::read_to_string(dir.path().join("invocations.txt")).unwrap();
+        assert_eq!(
+            runs.lines().collect::<Vec<_>>(),
+            ["--session-id", "--resume"]
+        );
+        assert_eq!(
+            session.launch_fingerprint,
+            crate::launch_fingerprint::for_agent("claude", &prefs)
+        );
+    }
 
     #[test]
     fn closing_documents_ignores_held_keys_and_pane_close_modifiers() {
@@ -4161,6 +4472,7 @@ mod tests {
     fn restart_status_requires_a_running_known_launch_and_tracks_effective_changes() {
         let prefs = crate::agent_preferences::Preferences::default();
         let mut session = Session {
+            restarting: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
@@ -4197,6 +4509,7 @@ mod tests {
     fn native_panes_cannot_start_pty_workers() {
         for launch in [Launch::CodexChat, Launch::ClaudeChat] {
             let mut session = Session {
+                restarting: None,
                 settings_changed: false,
                 conversation_id: None,
                 launch_fingerprint: None,
@@ -4235,6 +4548,7 @@ mod tests {
         };
         let mut session = Session {
             conversation_id: None,
+            restarting: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -4279,6 +4593,7 @@ mod tests {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            restarting: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,
@@ -4311,6 +4626,7 @@ mod tests {
     #[test]
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
+            restarting: None,
             settings_changed: false,
             conversation_id: None,
             launch_fingerprint: None,

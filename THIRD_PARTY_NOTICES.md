@@ -3,6 +3,14 @@
 Tessel Rust includes or adapts the third-party material identified below. The original
 copyright and permission notices are reproduced in full.
 
+## portable-pty
+
+`vendor/portable-pty` contains portable-pty 0.9.0 by Wez Furlong, under the MIT
+license reproduced in `vendor/portable-pty/LICENSE.md`. Tessel's Windows patch
+starts the child suspended, assigns a dedicated process job before execution,
+terminates that job, and exposes verified descendant exit accounting. The patch
+and upgrade requirements are recorded in `vendor/portable-pty/TESSEL_PATCH.md`.
+
 ## Orca
 
 The pure conversation resume planner in `src/agent_resume.rs` adapts Tessel's
