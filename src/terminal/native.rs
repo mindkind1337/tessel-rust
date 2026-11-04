@@ -1,6 +1,8 @@
 //! Native host terminal ownership behind the terminal facade (Windows owner store).
 //! Opening, commands and persistence run on workers; a frame only adopts and drains.
-use super::{host_emulator, host_events, host_lease_keeper, host_opening, host_worker};
+use super::{
+    host_emulator, host_events, host_lease_desk, host_lease_keeper, host_opening, host_worker,
+};
 use crate::host_opening_adapter::{HostConnection, OwnerStore};
 use std::sync::Arc;
 use std::{
@@ -24,7 +26,12 @@ pub(super) struct Native {
     pub feed: Option<host_events::Feed>,
     pub control: Option<host_worker::Control>,
     pub saved: bool,
-    pub retry_save: Option<host_lease_keeper::RetrySave>,
+    desk: host_lease_desk::DeskHandle,
+    openings: host_opening::Openings,
+    registration: Option<Box<dyn Send>>,
+    /// Informational only: reconcile with encrypted store before cleanup. A
+    /// newer lease may supersede creation without consuming this intent.
+    creation_record: Option<String>,
     awaiting: Option<host_opening::Opened<HostConnection>>,
     cancelling: Option<std::sync::mpsc::Receiver<Failure>>,
     admission_paused: bool,
@@ -43,18 +50,26 @@ impl Native {
     pub fn open(
         host: HostConnection,
         target: host_opening::Target,
-        keeper: Arc<host_lease_keeper::Keeper>,
+        runtime: &super::host_runtime::Runtime,
         repaint: eframe::egui::Context,
     ) -> Self {
+        let keeper = runtime.keeper();
+        let desk = runtime.desk();
+        let openings = runtime.openings();
         let alias = match &target {
             host_opening::Target::New(spec) => spec.alias.clone(),
             host_opening::Target::Existing { alias, .. } => alias.clone(),
         };
         let wake = repaint.clone();
-        let result = host_opening::open(
+        let result = host_opening::open_managed(
             host.clone(),
             Arc::new(OwnerStore),
             target.clone(),
+            host_opening::Management {
+                keeper: keeper.clone(),
+                registry: Arc::new(desk.clone()),
+                openings: openings.clone(),
+            },
             move || wake.request_repaint(),
         );
         let (pending, failure) = match result {
@@ -70,7 +85,10 @@ impl Native {
             feed: None,
             control: None,
             saved: true,
-            retry_save: None,
+            desk,
+            openings,
+            registration: None,
+            creation_record: None,
             awaiting: None,
             cancelling: None,
             admission_paused: false,
@@ -136,10 +154,15 @@ impl Native {
                 retry.open(move || wake.request_repaint())
             }
             Failure::Capacity | Failure::NotConnected | Failure::StoreUnavailable => {
-                host_opening::open(
+                host_opening::open_managed(
                     self.host.clone(),
                     Arc::new(OwnerStore),
                     self.target.clone(),
+                    host_opening::Management {
+                        keeper: self.keeper.clone(),
+                        registry: Arc::new(self.desk.clone()),
+                        openings: self.openings.clone(),
+                    },
                     move || wake.request_repaint(),
                 )
             }
@@ -177,23 +200,35 @@ impl Native {
                 .as_ref()
                 .is_some_and(host_worker::Control::online),
             can_retry_opening: self.can_retry_opening(),
-            can_retry_save_lease: self.retry_save.is_some(),
+            can_retry_save_lease: self.slot.as_ref().is_some_and(|slot| {
+                matches!(
+                    self.desk.view(slot),
+                    host_lease_desk::View::NotSaved | host_lease_desk::View::NotForgotten
+                )
+            }),
             ..Default::default()
         }
     }
 
     pub fn retry_save(&mut self) {
-        let Some(retry) = self.retry_save.take() else {
-            return;
-        };
-        match self.keeper.retry_save(retry) {
-            Ok(()) | Err(host_lease_keeper::RetryRefused::Superseded) => {}
-            Err(
-                host_lease_keeper::RetryRefused::Busy(retry)
-                | host_lease_keeper::RetryRefused::Closed(retry),
-            ) => {
-                self.retry_save = Some(retry);
-            }
+        if let Some(slot) = &self.slot {
+            self.desk.retry(slot);
+        }
+    }
+
+    pub fn lease_access(&self) -> crate::host_terminal_panel::LeaseSaveState {
+        use crate::host_terminal_panel::LeaseSaveState as Access;
+        let view = self.slot.as_ref().map(|slot| self.desk.view(slot));
+        match view {
+            Some(host_lease_desk::View::NotSaved) => Access::NotSaved,
+            Some(host_lease_desk::View::Superseded) => Access::Superseded,
+            Some(
+                host_lease_desk::View::Saved
+                | host_lease_desk::View::Forgotten
+                | host_lease_desk::View::Ending,
+            ) => Access::Ok,
+            _ if !self.saved => Access::Saving,
+            _ => Access::Ok,
         }
     }
 
@@ -229,7 +264,7 @@ impl Native {
                 Failure::Cancelled => {
                     return Phase::Lost {
                         reason: LostReason::StartFailed {
-                            detail: "Opening cancelled".into(),
+                            detail: crate::i18n::tr("Opening cancelled").into(),
                         },
                     };
                 }
@@ -290,7 +325,7 @@ impl Native {
                     }
                 } else if !feed.screen_ready() {
                     Phase::Opening {
-                        note: Some("Restoring remote screen".into()),
+                        note: Some(crate::i18n::tr("Restoring remote screen").into()),
                     }
                 } else if self.writable() {
                     Phase::Live
@@ -313,7 +348,7 @@ impl Native {
     pub fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
         let bytes = zeroize::Zeroizing::new(bytes);
         if !self.writable() {
-            return Err("Remote terminal is not writable".into());
+            return Err(crate::i18n::tr("Remote terminal is not writable").into());
         }
         self.active_until
             .set(Instant::now() + Duration::from_secs(1));
@@ -323,12 +358,12 @@ impl Native {
             .as_ref()
             .expect("writable control")
             .input(&bytes)
-            .map_err(|_| "Remote input was not queued".into())
+            .map_err(|_| crate::i18n::tr("Remote input was not queued").into())
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<(), String> {
         if !self.writable() {
-            return Err("Remote terminal is not writable".into());
+            return Err(crate::i18n::tr("Remote terminal is not writable").into());
         }
         if self.requested_size == Some((rows, cols)) {
             return Ok(());
@@ -337,7 +372,7 @@ impl Native {
             .as_ref()
             .expect("writable control")
             .resize(rows, cols)
-            .map_err(|_| "Remote resize was not queued".to_owned())?;
+            .map_err(|_| crate::i18n::tr("Remote resize was not queued").to_owned())?;
         self.requested_size = Some((rows, cols));
         Ok(())
     }
@@ -350,6 +385,15 @@ impl Native {
         query_tail: &mut Vec<u8>,
         status: &mut String,
     ) -> bool {
+        if let Some(slot) = &self.slot {
+            match self.desk.view(slot) {
+                host_lease_desk::View::Saved | host_lease_desk::View::Forgotten => {
+                    self.saved = true
+                }
+                host_lease_desk::View::NotSaved => self.saved = false,
+                _ => {}
+            }
+        }
         if let Some(receiver) = &self.cancelling {
             match receiver.try_recv() {
                 Ok(failure) => {
@@ -389,6 +433,7 @@ impl Native {
             self.saved = opened.saved;
             let mut admitted = true;
             if !opened.saved
+                && !opened.queued
                 && let Some(lease) = opened.recovery_lease.take()
             {
                 if let Some(pending) = opened.pending.take() {
@@ -406,9 +451,12 @@ impl Native {
                 }
             }
             if !admitted {
-                *status = "Waiting to queue remote terminal access for storage".into();
+                *status =
+                    crate::i18n::tr("Waiting to queue remote terminal access for storage").into();
                 self.awaiting = Some(opened);
             } else {
+                self.registration = opened.registration.take();
+                self.creation_record = opened.pending.take();
                 // A new attachment starts with a fresh emulator, even when the
                 // server chooses byte replay rather than a screen snapshot.
                 let (rows, cols) = match &self.target {
@@ -447,6 +495,10 @@ impl Native {
             while let Some(outcome) = control.outcome() {
                 match outcome {
                     host_worker::Outcome::ControlTaken => {
+                        self.saved = false;
+                        if let host_opening::Target::Existing { resume, .. } = &mut self.target {
+                            *resume = true;
+                        }
                         if let Some(feed) = &mut self.feed {
                             feed.lease = true;
                         }
@@ -456,13 +508,17 @@ impl Native {
                         *status = crate::i18n::tr("Waiting for the remote program to exit").into();
                     }
                     host_worker::Outcome::InputUncertain => {
-                        *status = "Remote input may have arrived; it was not sent again".into()
+                        *status =
+                            crate::i18n::tr("Remote input may have arrived; it was not sent again")
+                                .into()
                     }
                     host_worker::Outcome::Busy => {
-                        *status = "Terminal access storage is busy; retry the action".into()
+                        *status =
+                            crate::i18n::tr("Terminal access storage is busy; retry the action")
+                                .into()
                     }
                     host_worker::Outcome::Refused | host_worker::Outcome::Failed => {
-                        *status = "Remote terminal action was not confirmed".into()
+                        *status = crate::i18n::tr("Remote terminal action was not confirmed").into()
                     }
                 }
             }
@@ -480,9 +536,13 @@ impl Native {
                     if let Some(error) =
                         host_emulator::apply(parser, query_tail, bytes, can_reply, |reply| {
                             control
-                                .ok_or_else(|| "Remote terminal detached".to_owned())?
+                                .ok_or_else(|| {
+                                    crate::i18n::tr("Remote terminal detached").to_owned()
+                                })?
                                 .input(&reply)
-                                .map_err(|_| "Remote cursor reply was not queued".to_owned())
+                                .map_err(|_| {
+                                    crate::i18n::tr("Remote cursor reply was not queued").to_owned()
+                                })
                         })
                     {
                         *status = error;
@@ -496,7 +556,6 @@ impl Native {
             if feed.needs_detach() {
                 self.control.take();
                 if !self.end_observed {
-                    self.end_observed = true;
                     self.forget = match feed.state {
                         host_events::State::Exited { .. } => {
                             Some(host_lease_keeper::Ended::ExitReceived)
@@ -509,6 +568,7 @@ impl Native {
                             .map(|current| host_lease_keeper::Ended::EpochChanged { current }),
                         _ => None,
                     };
+                    self.end_observed = self.forget.is_some();
                 }
             }
         }
@@ -525,10 +585,14 @@ impl Native {
                     }
                 }
             };
-            match self.keeper.forget_ended(slot.clone(), proof) {
-                Ok(()) => self.retry_save = None,
-                Err(host_lease_keeper::Refusal::Busy) => self.forget = Some(retry),
-                Err(_) => *status = "Ended terminal access could not be queued for cleanup".into(),
+            match self.desk.hand_proof(slot.clone(), proof) {
+                Ok(()) => {}
+                Err(host_lease_desk::ProofRefused::Full(_, _)) => self.forget = Some(retry),
+                Err(_) => {
+                    *status =
+                        crate::i18n::tr("Ended terminal access could not be queued for cleanup")
+                            .into()
+                }
             }
         }
         if self.pending.is_some()
@@ -536,6 +600,11 @@ impl Native {
             || self.awaiting.is_some()
             || self.control.is_some()
             || self.forget.is_some()
+            || !self.end_observed
+                && self
+                    .feed
+                    .as_ref()
+                    .is_some_and(host_events::Feed::needs_detach)
         {
             if changed {
                 self.active_until
@@ -554,5 +623,18 @@ impl Native {
             self.requested_size = None;
         }
         changed
+    }
+}
+
+impl Drop for Native {
+    fn drop(&mut self) {
+        if let (Some(slot), Some(proof)) = (&self.slot, self.forget.take())
+            && matches!(
+                self.desk.hand_proof(slot.clone(), proof),
+                Err(host_lease_desk::ProofRefused::Full(_, _))
+            )
+        {
+            self.desk.count_unrecorded_end();
+        }
     }
 }

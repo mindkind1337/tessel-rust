@@ -101,6 +101,7 @@ impl Session {
     }
     fn can_restart(&self, prefs: Option<&crate::agent_preferences::Preferences>) -> bool {
         cfg!(windows)
+            && self.native_host.is_none()
             && self.loading.is_none()
             && self.restarting.is_none()
             && self.terminal.is_some()
@@ -2363,6 +2364,7 @@ impl Tessel {
                                     }
                                     if session.restarting.is_none()
                                         && session.loading.is_none()
+                                        && session.native_host.is_none()
                                         && session.launch.native_chat().is_none()
                                         && ui.button(tr("Sleep")).clicked()
                                     {

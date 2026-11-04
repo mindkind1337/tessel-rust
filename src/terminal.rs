@@ -8,6 +8,7 @@ pub mod host_history;
 pub mod host_lease_desk;
 pub mod host_lease_keeper;
 pub mod host_opening;
+pub mod host_runtime;
 pub mod host_worker;
 mod local;
 mod mouse;
@@ -75,6 +76,13 @@ impl Terminal {
         let backend::Backend::Native(native) = &mut self.backend else {
             return true;
         };
+        // A global dialog owns keyboard and painting while this pane is disabled.
+        // In particular, a pane's pending close prompt must not consume its Escape.
+        if !ui.is_enabled() {
+            self.native_panel.release_key_latches(ui.ctx());
+            native.allow_replies = false;
+            return false;
+        }
         let phase = native.phase();
         let epoch = native.host.client.epoch();
         let input = HostTerminalInput {
@@ -84,21 +92,21 @@ impl Terminal {
             phase: &phase,
             capabilities: native.capabilities(),
             terminal_focused: response.has_focus() && ui.is_enabled(),
-            unsaved_lease: !native.saved,
+            lease_save: native.lease_access(),
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: self.parser.screen().scrollback(),
             french: crate::i18n::is_french(),
         };
+        let layer = egui::LayerId::new(ui.layer_id().order, response.id.with("host-overlay-layer"));
+        ui.ctx().set_sublayer(ui.layer_id(), layer);
         let mut overlay = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt(response.id.with("host-overlay-ui"))
-                .layer_id(egui::LayerId::new(
-                    egui::Order::Foreground,
-                    response.id.with("host-overlay-layer"),
-                ))
+                .layer_id(layer)
                 .max_rect(rect),
         );
+        overlay.set_clip_rect(ui.clip_rect().intersect(rect));
         let action = self
             .native_panel
             .intercept_key(ui.ctx(), &input)
@@ -113,6 +121,11 @@ impl Terminal {
             Some(Action::TakeControl) => {
                 if let Some(control) = &native.control {
                     let _ = control.take_control();
+                }
+            }
+            Some(Action::Terminate) => {
+                if let Some(control) = &native.control {
+                    let _ = control.terminate();
                 }
             }
             Some(Action::Detach) if native.cancel_opening(&mut self.status) => {}
@@ -255,11 +268,11 @@ impl Terminal {
     pub fn spawn_native(
         host: crate::host_opening_adapter::HostConnection,
         target: host_opening::Target,
-        keeper: std::sync::Arc<host_lease_keeper::Keeper>,
+        runtime: &host_runtime::Runtime,
         context: egui::Context,
     ) -> Self {
         Self::with_backend(backend::Backend::Native(Box::new(native::Native::open(
-            host, target, keeper, context,
+            host, target, runtime, context,
         ))))
     }
 
@@ -348,7 +361,7 @@ impl Terminal {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {
-        if !self.status.is_empty() {
+        if !self.status.is_empty() && matches!(self.backend, backend::Backend::Local(_)) {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
         }
         let font = egui::FontId::monospace(font_size);
@@ -383,14 +396,16 @@ impl Terminal {
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
         self.widget_id = Some(response.id);
         #[cfg(windows)]
-        let accepts_input = self.native_overlays(ui, rect, &response) && self.backend.writable();
+        let accepts_input =
+            self.native_overlays(ui, rect, &response) && ui.is_enabled() && self.backend.writable();
         #[cfg(not(windows))]
         let accepts_input = ui.is_enabled() && self.backend.writable();
         #[cfg(windows)]
         let overlay_pointer = matches!(self.backend, backend::Backend::Native(_))
             && ui.input(|i| {
                 i.pointer
-                    .hover_pos()
+                    .interact_pos()
+                    .or_else(|| i.pointer.hover_pos())
                     .is_some_and(|p| self.native_panel.pointer_over_overlay(p))
             });
         #[cfg(not(windows))]
@@ -414,10 +429,10 @@ impl Terminal {
                 memory.set_focus_lock_filter(
                     response.id,
                     egui::EventFilter {
-                        tab: true,
-                        horizontal_arrows: true,
-                        vertical_arrows: true,
-                        escape: true,
+                        tab: accepts_input,
+                        horizontal_arrows: accepts_input,
+                        vertical_arrows: accepts_input,
+                        escape: accepts_input,
                     },
                 )
             });
@@ -429,7 +444,7 @@ impl Terminal {
                 end: (1, 9),
             });
         }
-        if response.lost_focus() {
+        if response.lost_focus() || !accepts_input {
             self.composition.clear();
             self.composing = false;
         }
@@ -440,7 +455,8 @@ impl Terminal {
         };
         let shift = ui.input(|i| i.modifiers.shift);
         let tracking = mode != vt100::MouseProtocolMode::None;
-        let mouse_bytes = if !ui.is_enabled() {
+        let release_mouse = !accepts_input || overlay_pointer;
+        let mouse_bytes = if release_mouse {
             self.mouse
                 .release(self.parser.screen().mouse_protocol_encoding())
         } else {
@@ -460,7 +476,11 @@ impl Terminal {
                 )
             })
         };
-        if accepts_input && !overlay_pointer && !mouse_bytes.is_empty() {
+        // Release only a previously held TUI button when a dialog takes input.
+        // A lost lease still forbids even this cleanup from reaching the host.
+        if (accepts_input && !overlay_pointer || release_mouse && self.backend.writable())
+            && !mouse_bytes.is_empty()
+        {
             self.selection = None;
             if let Err(e) = self.send(mouse_bytes) {
                 self.status = e;

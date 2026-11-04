@@ -342,6 +342,27 @@ pub struct HostTerminalCapabilities {
     pub can_retry_save_lease: bool,
 }
 
+/// Pure local encrypted lease-persistence status for this pane (`host_lease_desk::View` projection).
+///
+/// Strictly distinct from [`HostTerminalInput::persistence_warning`] (`survives_logout` on the
+/// remote host) and **never** implies write or terminate authority (authority comes strictly from
+/// [`HostTerminalInput::capabilities`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LeaseSaveState {
+    /// Local lease is persisted (`View::Saved`), ended (`Forgotten`/`Ending`), or not applicable.
+    #[default]
+    Ok,
+    /// Local lease save is in progress or queued for retry (`!saved && View::Unknown | View::Retrying`).
+    /// Kept visually silent so normal disk writes never flash a transient banner.
+    Saving,
+    /// Local lease save failed (`View::NotSaved`); displays a warning banner and offers
+    /// [`HostTerminalAction::RetrySaveLease`] when `capabilities.can_retry_save_lease` is `true`.
+    NotSaved,
+    /// Creation access was superseded by a newer control request (`View::Superseded`); neither
+    /// saved nor failed, rendered as a neutral notice without retry.
+    Superseded,
+}
+
 /// Borrowed frame input for [`HostTerminalPanel`].
 #[derive(Clone, Copy, Debug)]
 pub struct HostTerminalInput<'a> {
@@ -355,11 +376,10 @@ pub struct HostTerminalInput<'a> {
     /// owns keyboard focus. Gates `Enter` -> `RestartNew` in `Exited` and write-attempt flashes in
     /// `ReadOnly` so unfocused split panes never steal keys or react to typing elsewhere.
     pub terminal_focused: bool,
-    /// Pure local persistence-status flag (`true` while an in-memory lease for this terminal has
-    /// not yet been saved to local encrypted storage). Shown across `Live`, `ReadOnly`,
-    /// `Reconnecting`, `StreamRejected`, and `OpeningFailed`; **never** implies write or terminate
-    /// authority (authority comes strictly from `capabilities`).
-    pub unsaved_lease: bool,
+    /// Pure local lease-persistence status (`Ok`, `Saving`, `NotSaved`, `Superseded`).
+    /// Strictly separate from [`Self::persistence_warning`] (`survives_logout`) and **never**
+    /// implies write or terminate authority (authority comes strictly from `capabilities`).
+    pub lease_save: LeaseSaveState,
     pub persistence_warning: Option<PersistenceWarningInput<'a>>,
     pub skipped_output: Option<SkippedOutputInput<'a>>,
     pub scrollback_lines: usize,
@@ -658,6 +678,22 @@ impl HostTerminalPanel {
     pub fn is_readonly_flash_active(&self, now_secs: f64) -> bool {
         self.readonly_flash_until
             .is_some_and(|until| now_secs < until)
+    }
+
+    /// True while `Escape` remains physically latched after dismissing an inline prompt or popup.
+    #[must_use]
+    pub const fn is_escape_held(&self) -> bool {
+        self.escape_held
+    }
+
+    /// Synchronizes physical key-release latches when the parent terminal pane is disabled
+    /// (`!ui.is_enabled()`), releasing `escape_held` only when `Escape` is not physically down and
+    /// clearing stale `overlay_rects` without consuming any `egui` events.
+    pub fn release_key_latches(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.key_down(Key::Escape)) {
+            self.escape_held = false;
+        }
+        self.overlay_rects.clear();
     }
 
     /// Consumes `Escape` to dismiss an open close-choice prompt without leaking autorepeat `\x1b`
@@ -1142,44 +1178,69 @@ impl HostTerminalPanel {
             | HostTerminalPhase::Exited { .. } => {}
         }
 
-        let show_unsaved_lease = input.unsaved_lease
-            && !matches!(
-                input.phase,
-                HostTerminalPhase::Opening { .. }
-                    | HostTerminalPhase::Lost { .. }
-                    | HostTerminalPhase::Exited { .. }
-            );
-        if show_unsaved_lease {
-            let text = if fr {
-                "L'accès à ce terminal n'est pas enregistré sur cet ordinateur — enregistrez-le avant de quitter Tessel pour conserver sa reprise ou son arrêt après redémarrage."
-            } else {
-                "Terminal access is not saved on this computer — save it before closing Tessel to keep recovery or termination access after a restart."
-            }
-            .to_owned();
-            let mut buttons = Vec::new();
-            if caps.can_retry_save_lease {
-                buttons.push(ButtonSpec {
-                    id_key: "unsaved-lease-retry-save",
-                    label: if fr {
-                        "Réessayer l'enregistrement"
-                    } else {
-                        "Retry save"
-                    }
-                    .to_owned(),
-                    style: OverlayButtonStyle::SmallPrimary,
-                    action: Some(HostTerminalAction::RetrySaveLease),
-                    close_confirm: false,
-                    open_confirm: false,
-                    request_initial_focus: false,
+        match input.lease_save {
+            LeaseSaveState::Ok | LeaseSaveState::Saving => {}
+            LeaseSaveState::NotSaved
+                if !matches!(
+                    input.phase,
+                    HostTerminalPhase::Opening { .. }
+                        | HostTerminalPhase::Lost { .. }
+                        | HostTerminalPhase::Exited { .. }
+                ) =>
+            {
+                let text = if fr {
+                    "L'accès à ce terminal n'est pas enregistré sur cet ordinateur — enregistrez-le avant de quitter Tessel pour conserver sa reprise ou son arrêt après redémarrage."
+                } else {
+                    "Terminal access is not saved on this computer — save it before closing Tessel to keep recovery or termination access after a restart."
+                }
+                .to_owned();
+                let mut buttons = Vec::new();
+                if caps.can_retry_save_lease {
+                    buttons.push(ButtonSpec {
+                        id_key: "unsaved-lease-retry-save",
+                        label: if fr {
+                            "Réessayer l'enregistrement"
+                        } else {
+                            "Retry save"
+                        }
+                        .to_owned(),
+                        style: OverlayButtonStyle::SmallPrimary,
+                        action: Some(HostTerminalAction::RetrySaveLease),
+                        close_confirm: false,
+                        open_confirm: false,
+                        request_initial_focus: false,
+                    });
+                }
+                out.push(TopBannerSpec {
+                    id_key: "unsaved-lease-banner",
+                    text,
+                    tone: BannerTone::Warn,
+                    buttons,
+                    dismiss: None,
                 });
             }
-            out.push(TopBannerSpec {
-                id_key: "unsaved-lease-banner",
-                text,
-                tone: BannerTone::Warn,
-                buttons,
-                dismiss: None,
-            });
+            LeaseSaveState::NotSaved => {}
+            LeaseSaveState::Superseded
+                if !matches!(
+                    input.phase,
+                    HostTerminalPhase::Lost { .. } | HostTerminalPhase::Exited { .. }
+                ) =>
+            {
+                let text = if fr {
+                    "Accès de création remplacé par une demande plus récente — l'état d'enregistrement initial n'est plus suivi ici."
+                } else {
+                    "Creation access was superseded by a newer request — the earlier save status is no longer tracked here."
+                }
+                .to_owned();
+                out.push(TopBannerSpec {
+                    id_key: "superseded-lease-banner",
+                    text,
+                    tone: BannerTone::Neutral,
+                    buttons: Vec::new(),
+                    dismiss: None,
+                });
+            }
+            LeaseSaveState::Superseded => {}
         }
 
         let session_active = matches!(

@@ -17,6 +17,9 @@ mod host_lease_keeper;
 #[path = "../src/terminal/host_opening.rs"]
 mod host_opening;
 #[allow(dead_code)]
+#[path = "../src/terminal/host_runtime.rs"]
+mod host_runtime;
+#[allow(dead_code)]
 #[path = "../src/terminal/host_worker.rs"]
 mod host_worker;
 
@@ -130,6 +133,171 @@ fn setup() -> (Arc<FakeWriter>, Arc<Keeper>, LeaseDesk) {
     let keeper = Arc::new(Keeper::start(writer.clone()).unwrap());
     let desk = LeaseDesk::new(keeper.clone());
     (writer, keeper, desk)
+}
+
+#[test]
+fn runtime_exit_drains_the_last_failure_and_requires_an_explicit_retry() {
+    let writer = Arc::new(FakeWriter::default());
+    writer.fail_next(1);
+    let mut runtime = host_runtime::Runtime::start(writer).unwrap();
+    runtime.keeper().keep(slot(1), lease(1)).ok().unwrap();
+    runtime.begin_close();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = runtime.frame();
+        assert!(
+            !state.ready,
+            "a failed final save must never permit silent exit"
+        );
+        if !state.writing {
+            assert_eq!(state.unsettled.not_saved, 1);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    runtime.desk().retry_failures();
+    while !runtime.frame().ready {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn runtime_exit_waits_for_cleanup_that_the_desk_admits_during_drain() {
+    let writer = Arc::new(FakeWriter::default());
+    let mut runtime = host_runtime::Runtime::start(writer.clone()).unwrap();
+    let entered = writer.block();
+    runtime.keeper().keep(slot(1), lease(1)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    for n in 2..2 + MAX_QUEUE as u16 {
+        runtime.keeper().keep(slot(n), lease(1)).ok().unwrap();
+    }
+    assert!(
+        runtime
+            .desk()
+            .hand_proof(slot(900), Ended::ExitReceived)
+            .is_ok()
+    );
+    assert_eq!(runtime.desk().unsettled().ends_waiting, 1);
+    runtime.begin_close();
+    assert!(!runtime.frame().ready);
+    writer.release();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = runtime.frame();
+        if state.ready {
+            assert!(writer.ops().contains(&Op::Remove(slot(900).terminal)));
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn runtime_exit_waits_for_a_place_already_given_to_an_opening() {
+    let writer = Arc::new(FakeWriter::default());
+    let mut runtime = host_runtime::Runtime::start(writer.clone()).unwrap();
+    assert!(!runtime.frame().ready, "no exit before confirmation");
+    let place = runtime.keeper().reserve_new().unwrap();
+    runtime.begin_close();
+    assert!(!runtime.frame().ready);
+    assert!(matches!(
+        runtime.keeper().reserve_new(),
+        Err(host_lease_keeper::Refusal::Closed)
+    ));
+    place.promote(slot(1), "pending-fixture".into(), lease(1));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime.frame().ready {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        writer.ops(),
+        vec![Op::Complete(
+            "pending-fixture".into(),
+            slot(1).terminal,
+            lease(1)
+        )]
+    );
+}
+
+#[test]
+fn a_late_creation_after_a_pruned_success_is_superseded_not_saved() {
+    let (writer, keeper, desk) = setup();
+    let place = keeper.reserve_new().unwrap();
+    let first_seat = desk.handle().seat(&slot(1)).unwrap();
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    until(&desk, "the newer save", || {
+        desk.handle().view(&slot(1)) == View::Saved
+    });
+    drop(first_seat);
+    let seat = desk.handle().seat(&slot(1)).unwrap();
+    assert_eq!(desk.handle().view(&slot(1)), View::Unknown);
+    assert_eq!(
+        place.promote(slot(1), "pending-fixture".into(), lease(1)),
+        host_lease_keeper::Promoted::Superseded
+    );
+    desk.frame();
+    assert_eq!(desk.handle().view(&slot(1)), View::Superseded);
+    assert_eq!(writer.ops(), vec![Op::Put(slot(1).terminal, lease(2))]);
+    drop(seat);
+}
+
+#[test]
+fn superseded_creation_preserves_a_known_newer_save_result() {
+    let (_writer, keeper, desk) = setup();
+    let place = keeper.reserve_new().unwrap();
+    let _seat = desk.handle().seat(&slot(1)).unwrap();
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    until(&desk, "the newer save", || {
+        desk.handle().view(&slot(1)) == View::Saved
+    });
+    assert_eq!(
+        place.promote(slot(1), "pending-fixture".into(), lease(1)),
+        host_lease_keeper::Promoted::Superseded
+    );
+    desk.frame();
+    assert_eq!(desk.handle().view(&slot(1)), View::Saved);
+}
+
+#[test]
+fn a_worker_seat_retains_success_before_the_pane_adopts_it() {
+    let (_, keeper, desk) = setup();
+    let handle = desk.handle();
+    let seat = handle.seat(&slot(1)).unwrap();
+    keeper.keep(slot(1), lease(1)).ok().unwrap();
+    until(&desk, "saved before adoption", || {
+        handle.view(&slot(1)) == View::Saved
+    });
+    let second = handle.seat(&slot(1)).unwrap();
+    drop(seat);
+    desk.frame();
+    assert_eq!(handle.view(&slot(1)), View::Saved);
+    drop(second);
+    desk.frame();
+    assert_eq!(handle.view(&slot(1)), View::Unknown);
+}
+
+#[test]
+fn dropping_an_opening_seat_retains_its_failed_save_for_explicit_retry() {
+    let (writer, keeper, desk) = setup();
+    let handle = desk.handle();
+    let seat = handle.seat(&slot(1)).unwrap();
+    writer.fail_next(1);
+    keeper.keep(slot(1), lease(1)).ok().unwrap();
+    until(&desk, "failed save", || {
+        handle.view(&slot(1)) == View::NotSaved
+    });
+    drop(seat);
+    desk.frame();
+    assert_eq!(handle.view(&slot(1)), View::NotSaved);
+    assert_eq!(handle.unsettled().not_saved, 1);
+    assert_eq!(handle.retry(&slot(1)), Retried::Queued);
+    until(&desk, "retry completes", || {
+        writer.ops() == vec![Op::Put(slot(1).terminal, lease(1))]
+    });
 }
 
 /// Runs frames until `done`.

@@ -148,6 +148,8 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
         keeper.clone(),
     )
     .unwrap();
+    let desk = host_lease_desk::LeaseDesk::new(keeper.clone()).handle();
+    let registration = Some(Box::new(desk.seat(&slot).unwrap()) as Box<dyn Send>);
     let native = Native {
         alias: slot.alias.clone(),
         host: HostConnection::new(client.clone(), client.options().request_timeout),
@@ -157,7 +159,10 @@ fn fixture(ctx: &egui::Context) -> (Terminal, Client, Receiver<Seen>) {
         feed: Some(host_events::Feed::new_created(events, true)),
         control: Some(control),
         saved: true,
-        retry_save: None,
+        desk,
+        openings: Default::default(),
+        registration,
+        creation_record: None,
         awaiting: None,
         cancelling: None,
         admission_paused: false,
@@ -272,6 +277,169 @@ fn silent_native_input_reaches_client_but_modal_and_close_confirmation_do_not() 
             break;
         }
     }
+    client.close();
+}
+
+#[test]
+fn disabled_pane_yields_escape_to_global_dialog_and_resets_composition() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, _received) = fixture(&ctx);
+    frame(&mut terminal, &ctx, true, vec![]);
+    terminal.request_focus(&ctx);
+    terminal.composing = true;
+    terminal.composition = "unfinished".into();
+    let Backend::Native(native) = &terminal.backend else {
+        unreachable!()
+    };
+    terminal
+        .native_panel
+        .request_close(&native.phase(), native.capabilities());
+    let mut global_received_escape = false;
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 420.0),
+            )),
+            focused: true,
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.disable();
+                terminal.show(ui, 14.0);
+                global_received_escape =
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            });
+        },
+    );
+    assert!(global_received_escape);
+    assert!(terminal.native_panel.has_pending_close_choice());
+    assert!(!terminal.composing);
+    assert!(terminal.composition.is_empty());
+    assert!(output.platform_output.ime.is_none());
+    drop(terminal);
+    client.close();
+}
+
+#[test]
+fn opening_a_modal_releases_a_previously_held_remote_mouse_button() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, received) = fixture(&ctx);
+    terminal.parser.process(b"\x1b[?1000h\x1b[?1006h");
+    let pos = egui::pos2(40.0, 40.0);
+    frame(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    frame(
+        &mut terminal,
+        &ctx,
+        true,
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    frame(&mut terminal, &ctx, false, vec![]);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut inputs = Vec::new();
+    while inputs.len() < 2 {
+        if let Seen::Input(bytes) = received
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap()
+        {
+            inputs.push(bytes);
+        }
+    }
+    assert!(inputs[0].ends_with(b"M"));
+    assert!(inputs[1].ends_with(b"m"));
+    drop(terminal);
+    client.close();
+}
+
+#[test]
+fn native_status_does_not_change_the_terminal_grid_height() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, _received) = fixture(&ctx);
+    frame(&mut terminal, &ctx, true, vec![]);
+    let Backend::Native(native) = &terminal.backend else {
+        unreachable!()
+    };
+    let before = native.requested_size;
+    terminal.status = "Synthetic action not confirmed".into();
+    frame(&mut terminal, &ctx, true, vec![]);
+    let Backend::Native(native) = &terminal.backend else {
+        unreachable!()
+    };
+    assert_eq!(native.requested_size, before);
+    drop(terminal);
+    client.close();
+}
+
+#[test]
+fn native_overlay_stays_clipped_to_its_pane_and_below_foreground_dialogs() {
+    let ctx = egui::Context::default();
+    let (mut terminal, client, _received) = fixture(&ctx);
+    let Backend::Native(native) = &mut terminal.backend else {
+        unreachable!()
+    };
+    native.feed.as_mut().unwrap().state =
+        host_events::State::Rejected(host_events::Rejection::InvalidData);
+    let clip = egui::Rect::from_min_max(egui::pos2(40.0, 50.0), egui::pos2(400.0, 280.0));
+    let marker = egui::Color32::from_rgb(7, 23, 61);
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 420.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_clip_rect(clip);
+                terminal.show(ui, 14.0);
+            });
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("fixture-global-dialog"),
+            ))
+            .rect_filled(clip, 0.0, marker);
+        },
+    );
+    let marker_index = output
+        .shapes
+        .iter()
+        .position(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == marker))
+        .unwrap();
+    let mut text_count = 0;
+    for (index, shape) in output.shapes.iter().enumerate() {
+        if let egui::Shape::Text(_) = &shape.shape {
+            text_count += 1;
+            assert!(
+                clip.contains_rect(shape.clip_rect),
+                "overlay lost pane clipping"
+            );
+            assert!(index < marker_index, "overlay covered the global dialog");
+        }
+    }
+    assert!(
+        text_count > 0,
+        "the rejected-stream overlay must be visible"
+    );
+    drop(terminal);
     client.close();
 }
 

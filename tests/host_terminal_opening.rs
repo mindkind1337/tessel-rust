@@ -8,11 +8,17 @@ mod host_commands;
 #[path = "../src/terminal/host_handoff.rs"]
 mod host_handoff;
 #[allow(dead_code)]
+#[path = "../src/terminal/host_lease_desk.rs"]
+mod host_lease_desk;
+#[allow(dead_code)]
 #[path = "../src/terminal/host_lease_keeper.rs"]
 mod host_lease_keeper;
 #[allow(dead_code)]
 #[path = "../src/terminal/host_opening.rs"]
 mod host_opening;
+#[allow(dead_code)]
+#[path = "../src/terminal/host_runtime.rs"]
+mod host_runtime;
 #[allow(dead_code)]
 #[path = "../src/terminal/host_worker.rs"]
 mod host_worker;
@@ -204,6 +210,18 @@ struct StoreState {
 #[derive(Default)]
 struct FakeStore(Mutex<StoreState>);
 
+impl host_lease_keeper::LeaseWriter for FakeStore {
+    fn put(&self, slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+        Store::put(self, slot, lease)
+    }
+    fn remove(&self, slot: &Slot) -> Result<(), LocalError> {
+        Store::remove(self, slot)
+    }
+    fn complete(&self, pending: &str, slot: &Slot, lease: &LeaseKey) -> Result<(), LocalError> {
+        Store::complete(self, pending, slot, lease)
+    }
+}
+
 impl FakeStore {
     fn state(&self) -> MutexGuard<'_, StoreState> {
         self.0.lock().unwrap()
@@ -331,7 +349,7 @@ fn open_new(host: &FakeHost, store: &Arc<FakeStore>, adopt: Duration) -> (Openin
 }
 
 enum Settled {
-    Ready(Opened<FakeHost>),
+    Ready(Box<Opened<FakeHost>>),
     Failed(Failure<FakeHost, FakeStore>),
 }
 
@@ -339,7 +357,7 @@ fn settle(pending: &Opening) -> Settled {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match pending.poll() {
-            Poll::Ready(opened) => return Settled::Ready(opened),
+            Poll::Ready(opened) => return Settled::Ready(Box::new(opened)),
             Poll::Failed(failure) => return Settled::Failed(failure),
             Poll::Waiting => {
                 assert!(Instant::now() < deadline, "the opening never settled");
@@ -358,7 +376,7 @@ fn failed(pending: &Opening) -> Failure<FakeHost, FakeStore> {
 
 fn opened(pending: &Opening) -> Opened<FakeHost> {
     match settle(pending) {
-        Settled::Ready(opened) => opened,
+        Settled::Ready(opened) => *opened,
         Settled::Failed(failure) => panic!("failed: {}", failure.code()),
     }
 }
@@ -1002,4 +1020,399 @@ fn a_cancel_nobody_waits_for_still_cleans_up() {
     drop(answers); // the pane went
     eventually("the program to be ended", || host.state().closes == 1);
     eventually("its lease to be forgotten", || store.lease(&slot).is_none());
+}
+
+fn managed_context(
+    store: &Arc<FakeStore>,
+) -> (
+    Arc<host_lease_keeper::Keeper>,
+    host_lease_desk::LeaseDesk,
+    host_opening::Management,
+) {
+    let keeper = Arc::new(host_lease_keeper::Keeper::start(store.clone()).unwrap());
+    let desk = host_lease_desk::LeaseDesk::new(keeper.clone());
+    let management = host_opening::Management {
+        keeper: keeper.clone(),
+        registry: Arc::new(desk.handle()),
+        openings: host_opening::Openings::default(),
+    };
+    (keeper, desk, management)
+}
+
+fn first_created_slot() -> Slot {
+    Slot {
+        alias: ALIAS.into(),
+        epoch: epoch(1),
+        terminal: TerminalId::from_bytes([0x41; 16]),
+    }
+}
+
+#[test]
+fn managed_pane_drop_keeps_a_failed_creation_save_in_the_application() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    store.state().fail_complete = true;
+    let (_keeper, desk, management) = managed_context(&store);
+    let (release, started) = host.gated();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    drop(pending);
+    release.send(()).unwrap();
+    let slot = first_created_slot();
+    eventually("failed creation retained without a pane", || {
+        desk.frame();
+        desk.handle().view(&slot) == host_lease_desk::View::NotSaved
+    });
+    assert_eq!(host.state().closes, 0);
+    assert_eq!(store.state().pending.len(), 1);
+    store.state().fail_complete = false;
+    assert_eq!(desk.handle().retry(&slot), host_lease_desk::Retried::Queued);
+    eventually("retry saved original creation lease", || {
+        desk.frame();
+        store.lease(&slot) == Some(LeaseKey::from_bytes([0x81; 16]))
+    });
+    assert!(store.state().pending.is_empty());
+}
+
+#[test]
+fn managed_capacity_is_reserved_before_pending_record_or_create_rpc() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, _desk, management) = managed_context(&store);
+    let held: Vec<_> = (0..host_lease_keeper::MAX_QUEUE)
+        .map(|_| keeper.reserve_new().unwrap())
+        .collect();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("worker permit"));
+    assert!(matches!(failed(&pending), Failure::Capacity));
+    assert!(host.state().keys.is_empty());
+    assert_eq!(store.state().reserves, 0);
+    drop(held);
+}
+
+#[test]
+fn managed_save_report_before_adoption_stays_visible_until_the_seat_is_dropped() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (_keeper, desk, management) = managed_context(&store);
+    let pending =
+        host_opening::open_managed(host, store.clone(), Target::New(spec()), management, || {})
+            .unwrap_or_else(|_| panic!("opening"));
+    let slot = first_created_slot();
+    eventually("save before UI adoption", || {
+        desk.frame();
+        desk.handle().view(&slot) == host_lease_desk::View::Saved
+    });
+    let terminal = opened(&pending);
+    assert!(terminal.queued);
+    assert!(terminal.registration.is_some());
+    assert_eq!(desk.handle().view(&slot), host_lease_desk::View::Saved);
+    drop(terminal);
+    desk.frame();
+    assert_eq!(desk.handle().view(&slot), host_lease_desk::View::Unknown);
+    assert!(store.lease(&slot).is_some());
+}
+
+#[test]
+fn managed_cancellation_orders_forgetting_after_creation_promotion() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    store.state().fail_complete = true;
+    let (keeper, desk, management) = managed_context(&store);
+    let (release, started) = host.gated();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    pending.cancel();
+    release.send(()).unwrap();
+    assert!(matches!(failed(&pending), Failure::Cancelled));
+    eventually("ordered cleanup", || {
+        desk.frame();
+        keeper.is_idle() && store.state().pending.is_empty() && desk.handle().unsettled().is_empty()
+    });
+    assert_eq!(host.state().closes, 1);
+    assert!(store.state().leases.is_empty());
+}
+
+#[test]
+fn managed_attach_holds_the_slot_before_the_rpc_and_queues_a_new_lease() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let kept = LeaseKey::from_bytes([0x55; 16]);
+    store.put(&existing_slot(), &kept).unwrap();
+    let (keeper, desk, management) = managed_context(&store);
+
+    // A takeover of that terminal is in flight elsewhere: the attach sends nothing.
+    let takeover = keeper.reserve(existing_slot()).ok().unwrap();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        existing(true),
+        management.clone(),
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    assert!(matches!(failed(&pending), Failure::Capacity));
+    assert!(
+        host.state().attached_with.is_empty(),
+        "no attach while the slot is reserved"
+    );
+    drop(takeover);
+
+    // The attach returns another lease: seated, then handed to the keeper.
+    let fresh = LeaseKey::from_bytes([0x66; 16]);
+    host.state().attach = Some(Ok(Some(fresh.clone())));
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        existing(true),
+        management.clone(),
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    let terminal = opened(&pending);
+    assert!(terminal.queued && !terminal.saved);
+    assert!(terminal.registration.is_some());
+    eventually("the new lease saved through the keeper", || {
+        desk.frame();
+        store.lease(&existing_slot()) == Some(fresh.clone())
+    });
+    eventually("its report shown while the seat is held", || {
+        desk.frame();
+        desk.handle().view(&existing_slot()) == host_lease_desk::View::Saved
+    });
+    drop(terminal);
+
+    // The same lease comes back: nothing to save, and the reservation is given back.
+    host.state().attach = None;
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        existing(true),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    let terminal = opened(&pending);
+    assert!(terminal.saved && !terminal.queued);
+    eventually("the keeper idle again", || keeper.is_idle());
+    assert_eq!(store.lease(&existing_slot()), Some(fresh));
+    drop(terminal);
+}
+
+#[test]
+fn managed_cancel_without_a_place_for_the_end_sends_no_close() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, desk, management) = managed_context(&store);
+    // Another pane's takeover of the terminal about to be created holds its slot.
+    let takeover = keeper.reserve(first_created_slot()).ok().unwrap();
+    let (release, started) = host.gated();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    pending.cancel();
+    release.send(()).unwrap();
+    let Failure::CancelNotConfirmed(unended) = failed(&pending) else {
+        panic!("expected an unconfirmed end");
+    };
+    assert_eq!(
+        host.state().closes,
+        0,
+        "no close without a place to record its end"
+    );
+    assert!(
+        unended.queued && unended.lease.is_none(),
+        "the creation lease went to the keeper"
+    );
+    // The takeover failed: the creation lease stays saved, the program reachable.
+    drop(takeover);
+    eventually("the creation lease saved", || {
+        desk.frame();
+        store.lease(&first_created_slot()) == Some(LeaseKey::from_bytes([0x81; 16]))
+    });
+}
+
+#[test]
+fn cancelling_an_adopted_managed_terminal_orders_its_end_after_the_creation() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, desk, management) = managed_context(&store);
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    let terminal = opened(&pending);
+    drop(pending);
+    assert!(terminal.queued);
+    let slot = slot_of(&terminal);
+    let (answers, ready) = cancel_adopted(terminal, &store);
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(answers.try_recv(), Ok(Failure::Cancelled)));
+    assert_eq!(
+        host.state().closed,
+        [(slot.terminal.clone(), LeaseKey::from_bytes([0x81; 16]))],
+        "ended with the creation lease"
+    );
+    eventually("the end recorded after the creation", || {
+        desk.frame();
+        keeper.is_idle() && store.lease(&slot).is_none() && store.state().pending.is_empty()
+    });
+}
+
+#[test]
+fn managed_openings_are_counted_until_their_last_cleanup() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, desk, management) = managed_context(&store);
+    let openings = management.openings.clone();
+    let (release, started) = host.gated();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    assert_eq!(openings.count(), 1, "counted before its worker runs");
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    pending.cancel();
+    release.send(()).unwrap();
+    assert!(matches!(failed(&pending), Failure::Cancelled));
+    eventually("the opening's last cleanup", || openings.count() == 0);
+    eventually("everything written", || {
+        desk.frame();
+        keeper.is_idle() && store.state().pending.is_empty()
+    });
+    assert_eq!(host.state().closes, 1);
+}
+
+#[test]
+fn closed_admissions_stop_an_opening_before_any_record_or_rpc() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, _desk, management) = managed_context(&store);
+    let openings = management.openings.clone();
+    // The worker reads the epoch first: hold it there while the application closes.
+    let guard = host.state();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    assert_eq!(openings.count(), 1);
+    keeper.close_admissions();
+    drop(guard);
+    assert!(matches!(failed(&pending), Failure::Capacity));
+    eventually("the opening to end", || openings.count() == 0);
+    assert!(host.state().keys.is_empty(), "no create sent");
+    assert_eq!(store.state().reserves, 0, "no pending record written");
+    assert!(keeper.is_idle());
+}
+
+#[test]
+fn cancelling_an_adopted_managed_terminal_is_counted_until_its_cleanup_is_done() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let (keeper, desk, management) = managed_context(&store);
+    let openings = management.openings.clone();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        management,
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    let terminal = opened(&pending);
+    drop(pending);
+    eventually("the opening worker to end", || openings.count() == 0);
+    // Hold the host: the cleanup waits in its close.
+    let guard = host.state();
+    let (answers, ready) = cancel_adopted(terminal, &store);
+    assert_eq!(openings.count(), 1, "counted while its cleanup runs");
+    drop(guard);
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(answers.try_recv(), Ok(Failure::Cancelled)));
+    eventually("the cleanup to end", || openings.count() == 0);
+    eventually("everything written", || {
+        desk.frame();
+        keeper.is_idle() && store.state().pending.is_empty()
+    });
+    assert_eq!(host.state().closes, 1);
+}
+#[test]
+fn runtime_does_not_exit_while_an_opening_has_not_reached_the_keeper() {
+    let _serial = serial();
+    let host = FakeHost::connected();
+    let store = Arc::new(FakeStore::default());
+    let mut runtime = host_runtime::Runtime::start(store.clone()).unwrap();
+    let guard = host.state();
+    let pending = host_opening::open_managed(
+        host.clone(),
+        store.clone(),
+        Target::New(spec()),
+        host_opening::Management {
+            keeper: runtime.keeper(),
+            registry: Arc::new(runtime.desk()),
+            openings: runtime.openings(),
+        },
+        || {},
+    )
+    .unwrap_or_else(|_| panic!("opening"));
+    runtime.begin_close();
+    let state = runtime.frame();
+    assert_eq!(state.openings, 1);
+    assert!(!state.writing);
+    assert!(!state.ready);
+    drop(guard);
+    assert!(matches!(failed(&pending), Failure::Capacity));
+    eventually("the runtime to finish its opening", || {
+        runtime.frame().ready
+    });
+    assert_eq!(store.state().reserves, 0);
+    assert!(host.state().keys.is_empty());
 }

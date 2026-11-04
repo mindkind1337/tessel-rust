@@ -18,7 +18,7 @@ mod host_opening;
 mod host_worker;
 
 use host_lease_keeper::{
-    Ended, Keeper, LeaseWriter, MAX_INFO_REPORTS, MAX_QUEUE, MAX_SLOTS, Refusal, Report,
+    Ended, Keeper, LeaseWriter, MAX_INFO_REPORTS, MAX_QUEUE, MAX_SLOTS, Promoted, Refusal, Report,
     RetryRefused,
 };
 use host_opening::{LocalError, Slot};
@@ -765,5 +765,385 @@ fn a_busy_promote_retry_keeps_its_pending_record() {
     while !writer.ops().contains(&complete("pending-1", 1, 1)) {
         assert!(Instant::now() < deadline, "the promote was not retried");
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+// ---- Places and creation leases ---------------------------------------------------------
+
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn a_place_promotes_on_a_fresh_slot() {
+    let (writer, keeper) = keeper();
+    let place = keeper.reserve_new().ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    assert!(matches!(next(&keeper), Report::Kept(s) if s == slot(1)));
+    assert_eq!(writer.ops(), [complete("pending-1", 1, 1)]);
+}
+
+#[test]
+fn a_takeover_that_fails_leaves_the_creation_lease_saved() {
+    let (writer, keeper) = keeper();
+    let place = keeper.reserve_new().ok().unwrap();
+    let takeover = keeper.reserve(slot(1)).ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued,
+        "a reservation in flight proves no newer lease"
+    );
+    drop(takeover);
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    assert_eq!(writer.ops(), [complete("pending-1", 1, 1)]);
+}
+
+#[test]
+fn a_committed_takeover_wins_over_a_queued_creation_lease_whatever_the_stamps() {
+    for takeover_first in [true, false] {
+        let (writer, keeper) = keeper();
+        let entered = writer.block();
+        keeper.keep(slot(9), lease(9)).ok().unwrap();
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (place, takeover) = if takeover_first {
+            let takeover = keeper.reserve(slot(1)).ok().unwrap();
+            (keeper.reserve_new().ok().unwrap(), takeover)
+        } else {
+            let place = keeper.reserve_new().ok().unwrap();
+            (place, keeper.reserve(slot(1)).ok().unwrap())
+        };
+        assert_eq!(
+            place.promote(slot(1), "pending-1".into(), lease(1)),
+            Promoted::Queued
+        );
+        takeover.keep(lease(2));
+        writer.release();
+        let reports: Vec<&str> = (0..3).map(|_| name(&next(&keeper))).collect();
+        assert_eq!(reports, ["kept", "superseded", "kept"]);
+        assert_eq!(
+            writer.ops(),
+            [
+                Op::Put(slot(9).terminal, lease(9)),
+                Op::Put(slot(1).terminal, lease(2))
+            ]
+        );
+    }
+}
+
+#[test]
+fn a_takeover_after_the_creation_lease_was_written_overwrites_it() {
+    let (writer, keeper) = keeper();
+    let place = keeper.reserve_new().ok().unwrap();
+    let takeover = keeper.reserve(slot(1)).ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    takeover.keep(lease(2));
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    assert_eq!(
+        writer.ops(),
+        [
+            complete("pending-1", 1, 1),
+            Op::Put(slot(1).terminal, lease(2))
+        ]
+    );
+}
+
+#[test]
+fn a_confirmed_close_after_a_creation_lease_forgets_it() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(9), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let place = keeper.reserve_new().ok().unwrap();
+    let close = keeper.reserve(slot(1)).ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    assert!(close.forget(Ended::CloseConfirmed).is_ok());
+    writer.release();
+    let reports: Vec<&str> = (0..3).map(|_| name(&next(&keeper))).collect();
+    assert_eq!(reports, ["kept", "superseded", "forgotten"]);
+    assert_eq!(
+        writer.ops(),
+        [
+            Op::Put(slot(9).terminal, lease(9)),
+            Op::Remove(slot(1).terminal)
+        ]
+    );
+}
+
+#[test]
+fn an_end_written_while_the_place_was_held_supersedes_a_late_promote() {
+    let (writer, keeper) = keeper();
+    let place = keeper.reserve_new().ok().unwrap();
+    keeper.forget_ended(slot(1), Ended::ExitReceived).unwrap();
+    assert!(matches!(next(&keeper), Report::Forgotten(_)));
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Superseded
+    );
+    assert!(matches!(next(&keeper), Report::Superseded(_)));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        writer.ops(),
+        [Op::Remove(slot(1).terminal)],
+        "never brought back"
+    );
+}
+
+#[test]
+fn a_queued_save_supersedes_a_promote() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(9), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    let place = keeper.reserve_new().ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Superseded
+    );
+    writer.release();
+    wait_for("both saves", || writer.ops().len() == 2);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        writer.ops(),
+        [
+            Op::Put(slot(9).terminal, lease(9)),
+            Op::Put(slot(1).terminal, lease(2))
+        ]
+    );
+}
+
+#[test]
+fn a_retry_of_a_creation_lease_after_a_takeover_is_superseded() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(1);
+    let place = keeper.reserve_new().ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    let Report::NotKept(retry) = next(&keeper) else {
+        panic!("expected not kept");
+    };
+    let takeover = keeper.reserve(slot(1)).ok().unwrap();
+    takeover.keep(lease(2));
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    assert!(matches!(
+        keeper.retry_save(retry),
+        Err(RetryRefused::Superseded)
+    ));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(writer.ops(), [Op::Put(slot(1).terminal, lease(2))]);
+}
+
+#[test]
+fn a_takeover_that_wins_clears_the_creation_lease_failure_left_unread() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(1);
+    // Taken before the place: its stamp is older than the creation lease's.
+    let takeover = keeper.reserve(slot(1)).ok().unwrap();
+    let place = keeper.reserve_new().ok().unwrap();
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    wait_for("the failed creation write", || writer.attempts() == 1);
+    // Its failure report is delivered right after the write returned.
+    std::thread::sleep(Duration::from_millis(50));
+    takeover.keep(lease(2));
+    wait_for("the takeover's save", || !writer.ops().is_empty());
+    std::thread::sleep(Duration::from_millis(50));
+    let mut reports = Vec::new();
+    while let Some(report) = keeper.report() {
+        reports.push(name(&report));
+    }
+    assert_eq!(reports, ["kept"], "the out-of-date failure went with it");
+    assert_eq!(writer.ops(), [Op::Put(slot(1).terminal, lease(2))]);
+}
+
+#[test]
+fn a_direct_promote_after_an_accepted_save_is_skipped_and_reported() {
+    let (writer, keeper) = keeper();
+    let entered = writer.block();
+    keeper.keep(slot(9), lease(9)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    keeper.keep(slot(1), lease(2)).ok().unwrap();
+    assert!(
+        keeper
+            .promote(slot(1), "pending-1".into(), lease(1))
+            .is_ok()
+    );
+    assert!(matches!(next(&keeper), Report::Superseded(_)));
+    writer.release();
+    let reports: Vec<&str> = (0..2).map(|_| name(&next(&keeper))).collect();
+    assert_eq!(reports, ["kept", "kept"]);
+    assert_eq!(
+        writer.ops(),
+        [
+            Op::Put(slot(9).terminal, lease(9)),
+            Op::Put(slot(1).terminal, lease(2))
+        ]
+    );
+}
+
+#[test]
+fn places_hold_queue_places() {
+    let (_writer, keeper) = keeper();
+    let held: Vec<_> = (0..MAX_QUEUE)
+        .map(|_| keeper.reserve_new().ok().unwrap())
+        .collect();
+    assert!(matches!(keeper.reserve_new(), Err(Refusal::Busy)));
+    assert!(matches!(keeper.reserve(slot(1)), Err(Refusal::Busy)));
+    assert!(matches!(
+        keeper.keep(slot(1), lease(1)),
+        Err((Refusal::Busy, _, _))
+    ));
+    drop(held);
+    assert!(keeper.reserve_new().is_ok());
+}
+
+#[test]
+fn places_and_tombstones_hold_slot_table_places() {
+    let (writer, keeper) = keeper();
+    writer.fail_next(MAX_SLOTS - 1);
+    let mut tokens = Vec::new();
+    for n in 0..(MAX_SLOTS - 1) as u16 {
+        keeper.keep(slot(n), lease(1)).ok().unwrap();
+        let Report::NotKept(retry) = next(&keeper) else {
+            panic!("expected not kept");
+        };
+        tokens.push(retry);
+    }
+    let place = keeper.reserve_new().ok().unwrap();
+    assert!(
+        matches!(
+            keeper.keep(slot(1000), lease(1)),
+            Err((Refusal::Busy, _, _))
+        ),
+        "no place left for a new slot"
+    );
+    assert!(matches!(keeper.reserve_new(), Err(Refusal::Busy)));
+    assert!(
+        keeper.keep(slot(0), lease(2)).is_ok(),
+        "a followed slot needs no new place"
+    );
+    assert!(matches!(next(&keeper), Report::Kept(_)));
+    // Written, that save still holds its place as a tombstone while the place is held.
+    assert!(matches!(
+        keeper.keep(slot(1000), lease(1)),
+        Err((Refusal::Busy, _, _))
+    ));
+    drop(place);
+    assert!(keeper.keep(slot(1000), lease(1)).is_ok());
+    drop(tokens);
+}
+
+#[test]
+fn tombstones_go_with_the_oldest_place() {
+    let (_writer, keeper) = keeper();
+    let first = keeper.reserve_new().ok().unwrap();
+    let second = keeper.reserve_new().ok().unwrap();
+    keeper.forget_ended(slot(1), Ended::ExitReceived).unwrap();
+    assert!(matches!(next(&keeper), Report::Forgotten(_)));
+    drop(first);
+    assert_eq!(
+        second.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Superseded,
+        "the end is newer than the place still held"
+    );
+    // No place held any more: the tombstone is gone, a new place starts clean.
+    let third = keeper.reserve_new().ok().unwrap();
+    assert_eq!(
+        third.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+}
+
+#[test]
+fn a_place_promoted_after_the_keeper_was_dropped_is_written() {
+    let (writer, keeper) = keeper();
+    let place = keeper.reserve_new().ok().unwrap();
+    drop(keeper);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        place.promote(slot(1), "pending-1".into(), lease(1)),
+        Promoted::Queued
+    );
+    wait_for("the creation lease", || !writer.ops().is_empty());
+    assert_eq!(writer.ops(), [complete("pending-1", 1, 1)]);
+}
+
+#[test]
+fn idle_only_once_nothing_is_queued_reserved_placed_or_written() {
+    let (writer, keeper) = keeper();
+    assert!(keeper.is_idle());
+    let entered = writer.block();
+    keeper.keep(slot(1), lease(1)).ok().unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(!keeper.is_idle(), "a write in flight");
+    writer.release();
+    wait_for("idle", || keeper.is_idle());
+    assert!(
+        matches!(keeper.report(), Some(Report::Kept(_))),
+        "idle only once its report is delivered"
+    );
+    let reservation = keeper.reserve(slot(2)).ok().unwrap();
+    assert!(!keeper.is_idle(), "a reservation held");
+    drop(reservation);
+    let place = keeper.reserve_new().ok().unwrap();
+    assert!(!keeper.is_idle(), "a place held");
+    drop(place);
+    assert!(keeper.is_idle());
+}
+
+#[test]
+fn closed_admissions_refuse_new_requests_but_take_what_is_held() {
+    let (writer, keeper) = keeper();
+    let reservation = keeper.reserve(slot(1)).ok().unwrap();
+    let place = keeper.reserve_new().ok().unwrap();
+    writer.fail_next(1);
+    keeper.keep(slot(3), lease(3)).ok().unwrap();
+    let Report::NotKept(retry) = next(&keeper) else {
+        panic!("expected not kept");
+    };
+    keeper.close_admissions();
+    keeper.close_admissions();
+    assert!(keeper.admissions_closed());
+    // Nothing new that would come before a request to a host.
+    assert!(matches!(keeper.reserve(slot(2)), Err(Refusal::Closed)));
+    assert!(matches!(keeper.reserve_new(), Err(Refusal::Closed)));
+    assert!(!keeper.is_idle(), "what is held still counts");
+    // What is held commits; saves, removals and retries are still taken.
+    reservation.keep(lease(1));
+    assert_eq!(
+        place.promote(slot(4), "pending-4".into(), lease(4)),
+        Promoted::Queued
+    );
+    assert!(keeper.keep(slot(5), lease(5)).is_ok());
+    assert!(keeper.forget_ended(slot(6), Ended::ExitReceived).is_ok());
+    assert!(keeper.retry_save(retry).is_ok());
+    wait_for("idle", || keeper.is_idle());
+    let ops = writer.ops();
+    for op in [
+        Op::Put(slot(1).terminal, lease(1)),
+        complete("pending-4", 4, 4),
+        Op::Put(slot(5).terminal, lease(5)),
+        Op::Remove(slot(6).terminal),
+        Op::Put(slot(3).terminal, lease(3)),
+    ] {
+        assert!(ops.contains(&op), "{op:?} written");
     }
 }

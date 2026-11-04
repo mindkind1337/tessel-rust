@@ -17,10 +17,10 @@ use eframe::egui::accesskit::Role;
 use eframe::egui::{self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Shape, Vec2};
 use host_terminal_panel::{
     HostHeaderTag, HostTerminalAction, HostTerminalCapabilities, HostTerminalInput,
-    HostTerminalPanel, HostTerminalPhase, LostReason, MAX_EPOCH_CHARS, MAX_HOST_LABEL_CHARS,
-    MAX_NOTE_CHARS, MAX_RAW_SCAN_CHARS, OpeningFailureReason, PersistenceWarningInput,
-    ReadOnlyReason, SkippedOutput, SkippedOutputInput, StreamRejectReason, SurvivesLogout,
-    header_tag_width, sanitize_host_text, show_header_tag,
+    HostTerminalPanel, HostTerminalPhase, LeaseSaveState, LostReason, MAX_EPOCH_CHARS,
+    MAX_HOST_LABEL_CHARS, MAX_NOTE_CHARS, MAX_RAW_SCAN_CHARS, OpeningFailureReason,
+    PersistenceWarningInput, ReadOnlyReason, SkippedOutput, SkippedOutputInput, StreamRejectReason,
+    SurvivesLogout, header_tag_width, sanitize_host_text, show_header_tag,
 };
 use theme_palettes::THEMES;
 
@@ -340,7 +340,7 @@ fn focus_and_held_escape_isolation_never_leaks_to_live_terminal_and_respects_ope
         phase: &live,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -582,7 +582,7 @@ fn readonly_suppresses_input_and_resize_throttles_flash_and_emits_take_control()
             ..Default::default()
         },
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -713,7 +713,7 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
             phase: &live,
             capabilities: full_caps(),
             terminal_focused: true,
-            unsaved_lease: false,
+            lease_save: LeaseSaveState::Ok,
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: 0,
@@ -828,7 +828,7 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
         };
         let in_stream_closed = HostTerminalInput {
             phase: &stream_closed,
-            unsaved_lease: true,
+            lease_save: LeaseSaveState::NotSaved,
             ..in0
         };
         let m_stream_closed = settle_pane(&ctx, &mut panel, &in_stream_closed, viewport, 4.5);
@@ -854,7 +854,7 @@ fn overlays_never_alter_terminal_rect_or_grid_size_across_zero_one_and_three_ban
 
         // 4 stacked top banners (`ReadOnly` + `unsaved_lease` + `Persistence` + `SkippedOutput`)
         let in4 = HostTerminalInput {
-            unsaved_lease: true,
+            lease_save: LeaseSaveState::NotSaved,
             ..in3
         };
         let m4 = settle_pane(&ctx, &mut panel, &in4, viewport, 4.6);
@@ -1001,7 +1001,7 @@ fn sanitizes_control_c1_and_bidi_characters_in_host_notes_details_and_epochs() {
         phase: &phase,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1048,7 +1048,7 @@ fn lost_and_epoch_change_never_resume_old_process_only_explicit_restart_new() {
         phase: &lost_unavail,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1335,7 +1335,7 @@ fn terminate_requires_capability_and_live_or_readonly_and_opening_cancel_is_hone
         phase: &opening,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -1517,7 +1517,7 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
                 phase: &live,
                 capabilities: full_caps(),
                 terminal_focused: true,
-                unsaved_lease: false,
+                lease_save: LeaseSaveState::Ok,
                 persistence_warning: Some(PersistenceWarningInput::new("ep-i18n", survives)),
                 skipped_output: None,
                 scrollback_lines: 0,
@@ -1542,7 +1542,7 @@ fn bilingual_en_fr_parity_honest_persistence_resync_without_fake_bytes_and_all_t
         phase: &live,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: Some(SkippedOutputInput::bytes("ep-skip", 0)),
         scrollback_lines: 0,
@@ -1735,7 +1735,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
                 phase: &phase,
                 capabilities: full_caps(),
                 terminal_focused: true,
-                unsaved_lease: false,
+                lease_save: LeaseSaveState::Ok,
                 persistence_warning: Some(PersistenceWarningInput::new(
                     "ep-rej-1",
                     SurvivesLogout::No,
@@ -1874,7 +1874,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
             phase: &rejected,
             capabilities: no_auth_caps,
             terminal_focused: true,
-            unsaved_lease: false,
+            lease_save: LeaseSaveState::Ok,
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: 0,
@@ -1897,7 +1897,7 @@ fn stream_rejected_keeps_screen_readable_blocks_io_and_requires_confirmed_termin
         phase: &rejected,
         capabilities: full_caps(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -2162,7 +2162,7 @@ fn opening_failed_covers_all_reasons_blocks_implicit_restart_and_confirms_termin
                 phase: &phase,
                 capabilities: full_caps(),
                 terminal_focused: true,
-                unsaved_lease: false,
+                lease_save: LeaseSaveState::Ok,
                 persistence_warning: None,
                 skipped_output: None,
                 scrollback_lines: 0,
@@ -2295,7 +2295,7 @@ fn opening_failed_covers_all_reasons_blocks_implicit_restart_and_confirms_termin
             phase: &phase,
             capabilities: full_caps(),
             terminal_focused: true,
-            unsaved_lease: false,
+            lease_save: LeaseSaveState::Ok,
             persistence_warning: None,
             skipped_output: None,
             scrollback_lines: 0,
@@ -2368,7 +2368,7 @@ fn opening_failed_covers_all_reasons_blocks_implicit_restart_and_confirms_termin
         phase: &min_phase,
         capabilities: HostTerminalCapabilities::default(),
         terminal_focused: true,
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -2432,7 +2432,7 @@ fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
                 phase,
                 capabilities: retry_save_only_caps,
                 terminal_focused: true,
-                unsaved_lease: true,
+                lease_save: LeaseSaveState::NotSaved,
                 persistence_warning: None,
                 skipped_output: None,
                 scrollback_lines: 0,
@@ -2479,7 +2479,7 @@ fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
         phase: &live,
         capabilities: HostTerminalCapabilities::default(),
         terminal_focused: true,
-        unsaved_lease: true,
+        lease_save: LeaseSaveState::NotSaved,
         persistence_warning: None,
         skipped_output: None,
         scrollback_lines: 0,
@@ -2491,7 +2491,7 @@ fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
 
     // Once saved (`unsaved_lease == false`), the banner disappears immediately.
     let saved_in = HostTerminalInput {
-        unsaved_lease: false,
+        lease_save: LeaseSaveState::Ok,
         ..warn_only_in
     };
     let f_saved = settle_pane(&ctx, &mut panel, &saved_in, vp, next_time());
@@ -2511,7 +2511,7 @@ fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
     ] {
         let inactive_in = HostTerminalInput {
             phase: &inactive_phase,
-            unsaved_lease: true,
+            lease_save: LeaseSaveState::NotSaved,
             capabilities: retry_save_only_caps,
             ..warn_only_in
         };
@@ -2519,4 +2519,246 @@ fn unsaved_lease_banner_warns_across_phases_without_granting_authority() {
         assert!(!has_painted_text(&f_inactive.output.shapes, expected_en));
         assert!(find_accesskit_button_center(&f_inactive.output, "Retry save").is_none());
     }
+}
+
+#[test]
+fn lease_save_saving_silent_superseded_neutral_without_retry_and_release_key_latches() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx, true, Some(theme_palettes::ThemeId::Classic));
+    let mut panel = HostTerminalPanel::new();
+    let vp = Vec2::new(820.0, 520.0);
+
+    let mut clock = 1.0_f64;
+    let mut next_time = || {
+        let current = clock;
+        clock += 0.1;
+        current
+    };
+
+    let live = HostTerminalPhase::Live;
+    let retry_caps = HostTerminalCapabilities {
+        can_retry_save_lease: true,
+        ..Default::default()
+    };
+
+    // 1. `LeaseSaveState::Saving` is completely silent (no transient 1-frame flash).
+    for fr in [false, true] {
+        let saving_in = HostTerminalInput {
+            id_salt: Id::new(("pane-saving", fr)),
+            host_label: "gpu-lease",
+            epoch: Some("ep-saving-1"),
+            phase: &live,
+            capabilities: retry_caps,
+            terminal_focused: true,
+            lease_save: LeaseSaveState::Saving,
+            persistence_warning: None,
+            skipped_output: None,
+            scrollback_lines: 0,
+            french: fr,
+        };
+        let f_saving = settle_pane(&ctx, &mut panel, &saving_in, vp, next_time());
+        assert!(panel.overlay_rects().is_empty());
+        assert!(find_accesskit_button_center(&f_saving.output, "Retry save").is_none());
+        assert!(
+            find_accesskit_button_center(&f_saving.output, "Réessayer l'enregistrement").is_none()
+        );
+    }
+
+    // 2. `LeaseSaveState::Superseded` renders honest EN/FR neutral copy without offering retry,
+    //    even if `can_retry_save_lease == true`, and never collides with `persistence_warning`.
+    let expected_sup_en = "Creation access was superseded by a newer request — the earlier save status is no longer tracked here.";
+    let expected_sup_fr = "Accès de création remplacé par une demande plus récente — l'état d'enregistrement initial n'est plus suivi ici.";
+
+    let active_phases = [
+        HostTerminalPhase::Opening { note: None },
+        HostTerminalPhase::Live,
+        HostTerminalPhase::ReadOnly {
+            reason: ReadOnlyReason::ObserverAttach,
+        },
+        HostTerminalPhase::Reconnecting {
+            attempt: 1,
+            max_attempts: Some(3),
+        },
+        HostTerminalPhase::StreamRejected {
+            reason: StreamRejectReason::Closed,
+        },
+        HostTerminalPhase::OpeningFailed {
+            reason: OpeningFailureReason::Ambiguous,
+        },
+    ];
+
+    for (idx, phase) in active_phases.iter().enumerate() {
+        for (fr, expected_msg) in [(false, expected_sup_en), (true, expected_sup_fr)] {
+            let sup_in = HostTerminalInput {
+                id_salt: Id::new(("pane-superseded", idx, fr)),
+                host_label: "gpu-lease",
+                epoch: Some("ep-sup-1"),
+                phase,
+                capabilities: retry_caps,
+                terminal_focused: true,
+                lease_save: LeaseSaveState::Superseded,
+                persistence_warning: Some(PersistenceWarningInput::new(
+                    "ep-sup-1",
+                    SurvivesLogout::No,
+                )),
+                skipped_output: None,
+                scrollback_lines: 0,
+                french: fr,
+            };
+            let f_sup = settle_pane(&ctx, &mut panel, &sup_in, vp, next_time());
+            assert!(
+                has_painted_text(&f_sup.output.shapes, expected_msg),
+                "missing superseded notice `{expected_msg}` in {phase:?}"
+            );
+            assert!(find_accesskit_button_center(&f_sup.output, "Retry save").is_none());
+            assert!(
+                find_accesskit_button_center(&f_sup.output, "Réessayer l'enregistrement").is_none()
+            );
+            if matches!(
+                phase,
+                HostTerminalPhase::Live | HostTerminalPhase::ReadOnly { .. }
+            ) {
+                let dismiss_lbl = if fr {
+                    "Fermer l'avis de persistance"
+                } else {
+                    "Dismiss persistence notice"
+                };
+                assert!(
+                    find_accesskit_button_center(&f_sup.output, dismiss_lbl).is_some(),
+                    "persistence_warning (`survives_logout`) must remain distinct alongside Superseded"
+                );
+            }
+        }
+    }
+
+    // `Lost` and `Exited` suppress `Superseded`.
+    for ended_phase in [
+        HostTerminalPhase::Lost {
+            reason: LostReason::EpochChanged,
+        },
+        HostTerminalPhase::Exited {
+            exit_code: Some(0),
+            signal: None,
+        },
+    ] {
+        let ended_in = HostTerminalInput {
+            id_salt: Id::new("pane-sup-ended"),
+            host_label: "gpu-lease",
+            epoch: Some("ep-sup-1"),
+            phase: &ended_phase,
+            capabilities: retry_caps,
+            terminal_focused: true,
+            lease_save: LeaseSaveState::Superseded,
+            persistence_warning: None,
+            skipped_output: None,
+            scrollback_lines: 0,
+            french: false,
+        };
+        let f_ended = settle_pane(&ctx, &mut panel, &ended_in, vp, next_time());
+        assert!(!has_painted_text(&f_ended.output.shapes, expected_sup_en));
+    }
+
+    // 3. `release_key_latches(ctx)` on a disabled pane:
+    //    - keeps `escape_held == true` while `Escape` is physically held without consuming events;
+    //    - clears `overlay_rects`;
+    //    - clears `escape_held` once `Escape` is physically released without consuming events.
+    let full_live_in = HostTerminalInput {
+        id_salt: Id::new("pane-latches"),
+        host_label: "gpu-lease",
+        epoch: Some("ep-latch-1"),
+        phase: &live,
+        capabilities: full_caps(),
+        terminal_focused: true,
+        lease_save: LeaseSaveState::Ok,
+        persistence_warning: None,
+        skipped_output: None,
+        scrollback_lines: 0,
+        french: false,
+    };
+    // Adopt this pane/epoch before requesting its close prompt: changing the
+    // observed epoch deliberately discards a prompt from the previous session.
+    let _ = settle_pane(&ctx, &mut panel, &full_live_in, vp, next_time());
+    assert_eq!(panel.request_close(&live, full_live_in.capabilities), None);
+    let _ = settle_pane(&ctx, &mut panel, &full_live_in, vp, next_time());
+    assert!(!panel.overlay_rects().is_empty());
+
+    // Dismiss close prompt with `Escape` press (stays physically down -> `escape_held == true`).
+    let _ = step_pane_frame(
+        &ctx,
+        &mut panel,
+        &full_live_in,
+        vp,
+        next_time(),
+        vec![key_ev(Key::Escape, true, false, Modifiers::NONE)],
+        false,
+    );
+    assert!(panel.is_escape_held());
+
+    // Simulate a frame where a global modal disabled the pane (`release_key_latches` called instead
+    // of `intercept_key` / `show_overlays`) while `Escape` repeats: event must remain unconsumed!
+    let mut escape_events_remaining_while_held = 0_usize;
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vp)),
+            focused: true,
+            time: Some(next_time()),
+            events: vec![key_ev(Key::Escape, true, true, Modifiers::NONE)],
+            ..Default::default()
+        },
+        |ctx| {
+            panel.release_key_latches(ctx);
+            escape_events_remaining_while_held = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter(|ev| {
+                        matches!(
+                            ev,
+                            Event::Key {
+                                key: Key::Escape,
+                                ..
+                            }
+                        )
+                    })
+                    .count()
+            });
+        },
+    );
+    assert!(panel.is_escape_held());
+    assert!(panel.overlay_rects().is_empty());
+    assert_eq!(
+        escape_events_remaining_while_held, 1,
+        "release_key_latches must never consume Escape events intended for global modals"
+    );
+
+    // Physical release frame while disabled: clears `escape_held` and still leaves event unconsumed.
+    let mut release_events_remaining = 0_usize;
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vp)),
+            focused: true,
+            time: Some(next_time()),
+            events: vec![key_ev(Key::Escape, false, false, Modifiers::NONE)],
+            ..Default::default()
+        },
+        |ctx| {
+            panel.release_key_latches(ctx);
+            release_events_remaining = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter(|ev| {
+                        matches!(
+                            ev,
+                            Event::Key {
+                                key: Key::Escape,
+                                ..
+                            }
+                        )
+                    })
+                    .count()
+            });
+        },
+    );
+    assert!(!panel.is_escape_held());
+    assert_eq!(release_events_remaining, 1);
 }

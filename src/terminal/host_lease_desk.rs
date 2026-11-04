@@ -50,6 +50,8 @@ fn copy(proof: &Ended) -> Ended {
 pub enum View {
     /// Nothing reported yet.
     Unknown,
+    /// A newer request superseded this access; its result is no longer retained here.
+    Superseded,
     /// A retry is queued: its report follows.
     Retrying,
     Saved,
@@ -109,6 +111,7 @@ impl Unsettled {
 
 // No Debug: the tokens hold leases.
 enum Status {
+    Superseded,
     Retrying,
     Saved,
     NotSaved(RetrySave),
@@ -169,6 +172,27 @@ pub struct DeskHandle {
     desk: Arc<Mutex<Desk>>,
 }
 
+/// Keeps a slot's reports visible while an opening travels from its worker to
+/// its pane. Dropping a failed opening removes only its subscription, not retries.
+pub struct Seat {
+    handle: DeskHandle,
+    slot: Slot,
+}
+
+impl Drop for Seat {
+    fn drop(&mut self) {
+        self.handle.unregister(&self.slot);
+    }
+}
+
+impl super::host_opening::Register for DeskHandle {
+    fn seat(&self, slot: &Slot) -> Result<Box<dyn Send>, super::host_opening::LocalError> {
+        DeskHandle::seat(self, slot)
+            .map(|seat| Box::new(seat) as Box<dyn Send>)
+            .map_err(|_| super::host_opening::LocalError)
+    }
+}
+
 impl LeaseDesk {
     pub fn new(keeper: Arc<Keeper>) -> Self {
         Self {
@@ -185,7 +209,8 @@ impl LeaseDesk {
 
     /// Once per frame, on the UI thread, without I/O: reads every keeper report (the desk is
     /// their only reader), admits the waiting proofs again, and lets settled entries go.
-    pub fn frame(&self) {
+    /// Returns whether this frame admitted a deferred cleanup write.
+    pub fn frame(&self) -> bool {
         let handle = &self.handle;
         let mut desk = handle.desk.lock().unwrap();
         // In the keeper's order: the last report of a slot is its state.
@@ -197,8 +222,14 @@ impl LeaseDesk {
                     entry.status = Some(Status::Forgotten);
                     entry.proof = None;
                 }
-                // The newer request that won sends its own report.
-                Report::Superseded(_) => {}
+                // Its newer request may already have been drained and pruned before
+                // this opening registered. Never invent a saved or failed result.
+                Report::Superseded(slot) => {
+                    let entry = desk.entry(&slot);
+                    if entry.status.is_none() {
+                        entry.status = Some(Status::Superseded);
+                    }
+                }
                 Report::NotKept(retry) => {
                     let slot = retry.slot().clone();
                     desk.entry(&slot).status = Some(Status::NotSaved(retry));
@@ -213,6 +244,7 @@ impl LeaseDesk {
         // room (a new slot while the keeper's table is full) must not hold back another that
         // has room (a slot the keeper already follows needs no new place in its table).
         let mut tried = 0;
+        let mut admitted = false;
         for entry in desk.entries.values_mut() {
             let Some(proof) = &entry.proof else {
                 continue;
@@ -222,7 +254,10 @@ impl LeaseDesk {
             }
             tried += 1;
             match handle.keeper.forget_ended(entry.slot.clone(), copy(proof)) {
-                Ok(()) => entry.proof = None,
+                Ok(()) => {
+                    entry.proof = None;
+                    admitted = true;
+                }
                 // Checked when it was handed in; nothing to keep.
                 Err(Refusal::InvalidProof) => entry.proof = None,
                 // No room (or never: the desk holds the keeper open): kept for the next frame.
@@ -230,10 +265,40 @@ impl LeaseDesk {
             }
         }
         desk.entries.retain(|_, entry| !entry.settled());
+        admitted
     }
 }
 
 impl DeskHandle {
+    /// Explicit user action, including after panes have closed. No I/O here;
+    /// retry tokens are admitted back to the keeper or remain owned by the desk.
+    pub fn retry_failures(&self) {
+        let slots: Vec<_> = self
+            .desk
+            .lock()
+            .unwrap()
+            .entries
+            .values()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    Some(Status::NotSaved(_) | Status::NotForgotten(_))
+                )
+            })
+            .map(|entry| entry.slot.clone())
+            .collect();
+        for slot in slots {
+            self.retry(&slot);
+        }
+    }
+
+    pub fn seat(&self, slot: &Slot) -> Result<Seat, TooManyPanes> {
+        self.register(slot)?;
+        Ok(Seat {
+            handle: self.clone(),
+            slot: slot.clone(),
+        })
+    }
     /// A pane shows `slot`. Pair it with `unregister`. The panes are counted with a checked
     /// addition: a count that cannot grow is refused, never wrapped.
     pub fn register(&self, slot: &Slot) -> Result<(), TooManyPanes> {
@@ -265,6 +330,7 @@ impl DeskHandle {
         }
         match entry.status {
             None => View::Unknown,
+            Some(Status::Superseded) => View::Superseded,
             Some(Status::Retrying) => View::Retrying,
             Some(Status::Saved) => View::Saved,
             Some(Status::NotSaved(_)) => View::NotSaved,

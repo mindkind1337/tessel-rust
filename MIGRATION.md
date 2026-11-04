@@ -321,3 +321,28 @@ client protocol and command worker over in-process pipes: silent-program input,
 modal/close-confirmation input isolation, detach without termination, and retaining
 the last screen while refusing input and resize after stream rejection all pass.
 These fixtures never open the owner store or connect to SSH.
+
+Managed opening now reserves persistence capacity before creating a remote
+process and retains a desk subscription through worker-to-pane handoff. A failed
+save remains recoverable after that pane closes. Creation grants have lower
+priority than committed control changes or confirmed termination, including when
+responses arrive out of order. A superseded creation never implies a successful
+or failed save; pending intent remains in the encrypted store for reconciliation.
+Validation before the shutdown extension: opening 54, keeper 63 and desk 34
+scoped tests pass (shared helpers overlap). Native workspace activation still
+requires application-level shutdown, action dispatch and explicit opening/list
+routing; these internal tests do not establish real-host or complete UI parity.
+
+The runtime now closes new RPC admissions only after explicit shutdown
+confirmation, counts opening workers through their last cleanup, and drains the
+last persistence reports after observing idle. Deferred cleanup admitted during
+that final drain requires another frame. Its application dialog is not wired yet.
+Final validation: opening 58, keeper 64, desk/runtime 37, terminal panel 11 and
+existing-terminal picker 6 suites pass. The filtered binary suite passes 51
+terminal/profile tests, including six native UI/protocol fixtures and the local
+modal-input regression; the inert native-workspace guard also passes. Strict
+Clippy passes for the binary and these five integration targets with all features.
+Formatting checks pass for the changed Rust sources. Native overlays retain pane
+clipping, stay below global dialogs, release IME/mouse state on input loss and
+preserve Escape for disabled panes. Local save states distinguish pending, failed
+and superseded access without inventing a saved result or a retry authority.
