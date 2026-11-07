@@ -655,8 +655,21 @@ provider secrets seal via Windows DPAPI (`provider-secrets.dat`); `scan_skills`
 and `install_skill_from_folder` enforce bounded symlink-free skill management;
 `upsert_json_mcp_server` / `remove_json_mcp_server` create `.tessel-bak` backups
 and `probe_mcp_stdio` runs bounded JSON-RPC `initialize` probes; `scan_project_context`
-estimates model-family token budgets while excluding `.env*`/keys; `AutomationsFile`
-enforces `>= 15m` cron validation, 64-bit FNV-1a `confirmed_sig` gating, concurrency
-caps and file-backed `prompt.md` execution; and up to 30 `CustomAgent` entries
-integrate across `Agents`, `Launcher`, `CommandPalette`, `launch.rs`, and portable
-backup stripping.
+estimates model-family token budgets while excluding `.env*`/keys; `AutomationsFile` enforces `>= 15m` cron validation, 64-bit FNV-1a `confirmed_sig`
+gating, concurrency caps and file-backed `prompt.md` execution; and up to 30
+`CustomAgent` entries integrate across `Agents`, `Launcher`, `CommandPalette`,
+`launch.rs`, and portable backup stripping.
+
+All 7 `SidePanel` tabs, `NotesPanel`, `ScmHistoryPanel`, and `ReviewPanel`
+integration (`side_panels_model.rs` + `side_panels_ui.rs` + `icons.rs` +
+`workspace.rs` + `app.rs` + `tests/ui_side_panels_and_review.rs`):
+`SideTab` expands cleanly to `Dashboard`, `Files`, `Changes`, `Tasks`,
+`TaskHistory` (`#[serde(alias = "taskHistory")]`), `History`, and
+`Conversations`, preserving `#[default] Files` and unknown-variant rejection.
+UI-agnostic `side_panels_model` provides `build_dashboard` (5-bucket status or
+project grouping + `sleepable_pane_ids`), `TaskHistoryStore` + formula-safe
+UTF-8 BOM `history_csv`, bounded `scan_past_sessions` + opt-in secret-masked
+transcript search, `ActivityStore` thread builder with media chips, `.tessel/notes.md`
+`NotesModel` with disk `mtime` conflict resolution, 5-color topological Git
+swimlane graph (`build_git_history_lanes`), and `load_branch_review` /
+`merge_review_branch` with `expect_head_oid` safety checks.

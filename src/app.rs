@@ -526,6 +526,12 @@ pub struct Tessel {
     status_bar: crate::status_strip::StatusBarState,
     status_telemetry: crate::status_metrics::StatusTelemetry,
     keep_awake: crate::status_metrics::KeepAwakeController,
+    side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
+    task_history_store: crate::side_panels_model::TaskHistoryStore,
+    activity_store: crate::side_panels_model::ActivityStore,
+    past_sessions_cache: Vec<crate::side_panels_model::SessionHistoryEntry>,
+    scm_commits_cache: Vec<crate::side_panels_model::CommitHistoryRow>,
+    scm_commits_project: Option<u64>,
     #[cfg(windows)]
     browser_tab_open: bool,
     #[cfg(windows)]
@@ -595,6 +601,14 @@ impl Tessel {
         let automations_store = store
             .as_ref()
             .map(|s| crate::automations::AutomationsFile::load(s.directory()))
+            .unwrap_or_default();
+        let task_history_store = store
+            .as_ref()
+            .map(|s| crate::side_panels_model::TaskHistoryStore::load(s.directory()))
+            .unwrap_or_default();
+        let activity_store = store
+            .as_ref()
+            .map(|s| crate::side_panels_model::ActivityStore::load(s.directory()))
             .unwrap_or_default();
         let mut app = Self {
             #[cfg(windows)]
@@ -717,6 +731,12 @@ impl Tessel {
                 move || ctx.request_repaint()
             }),
             keep_awake: Default::default(),
+            side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            task_history_store,
+            activity_store,
+            past_sessions_cache: Vec::new(),
+            scm_commits_cache: Vec::new(),
+            scm_commits_project: None,
             #[cfg(windows)]
             browser_tab_open: false,
             #[cfg(windows)]
@@ -2920,8 +2940,19 @@ impl Tessel {
             tr("Remote files"),
         ));
 
-        // 5. Task
+        // 5. Task & Side Panels
         let task_group = tr("Task");
+        let dashboard_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Dashboard;
+        commands.push(PaletteCommand::new(
+            "dashboard",
+            task_group,
+            tr(if dashboard_showing {
+                "Hide agent dashboard"
+            } else {
+                "Show agent dashboard"
+            }),
+        ));
         let tasks_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::Tasks;
         commands.push(
@@ -2936,8 +2967,56 @@ impl Tessel {
             )
             .with_shortcut("Ctrl+Shift+K"),
         );
+        let task_hist_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::TaskHistory;
+        commands.push(PaletteCommand::new(
+            "task_history",
+            task_group,
+            tr(if task_hist_showing {
+                "Hide task history"
+            } else {
+                "Show task history"
+            }),
+        ));
+        let past_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::History;
+        commands.push(PaletteCommand::new(
+            "history",
+            task_group,
+            tr(if past_showing {
+                "Hide past conversations"
+            } else {
+                "Show past conversations"
+            }),
+        ));
+        commands.push(PaletteCommand::new(
+            "sessions:modal",
+            task_group,
+            tr("Past conversations"),
+        ));
+        let conv_showing =
+            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Conversations;
+        commands.push(PaletteCommand::new(
+            "conversations",
+            task_group,
+            tr(if conv_showing {
+                "Hide conversation threads"
+            } else {
+                "Show conversation threads"
+            }),
+        ));
         if self.state.active_project.is_some() {
             commands.push(PaletteCommand::new("task:new", task_group, tr("New task…")));
+            commands.push(PaletteCommand::new(
+                "notes",
+                files_group,
+                tr("Project notes…"),
+            ));
+            commands.push(PaletteCommand::new(
+                "review",
+                task_group,
+                tr("Review task branch…"),
+            ));
         }
 
         // 6. Theme
@@ -3093,9 +3172,22 @@ impl Tessel {
                 "project:prev" => self.cycle_workspace(-1),
                 "project:next" => self.cycle_workspace(1),
                 "finder" => self.open_finder(),
+                "dashboard" => self.state.panels.toggle_right(RightTab::Dashboard),
                 "files" => self.state.panels.toggle_right(RightTab::Files),
                 "changes" => self.state.panels.toggle_right(RightTab::Changes),
                 "tasks" => self.state.panels.toggle_right(RightTab::Tasks),
+                "task_history" => self.state.panels.toggle_right(RightTab::TaskHistory),
+                "history" => {
+                    self.refresh_past_sessions();
+                    self.state.panels.toggle_right(RightTab::History);
+                }
+                "sessions:modal" => {
+                    self.refresh_past_sessions();
+                    self.side_panels_ui.sessions_modal_open = true;
+                }
+                "conversations" => self.state.panels.toggle_right(RightTab::Conversations),
+                "notes" => self.open_notes_modal(),
+                "review" => self.open_review_modal(),
                 "task:new" => {
                     self.state.panels.right_open = true;
                     self.state.panels.right_tab = RightTab::Tasks;
@@ -4009,6 +4101,7 @@ impl Tessel {
         let changes_badge = self.scm_state.badge_count();
         panel.show(ctx, |ui| {
             if self.native_modal_open()
+                || self.side_panels_ui.any_modal_open()
                 || self.pending_scm_discard.is_some()
                 || self.rename_project_modal.is_some()
             {
@@ -4017,6 +4110,13 @@ impl Tessel {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 for (tab, label, icon, shortcut, badge) in [
+                    (
+                        RightTab::Dashboard,
+                        "Dashboard",
+                        crate::icons::Icon::LayoutDashboard,
+                        "",
+                        0,
+                    ),
                     (
                         RightTab::Files,
                         "Files",
@@ -4038,8 +4138,33 @@ impl Tessel {
                         "Ctrl+Shift+K",
                         0,
                     ),
+                    (
+                        RightTab::TaskHistory,
+                        "Task history",
+                        crate::icons::Icon::ReceiptText,
+                        "",
+                        0,
+                    ),
+                    (
+                        RightTab::History,
+                        "Past conversations",
+                        crate::icons::Icon::History,
+                        "",
+                        0,
+                    ),
+                    (
+                        RightTab::Conversations,
+                        "Conversations",
+                        crate::icons::Icon::MessagesSquare,
+                        "",
+                        0,
+                    ),
                 ] {
-                    let tab_label = format!("{} ({shortcut})", tr(label));
+                    let tab_label = if shortcut.is_empty() {
+                        tr(label).to_owned()
+                    } else {
+                        format!("{} ({shortcut})", tr(label))
+                    };
                     let selected = self.state.panels.right_tab == tab;
                     let clicked = if badge > 0 {
                         crate::chrome::side_tab_with_badge(ui, icon, &tab_label, selected, badge)
@@ -4048,6 +4173,9 @@ impl Tessel {
                         crate::chrome::side_tab(ui, icon, &tab_label, selected).clicked()
                     };
                     if clicked {
+                        if tab == RightTab::History && self.past_sessions_cache.is_empty() {
+                            self.refresh_past_sessions();
+                        }
                         self.state.panels.right_tab = tab;
                     }
                 }
@@ -4070,13 +4198,27 @@ impl Tessel {
                     if crate::pane_header::button(ui, fs_icon, fs_tip).clicked() {
                         self.right_fullscreen = !self.right_fullscreen;
                     }
+                    if self.state.active_project.is_some()
+                        && crate::pane_header::button(
+                            ui,
+                            crate::icons::Icon::NotebookPen,
+                            tr("Project notes…"),
+                        )
+                        .clicked()
+                    {
+                        self.open_notes_modal();
+                    }
                 });
             });
             ui.separator();
             match self.state.panels.right_tab {
+                RightTab::Dashboard => self.dashboard_view(ui),
                 RightTab::Files => self.explorer(ui),
                 RightTab::Changes => self.git_view(ui),
                 RightTab::Tasks => self.tasks(ui),
+                RightTab::TaskHistory => self.task_history_view(ui),
+                RightTab::History => self.session_history_view(ui),
+                RightTab::Conversations => self.conversations_view(ui),
             }
         });
     }
@@ -5571,6 +5713,17 @@ impl Tessel {
                 column: task.column,
             })
             .collect();
+        if project.is_some() {
+            ui.horizontal(|ui| {
+                if ui.small_button(tr("Review task branch…")).clicked() {
+                    self.open_review_modal();
+                }
+                if ui.small_button(tr("Project notes…")).clicked() {
+                    self.open_notes_modal();
+                }
+            });
+            ui.add_space(2.0_f32);
+        }
         let action = self.tasks_board.show(
             ui,
             TasksBoardInput {
@@ -5583,8 +5736,64 @@ impl Tessel {
             return;
         };
         if let Some(action) = action {
+            let moved_to_done_title =
+                if let crate::tasks_board_panel::TasksBoardAction::Move { id, column: 3 } = &action
+                {
+                    self.state
+                        .tasks
+                        .iter()
+                        .find(|t| t.id == *id && t.project == project && t.column != 3)
+                        .map(|t| (t.id, t.title.clone()))
+                } else {
+                    None
+                };
             match crate::task_actions::apply(&mut self.state, project, action) {
-                Ok(true) => self.save(),
+                Ok(true) => {
+                    if let Some((task_id, title)) = moved_to_done_title {
+                        let proj_name = self
+                            .state
+                            .projects
+                            .iter()
+                            .find(|p| p.id == project)
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        let (agent_name, agent_kind) = self
+                            .sessions
+                            .iter()
+                            .find(|s| s.project == Some(project))
+                            .map(|s| {
+                                let kind = match &s.launch {
+                                    Launch::Agent(a) => a.clone(),
+                                    Launch::CodexChat => "codex".into(),
+                                    Launch::ClaudeChat => "claude".into(),
+                                    Launch::Shell => "shell".into(),
+                                    Launch::Ssh(h) => format!("ssh:{}", h.alias),
+                                };
+                                (s.label().to_owned(), kind)
+                            })
+                            .unwrap_or_default();
+                        self.task_history_store.record_completed(
+                            crate::side_panels_model::TaskHistoryRecord {
+                                id: 0,
+                                task_id,
+                                title,
+                                project_id: project,
+                                project_name: proj_name,
+                                agent_name,
+                                agent_kind,
+                                created_at_ms: 0,
+                                done_at_ms: crate::side_panels_model::now_unix_ms(),
+                                duration_ms: 0,
+                                tokens: 0,
+                                cost_usd: 0.0,
+                            },
+                        );
+                        if let Some(st) = &self.store {
+                            let _ = self.task_history_store.save(st.directory());
+                        }
+                    }
+                    self.save();
+                }
                 Ok(false) => {}
                 Err(error) => self.error = tr(&error).into(),
             }
@@ -9402,6 +9611,579 @@ impl Tessel {
             self.state.git_prefs.scm_view_mode = new_mode;
             self.save();
         }
+        if self.scm_commits_project != self.state.active_project {
+            self.scm_commits_project = self.state.active_project;
+            self.refresh_scm_commits();
+        }
+        if self.state.active().is_some()
+            && let Some(hist_act) = crate::side_panels_ui::show_scm_history_section(
+                ui,
+                &mut self.side_panels_ui,
+                &self.scm_commits_cache,
+                french,
+            )
+        {
+            self.handle_side_panels_action(ui.ctx(), hist_act);
+        }
+    }
+
+    fn refresh_scm_commits(&mut self) {
+        self.side_panels_ui.expanded_commits.clear();
+        self.side_panels_ui.commit_files_cache.clear();
+        if let Some(proj) = self.state.active() {
+            self.scm_commits_cache = crate::side_panels_model::load_git_commit_history(
+                &proj.path,
+                crate::side_panels_model::DEFAULT_COMMIT_LIMIT,
+            )
+            .unwrap_or_default();
+        } else {
+            self.scm_commits_cache.clear();
+        }
+    }
+
+    fn build_dashboard_items(&self) -> Vec<crate::side_panels_model::DashboardItem> {
+        use crate::side_panels_model::{DashboardItem, DashboardState};
+        let mut out = Vec::with_capacity(self.sessions.len());
+        for s in &self.sessions {
+            let project_name = self
+                .state
+                .projects
+                .iter()
+                .find(|p| Some(p.id) == s.project)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let is_chat = s.launch.native_chat().is_some();
+            let (agent_kind, state) = match &s.launch {
+                Launch::CodexChat => {
+                    let chat = self.chats.iter().find(|c| c.pane == s.id);
+                    let st = if chat.is_some_and(crate::chat::Chat::waiting_for_user) {
+                        DashboardState::Waiting
+                    } else if chat.is_some_and(crate::chat::Chat::working) {
+                        DashboardState::Working
+                    } else {
+                        DashboardState::Idle
+                    };
+                    ("Codex Chat".to_owned(), st)
+                }
+                Launch::ClaudeChat => {
+                    let chat = self.claude_chats.iter().find(|c| c.pane == s.id);
+                    let st = if chat.is_some_and(crate::claude::Chat::waiting_for_user) {
+                        DashboardState::Waiting
+                    } else if chat.is_some_and(crate::claude::Chat::working) {
+                        DashboardState::Working
+                    } else {
+                        DashboardState::Idle
+                    };
+                    ("Claude Chat".to_owned(), st)
+                }
+                Launch::Agent(agent) => {
+                    let sleeping =
+                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let st = if sleeping {
+                        DashboardState::Sleeping
+                    } else if s.terminal.as_ref().is_some_and(Terminal::exited) {
+                        DashboardState::Done
+                    } else {
+                        DashboardState::Idle
+                    };
+                    (agent.clone(), st)
+                }
+                Launch::Shell => {
+                    let sleeping =
+                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let st = if sleeping {
+                        DashboardState::Sleeping
+                    } else if s.terminal.as_ref().is_some_and(Terminal::exited) {
+                        DashboardState::Done
+                    } else {
+                        DashboardState::Idle
+                    };
+                    ("Terminal".to_owned(), st)
+                }
+                Launch::Ssh(host) => {
+                    let sleeping =
+                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let st = if sleeping {
+                        DashboardState::Sleeping
+                    } else {
+                        DashboardState::Idle
+                    };
+                    (format!("SSH ({})", host.alias), st)
+                }
+            };
+            let branch = s
+                .project
+                .and_then(|pid| self.worktree_state.summary(pid))
+                .map(|sum| sum.branch.clone());
+            out.push(DashboardItem {
+                pane_id: s.id,
+                project_id: s.project,
+                project_name,
+                title: s.label().to_owned(),
+                agent_kind,
+                branch,
+                task_line: None,
+                state,
+                is_chat,
+                is_focused: self.active_session == Some(s.id),
+            });
+        }
+        out
+    }
+
+    fn dashboard_view(&mut self, ui: &mut egui::Ui) {
+        let items = self.build_dashboard_items();
+        let french = self.state.language == crate::i18n::Language::French;
+        if let Some(act) = crate::side_panels_ui::show_dashboard_panel(
+            ui,
+            &mut self.side_panels_ui,
+            &items,
+            french,
+        ) {
+            self.handle_side_panels_action(ui.ctx(), act);
+        }
+    }
+
+    fn task_history_view(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        if let Some(act) = crate::side_panels_ui::show_task_history_panel(
+            ui,
+            &mut self.side_panels_ui,
+            &self.task_history_store.records,
+            self.state.active_project,
+            french,
+        ) {
+            self.handle_side_panels_action(ui.ctx(), act);
+        }
+    }
+
+    fn refresh_past_sessions(&mut self) {
+        let live: Vec<crate::side_panels_model::SessionHistoryEntry> = self
+            .sessions
+            .iter()
+            .filter_map(|s| {
+                let agent_id = match &s.launch {
+                    Launch::Agent(a) => a.clone(),
+                    Launch::CodexChat => "codex".into(),
+                    Launch::ClaudeChat => "claude".into(),
+                    _ => return None,
+                };
+                Some(crate::side_panels_model::SessionHistoryEntry {
+                    id: s
+                        .conversation_id
+                        .clone()
+                        .unwrap_or_else(|| format!("pane-{}", s.id)),
+                    agent_id,
+                    title: s.label().to_owned(),
+                    folder: s.cwd.clone(),
+                    updated_at_ms: crate::side_panels_model::now_unix_ms(),
+                    file_path: None,
+                    open_pane_id: Some(s.id),
+                    transcript_snippet: None,
+                })
+            })
+            .collect();
+        let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+        self.past_sessions_cache = crate::side_panels_model::scan_past_sessions(
+            home.as_deref(),
+            &live,
+            self.side_panels_ui.sessions_limit,
+        );
+    }
+
+    fn session_history_view(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let active_root = self.state.active().map(|p| p.path.clone());
+        let ws_roots: Vec<PathBuf> = self.state.projects.iter().map(|p| p.path.clone()).collect();
+        if let Some(act) = crate::side_panels_ui::show_session_history_panel(
+            ui,
+            &mut self.side_panels_ui,
+            &self.past_sessions_cache,
+            active_root.as_deref(),
+            &ws_roots,
+            french,
+        ) {
+            self.handle_side_panels_action(ui.ctx(), act);
+        }
+    }
+
+    fn conversations_view(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        if let Some(act) = crate::side_panels_ui::show_conversations_panel(
+            ui,
+            &mut self.side_panels_ui,
+            &self.activity_store.messages,
+            french,
+        ) {
+            self.handle_side_panels_action(ui.ctx(), act);
+        }
+    }
+
+    fn open_notes_modal(&mut self) {
+        let root = self.state.active().map(|p| p.path.clone());
+        if let Err(e) = self.side_panels_ui.notes.load_project(root.as_deref()) {
+            self.error = e;
+            return;
+        }
+        self.side_panels_ui.notes_modal_open = true;
+    }
+
+    fn review_candidate_branches(&self) -> Vec<(String, Option<PathBuf>)> {
+        let Some(pid) = self.state.active_project else {
+            return Vec::new();
+        };
+        let Some(summary) = self.worktree_state.summary(pid) else {
+            return Vec::new();
+        };
+        summary
+            .worktrees
+            .iter()
+            .filter(|w| !w.is_primary && !w.branch.is_empty())
+            .map(|w| (w.branch.clone(), Some(PathBuf::from(&w.path))))
+            .collect()
+    }
+
+    fn open_review_modal(&mut self) {
+        let candidates = self.review_candidate_branches();
+        self.side_panels_ui.review_modal_open = true;
+        if let Some((first_br, first_wt)) = candidates.first().cloned() {
+            self.load_review_for_branch(first_br, first_wt);
+        } else {
+            self.side_panels_ui.review_snapshot = None;
+            self.side_panels_ui.review_error = None;
+        }
+    }
+
+    fn load_review_for_branch(&mut self, head_branch: String, worktree_path: Option<PathBuf>) {
+        let Some(proj) = self.state.active() else {
+            return;
+        };
+        let base_branch = self
+            .worktree_state
+            .summary(proj.id)
+            .map(|s| s.default_branch.clone())
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| "main".to_owned());
+        self.side_panels_ui.review_head_branch = head_branch.clone();
+        self.side_panels_ui.review_worktree_path = worktree_path.clone();
+        match crate::side_panels_model::load_branch_review(
+            &proj.path,
+            &base_branch,
+            &head_branch,
+            worktree_path.as_deref(),
+        ) {
+            Ok(snap) => {
+                let first_file = snap.files.first().map(|f| f.path.clone());
+                let merge_base = snap.merge_base.clone();
+                self.side_panels_ui.review_snapshot = Some(snap);
+                self.side_panels_ui.review_error = None;
+                if let Some(fp) = first_file {
+                    self.side_panels_ui.review_selected_diff =
+                        crate::side_panels_model::load_review_file_diff(
+                            &proj.path,
+                            &merge_base,
+                            &head_branch,
+                            &fp,
+                        )
+                        .unwrap_or_default();
+                    self.side_panels_ui.review_selected_file = Some(fp);
+                } else {
+                    self.side_panels_ui.review_selected_file = None;
+                    self.side_panels_ui.review_selected_diff.clear();
+                }
+            }
+            Err(err) => {
+                self.side_panels_ui.review_snapshot = None;
+                self.side_panels_ui.review_error = Some(err);
+            }
+        }
+    }
+
+    fn handle_side_panels_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::side_panels_ui::SidePanelsAction,
+    ) {
+        use crate::side_panels_ui::SidePanelsAction;
+        match action {
+            SidePanelsAction::FocusPane(pane_id) => {
+                if let Some(proj_id) = self
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == pane_id)
+                    .and_then(|s| s.project)
+                {
+                    self.state.active_project = Some(proj_id);
+                }
+                self.active_session = Some(pane_id);
+                self.view = View::Work;
+                self.side_panels_ui.sessions_modal_open = false;
+            }
+            SidePanelsAction::SleepPanes(ids) => {
+                for id in ids {
+                    if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id)
+                        && sess.launch.native_chat().is_none()
+                    {
+                        sess.terminal = None;
+                    }
+                }
+                self.save();
+            }
+            SidePanelsAction::RestartPane(pane_id) => {
+                if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id) {
+                    let prefs = match &session.launch {
+                        Launch::Agent(agent) => Some(crate::agent_preferences::for_pane_launch(
+                            &self.state,
+                            agent,
+                            self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                            session.session_options.as_ref(),
+                        )),
+                        _ => None,
+                    };
+                    session.restart(prefs);
+                }
+            }
+            SidePanelsAction::ClosePane(pane_id) => {
+                self.close_session(pane_id);
+            }
+            SidePanelsAction::ExportTaskHistoryCsv(csv) => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("tessel-task-history.csv")
+                    .add_filter("CSV", &["csv"])
+                    .save_file()
+                    && let Err(e) = std::fs::write(path, csv.as_bytes())
+                {
+                    self.error = e.to_string();
+                }
+            }
+            SidePanelsAction::ClearTaskHistory => {
+                self.task_history_store.clear();
+                if let Some(st) = &self.store {
+                    let _ = self.task_history_store.save(st.directory());
+                }
+            }
+            SidePanelsAction::RefreshSessions => {
+                self.refresh_past_sessions();
+            }
+            SidePanelsAction::ResumeSession {
+                agent_id,
+                session_id,
+                folder,
+            } => {
+                self.side_panels_ui.sessions_modal_open = false;
+                if let Some(proj) = self
+                    .state
+                    .projects
+                    .iter()
+                    .find(|p| folder.starts_with(&p.path))
+                {
+                    self.state.active_project = Some(proj.id);
+                }
+                let before = self.sessions.len();
+                self.new_session(Launch::Agent(agent_id));
+                if self.sessions.len() > before
+                    && let Some(sess) = self.sessions.last_mut()
+                {
+                    sess.conversation_id = Some(session_id);
+                }
+                self.save();
+            }
+            SidePanelsAction::DeleteSession(entry) => {
+                if let Err(e) = crate::side_panels_model::delete_session_file(&entry) {
+                    self.error = e;
+                } else {
+                    self.refresh_past_sessions();
+                }
+            }
+            SidePanelsAction::CopyText(text) => {
+                ctx.copy_text(text);
+            }
+            SidePanelsAction::RefreshCommits => {
+                self.refresh_scm_commits();
+            }
+            SidePanelsAction::ToggleExpandCommit(hash) => {
+                if !self.side_panels_ui.expanded_commits.remove(&hash) {
+                    if !self.side_panels_ui.commit_files_cache.contains_key(&hash)
+                        && let Some(proj) = self.state.active()
+                        && let Ok(files) =
+                            crate::side_panels_model::load_commit_files(&proj.path, &hash)
+                    {
+                        self.side_panels_ui
+                            .commit_files_cache
+                            .insert(hash.clone(), files);
+                    }
+                    self.side_panels_ui.expanded_commits.insert(hash);
+                }
+            }
+            SidePanelsAction::OpenCommitDiff {
+                commit_hash,
+                path,
+                pinned,
+            } => {
+                if let Some(proj) = self.state.active().cloned() {
+                    let short = &commit_hash[..commit_hash.len().min(7)];
+                    let short_file = std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&path);
+                    let title = format!("{short_file} ({short})");
+                    let full_path = proj.path.join(&path);
+                    let root = proj.path.clone();
+                    let sender = self.sender.clone();
+                    thread::spawn(move || {
+                        let result = crate::side_panels_model::load_commit_file_diff(
+                            &root,
+                            &commit_hash,
+                            &path,
+                        );
+                        let _ = sender.send(Message::DiffDocument {
+                            root,
+                            path: full_path,
+                            title,
+                            pinned,
+                            result,
+                        });
+                    });
+                }
+            }
+            SidePanelsAction::SaveNotes { force } => {
+                if let Err(e) = self.side_panels_ui.notes.save(force) {
+                    self.error = e;
+                }
+            }
+            SidePanelsAction::OpenNotesInEditor => {
+                if let Some(proj) = self.state.active().cloned() {
+                    let _ = self.side_panels_ui.notes.save(false);
+                    let notes_path = crate::side_panels_model::NotesModel::notes_path(&proj.path);
+                    if !notes_path.exists() {
+                        if let Some(parent) = notes_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(&notes_path, &self.side_panels_ui.notes.text);
+                    }
+                    self.side_panels_ui.notes_modal_open = false;
+                    self.open_document_at(proj.path, notes_path);
+                }
+            }
+            SidePanelsAction::SendPromptToActiveAgent(prompt) => {
+                if let Some(pane_id) = self.active_project_work_pane() {
+                    if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == pane_id)
+                        && let Some(term) = &mut sess.terminal
+                    {
+                        term.paste_text(&prompt);
+                    }
+                    self.activity_store
+                        .push(crate::side_panels_model::ActivityMessage {
+                            id: 0,
+                            thread_key: format!("you:{pane_id}"),
+                            thread_title: format!("You & Pane #{pane_id}"),
+                            pane_id: Some(pane_id),
+                            sender: "You".into(),
+                            recipient: format!("Pane #{pane_id}"),
+                            body: prompt,
+                            timestamp_ms: crate::side_panels_model::now_unix_ms(),
+                        });
+                    if let Some(st) = &self.store {
+                        let _ = self.activity_store.save(st.directory());
+                    }
+                    self.side_panels_ui.notes_modal_open = false;
+                    self.side_panels_ui.review_modal_open = false;
+                    self.view = View::Work;
+                }
+            }
+            SidePanelsAction::CloseNotesModal => {
+                self.side_panels_ui.notes_modal_open = false;
+            }
+            SidePanelsAction::CloseSessionsModal => {
+                self.side_panels_ui.sessions_modal_open = false;
+            }
+            SidePanelsAction::SelectReviewBranch {
+                head_branch,
+                worktree_path,
+            } => {
+                self.load_review_for_branch(head_branch, worktree_path);
+            }
+            SidePanelsAction::RefreshReview => {
+                let br = self.side_panels_ui.review_head_branch.clone();
+                let wt = self.side_panels_ui.review_worktree_path.clone();
+                if !br.is_empty() {
+                    self.load_review_for_branch(br, wt);
+                }
+            }
+            SidePanelsAction::SelectReviewFile(rel_path) => {
+                if let (Some(proj), Some(snap)) =
+                    (self.state.active(), &self.side_panels_ui.review_snapshot)
+                {
+                    self.side_panels_ui.review_selected_diff =
+                        crate::side_panels_model::load_review_file_diff(
+                            &proj.path,
+                            &snap.merge_base,
+                            &snap.head_branch,
+                            &rel_path,
+                        )
+                        .unwrap_or_default();
+                    self.side_panels_ui.review_selected_file = Some(rel_path);
+                }
+            }
+            SidePanelsAction::OpenReviewDiffInTab(rel_path) => {
+                if let (Some(proj), Some(snap)) = (
+                    self.state.active().cloned(),
+                    self.side_panels_ui.review_snapshot.clone(),
+                ) {
+                    let full_path = proj.path.join(&rel_path);
+                    let title = format!("{rel_path} ({})", snap.head_branch);
+                    let root = proj.path;
+                    let sender = self.sender.clone();
+                    thread::spawn(move || {
+                        let result = crate::side_panels_model::load_review_file_diff(
+                            &root,
+                            &snap.merge_base,
+                            &snap.head_branch,
+                            &rel_path,
+                        );
+                        let _ = sender.send(Message::DiffDocument {
+                            root,
+                            path: full_path,
+                            title,
+                            pinned: true,
+                            result,
+                        });
+                    });
+                    self.side_panels_ui.review_modal_open = false;
+                }
+            }
+            SidePanelsAction::PushReviewBranch(branch) => {
+                self.git_start_work(move |root| {
+                    crate::git::run(&root, &["push", "-u", "origin", &branch], None)
+                });
+            }
+            SidePanelsAction::MergeReviewBranch {
+                base_branch,
+                head_branch,
+                expect_head_oid,
+            } => {
+                if let Some(proj) = self.state.active().cloned() {
+                    match crate::side_panels_model::merge_review_branch(
+                        &proj.path,
+                        &base_branch,
+                        &head_branch,
+                        &expect_head_oid,
+                    ) {
+                        Ok(_) => {
+                            self.side_panels_ui.review_modal_open = false;
+                            self.scm_state.refresh();
+                            self.refresh_scm_commits();
+                        }
+                        Err(e) => {
+                            self.side_panels_ui.review_error = Some(e);
+                        }
+                    }
+                }
+            }
+            SidePanelsAction::CloseReviewModal => {
+                self.side_panels_ui.review_modal_open = false;
+            }
+        }
     }
 }
 impl eframe::App for Tessel {
@@ -10097,6 +10879,44 @@ impl eframe::App for Tessel {
             });
         }
         self.confirmations(ctx);
+        {
+            let french = self.state.language == crate::i18n::Language::French;
+            let proj_name = self
+                .state
+                .active()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            if let Some(act) = crate::side_panels_ui::show_notes_modal(
+                ctx,
+                &mut self.side_panels_ui,
+                &proj_name,
+                french,
+            ) {
+                self.handle_side_panels_action(ctx, act);
+            }
+            let active_root = self.state.active().map(|p| p.path.clone());
+            let ws_roots: Vec<PathBuf> =
+                self.state.projects.iter().map(|p| p.path.clone()).collect();
+            if let Some(act) = crate::side_panels_ui::show_sessions_modal(
+                ctx,
+                &mut self.side_panels_ui,
+                &self.past_sessions_cache,
+                active_root.as_deref(),
+                &ws_roots,
+                french,
+            ) {
+                self.handle_side_panels_action(ctx, act);
+            }
+            let candidates = self.review_candidate_branches();
+            if let Some(act) = crate::side_panels_ui::show_review_modal(
+                ctx,
+                &mut self.side_panels_ui,
+                &candidates,
+                french,
+            ) {
+                self.handle_side_panels_action(ctx, act);
+            }
+        }
         #[cfg_attr(not(windows), allow(unused_variables))]
         let ask_modal_open = if self.share.hosting() {
             let all_projects = self.live_share_project_list();
@@ -10112,6 +10932,7 @@ impl eframe::App for Tessel {
             self.show_native_drain(ctx);
             let browser_unblocked = self.view == View::Browser
                 && !self.native_modal_open()
+                && !self.side_panels_ui.any_modal_open()
                 && !ask_modal_open
                 && !self.share.has_pending_ask()
                 && !self.pending_exit

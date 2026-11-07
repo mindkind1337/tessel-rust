@@ -506,5 +506,19 @@
   "Notifications": "Notifications",
   "Voice typing": "Saisie vocale",
   "Developer tools": "Outils de d\u00e9veloppement",
-  "Automations": "Automatisations"
+  "Automations": "Automatisations",
+  "Dashboard": "Tableau de bord",
+  "Task history": "Historique des t\u00e2ches",
+  "Past conversations": "Conversations pass\u00e9es",
+  "Conversations": "Conversations",
+  "Project notes\u2026": "Notes du projet\u2026",
+  "Review task branch\u2026": "Examiner une branche\u2026",
+  "Show agent dashboard": "Afficher le tableau de bord des agents",
+  "Hide agent dashboard": "Masquer le tableau de bord des agents",
+  "Show task history": "Afficher l\u2019historique des t\u00e2ches",
+  "Hide task history": "Masquer l\u2019historique des t\u00e2ches",
+  "Show past conversations": "Afficher les conversations pass\u00e9es",
+  "Hide past conversations": "Masquer les conversations pass\u00e9es",
+  "Show conversation threads": "Afficher les fils de conversation",
+  "Hide conversation threads": "Masquer les fils de conversation"
 }

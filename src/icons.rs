@@ -65,10 +65,18 @@ pub enum Icon {
     Pencil,
     ShieldCheck,
     UserX,
+    LayoutDashboard,
+    ReceiptText,
+    History,
+    MessagesSquare,
+    NotebookPen,
+    GitPullRequest,
+    Moon,
+    Gauge,
 }
 
 impl Icon {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 57] = [
         Self::Search,
         Self::Plus,
         Self::ChevronDown,
@@ -118,6 +126,14 @@ impl Icon {
         Self::Pencil,
         Self::ShieldCheck,
         Self::UserX,
+        Self::LayoutDashboard,
+        Self::ReceiptText,
+        Self::History,
+        Self::MessagesSquare,
+        Self::NotebookPen,
+        Self::GitPullRequest,
+        Self::Moon,
+        Self::Gauge,
     ];
 }
 
@@ -441,7 +457,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         | Icon::Minimize2
         | Icon::Pencil
         | Icon::ShieldCheck
-        | Icon::UserX => {
+        | Icon::UserX
+        | Icon::LayoutDashboard
+        | Icon::ReceiptText
+        | Icon::History
+        | Icon::MessagesSquare
+        | Icon::NotebookPen
+        | Icon::GitPullRequest
+        | Icon::Moon
+        | Icon::Gauge => {
             let Some(vp) = Viewport::new(rect, 24.0_f32) else {
                 return;
             };
@@ -670,6 +694,81 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                         painter,
                         vp,
                         "M15.5 21v-2a4 4 0 0 0-4-4h-5a4 4 0 0 0-4 4v2M17 8.5l4.5 4.5M21.5 8.5L17 13",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::LayoutDashboard => {
+                    for (x, y, w, h) in [
+                        (3.0_f32, 3.0_f32, 7.0_f32, 9.0_f32),
+                        (14.0_f32, 3.0_f32, 7.0_f32, 5.0_f32),
+                        (14.0_f32, 12.0_f32, 7.0_f32, 9.0_f32),
+                        (3.0_f32, 16.0_f32, 7.0_f32, 5.0_f32),
+                    ] {
+                        painter.rect_stroke(
+                            vp.rect_xywh(x, y, w, h),
+                            vp.len(1.0_f32),
+                            stroke,
+                            StrokeKind::Middle,
+                        );
+                    }
+                }
+                Icon::ReceiptText => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1ZM14 8H8M16 12H8M13 16H8",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::History => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::MessagesSquare => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2ZM18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::NotebookPen => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4M2 6h4M2 10h4M2 14h4M2 18h4M20.5 5.5a1.5 1.5 0 0 0-2.1-2.1l-5.4 5.4-1 3.2 3.2-1Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::GitPullRequest => {
+                    painter.circle_stroke(vp.pt(18.0_f32, 18.0_f32), vp.len(3.0_f32), stroke);
+                    painter.circle_stroke(vp.pt(6.0_f32, 6.0_f32), vp.len(3.0_f32), stroke);
+                    painter.circle_stroke(vp.pt(6.0_f32, 18.0_f32), vp.len(3.0_f32), stroke);
+                    paint_svg_path(painter, vp, "M13 6h3a2 2 0 0 1 2 2v7M6 9v6", stroke, true);
+                }
+                Icon::Moon => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z",
+                        stroke,
+                        true,
+                    );
+                }
+                Icon::Gauge => {
+                    paint_svg_path(
+                        painter,
+                        vp,
+                        "M12 14l4-4M3.34 19a10 10 0 1 1 17.32 0",
                         stroke,
                         true,
                     );

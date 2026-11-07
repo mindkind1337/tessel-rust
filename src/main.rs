@@ -115,6 +115,8 @@ mod settings_surface;
 pub mod share;
 pub mod share_panel;
 pub mod shortcuts;
+pub mod side_panels_model;
+pub mod side_panels_ui;
 pub mod sidebar_model;
 mod ssh_config;
 pub mod ssh_hosts_panel;
