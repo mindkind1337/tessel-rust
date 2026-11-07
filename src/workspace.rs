@@ -15,6 +15,97 @@ const fn default_pane_broadcast() -> bool {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum RendererPreference {
+    #[default]
+    #[serde(alias = "gpui", alias = "auto")]
+    AutoGpui,
+    #[serde(alias = "compat", alias = "egui")]
+    CompatEgui,
+}
+
+impl RendererPreference {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoGpui => "auto_gpui",
+            Self::CompatEgui => "compat_egui",
+        }
+    }
+
+    #[must_use]
+    pub fn from_flag(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "gpui" | "auto" | "auto_gpui" | "default" => Some(Self::AutoGpui),
+            "compat" | "egui" | "compat_egui" | "opengl" => Some(Self::CompatEgui),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self, french: bool) -> &'static str {
+        match (self, french) {
+            (Self::AutoGpui, false) => "GPUI (GPU-accelerated, 1:1)",
+            (Self::AutoGpui, true) => "GPUI (accéléré GPU, 1:1)",
+            (Self::CompatEgui, false) => "Compatibility (OpenGL / egui)",
+            (Self::CompatEgui, true) => "Compatibilité (OpenGL / egui)",
+        }
+    }
+
+    #[must_use]
+    pub const fn description(self, french: bool) -> &'static str {
+        match (self, french) {
+            (Self::AutoGpui, false) => {
+                "Primary DirectX / Metal / Vulkan renderer with automatic fallback to Compatibility on older GPUs or Remote Desktop."
+            }
+            (Self::AutoGpui, true) => {
+                "Moteur principal DirectX / Metal / Vulkan avec repli automatique vers Compatibilité sur anciens GPU ou Bureau à distance."
+            }
+            (Self::CompatEgui, false) => {
+                "Universal OpenGL compatibility renderer for older hardware, VMs, and headless screenshot fixtures."
+            }
+            (Self::CompatEgui, true) => {
+                "Moteur de compatibilité OpenGL universel pour matériel ancien, machines virtuelles et captures."
+            }
+        }
+    }
+}
+
+/// Resolves the startup UI renderer from CLI flags (`--renderer gpui|compat`),
+/// `TESSEL_RENDERER` environment override, visual-test screenshot fixtures, and
+/// saved workspace preference (`AutoGpui` by default).
+#[must_use]
+pub fn resolve_startup_renderer(
+    args: &[String],
+    env_override: Option<&str>,
+    saved: RendererPreference,
+    visual_test_fixture: bool,
+) -> RendererPreference {
+    for (idx, arg) in args.iter().enumerate() {
+        if let Some(val) = arg.strip_prefix("--renderer=")
+            && let Some(pref) = RendererPreference::from_flag(val)
+        {
+            return pref;
+        }
+        if arg == "--renderer"
+            && let Some(next) = args.get(idx + 1)
+            && let Some(pref) = RendererPreference::from_flag(next)
+        {
+            return pref;
+        }
+    }
+    if let Some(env_val) = env_override
+        && let Some(pref) = RendererPreference::from_flag(env_val)
+    {
+        return pref;
+    }
+    if visual_test_fixture {
+        return RendererPreference::CompatEgui;
+    }
+    saved
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SideTab {
     Dashboard,
     #[default]
@@ -533,6 +624,8 @@ pub struct Workspace {
     pub active_project: Option<u64>,
     pub dark: bool,
     pub theme: Option<crate::theme_palettes::ThemeId>,
+    #[serde(default)]
+    pub renderer: RendererPreference,
     pub language: crate::i18n::Language,
     pub columns: usize,
     pub broadcast: bool,
@@ -590,6 +683,7 @@ impl Default for Workspace {
             active_project: None,
             dark: true,
             theme: None,
+            renderer: Default::default(),
             language: Default::default(),
             columns: 1,
             broadcast: false,

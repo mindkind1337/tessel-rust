@@ -8,6 +8,8 @@ use crate::{
 use eframe::egui;
 #[path = "app/floating_terminal.rs"]
 mod floating_terminal;
+#[path = "app/gpui_bridge.rs"]
+pub(crate) mod gpui_bridge;
 #[cfg(windows)]
 #[path = "app/native_terminals.rs"]
 mod native_terminals;
@@ -6777,6 +6779,40 @@ impl Tessel {
                 }
                 ui.add_space(2.0);
                 ui.small(tr("Show or hide the bottom status bar."));
+            });
+        ui.add_space(12.0);
+        let french = self.state.language == crate::i18n::Language::French;
+        egui::Frame::new()
+            .fill(spec.ui.surface)
+            .stroke(egui::Stroke::new(1.0_f32, spec.ui.border))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(680.0));
+                ui.strong(if french {
+                    "Moteur de rendu UI"
+                } else {
+                    "UI Renderer"
+                });
+                ui.add_space(6.0);
+                for pref in [
+                    workspace::RendererPreference::AutoGpui,
+                    workspace::RendererPreference::CompatEgui,
+                ] {
+                    if ui
+                        .radio_value(&mut self.state.renderer, pref, pref.label(french))
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    ui.small(pref.description(french));
+                    ui.add_space(4.0);
+                }
+                ui.small(if french {
+                    "Prend effet au prochain démarrage (ou via --renderer gpui|compat)."
+                } else {
+                    "Takes effect on next launch (or override per run with --renderer gpui|compat)."
+                });
             });
         if changed {
             self.save();

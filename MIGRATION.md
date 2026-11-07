@@ -732,3 +732,18 @@ integration suites), including the rounded dual-arc `Icon::Moon` vector fix acro
 `eframe`/`egui` compatibility renderer) is complete; Phase B layers the native
 1:1 `GPUI` primary renderer with `--renderer gpui` / `--renderer compat` and
 automatic runtime fallback.
+
+Phase B GPUI foundation, dual-renderer startup & 4-zone Flexbox shell (`Lot b174` —
+`Cargo.toml` + `workspace.rs` + `app/floating_terminal.rs` + `app/gpui_bridge.rs` +
+`gpui_ui/{mod,theme,icons,chrome,shell,tests}.rs` + `main.rs` + `tests/ui_gpui_shell.rs`):
+Integrates `gpui-ce 0.3` and `gpui_ce_platform 0.3` over the shared `app::Tessel`
+core (`new_for_gpui`, `gpui_snapshot`, `apply_gpui_action`), adds `RendererPreference`
+(`AutoGpui` default, `CompatEgui`), pure `resolve_startup_renderer` (`--renderer`,
+`TESSEL_RENDERER`, visual-test fixture auto-compat, and persisted `workspace.json`
+preference), `Settings > Appearance` `UI Renderer` selector, and panic/error-guarded
+`run_gpui_app()` with automatic runtime fallback to `eframe::run_native`. Transcribes
+all 7 `GpuiThemeTokens` palettes, sRGB `color_mix_srgb`, DirectWrite font stacks,
+35 embedded `resvg` vector icons + 6-tile `BrandLogo`, frameless `40px` toolbar with
+`WindowControlArea` caption drag/min/max/close hit-testing, `24px` broadcast/error
+strips, `24px` status bar, and the resizable 4-zone workspace shell (`Left Sidebar |
+Center ViewTabs + PaneGrid | Right 7-tab SidePanel`).

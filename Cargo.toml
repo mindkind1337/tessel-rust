@@ -23,6 +23,8 @@ tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", re
 tessel-host-client = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }
 tessel-host = { git = "https://github.com/mindkind1337/tessel-host", rev = "23b62ac09d70776d03fc4d91c2d8512c3c7addb8" }
 eframe = "=0.33.0"
+gpui = { package = "gpui-ce", version = "0.3" }
+gpui_platform = { package = "gpui_ce_platform", version = "0.3" }
 portable-pty = "=0.9.0"
 vt100 = "=0.15.2"
 serde = { version = "1", features = ["derive"] }

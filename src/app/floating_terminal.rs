@@ -79,9 +79,15 @@ pub(super) struct State {
 impl State {
     pub fn new(ctx: &egui::Context, saved: workspace::FloatingPreferences) -> Self {
         let ctx = ctx.clone();
+        Self::new_with_repaint(move || ctx.request_repaint(), saved)
+    }
+    pub fn new_with_repaint(
+        repaint: impl Fn() + Send + Sync + 'static,
+        saved: workspace::FloatingPreferences,
+    ) -> Self {
         Self {
             ui: FloatingTerminalState::from_saved(saved.open, saved.height),
-            runtime: Controller::new(move || ctx.request_repaint()),
+            runtime: Controller::new(repaint),
             title: "Terminal".into(),
             pending_title: None,
             toggle_id: None,
@@ -343,6 +349,17 @@ impl Tessel {
             Action::Show
         };
         self.floating_action(ctx, action);
+    }
+    pub(super) fn toggle_floating_headless(&mut self) {
+        if self.floating.ui.is_open() {
+            self.floating.ui.hide();
+        } else {
+            self.floating.ui.show();
+            if !self.floating.busy() {
+                self.start_floating(false);
+            }
+        }
+        self.save();
     }
     pub(super) fn show_floating(
         &mut self,

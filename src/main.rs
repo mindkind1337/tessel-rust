@@ -65,6 +65,7 @@ pub mod floating_terminal_panel;
 pub mod floating_terminal_runtime;
 mod git;
 mod git_result;
+pub mod gpui_ui;
 pub mod help_panel;
 mod host_actions;
 pub mod host_existing_terminals_panel;
@@ -201,13 +202,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--self-test-vault") {
         return browser::vault_smoke::run();
     }
+    let args: Vec<String> = std::env::args().collect();
+    let env_renderer = std::env::var("TESSEL_RENDERER").ok();
+    let visual_test_fixture = std::env::var_os("TESSEL_SETTLED_SCREENSHOT").is_some()
+        || args.iter().any(|a| a.ends_with("-fixture"));
+    let saved_renderer = peek_saved_renderer(&args);
+    let chosen_renderer = workspace::resolve_startup_renderer(
+        &args,
+        env_renderer.as_deref(),
+        saved_renderer,
+        visual_test_fixture,
+    );
+
+    if chosen_renderer == workspace::RendererPreference::AutoGpui {
+        match gpui_ui::run_gpui_app() {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!(
+                    "[Tessel] GPUI primary renderer unavailable ({err}); falling back to Compatibility (egui/OpenGL) renderer."
+                );
+            }
+        }
+    }
+
+    run_compat_egui_app(&args)
+}
+
+fn peek_saved_renderer(args: &[String]) -> workspace::RendererPreference {
+    #[derive(serde::Deserialize)]
+    struct RendererPeek {
+        #[serde(default)]
+        renderer: workspace::RendererPreference,
+    }
+
+    let data_dir = args
+        .windows(2)
+        .find(|pair| pair[0] == "--data-dir")
+        .map(|pair| std::path::PathBuf::from(&pair[1]))
+        .or_else(|| {
+            directories::ProjectDirs::from("com", "Tessel", "TesselRust")
+                .map(|d| d.data_local_dir().to_owned())
+        });
+
+    data_dir
+        .and_then(|dir| std::fs::read_to_string(dir.join("workspace.json")).ok())
+        .and_then(|raw| serde_json::from_str::<RendererPeek>(&raw).ok())
+        .map(|p| p.renderer)
+        .unwrap_or_default()
+}
+
+fn run_compat_egui_app(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Tessel Rust",
         eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_inner_size(
                     if cfg!(feature = "visual-test")
-                        && std::env::args().any(|a| a == "--compact-fixture")
+                        && args.iter().any(|a| a == "--compact-fixture")
                     {
                         [800.0, 520.0]
                     } else {

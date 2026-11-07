@@ -1,0 +1,798 @@
+//! Unified `40px` frameless toolbar, `24px` broadcast/error banners, and `24px` status bar
+//! for the GPUI primary renderer (`1:1` layout with `C:\Tessel`).
+
+use super::{
+    TesselGpuiRoot,
+    icons::{GpuiIcon, render_brand_logo},
+    theme::{
+        BROADCAST_BANNER_HEIGHT_PX, CAPTION_BTN_WIDTH_PX, GpuiThemeTokens, STATUSBAR_HEIGHT_PX,
+        TOOLBAR_BTN_HEIGHT_PX, TOOLBAR_HEIGHT_PX, TOOLBAR_ICON_BTN_WIDTH_PX, rgba_with_alpha,
+    },
+};
+use crate::app::gpui_bridge::{GpuiAction, GpuiWorkspaceSnapshot};
+use gpui::{
+    Context, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, WindowControlArea, div,
+    prelude::FluentBuilder as _, px,
+};
+
+pub(crate) fn render_toolbar(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    is_maximized: bool,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let tb = &snapshot.toolbar;
+    let french = snapshot.french;
+
+    let search_placeholder = if french {
+        "Rechercher ou lancer une commande..."
+    } else {
+        "Search or run a command..."
+    };
+    let broadcast_label = if french { "Diffusion" } else { "Broadcast" };
+    let share_label = if french { "Partage" } else { "Live Share" };
+
+    div()
+        .id("gpui-toolbar")
+        .h(px(TOOLBAR_HEIGHT_PX))
+        .w_full()
+        .flex()
+        .items_center()
+        .bg(tokens.titlebar_bg)
+        .border_b_1()
+        .border_color(tokens.border)
+        .text_color(tokens.text)
+        .text_size(px(12.0))
+        // Left cluster: Brand mosaic + Sidebar toggle + Quick launch pills
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .pl(px(10.0))
+                .pr(px(6.0))
+                .h_full()
+                .child(
+                    div()
+                        .id("toolbar-brand-drag")
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .pr(px(4.0))
+                        .h_full()
+                        .window_control_area(WindowControlArea::Drag)
+                        .child(render_brand_logo(tokens))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(tokens.text_strong)
+                                .child("Tessel"),
+                        ),
+                )
+                .child(toolbar_icon_btn(
+                    "btn-toggle-left-sidebar",
+                    GpuiIcon::SidebarLeft,
+                    tb.left_open,
+                    tokens,
+                    GpuiAction::ToggleLeftSidebar,
+                    cx,
+                ))
+                .when(tb.has_active_project, |el| {
+                    let shell_title: SharedString = tb.preferred_shell_label.clone().into();
+                    let mut row = el
+                        .child(
+                            div()
+                                .id("btn-new-shell")
+                                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                                .px(px(8.0))
+                                .rounded(px(tokens.radius_px))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.0))
+                                .bg(tokens.surface_2)
+                                .border_1()
+                                .border_color(tokens.border)
+                                .cursor_pointer()
+                                .hover(|s| {
+                                    s.bg(tokens.surface_3).border_color(tokens.border_strong)
+                                })
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.dispatch(GpuiAction::NewShell, cx);
+                                }))
+                                .child(GpuiIcon::Plus.render(12.0, tokens.text_strong))
+                                .child(GpuiIcon::Terminal.render(13.0, tokens.accent))
+                                .child(div().text_color(tokens.text_strong).child(shell_title)),
+                        )
+                        .child(
+                            div()
+                                .id("btn-launch-codex-chat")
+                                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                                .px(px(8.0))
+                                .rounded(px(tokens.radius_px))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.0))
+                                .bg(tokens.surface)
+                                .border_1()
+                                .border_color(tokens.border)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens.surface_2).border_color(tokens.accent))
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.dispatch(GpuiAction::LaunchCodexChat, cx);
+                                }))
+                                .child(GpuiIcon::Sparkles.render(12.5, tokens.accent))
+                                .child(div().text_color(tokens.text).child("Codex")),
+                        )
+                        .child(
+                            div()
+                                .id("btn-launch-claude-chat")
+                                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                                .px(px(8.0))
+                                .rounded(px(tokens.radius_px))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.0))
+                                .bg(tokens.surface)
+                                .border_1()
+                                .border_color(tokens.border)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens.surface_2).border_color(tokens.accent))
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.dispatch(GpuiAction::LaunchClaudeChat, cx);
+                                }))
+                                .child(GpuiIcon::Sparkles.render(12.5, tokens.warn))
+                                .child(div().text_color(tokens.text).child("Claude")),
+                        );
+
+                    for (idx, (id, label)) in tb.installed_agents.iter().take(2).enumerate() {
+                        let agent_id = id.clone();
+                        let agent_label: SharedString = label.clone().into();
+                        row = row.child(
+                            div()
+                                .id(("btn-toolbar-agent", idx))
+                                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                                .px(px(7.0))
+                                .rounded(px(tokens.radius_px))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .bg(tokens.surface)
+                                .border_1()
+                                .border_color(tokens.border)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens.surface_2))
+                                .on_click(cx.listener(move |root, _, _, cx| {
+                                    root.dispatch(GpuiAction::LaunchAgent(agent_id.clone()), cx);
+                                }))
+                                .child(div().text_color(tokens.text_dim).child(agent_label)),
+                        );
+                    }
+                    row
+                }),
+        )
+        // Left drag spacer
+        .child(
+            div()
+                .id("toolbar-drag-left")
+                .flex_1()
+                .h_full()
+                .min_w(px(12.0))
+                .window_control_area(WindowControlArea::Drag),
+        )
+        // Centered Command Palette trigger (`Ctrl+K`)
+        .child(
+            div()
+                .id("btn-command-palette")
+                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                .w(px(280.0))
+                .px(px(10.0))
+                .rounded(px(tokens.radius_px))
+                .flex()
+                .items_center()
+                .justify_between()
+                .bg(if tb.command_palette_open {
+                    tokens.surface_3
+                } else {
+                    tokens.surface
+                })
+                .border_1()
+                .border_color(if tb.command_palette_open {
+                    tokens.accent
+                } else {
+                    tokens.border
+                })
+                .cursor_pointer()
+                .hover(|s| s.bg(tokens.surface_2).border_color(tokens.border_strong))
+                .on_click(cx.listener(|root, _, _, cx| {
+                    root.dispatch(GpuiAction::ToggleCommandPalette, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .overflow_hidden()
+                        .child(GpuiIcon::Search.render(13.0, tokens.text_dim))
+                        .child(
+                            div()
+                                .text_color(tokens.text_dim)
+                                .truncate()
+                                .child(search_placeholder),
+                        ),
+                )
+                .child(
+                    div()
+                        .px(px(5.0))
+                        .py(px(1.0))
+                        .rounded(px(4.0))
+                        .bg(tokens.surface_2)
+                        .border_1()
+                        .border_color(tokens.border)
+                        .text_size(px(10.5))
+                        .text_color(tokens.text_dim)
+                        .child("Ctrl+K"),
+                ),
+        )
+        // Right drag spacer
+        .child(
+            div()
+                .id("toolbar-drag-right")
+                .flex_1()
+                .h_full()
+                .min_w(px(12.0))
+                .window_control_area(WindowControlArea::Drag),
+        )
+        // Right controls + Window caption buttons
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .h_full()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .id("btn-broadcast-toggle")
+                        .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                        .px(px(8.0))
+                        .rounded(px(tokens.radius_px))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .bg(if tb.broadcast_enabled {
+                            rgba_with_alpha(tokens.warn, 0.20)
+                        } else {
+                            tokens.surface
+                        })
+                        .border_1()
+                        .border_color(if tb.broadcast_enabled {
+                            tokens.warn
+                        } else {
+                            tokens.border
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.dispatch(GpuiAction::ToggleBroadcastMode, cx);
+                        }))
+                        .child(GpuiIcon::Radio.render(
+                            13.0,
+                            if tb.broadcast_enabled {
+                                tokens.warn
+                            } else {
+                                tokens.text_dim
+                            },
+                        ))
+                        .child(
+                            div()
+                                .text_color(if tb.broadcast_enabled {
+                                    tokens.broadcast_banner_fg
+                                } else {
+                                    tokens.text_dim
+                                })
+                                .child(if tb.broadcast_count > 0 {
+                                    SharedString::from(format!(
+                                        "{broadcast_label} ({})",
+                                        tb.broadcast_count
+                                    ))
+                                } else {
+                                    SharedString::new_static(broadcast_label)
+                                }),
+                        ),
+                )
+                .child(toolbar_icon_btn(
+                    "btn-autotile-grid",
+                    GpuiIcon::LayoutGrid,
+                    false,
+                    tokens,
+                    GpuiAction::AutoTilePanes,
+                    cx,
+                ))
+                .child(toolbar_icon_btn(
+                    "btn-floating-terminal",
+                    GpuiIcon::PanelBottom,
+                    tb.floating_open,
+                    tokens,
+                    GpuiAction::ToggleFloatingTerminal,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .id("btn-live-share")
+                        .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                        .px(px(8.0))
+                        .rounded(px(tokens.radius_px))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .bg(if tb.share_active {
+                            rgba_with_alpha(tokens.ok_green, 0.18)
+                        } else {
+                            tokens.surface
+                        })
+                        .border_1()
+                        .border_color(if tb.share_active {
+                            tokens.ok_green
+                        } else {
+                            tokens.border
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.dispatch(GpuiAction::OpenLiveShare, cx);
+                        }))
+                        .child(GpuiIcon::Share2.render(
+                            13.0,
+                            if tb.share_active {
+                                tokens.ok_green
+                            } else {
+                                tokens.text_dim
+                            },
+                        ))
+                        .child(div().text_color(tokens.text).child(share_label)),
+                )
+                .when(tb.has_active_project, |el| {
+                    el.child(toolbar_icon_btn(
+                        "btn-github-dialog",
+                        GpuiIcon::Github,
+                        false,
+                        tokens,
+                        GpuiAction::OpenGitHubDialog,
+                        cx,
+                    ))
+                })
+                .when(tb.waiting_agents_count > 0, |el| {
+                    let count_str = SharedString::from(tb.waiting_agents_count.to_string());
+                    el.child(
+                        div()
+                            .id("pill-waiting-agents")
+                            .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                            .px(px(7.0))
+                            .rounded(px(tokens.radius_px))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .bg(rgba_with_alpha(tokens.warn, 0.18))
+                            .border_1()
+                            .border_color(tokens.warn)
+                            .child(GpuiIcon::Activity.render(12.5, tokens.warn))
+                            .child(div().text_color(tokens.warn).child(count_str)),
+                    )
+                })
+                .when(tb.unread_notifications > 0, |el| {
+                    let notif_str = SharedString::from(tb.unread_notifications.to_string());
+                    el.child(
+                        div()
+                            .id("pill-notifications")
+                            .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                            .px(px(7.0))
+                            .rounded(px(tokens.radius_px))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .bg(tokens.accent_soft_bg)
+                            .border_1()
+                            .border_color(tokens.accent)
+                            .child(GpuiIcon::Bell.render(12.5, tokens.accent))
+                            .child(div().text_color(tokens.text_strong).child(notif_str)),
+                    )
+                })
+                .child(toolbar_icon_btn(
+                    "btn-help",
+                    GpuiIcon::HelpCircle,
+                    false,
+                    tokens,
+                    GpuiAction::OpenHelp,
+                    cx,
+                ))
+                .child(toolbar_icon_btn(
+                    "btn-settings",
+                    GpuiIcon::Settings,
+                    false,
+                    tokens,
+                    GpuiAction::OpenSettings,
+                    cx,
+                ))
+                .child(toolbar_icon_btn(
+                    "btn-toggle-right-sidebar",
+                    GpuiIcon::SidebarRight,
+                    tb.right_open,
+                    tokens,
+                    GpuiAction::ToggleRightSidebar,
+                    cx,
+                ))
+                // Native Win32/Client caption buttons (`3 × 46×40px`)
+                .child(
+                    div()
+                        .ml(px(6.0))
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .child(
+                            div()
+                                .id("win-btn-minimize")
+                                .w(px(CAPTION_BTN_WIDTH_PX))
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .window_control_area(WindowControlArea::Min)
+                                .hover(|s| s.bg(tokens.surface_2))
+                                .on_click(|_, window: &mut Window, _| {
+                                    window.minimize_window();
+                                })
+                                .child(GpuiIcon::WinMinimize.render(10.0, tokens.titlebar_symbol)),
+                        )
+                        .child(
+                            div()
+                                .id("win-btn-maximize")
+                                .w(px(CAPTION_BTN_WIDTH_PX))
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .window_control_area(WindowControlArea::Max)
+                                .hover(|s| s.bg(tokens.surface_2))
+                                .on_click(|_, window: &mut Window, _| {
+                                    window.zoom_window();
+                                })
+                                .child(if is_maximized {
+                                    GpuiIcon::WinRestore.render(10.0, tokens.titlebar_symbol)
+                                } else {
+                                    GpuiIcon::WinMaximize.render(10.0, tokens.titlebar_symbol)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("win-btn-close")
+                                .w(px(CAPTION_BTN_WIDTH_PX))
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .window_control_area(WindowControlArea::Close)
+                                .hover(|s| s.bg(tokens.caption_close_hover_bg))
+                                .on_click(|_, window: &mut Window, _| {
+                                    window.remove_window();
+                                })
+                                .child(GpuiIcon::WinClose.render(10.0, tokens.titlebar_symbol)),
+                        ),
+                ),
+        )
+}
+
+fn toolbar_icon_btn(
+    id: &'static str,
+    icon: GpuiIcon,
+    active: bool,
+    tokens: &GpuiThemeTokens,
+    action: GpuiAction,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .w(px(TOOLBAR_ICON_BTN_WIDTH_PX))
+        .h(px(TOOLBAR_BTN_HEIGHT_PX))
+        .rounded(px(tokens.radius_px))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if active {
+            tokens.accent_soft_bg
+        } else {
+            gpui::rgba(0x0000_0000)
+        })
+        .when(active, |el| el.border_1().border_color(tokens.accent))
+        .cursor_pointer()
+        .hover(|s| s.bg(tokens.surface_2))
+        .on_click(cx.listener(move |root, _, _, cx| {
+            root.dispatch(action.clone(), cx);
+        }))
+        .child(icon.render(
+            14.5,
+            if active {
+                tokens.accent
+            } else {
+                tokens.text_dim
+            },
+        ))
+}
+
+pub(crate) fn render_broadcast_banner(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> Option<impl IntoElement> {
+    if !snapshot.toolbar.broadcast_enabled {
+        return None;
+    }
+    let msg = if snapshot.french {
+        format!(
+            "Mode diffusion actif — la saisie clavier est envoyée à {} terminal(aux).",
+            snapshot.toolbar.broadcast_count
+        )
+    } else {
+        format!(
+            "Broadcast mode active — keystrokes are sent to {} terminal pane(s).",
+            snapshot.toolbar.broadcast_count
+        )
+    };
+    let stop_label = if snapshot.french {
+        "Arrêter"
+    } else {
+        "Turn off"
+    };
+
+    Some(
+        div()
+            .id("gpui-broadcast-banner")
+            .h(px(BROADCAST_BANNER_HEIGHT_PX))
+            .w_full()
+            .px(px(12.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .bg(tokens.broadcast_banner_bg)
+            .border_b_1()
+            .border_color(rgba_with_alpha(tokens.warn, 0.45))
+            .text_size(px(11.5))
+            .text_color(tokens.broadcast_banner_fg)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(GpuiIcon::Radio.render(12.5, tokens.warn))
+                    .child(SharedString::from(msg)),
+            )
+            .child(
+                div()
+                    .id("btn-stop-broadcast")
+                    .px(px(7.0))
+                    .py(px(1.5))
+                    .rounded(px(4.0))
+                    .bg(rgba_with_alpha(tokens.warn, 0.22))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgba_with_alpha(tokens.warn, 0.35)))
+                    .on_click(cx.listener(|root, _, _, cx| {
+                        root.dispatch(GpuiAction::ToggleBroadcastMode, cx);
+                    }))
+                    .child(stop_label),
+            ),
+    )
+}
+
+pub(crate) fn render_error_banner(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> Option<impl IntoElement> {
+    let err = snapshot.toolbar.error_banner.as_ref()?;
+    Some(
+        div()
+            .id("gpui-error-banner")
+            .min_h(px(24.0))
+            .w_full()
+            .px(px(12.0))
+            .py(px(3.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .bg(rgba_with_alpha(tokens.danger, 0.18))
+            .border_b_1()
+            .border_color(tokens.danger)
+            .text_size(px(11.5))
+            .text_color(tokens.text_strong)
+            .child(SharedString::from(err.clone()))
+            .child(
+                div()
+                    .id("btn-dismiss-error")
+                    .p(px(2.0))
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(|root, _, _, cx| {
+                        root.dispatch(GpuiAction::DismissError, cx);
+                    }))
+                    .child(GpuiIcon::Close.render(12.0, tokens.text_strong)),
+            ),
+    )
+}
+
+pub(crate) fn render_status_bar(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    viewport_width_px: f32,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> Option<impl IntoElement> {
+    let sb = &snapshot.status_bar;
+    if !sb.visible {
+        return None;
+    }
+
+    let awake_text = match sb.keep_awake {
+        crate::workspace::KeepAwakeSetting::Off => {
+            if snapshot.french {
+                "Veille auto"
+            } else {
+                "Sleep normal"
+            }
+        }
+        crate::workspace::KeepAwakeSetting::Agents => {
+            if snapshot.french {
+                "Éveil (agents)"
+            } else {
+                "Awake (auto)"
+            }
+        }
+        crate::workspace::KeepAwakeSetting::On => {
+            if snapshot.french {
+                "Toujours éveillé"
+            } else {
+                "Always awake"
+            }
+        }
+    };
+
+    let sessions_label = if sb.working_agents > 0 {
+        format!("{} panes · {} active", sb.session_count, sb.working_agents)
+    } else {
+        format!("{} panes", sb.session_count)
+    };
+
+    Some(
+        div()
+            .id("gpui-statusbar")
+            .h(px(STATUSBAR_HEIGHT_PX))
+            .w_full()
+            .px(px(10.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .bg(tokens.chrome)
+            .border_t_1()
+            .border_color(tokens.border)
+            .text_size(px(11.0))
+            .text_color(tokens.text_dim)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("status-keep-awake")
+                            .px(px(6.0))
+                            .py(px(1.5))
+                            .rounded(px(4.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .bg(if sb.keep_awake_active {
+                                tokens.accent_soft_bg
+                            } else {
+                                gpui::rgba(0x0000_0000)
+                            })
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens.surface_2))
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(GpuiAction::CycleKeepAwake, cx);
+                            }))
+                            .child(GpuiIcon::Coffee.render(
+                                11.5,
+                                if sb.keep_awake_active {
+                                    tokens.accent
+                                } else {
+                                    tokens.text_dim
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .text_color(if sb.keep_awake_active {
+                                        tokens.text_strong
+                                    } else {
+                                        tokens.text_dim
+                                    })
+                                    .child(awake_text),
+                            ),
+                    )
+                    .when_some(
+                        sb.workspace_path
+                            .as_ref()
+                            .filter(|_| viewport_width_px >= 900.0),
+                        |el, ws_path| {
+                            el.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .max_w(px(340.0))
+                                    .overflow_hidden()
+                                    .child(GpuiIcon::Folder.render(11.5, tokens.text_dim))
+                                    .child(
+                                        div().truncate().child(SharedString::from(ws_path.clone())),
+                                    ),
+                            )
+                        },
+                    )
+                    .when_some(sb.git_branch.as_ref(), |el, branch| {
+                        el.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(GpuiIcon::GitBranch.render(11.5, tokens.accent))
+                                .child(
+                                    div()
+                                        .text_color(tokens.text)
+                                        .child(SharedString::from(branch.clone())),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(GpuiIcon::Terminal.render(11.5, tokens.text_dim))
+                            .child(SharedString::from(sessions_label)),
+                    )
+                    .when(sb.ssh_host_count > 0, |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(GpuiIcon::Server.render(11.5, tokens.text_dim))
+                                .child(SharedString::from(format!("SSH: {}", sb.ssh_host_count))),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .id("status-renderer-pill")
+                            .px(px(6.0))
+                            .py(px(1.0))
+                            .rounded(px(4.0))
+                            .bg(tokens.accent_soft_bg)
+                            .text_color(tokens.accent)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::OpenSettingsPage("appearance".into()),
+                                    cx,
+                                );
+                            }))
+                            .child("GPUI"),
+                    )
+                    .child(SharedString::from(sb.version_build.clone())),
+            ),
+    )
+}
