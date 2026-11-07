@@ -42,6 +42,7 @@ pub struct Terminal {
     output_revision: u64,
     last_output_at: Option<std::time::Instant>,
     size: (u16, u16),
+    scrollback_limit: usize,
     status: String,
     exited: bool,
     query_tail: Vec<u8>,
@@ -56,6 +57,7 @@ pub struct Terminal {
     find_query: String,
     find_index: usize,
     find_focus_pending: bool,
+    pending_multiline_paste: Option<String>,
     shift_context_requested: Option<egui::Pos2>,
     #[cfg(windows)]
     native_panel: crate::host_terminal_panel::HostTerminalPanel,
@@ -160,6 +162,25 @@ impl Terminal {
         bytes.push(b'\r');
         self.back_to_live();
         self.send(bytes)
+    }
+
+    pub fn run_quick_command(&mut self, text: &str, press_enter: bool) -> Result<(), String> {
+        if !self.accepts_broadcast_input() || text.is_empty() {
+            return Err("Terminal is not ready for input.".into());
+        }
+        if text.len() > 65536 {
+            return Err("Quick command exceeds 64 KiB.".into());
+        }
+        if press_enter {
+            let mut bytes = Vec::with_capacity(text.len() + 1);
+            bytes.extend_from_slice(text.as_bytes());
+            bytes.push(b'\r');
+            self.back_to_live();
+            self.send(bytes)
+        } else {
+            self.paste_text(text);
+            Ok(())
+        }
     }
 
     pub fn clear_screen(&mut self) {
@@ -540,7 +561,9 @@ impl Terminal {
             return;
         }
         let scroll = (self.parser.screen().scrollback() as i64).saturating_add(lines);
-        self.parser.set_scrollback(scroll.clamp(0, 1000) as usize);
+        let max_scroll = (self.scrollback_limit.clamp(500, 100_000)) as i64;
+        self.parser
+            .set_scrollback(scroll.clamp(0, max_scroll) as usize);
     }
     pub fn output(&self) -> String {
         self.parser.screen().contents()
@@ -657,18 +680,34 @@ impl Terminal {
         agent: &str,
         command: CommandBuilder,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::spawn_agent_command_with_scrollback(agent, command, 5000)
+    }
+
+    pub fn spawn_agent_command_with_scrollback(
+        agent: &str,
+        command: CommandBuilder,
+        scrollback: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let profile = directories::BaseDirs::new().and_then(|dirs| {
             crate::pane_model_profile::Profile::capture(agent, &command, dirs.home_dir())
         });
-        let mut terminal = Self::spawn_command(command)?;
+        let mut terminal = Self::spawn_command_with_scrollback(command, scrollback)?;
         terminal.model_profile = profile;
         Ok(terminal)
     }
 
     pub fn spawn_command(command: CommandBuilder) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self::with_backend(backend::Backend::Local(
-            local::LocalPty::spawn(command)?,
-        )))
+        Self::spawn_command_with_scrollback(command, 5000)
+    }
+
+    pub fn spawn_command_with_scrollback(
+        command: CommandBuilder,
+        scrollback: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self::with_backend_and_scrollback(
+            backend::Backend::Local(local::LocalPty::spawn(command)?),
+            scrollback,
+        ))
     }
 
     #[cfg(windows)]
@@ -678,15 +717,24 @@ impl Terminal {
         runtime: &host_runtime::Runtime,
         context: egui::Context,
     ) -> Self {
-        Self::with_backend(backend::Backend::Native(Box::new(native::Native::open(
-            host, target, runtime, context,
-        ))))
+        Self::with_backend_and_scrollback(
+            backend::Backend::Native(Box::new(native::Native::open(
+                host, target, runtime, context,
+            ))),
+            5000,
+        )
     }
 
+    #[cfg(test)]
     fn with_backend(backend: backend::Backend) -> Self {
+        Self::with_backend_and_scrollback(backend, 5000)
+    }
+
+    fn with_backend_and_scrollback(backend: backend::Backend, scrollback: usize) -> Self {
+        let scrollback = scrollback.clamp(500, 100_000);
         Self {
             backend,
-            parser: vt100::Parser::new(30, 100, 1000),
+            parser: vt100::Parser::new(30, 100, scrollback),
             model_dirty: true,
             observed_model: None,
             model_catalog: Vec::new(),
@@ -697,6 +745,7 @@ impl Terminal {
             output_revision: 0,
             last_output_at: None,
             size: (30, 100),
+            scrollback_limit: scrollback,
             status: String::new(),
             exited: false,
             query_tail: Vec::new(),
@@ -711,6 +760,7 @@ impl Terminal {
             find_query: String::new(),
             find_index: 0,
             find_focus_pending: false,
+            pending_multiline_paste: None,
             shift_context_requested: None,
             #[cfg(windows)]
             native_panel: Default::default(),
@@ -783,12 +833,66 @@ impl Terminal {
         self.show_with_id(ui, font_size, None);
     }
     pub fn show_with_id(&mut self, ui: &mut egui::Ui, font_size: f32, id: Option<egui::Id>) {
+        let legacy_prefs = crate::workspace::TerminalPreferences {
+            confirm_multiline_paste: false,
+            cursor_blink: false,
+            ..Default::default()
+        };
+        self.show_with_prefs(ui, font_size, &legacy_prefs, id);
+    }
+    pub fn show_with_prefs(
+        &mut self,
+        ui: &mut egui::Ui,
+        font_size: f32,
+        prefs: &crate::workspace::TerminalPreferences,
+        id: Option<egui::Id>,
+    ) {
         self.broadcast_outbox.clear();
         let is_floating = id.is_some();
         if !self.status.is_empty() && matches!(self.backend, backend::Backend::Local(_)) {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.status);
         }
         let mut refocus_terminal = false;
+        if let Some(pending_text) = self.pending_multiline_paste.clone() {
+            let french = crate::i18n::is_french();
+            let line_count = pending_text.lines().count().max(2);
+            let mut confirm_paste = false;
+            let mut cancel_paste = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    if french {
+                        format!("Coller {line_count} lignes dans ce terminal ?")
+                    } else {
+                        format!("Paste {line_count} lines into this terminal?")
+                    },
+                );
+                if ui
+                    .button(if french {
+                        "Coller quand même"
+                    } else {
+                        "Paste anyway"
+                    })
+                    .clicked()
+                {
+                    confirm_paste = true;
+                }
+                if ui
+                    .button(if french { "Annuler" } else { "Cancel" })
+                    .clicked()
+                {
+                    cancel_paste = true;
+                }
+            });
+            if confirm_paste {
+                self.pending_multiline_paste = None;
+                self.paste_text(&pending_text);
+                refocus_terminal = true;
+            } else if cancel_paste {
+                self.pending_multiline_paste = None;
+                refocus_terminal = true;
+            }
+        }
         if self.find_open {
             let french = crate::i18n::is_french();
             let hint = if french {
@@ -889,7 +993,12 @@ impl Terminal {
         }
         let font = egui::FontId::monospace(font_size);
         let cell_width = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
-        let line_height = ui.fonts_mut(|f| f.row_height(&font));
+        let line_scale = if prefs.line_height.is_finite() {
+            prefs.line_height.clamp(1.0_f32, 3.0_f32)
+        } else {
+            1.0_f32
+        };
+        let line_height = ui.fonts_mut(|f| f.row_height(&font)) * line_scale;
         let available = ui.available_size();
         let cols = ((available.x / cell_width) as u16).clamp(20, 300);
         let rows = ((available.y / line_height) as u16).clamp(5, 150);
@@ -949,7 +1058,10 @@ impl Terminal {
             && (refocus_terminal
                 || response.clicked()
                 || response.drag_started()
-                || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))
+                || response.contains_pointer() && ui.input(|i| i.pointer.any_pressed())
+                || prefs.focus_follows_mouse
+                    && response.contains_pointer()
+                    && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO))
         {
             response.request_focus();
         }
@@ -1050,6 +1162,18 @@ impl Terminal {
         {
             selection.end = cell_at(pos);
         }
+        if !overlay_pointer
+            && !focus_blocked
+            && (!tracking || shift)
+            && prefs.copy_on_select
+            && response.drag_stopped_by(egui::PointerButton::Primary)
+            && let Some(sel) = self.selection.filter(|s| s.start != s.end)
+        {
+            let text = self.selection_text(sel);
+            if !text.is_empty() {
+                ui.ctx().copy_text(text);
+            }
+        }
         if !overlay_pointer && !focus_blocked && response.clicked() {
             self.selection = None;
         }
@@ -1069,7 +1193,7 @@ impl Terminal {
             }
         }
         if !overlay_pointer && !focus_blocked && (!tracking || shift) {
-            if shift {
+            if shift || !prefs.right_click_paste {
                 if is_floating {
                     response.context_menu(|ui| {
                         if self.has_selection() && ui.button(tr("Copy selection")).clicked() {
@@ -1218,15 +1342,57 @@ impl Terminal {
         if response.has_focus() && ui.is_enabled() {
             let (row, col) = screen.cursor_position();
             if accepts_input && !screen.hide_cursor() && !self.viewing_scrollback() {
-                let pos = rect.min
-                    + egui::vec2(
-                        col as f32 * cell_width,
-                        (row as f32 + 1.0) * line_height - 2.0,
-                    );
-                painter.line_segment(
-                    [pos, pos + egui::vec2(cell_width, 0.0)],
-                    (2.0, palette.cursor),
-                );
+                #[cfg(feature = "visual-test")]
+                let blink_allowed = prefs.cursor_blink && !self.fixture;
+                #[cfg(not(feature = "visual-test"))]
+                let blink_allowed = prefs.cursor_blink;
+                let cursor_visible = if blink_allowed {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(530));
+                    let ms = (ui.input(|i| i.time.max(0.0)) * 1000.0) as u64;
+                    (ms / 530).is_multiple_of(2)
+                } else {
+                    true
+                };
+                if cursor_visible {
+                    let cell_origin =
+                        rect.min + egui::vec2(col as f32 * cell_width, row as f32 * line_height);
+                    match prefs.cursor_style {
+                        crate::workspace::TerminalCursorStyle::Block => {
+                            let block_rect = egui::Rect::from_min_size(
+                                cell_origin,
+                                egui::vec2(cell_width, line_height),
+                            );
+                            painter.rect_filled(
+                                block_rect,
+                                0.0,
+                                palette.cursor.gamma_multiply(0.45_f32),
+                            );
+                            painter.rect_stroke(
+                                block_rect,
+                                0.0,
+                                egui::Stroke::new(1.0_f32, palette.cursor),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        crate::workspace::TerminalCursorStyle::Bar => {
+                            let top = cell_origin + egui::vec2(1.0_f32, 1.0_f32);
+                            let bot = cell_origin + egui::vec2(1.0_f32, line_height - 1.0_f32);
+                            painter.line_segment([top, bot], (2.0, palette.cursor));
+                        }
+                        crate::workspace::TerminalCursorStyle::Underline => {
+                            let pos = rect.min
+                                + egui::vec2(
+                                    col as f32 * cell_width,
+                                    (row as f32 + 1.0) * line_height - 2.0,
+                                );
+                            painter.line_segment(
+                                [pos, pos + egui::vec2(cell_width, 0.0)],
+                                (2.0, palette.cursor),
+                            );
+                        }
+                    }
+                }
             }
             let cursor = egui::Rect::from_min_size(
                 rect.min + egui::vec2(f32::from(col) * cell_width, f32::from(row) * line_height),
@@ -1305,16 +1471,23 @@ impl Terminal {
                         }
                     }
                     egui::Event::Paste(text) => {
-                        if text.len() <= 65536 && !text.is_empty() {
-                            bcast_item = Some(BroadcastInput::Paste(text.clone()));
-                        }
                         if text.len() > 65536 {
                             self.status = "Paste limit: 64 KiB".into();
                             Vec::new()
-                        } else if self.parser.screen().bracketed_paste() {
-                            format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                        } else if prefs.confirm_multiline_paste
+                            && text.trim_end_matches(['\r', '\n']).contains('\n')
+                        {
+                            self.pending_multiline_paste = Some(text);
+                            Vec::new()
                         } else {
-                            text.into_bytes()
+                            if !text.is_empty() {
+                                bcast_item = Some(BroadcastInput::Paste(text.clone()));
+                            }
+                            if self.parser.screen().bracketed_paste() {
+                                format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                            } else {
+                                text.into_bytes()
+                            }
                         }
                     }
                     egui::Event::Key {

@@ -548,6 +548,12 @@ impl ExplorerTree {
     }
 
     #[allow(dead_code)]
+    #[must_use]
+    pub const fn compact_folders(&self) -> bool {
+        self.compact_folders
+    }
+
+    #[allow(dead_code)]
     pub fn set_filter_query(&mut self, query: impl Into<String>) {
         self.filter_query = query.into();
     }

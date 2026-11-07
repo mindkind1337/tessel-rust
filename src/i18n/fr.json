@@ -478,5 +478,18 @@
   "Task title cannot be empty.": "Le titre de la t\u00e2che ne peut pas \u00eatre vide.",
   "Line numbers": "Num\u00e9ros de ligne",
   "Syntax highlighting": "Coloration syntaxique",
-  "Install": "Installer"
+  "Install": "Installer",
+  "General": "G\u00e9n\u00e9ral",
+  "Editor": "\u00c9diteur",
+  "Git": "Git",
+  "Quick commands": "Commandes rapides",
+  "Stats": "Statistiques",
+  "Updates": "Mises \u00e0 jour",
+  "Close running agent?": "Fermer l\u2019agent en cours d\u2019ex\u00e9cution ?",
+  "This pane is still running an agent session. Closing it will stop the session.": "Ce panneau ex\u00e9cute encore une session d\u2019agent. Le fermer arr\u00eatera la session.",
+  "Close pane": "Fermer le panneau",
+  "Remove workspace from sidebar?": "Retirer l\u2019espace de travail de la barre lat\u00e9rale ?",
+  "Removes this workspace and closes its open panes in Tessel. Files on disk are untouched.": "Retire cet espace de travail et ferme ses panneaux ouverts dans Tessel. Les fichiers sur le disque ne sont pas modifi\u00e9s.",
+  "Remove workspace": "Retirer l\u2019espace de travail",
+  "Settings reset to defaults.": "Pr\u00e9f\u00e9rences r\u00e9initialis\u00e9es aux valeurs par d\u00e9faut."
 }

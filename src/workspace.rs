@@ -127,6 +127,26 @@ const fn default_tab_size() -> u8 {
     4
 }
 
+const fn default_auto_save_delay_ms() -> u32 {
+    1000
+}
+
+const fn default_terminal_scrollback() -> usize {
+    5000
+}
+
+const fn default_terminal_line_height() -> f32 {
+    1.0
+}
+
+fn default_branch_prefix_custom() -> String {
+    "agent".into()
+}
+
+const fn default_usage_refresh_minutes() -> u16 {
+    5
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EditorPreferences {
@@ -137,6 +157,15 @@ pub struct EditorPreferences {
     pub word_wrap: bool,
     #[serde(default = "default_tab_size")]
     pub tab_size: u8,
+    pub auto_save: bool,
+    #[serde(default = "default_auto_save_delay_ms")]
+    pub auto_save_delay_ms: u32,
+    #[serde(default = "default_true")]
+    pub preview_tabs: bool,
+    #[serde(default = "default_true")]
+    pub show_git_ignored: bool,
+    pub compact_folders: bool,
+    pub diff_word_wrap: bool,
 }
 
 impl Default for EditorPreferences {
@@ -146,6 +175,230 @@ impl Default for EditorPreferences {
             line_numbers: true,
             word_wrap: false,
             tab_size: 4,
+            auto_save: false,
+            auto_save_delay_ms: 1000,
+            preview_tabs: true,
+            show_git_ignored: true,
+            compact_folders: false,
+            diff_word_wrap: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GeneralPreferences {
+    #[serde(default = "default_true")]
+    pub restore_workspaces: bool,
+    #[serde(default = "default_true")]
+    pub confirm_close_agent: bool,
+    #[serde(default = "default_true")]
+    pub confirm_quit_running: bool,
+    pub workspace_dir: String,
+    #[serde(default = "default_true")]
+    pub confirm_delete_workspace: bool,
+}
+
+impl Default for GeneralPreferences {
+    fn default() -> Self {
+        Self {
+            restore_workspaces: true,
+            confirm_close_agent: true,
+            confirm_quit_running: true,
+            workspace_dir: String::new(),
+            confirm_delete_workspace: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalCursorStyle {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalPreferences {
+    #[serde(default = "default_terminal_scrollback")]
+    pub scrollback: usize,
+    #[serde(default = "default_terminal_line_height")]
+    pub line_height: f32,
+    pub cursor_style: TerminalCursorStyle,
+    #[serde(default = "default_true")]
+    pub cursor_blink: bool,
+    #[serde(default = "default_true")]
+    pub tile_new_panes: bool,
+    #[serde(default = "default_true")]
+    pub copy_on_select: bool,
+    #[serde(default = "default_true")]
+    pub right_click_paste: bool,
+    #[serde(default = "default_true")]
+    pub confirm_multiline_paste: bool,
+    pub focus_follows_mouse: bool,
+}
+
+impl Default for TerminalPreferences {
+    fn default() -> Self {
+        Self {
+            scrollback: 5000,
+            line_height: 1.0,
+            cursor_style: TerminalCursorStyle::Block,
+            cursor_blink: true,
+            tile_new_panes: true,
+            copy_on_select: true,
+            right_click_paste: true,
+            confirm_multiline_paste: true,
+            focus_follows_mouse: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenLinksTarget {
+    #[default]
+    Builtin,
+    System,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserPreferences {
+    pub open_links_in: OpenLinksTarget,
+    #[serde(default = "default_true")]
+    pub separate_agent_session: bool,
+}
+
+impl Default for BrowserPreferences {
+    fn default() -> Self {
+        Self {
+            open_links_in: OpenLinksTarget::Builtin,
+            separate_agent_session: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchPrefixMode {
+    GitUsername,
+    #[default]
+    Custom,
+    None,
+}
+
+#[allow(clippy::enum_variant_names)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScmOrderSetting {
+    #[default]
+    ChangesFirst,
+    StagedFirst,
+    UntrackedFirst,
+}
+
+impl ScmOrderSetting {
+    #[must_use]
+    pub const fn into_panel(self) -> crate::scm_changes_panel::ScmGroupOrder {
+        match self {
+            Self::ChangesFirst => crate::scm_changes_panel::ScmGroupOrder::ChangesFirst,
+            Self::StagedFirst => crate::scm_changes_panel::ScmGroupOrder::StagedFirst,
+            Self::UntrackedFirst => crate::scm_changes_panel::ScmGroupOrder::UntrackedFirst,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_panel(order: crate::scm_changes_panel::ScmGroupOrder) -> Self {
+        match order {
+            crate::scm_changes_panel::ScmGroupOrder::ChangesFirst => Self::ChangesFirst,
+            crate::scm_changes_panel::ScmGroupOrder::StagedFirst => Self::StagedFirst,
+            crate::scm_changes_panel::ScmGroupOrder::UntrackedFirst => Self::UntrackedFirst,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScmViewModeSetting {
+    #[default]
+    Tree,
+    List,
+}
+
+impl ScmViewModeSetting {
+    #[must_use]
+    pub const fn into_panel(self) -> crate::scm_changes_panel::ScmViewMode {
+        match self {
+            Self::Tree => crate::scm_changes_panel::ScmViewMode::Tree,
+            Self::List => crate::scm_changes_panel::ScmViewMode::List,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_panel(mode: crate::scm_changes_panel::ScmViewMode) -> Self {
+        match mode {
+            crate::scm_changes_panel::ScmViewMode::Tree => Self::Tree,
+            crate::scm_changes_panel::ScmViewMode::List => Self::List,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GitPreferences {
+    pub branch_prefix_mode: BranchPrefixMode,
+    #[serde(default = "default_branch_prefix_custom")]
+    pub branch_prefix_custom: String,
+    pub scm_group_order: ScmOrderSetting,
+    pub scm_view_mode: ScmViewModeSetting,
+}
+
+impl Default for GitPreferences {
+    fn default() -> Self {
+        Self {
+            branch_prefix_mode: BranchPrefixMode::Custom,
+            branch_prefix_custom: default_branch_prefix_custom(),
+            scm_group_order: ScmOrderSetting::ChangesFirst,
+            scm_view_mode: ScmViewModeSetting::Tree,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QuickCommand {
+    pub id: u64,
+    pub name: String,
+    pub text: String,
+    #[serde(default = "default_true")]
+    pub press_enter: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsagePercentDisplay {
+    #[default]
+    Used,
+    Remaining,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct StatsPreferences {
+    pub usage_percentage_display: UsagePercentDisplay,
+    #[serde(default = "default_usage_refresh_minutes")]
+    pub usage_refresh_minutes: u16,
+}
+
+impl Default for StatsPreferences {
+    fn default() -> Self {
+        Self {
+            usage_percentage_display: UsagePercentDisplay::Used,
+            usage_refresh_minutes: 5,
         }
     }
 }
@@ -262,7 +515,13 @@ pub struct Workspace {
     pub panels: Panels,
     pub sidebar: SidebarPreferences,
     pub launcher_prefs: LauncherPreferences,
+    pub general_prefs: GeneralPreferences,
+    pub terminal_prefs: TerminalPreferences,
     pub editor_prefs: EditorPreferences,
+    pub browser_prefs: BrowserPreferences,
+    pub git_prefs: GitPreferences,
+    pub quick_commands: Vec<QuickCommand>,
+    pub stats_prefs: StatsPreferences,
     pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
@@ -293,7 +552,13 @@ impl Default for Workspace {
             panels: Default::default(),
             sidebar: Default::default(),
             launcher_prefs: Default::default(),
+            general_prefs: Default::default(),
+            terminal_prefs: Default::default(),
             editor_prefs: Default::default(),
+            browser_prefs: Default::default(),
+            git_prefs: Default::default(),
+            quick_commands: Vec::new(),
+            stats_prefs: Default::default(),
             status_bar: Default::default(),
             floating: Default::default(),
             terminal_layouts: Default::default(),
@@ -339,6 +604,57 @@ impl Workspace {
         }
         if !(1..=8).contains(&self.editor_prefs.tab_size) {
             return Err("Invalid editor tab size.".into());
+        }
+        if !(250..=10_000).contains(&self.editor_prefs.auto_save_delay_ms) {
+            return Err("Invalid editor auto-save delay.".into());
+        }
+        if self.general_prefs.workspace_dir.len() > 4096
+            || self
+                .general_prefs
+                .workspace_dir
+                .chars()
+                .any(char::is_control)
+        {
+            return Err("Invalid worktrees directory override.".into());
+        }
+        if !(500..=100_000).contains(&self.terminal_prefs.scrollback)
+            || !self.terminal_prefs.line_height.is_finite()
+            || !(1.0..=3.0).contains(&self.terminal_prefs.line_height)
+        {
+            return Err("Invalid terminal preferences.".into());
+        }
+        if self.git_prefs.branch_prefix_custom.len() > 80
+            || self
+                .git_prefs
+                .branch_prefix_custom
+                .chars()
+                .any(char::is_control)
+        {
+            return Err("Invalid custom Git branch prefix.".into());
+        }
+        if !matches!(
+            self.stats_prefs.usage_refresh_minutes,
+            0 | 2 | 5 | 15 | 30 | 60
+        ) {
+            return Err("Invalid usage refresh interval.".into());
+        }
+        if self.quick_commands.len() > 200 {
+            return Err("Too many quick commands.".into());
+        }
+        let mut qc_ids = std::collections::HashSet::with_capacity(self.quick_commands.len());
+        for cmd in &self.quick_commands {
+            let trimmed_name = cmd.name.trim();
+            if !qc_ids.insert(cmd.id)
+                || cmd.id == u64::MAX
+                || trimmed_name.is_empty()
+                || cmd.name.chars().count() > 120
+                || cmd.name.chars().any(char::is_control)
+                || cmd.text.trim().is_empty()
+                || cmd.text.chars().count() > 20_000
+                || cmd.text.contains('\0')
+            {
+                return Err("Invalid quick command.".into());
+            }
         }
         if let Some(shell) = &self.launcher_prefs.preferred_shell
             && !matches!(shell.as_str(), "powershell" | "cmd" | "wsl" | "sh")

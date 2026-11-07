@@ -107,6 +107,7 @@ mod scm_state;
 pub mod session_option_picker_ui;
 pub mod settings_model;
 pub mod settings_nav;
+pub mod settings_pages_panel;
 mod settings_surface;
 pub mod share;
 pub mod share_panel;

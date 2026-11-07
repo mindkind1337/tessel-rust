@@ -160,6 +160,7 @@ fn configured_agent_command(
     Ok(c)
 }
 
+#[cfg(any(test, feature = "visual-test"))]
 pub fn command_with_preferences(
     launch: &Launch,
     cwd: &Path,

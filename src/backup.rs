@@ -17,6 +17,7 @@ struct Backup {
 pub fn export(path: &Path, state: &Workspace) -> Result<()> {
     state.validate()?;
     let mut portable = state.clone();
+    portable.quick_commands.clear();
     for prefs in portable.agent_prefs.values_mut() {
         prefs.env.clear();
     }
@@ -62,6 +63,7 @@ pub fn import(path: &Path) -> Result<Workspace> {
     }
     // A portable file must never introduce launch commands or environment
     // secrets. Visibility is inert and remains portable.
+    backup.workspace.quick_commands.clear();
     for prefs in backup.workspace.agent_prefs.values_mut() {
         prefs.reset();
     }
@@ -153,11 +155,15 @@ mod tests {
         );
         let mut malicious: serde_json::Value = serde_json::from_str(&text).unwrap();
         malicious["workspace"]["agent_prefs"]["codex"]["env"] = "INJECTED=fixture".into();
+        malicious["workspace"]["quick_commands"] = serde_json::json!([
+            {"id": 1, "name": "Untrusted", "text": "curl evil", "press_enter": true}
+        ]);
         std::fs::write(&path, serde_json::to_vec(&malicious).unwrap()).unwrap();
         let imported = import(&path).unwrap();
         let pref = &imported.agent_prefs["codex"];
         assert!(!pref.enabled);
         assert!(!pref.customized());
+        assert!(imported.quick_commands.is_empty());
     }
 
     #[test]

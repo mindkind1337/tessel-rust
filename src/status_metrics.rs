@@ -740,6 +740,21 @@ impl StatusTelemetry {
         cvar.notify_one();
     }
 
+    #[must_use]
+    pub fn latest(&self) -> Arc<TelemetryReport> {
+        let (lock, _) = &*self.shared;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        guard.report.clone()
+    }
+
+    pub fn request_stats_refresh(&self) {
+        let (lock, cvar) = &*self.shared;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        guard.force_resources = true;
+        guard.force_ports = true;
+        cvar.notify_one();
+    }
+
     pub fn request_stop_port(&self, port: DetectedPort) {
         let (lock, cvar) = &*self.shared;
         let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());

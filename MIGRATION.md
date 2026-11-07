@@ -599,3 +599,25 @@ dialog (`show_install_confirm_modal` blocking underlying Settings/WebView2),
 non-broadcast terminal execution (`Terminal::send_installer_line`), automatic
 post-install `detect_agents` refresh, and the launcher footer jump to Settings >
 Agents.
+
+Remaining Settings pages integration (`settings_pages_panel.rs` + `workspace.rs`
++ `terminal.rs` + `backup.rs` + `app.rs`): Settings navigation now populates all
+five groups (`AI`, `Workspace`, `Workflows`, `Insights`, `About`) with `General`,
+`Terminal`, `Editor`, `Browser`, `Git`, `Quick commands`, `Stats` and `Updates`
+alongside `Agents`, `Appearance`, `SSH hosts`, `Passwords` and `Account`.
+`GeneralPreferences` wires session-restore opt-out, running-agent close modal,
+workspace-removal modal, running-session quit confirmation, default worktree
+directory, backup export/import, diagnostics copy and preference reset.
+`TerminalPreferences` wires scrollback (`500..=100_000`), line height
+(`1.0..=3.0`), `Block`/`Bar`/`Underline` cursor style, `530ms` cursor blink,
+automatic pane tiling, copy-on-select, right-click paste vs context menu, inline
+multi-line paste confirmation and focus-follows-mouse across workspace and
+floating terminals. `EditorPreferences` wires idle auto-save, reusable preview
+tabs, two-way Explorer dotfiles/compact-folder sync and Git diff word wrap.
+`BrowserPreferences` wires built-in vs system link opening and isolated
+project-agent browser gating. `GitPreferences` wires branch-prefix modes/preview
+and two-way `ScmChangesPanel` group-order/view-mode sync. `QuickCommand`
+snippets run in active or newly spawned shells from Settings or Command Palette
+and are stripped from portable backups (`backup::export`/`import`). `Stats`
+surfaces live telemetry and `Updates` opens embedded `LICENSE` /
+`THIRD_PARTY_NOTICES.md` tabs offline.

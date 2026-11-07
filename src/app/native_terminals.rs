@@ -565,6 +565,7 @@ impl Tessel {
                 .active()
                 .map(|p| p.path.clone())
                 .unwrap_or_else(launch::default_directory),
+            scrollback: self.state.terminal_prefs.scrollback,
             terminal: Some(terminal),
             loading: None,
             error: String::new(),

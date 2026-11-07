@@ -42,6 +42,7 @@ struct Session {
     title: String,
     launch: Launch,
     cwd: PathBuf,
+    scrollback: usize,
     terminal: Option<Terminal>,
     loading: Option<Receiver<Result<Terminal, String>>>,
     error: String,
@@ -252,6 +253,7 @@ impl Session {
             _ => None,
         };
         let cwd = self.cwd.clone();
+        let scrollback = self.scrollback;
         let (sender, receiver) = mpsc::channel();
         self.loading = Some(receiver);
         self.error.clear();
@@ -277,9 +279,9 @@ impl Session {
                     .is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
                 match &launch {
                     Launch::Agent(agent) if !custom => {
-                        Terminal::spawn_agent_command(agent, command)
+                        Terminal::spawn_agent_command_with_scrollback(agent, command, scrollback)
                     }
-                    _ => Terminal::spawn_command(command),
+                    _ => Terminal::spawn_command_with_scrollback(command, scrollback),
                 }
                 .map_err(|e| e.to_string())
             });
@@ -382,10 +384,17 @@ enum Overlay {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
+    General,
     Appearance,
+    Terminal,
+    Editor,
+    Browser,
+    Git,
+    QuickCommands,
     Hosts,
-    Backup,
     Agents,
+    Stats,
+    Updates,
     #[cfg(windows)]
     Passwords,
     #[cfg(windows)]
@@ -428,6 +437,7 @@ pub struct Tessel {
     empty_state: crate::empty_state_panel::EmptyState,
     settings_section: SettingsSection,
     settings_nav: crate::settings_nav::SettingsNav,
+    settings_pages: crate::settings_pages_panel::SettingsPagesState,
     appearance_panel: crate::appearance_panel::AppearancePanel,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
@@ -474,6 +484,11 @@ pub struct Tessel {
     pending_agent_install: Option<crate::agent_installs::InstallConfirmSpec>,
     active_agent_installs: Vec<ActiveAgentInstall>,
     rename_project_modal: Option<(u64, String, bool)>,
+    pending_close_session: Option<u64>,
+    pending_remove_project: Option<u64>,
+    pending_quick_command: Option<(u64, String, bool)>,
+    git_username: Option<String>,
+    git_username_rx: Option<Receiver<Option<String>>>,
     right_fullscreen: bool,
     remember_next_project_launch: bool,
     wsl_available: bool,
@@ -558,8 +573,9 @@ impl Tessel {
             launcher: Default::default(),
             project_panel: Default::default(),
             empty_state: Default::default(),
-            settings_section: SettingsSection::Appearance,
+            settings_section: SettingsSection::General,
             settings_nav: Default::default(),
+            settings_pages: crate::settings_pages_panel::SettingsPagesState::new(),
             appearance_panel: Default::default(),
             command_palette: Default::default(),
             command_palette_focused: false,
@@ -602,6 +618,31 @@ impl Tessel {
             pending_agent_install: None,
             active_agent_installs: Vec::new(),
             rename_project_modal: None,
+            pending_close_session: None,
+            pending_remove_project: None,
+            pending_quick_command: None,
+            git_username: None,
+            git_username_rx: {
+                let (tx, rx) = mpsc::channel();
+                thread::spawn(move || {
+                    let mut cmd = std::process::Command::new("git");
+                    cmd.args(["config", "--global", "user.name"]);
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x0800_0000);
+                    }
+                    let name = cmd
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_owned())
+                        .filter(|s| !s.is_empty());
+                    let _ = tx.send(name);
+                });
+                Some(rx)
+            },
             right_fullscreen: false,
             remember_next_project_launch,
             wsl_available,
@@ -628,36 +669,48 @@ impl Tessel {
             #[cfg(windows)]
             account: Default::default(),
         };
-        for saved in &app.state.sessions {
-            app.next_session = app.next_session.max(saved.id + 1);
-            app.sessions.push(Session {
-                native_host: saved.native_host.clone(),
-                restarting: None,
-                codex_discovery: None,
-                codex_restore: None,
-                model_picker: Default::default(),
-                last_model: saved.last_model.clone(),
-                model_save_attempt: None,
-                settings_changed: false,
-                codex_seed: saved.codex_seed.clone(),
-                conversation_id: saved.conversation_id.clone(),
-                launch_fingerprint: saved.launch_fingerprint.clone(),
-                session_options: if saved.launch.native_chat().is_some() {
-                    saved.native_options.clone()
-                } else {
-                    saved.session_options.clone()
-                },
-                pane_name: saved.pane_name.clone(),
-                broadcast: saved.broadcast,
-                id: saved.id,
-                project: saved.project,
-                title: saved.title.clone(),
-                launch: saved.launch.clone(),
-                cwd: saved.cwd.clone(),
-                terminal: None,
-                loading: None,
-                error: String::new(),
-            });
+        app.explorer_tree
+            .set_show_dotfiles(app.state.editor_prefs.show_git_ignored);
+        app.explorer_tree
+            .set_compact_folders(app.state.editor_prefs.compact_folders);
+        app.scm_panel
+            .set_group_order(app.state.git_prefs.scm_group_order.into_panel());
+        app.scm_panel
+            .set_view_mode(app.state.git_prefs.scm_view_mode.into_panel());
+        if app.state.general_prefs.restore_workspaces {
+            let initial_scrollback = app.state.terminal_prefs.scrollback;
+            for saved in &app.state.sessions {
+                app.next_session = app.next_session.max(saved.id + 1);
+                app.sessions.push(Session {
+                    native_host: saved.native_host.clone(),
+                    restarting: None,
+                    codex_discovery: None,
+                    codex_restore: None,
+                    model_picker: Default::default(),
+                    last_model: saved.last_model.clone(),
+                    model_save_attempt: None,
+                    settings_changed: false,
+                    codex_seed: saved.codex_seed.clone(),
+                    conversation_id: saved.conversation_id.clone(),
+                    launch_fingerprint: saved.launch_fingerprint.clone(),
+                    session_options: if saved.launch.native_chat().is_some() {
+                        saved.native_options.clone()
+                    } else {
+                        saved.session_options.clone()
+                    },
+                    pane_name: saved.pane_name.clone(),
+                    broadcast: saved.broadcast,
+                    id: saved.id,
+                    project: saved.project,
+                    title: saved.title.clone(),
+                    launch: saved.launch.clone(),
+                    cwd: saved.cwd.clone(),
+                    scrollback: initial_scrollback,
+                    terminal: None,
+                    loading: None,
+                    error: String::new(),
+                });
+            }
         }
         #[cfg(feature = "visual-test")]
         {
@@ -718,7 +771,7 @@ impl Tessel {
             }
             if std::env::args().any(|a| a == "--restore-fixture") {
                 app.overlay = Some(Overlay::Settings);
-                app.settings_section = SettingsSection::Backup;
+                app.settings_section = SettingsSection::General;
                 app.restore_preview = Some(Workspace::default());
             }
             if std::env::args().any(|a| a == "--settings-fixture") {
@@ -850,6 +903,7 @@ impl Tessel {
                         title: "Terminal rendering fixture".into(),
                         launch: Launch::Shell,
                         cwd: launch::default_directory(),
+                        scrollback: app.state.terminal_prefs.scrollback,
                         terminal: Some(terminal),
                         loading: None,
                         error: String::new(),
@@ -938,6 +992,7 @@ impl Tessel {
                     title: format!("Terminal {id}"),
                     launch: Launch::Shell,
                     cwd: launch::default_directory(),
+                    scrollback: app.state.terminal_prefs.scrollback,
                     terminal: Terminal::visual_fixture().ok(),
                     loading: None,
                     error: String::new(),
@@ -1114,7 +1169,8 @@ impl Tessel {
         self.open_document_mode(path, true);
     }
     fn open_document_preview(&mut self, path: PathBuf) {
-        self.open_document_mode(path, false);
+        let pinned = !self.state.editor_prefs.preview_tabs;
+        self.open_document_mode(path, pinned);
     }
     fn open_document_mode(&mut self, path: PathBuf, pinned: bool) {
         let Some(root) = self.state.active().map(|p| p.path.clone()) else {
@@ -1243,6 +1299,18 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        if let Some(rx) = &self.git_username_rx {
+            match rx.try_recv() {
+                Ok(name) => {
+                    self.git_username = name;
+                    self.git_username_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.git_username_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         self.agents.poll();
         let mut launch_changed = self
             .model_discovery
@@ -1282,7 +1350,17 @@ impl Tessel {
             while let Some(call) = chat.tool_calls.pop_front() {
                 #[cfg(windows)]
                 if call.name == "tessel_browser" {
-                    self.agent_browsers.dispatch(chat, call);
+                    if !self.state.browser_prefs.separate_agent_session {
+                        chat.tool_result(
+                            call.id,
+                            Err(
+                                "Isolated project agent browser sessions are disabled in Settings > Browser."
+                                    .into(),
+                            ),
+                        );
+                    } else {
+                        self.agent_browsers.dispatch(chat, call);
+                    }
                     continue;
                 }
                 let result = crate::agent_tools::execute(
@@ -1479,6 +1557,43 @@ impl Tessel {
                 },
             }
         }
+        if self.state.editor_prefs.auto_save && !self.file_action_pending {
+            let delay = Duration::from_millis(u64::from(
+                self.state
+                    .editor_prefs
+                    .auto_save_delay_ms
+                    .clamp(250, 10_000),
+            ));
+            let now = std::time::Instant::now();
+            for doc in &mut self.documents {
+                if !doc.media
+                    && doc.diff_title.is_none()
+                    && !doc.deleted_on_disk
+                    && doc.dirty()
+                    && let Some(edited) = doc.last_edited_at
+                    && now.saturating_duration_since(edited) >= delay
+                    && let Err(err) = doc.save()
+                {
+                    doc.last_edited_at = None;
+                    doc.error = err;
+                }
+            }
+        }
+        if let Some((sid, ref text, press_enter)) = self.pending_quick_command {
+            let text_owned = text.clone();
+            if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == sid) {
+                if let Some(term) = &mut sess.terminal {
+                    if !term.exited() {
+                        let _ = term.run_quick_command(&text_owned, press_enter);
+                    }
+                    self.pending_quick_command = None;
+                } else if sess.loading.is_none() && sess.restarting.is_none() {
+                    self.pending_quick_command = None;
+                }
+            } else {
+                self.pending_quick_command = None;
+            }
+        }
     }
     fn new_session(&mut self, launch: Launch) {
         self.new_session_placed(launch, None);
@@ -1546,6 +1661,7 @@ impl Tessel {
             title: execution.agent_name.clone(),
             launch: Launch::Shell,
             cwd,
+            scrollback: self.state.terminal_prefs.scrollback,
             terminal: None,
             loading: None,
             error: String::new(),
@@ -1692,6 +1808,7 @@ impl Tessel {
             title,
             launch,
             cwd,
+            scrollback: self.state.terminal_prefs.scrollback,
             terminal: None,
             loading: None,
             error: String::new(),
@@ -1723,12 +1840,43 @@ impl Tessel {
             } else {
                 layout.split(target, id, dir);
             }
+        } else if self.state.terminal_prefs.tile_new_panes
+            && self
+                .sessions
+                .iter()
+                .filter(|sess| sess.project == self.state.active_project)
+                .count()
+                > 1
+        {
+            self.tile_sessions(None);
         }
         self.active_session = Some(id);
         self.view = View::Work;
         self.save();
     }
+    fn session_is_running_agent(&self, id: u64) -> bool {
+        let Some(sess) = self.sessions.iter().find(|s| s.id == id) else {
+            return false;
+        };
+        match &sess.launch {
+            Launch::Agent(_) => {
+                sess.loading.is_some()
+                    || sess.restarting.is_some()
+                    || sess.terminal.as_ref().is_some_and(|t| !t.exited())
+            }
+            Launch::CodexChat => self.chats.iter().any(|c| c.pane == id && c.busy()),
+            Launch::ClaudeChat => self.claude_chats.iter().any(|c| c.pane == id && c.busy()),
+            _ => false,
+        }
+    }
     fn close_session(&mut self, id: u64) {
+        if self.state.general_prefs.confirm_close_agent && self.session_is_running_agent(id) {
+            self.pending_close_session = Some(id);
+            return;
+        }
+        self.close_session_immediate(id);
+    }
+    fn close_session_immediate(&mut self, id: u64) {
         #[cfg(windows)]
         if self
             .sessions
@@ -2091,6 +2239,60 @@ impl Tessel {
         false
     }
 
+    fn run_quick_command_by_id(&mut self, ctx: &egui::Context, cmd_id: u64) {
+        let Some(cmd) = self
+            .state
+            .quick_commands
+            .iter()
+            .find(|c| c.id == cmd_id)
+            .cloned()
+        else {
+            return;
+        };
+        if cmd.text.is_empty() {
+            return;
+        }
+        self.overlay = None;
+        if self.floating.ui.is_open()
+            && self.floating.ui.has_keyboard()
+            && self.floating.run_quick_command(&cmd.text, cmd.press_enter)
+        {
+            return;
+        }
+        let target_id = self
+            .active_session
+            .filter(|id| {
+                self.sessions.iter().any(|s| {
+                    s.id == *id
+                        && s.project == self.state.active_project
+                        && s.terminal.as_ref().is_some_and(|t| !t.exited())
+                })
+            })
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|s| {
+                        s.project == self.state.active_project
+                            && s.terminal.as_ref().is_some_and(|t| !t.exited())
+                    })
+                    .map(|s| s.id)
+            });
+        if let Some(id) = target_id
+            && let Some(session) = self.sessions.iter_mut().find(|s| s.id == id)
+            && let Some(terminal) = &mut session.terminal
+        {
+            let _ = terminal.run_quick_command(&cmd.text, cmd.press_enter);
+            terminal.request_focus(ctx);
+            self.active_session = Some(id);
+            self.view = View::Work;
+            return;
+        }
+        self.new_session(Launch::Shell);
+        if let Some(id) = self.active_session {
+            self.pending_quick_command = Some((id, cmd.text, cmd.press_enter));
+        }
+    }
+
     fn show_command_palette(&mut self, ctx: &egui::Context) {
         if !self.command_palette.open {
             self.command_palette_focused = false;
@@ -2414,7 +2616,22 @@ impl Tessel {
             PaletteCommand::new("help", "Tessel", tr("Keyboard shortcuts")).with_shortcut("F1"),
         );
 
-        // 8. Go to workspace / Go to pane / Open editors
+        // 8. Quick commands, Go to workspace / Go to pane / Open editors
+        let qc_group = tr("Quick commands");
+        for qc in &self.state.quick_commands {
+            let preview: String = qc
+                .text
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(48)
+                .collect();
+            commands.push(
+                PaletteCommand::new(format!("quickcmd:{}", qc.id), qc_group, &qc.name)
+                    .with_hint(preview),
+            );
+        }
         commands.extend(self.state.projects.iter().map(|project| {
             PaletteCommand::new(
                 format!("project:{}", project.id),
@@ -2587,6 +2804,14 @@ impl Tessel {
                             .any(|(known, installed)| *installed && known == agent_id)
                     {
                         self.new_session(Launch::Agent(agent_id.into()));
+                    }
+                }
+                id_str if id_str.starts_with("quickcmd:") => {
+                    if let Some(cmd_id) = id_str
+                        .strip_prefix("quickcmd:")
+                        .and_then(|s| s.parse::<u64>().ok())
+                    {
+                        self.run_quick_command_by_id(ctx, cmd_id);
                     }
                 }
                 id_str if id_str.starts_with("theme:") => {
@@ -2800,6 +3025,8 @@ impl Tessel {
             || self.finder.is_open()
             || self.toolbar_menu_open
             || self.pending_close.is_some()
+            || self.pending_close_session.is_some()
+            || self.pending_remove_project.is_some()
             || self.pending_scm_discard.is_some()
             || self.pending_agent_install.is_some()
             || self.rename_project_modal.is_some()
@@ -2904,25 +3131,13 @@ impl Tessel {
                 return;
             }
             Some(ProjectAction::RemoveProject(id)) => {
-                let Some(pos) = self.state.projects.iter().position(|p| p.id == id) else {
+                if self.state.general_prefs.confirm_delete_workspace
+                    && self.state.projects.iter().any(|p| p.id == id)
+                {
+                    self.pending_remove_project = Some(id);
                     return;
-                };
-                self.state.projects.remove(pos);
-                self.state.tasks.retain(|t| t.project != id);
-                let session_ids: Vec<u64> = self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.project == Some(id))
-                    .map(|s| s.id)
-                    .collect();
-                for sid in session_ids {
-                    self.remove_session(sid);
                 }
-                if self.state.active_project == Some(id) {
-                    self.state.active_project = self.state.projects.first().map(|p| p.id);
-                    self.refresh_project();
-                }
-                self.save();
+                self.remove_project_immediate(id);
                 return;
             }
             Some(ProjectAction::MoveProject { id, delta }) => {
@@ -2991,7 +3206,32 @@ impl Tessel {
         }
         self.save();
     }
+    fn remove_project_immediate(&mut self, id: u64) {
+        let Some(pos) = self.state.projects.iter().position(|p| p.id == id) else {
+            return;
+        };
+        self.state.projects.remove(pos);
+        self.state.tasks.retain(|t| t.project != id);
+        let session_ids: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|s| s.project == Some(id))
+            .map(|s| s.id)
+            .collect();
+        for sid in session_ids {
+            self.remove_session(sid);
+        }
+        if self.state.active_project == Some(id) {
+            self.state.active_project = self.state.projects.first().map(|p| p.id);
+            self.refresh_project();
+        }
+        self.save();
+    }
     fn explorer(&mut self, ui: &mut egui::Ui) {
+        self.explorer_tree
+            .set_show_dotfiles(self.state.editor_prefs.show_git_ignored);
+        self.explorer_tree
+            .set_compact_folders(self.state.editor_prefs.compact_folders);
         self.explorer_tree
             .set_git_badges(self.scm_state.explorer_badges());
         let mut close_doc = None;
@@ -3062,10 +3302,19 @@ impl Tessel {
             .flatten()
             .map(|d| d.path.clone());
         let actions_enabled = self.file_actions_ready();
-        if let Some(action) =
+        let tree_action =
             self.explorer_tree
-                .show(ui, root.as_deref(), active.as_deref(), actions_enabled)
+                .show(ui, root.as_deref(), active.as_deref(), actions_enabled);
+        let new_dotfiles = self.explorer_tree.show_dotfiles();
+        let new_compact = self.explorer_tree.compact_folders();
+        if self.state.editor_prefs.show_git_ignored != new_dotfiles
+            || self.state.editor_prefs.compact_folders != new_compact
         {
+            self.state.editor_prefs.show_git_ignored = new_dotfiles;
+            self.state.editor_prefs.compact_folders = new_compact;
+            self.save();
+        }
+        if let Some(action) = tree_action {
             use crate::explorer_tree::{TreeAction, TreeContextKind};
             match action {
                 TreeAction::OpenFile(path) if !self.file_action_pending => {
@@ -3327,6 +3576,7 @@ impl Tessel {
                 title: "Terminal".into(),
                 launch: Launch::Shell,
                 cwd: cwd.clone(),
+                scrollback: self.state.terminal_prefs.scrollback,
                 terminal: None,
                 loading: None,
                 error: String::new(),
@@ -4169,7 +4419,7 @@ impl Tessel {
                                     _ => None,
                                 };
                                 terminal.set_agent_kind(agent_kind);
-                                ui.add_enabled_ui(!picker_was_open && !session.model_picker.is_open(), |ui| terminal.show(ui, self.state.font_size));
+                                ui.add_enabled_ui(!picker_was_open && !session.model_picker.is_open(), |ui| terminal.show_with_prefs(ui, self.state.font_size, &self.state.terminal_prefs, None));
                                 if let Some(pos) = terminal.take_context_menu_request() {
                                     self.pane_context_menu = Some((id, pos));
                                     self.pane_context_menu_just_opened = true;
@@ -4437,7 +4687,12 @@ impl Tessel {
         }
         let mut link = None;
         if d.diff_title.is_some() {
-            show_diff_document(ui, d, self.state.font_size);
+            show_diff_document(
+                ui,
+                d,
+                self.state.font_size,
+                self.state.editor_prefs.diff_word_wrap,
+            );
         } else if let Some(office) = &mut d.office {
             office.show(ui);
         } else if let Some(pdf) = &mut d.pdf {
@@ -4536,6 +4791,7 @@ impl Tessel {
                         syntax_cache,
                         preview,
                         unpinned_preview,
+                        last_edited_at,
                         ..
                     } = d;
                     let word_wrap = tools.word_wrap;
@@ -4592,6 +4848,7 @@ impl Tessel {
                     if out.response.changed() {
                         *preview = None;
                         *unpinned_preview = false;
+                        *last_edited_at = Some(std::time::Instant::now());
                         syntax_cache.invalidate();
                     }
                 });
@@ -4607,24 +4864,77 @@ impl Tessel {
         if let Some(result) = resolved {
             match result {
                 Ok((root, crate::preview::Link::File(path))) => self.open_document_at(root, path),
-                Ok((_, crate::preview::Link::Web(url))) => {
-                    #[cfg(windows)]
-                    {
-                        self.show_agent_browser = false;
-                        self.browser.open_address(url);
-                        self.view = View::Browser;
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        self.error = format!("Browser is not available on this platform: {url}");
-                    }
-                }
+                Ok((_, crate::preview::Link::Web(url))) => self.open_web_link(ui.ctx(), url),
                 Err(error) => self.error = error,
             }
         }
         if let Some(i) = close {
             self.request_document_close(i);
         }
+    }
+    fn open_web_link(&mut self, ctx: &egui::Context, url: String) {
+        if self.state.browser_prefs.open_links_in == workspace::OpenLinksTarget::System {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+            return;
+        }
+        #[cfg(windows)]
+        {
+            self.overlay = None;
+            self.show_agent_browser = false;
+            self.browser.open_address(url);
+            self.view = View::Browser;
+        }
+        #[cfg(not(windows))]
+        {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+    }
+    fn open_embedded_notice(&mut self, name: &'static str) {
+        let (title, content, markdown) = match name {
+            "THIRD_PARTY_NOTICES.md" => (
+                "THIRD_PARTY_NOTICES.md".to_owned(),
+                include_str!("../THIRD_PARTY_NOTICES.md").to_owned(),
+                true,
+            ),
+            _ => (
+                "LICENSE".to_owned(),
+                include_str!("../LICENSE").to_owned(),
+                false,
+            ),
+        };
+        let vpath = PathBuf::from(format!("tessel-notice://{title}"));
+        if let Some(idx) = self.documents.iter().position(|d| d.path == vpath) {
+            self.active_document = idx;
+            self.overlay = None;
+            self.view = View::Files;
+            return;
+        }
+        if self.documents.len() >= 24 {
+            if let Some(idx) = self
+                .documents
+                .iter()
+                .position(|d| d.unpinned_preview && !d.dirty())
+            {
+                self.documents[idx] =
+                    Document::from_readonly_text(PathBuf::new(), vpath, title, content, markdown);
+                self.active_document = idx;
+                self.overlay = None;
+                self.view = View::Files;
+            } else {
+                self.error = "Close a document before opening more (24-tab limit)".into();
+            }
+            return;
+        }
+        self.documents.push(Document::from_readonly_text(
+            PathBuf::new(),
+            vpath,
+            title,
+            content,
+            markdown,
+        ));
+        self.active_document = self.documents.len() - 1;
+        self.overlay = None;
+        self.view = View::Files;
     }
     fn tasks(&mut self, ui: &mut egui::Ui) {
         use crate::tasks_board_panel::{TaskCard, TasksBoardInput};
@@ -4743,6 +5053,7 @@ impl Tessel {
         self.pane_context_menu = None;
         self.pane_context_menu_just_opened = false;
         self.next_session = self.state.next_pane_id();
+        let restored_scrollback = self.state.terminal_prefs.scrollback;
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
@@ -4769,11 +5080,20 @@ impl Tessel {
                 title: saved.title.clone(),
                 launch: saved.launch.clone(),
                 cwd: saved.cwd.clone(),
+                scrollback: restored_scrollback,
                 terminal: None,
                 loading: None,
                 error: String::new(),
             });
         }
+        self.explorer_tree
+            .set_show_dotfiles(self.state.editor_prefs.show_git_ignored);
+        self.explorer_tree
+            .set_compact_folders(self.state.editor_prefs.compact_folders);
+        self.scm_panel
+            .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
+        self.scm_panel
+            .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
         crate::i18n::set_language(self.state.language);
         crate::theme::apply(ctx, self.state.dark, self.state.theme);
         self.refresh_project();
@@ -4784,59 +5104,404 @@ impl Tessel {
         );
         Ok(())
     }
-    fn backup_controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr("Settings backup"));
-        ui.label(tr("Exports project paths, tasks, SSH aliases and sleeping session metadata. No passwords, account tokens, browser data or project files. The JSON file is not encrypted."));
-        if ui.button(tr("Export settings…")).clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .set_file_name("tessel-rust-settings.json")
-                .save_file()
-        {
-            self.save();
-            self.backup_status = match crate::backup::export(&path, &self.state) {
-                Ok(()) => format!("{} {}", tr("Settings exported:"), path.display()),
-                Err(e) => e,
-            };
-        }
-        if ui.button(tr("Import settings…")).clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .pick_file()
-        {
-            match crate::backup::import(&path) {
-                Ok(state) => self.restore_preview = Some(state),
-                Err(e) => self.backup_status = e,
-            }
-        }
-        if !self.backup_status.is_empty() {
-            ui.label(&self.backup_status);
-        }
+    fn restore_preview_modal(&mut self, ctx: &egui::Context) {
         if let Some(state) = &self.restore_preview {
             let mut apply = false;
             let mut cancel = false;
-            egui::Modal::new(egui::Id::new("restore-settings")).show(ui.ctx(), |ui| {
+            egui::Modal::new(egui::Id::new("restore-settings")).show(ctx, |ui| {
                 ui.heading(tr("Replace current settings?"));
-                ui.label(format!("{}: {} · {}: {} · {}: {}", tr("Projects"), state.projects.len(), tr("Tasks"), state.tasks.len(), tr("Sessions"), state.sessions.len()));
+                ui.label(format!(
+                    "{}: {} · {}: {} · {}: {}",
+                    tr("Projects"),
+                    state.projects.len(),
+                    tr("Tasks"),
+                    state.tasks.len(),
+                    tr("Sessions"),
+                    state.sessions.len()
+                ));
                 ui.label(tr("Project folders are checked when opened, not during restore."));
                 ui.collapsing(tr("Projects"), |ui| {
-                    egui::ScrollArea::vertical().max_height(180.0).show_rows(ui, 22.0, state.projects.len(), |ui, rows| {
-                        for index in rows { let project = &state.projects[index]; ui.label(format!("{} — {}", project.name, project.path.display())); }
-                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(180.0)
+                        .show_rows(ui, 22.0, state.projects.len(), |ui, rows| {
+                            for index in rows {
+                                let project = &state.projects[index];
+                                ui.label(format!("{} — {}", project.name, project.path.display()));
+                            }
+                        });
                 });
                 ui.label(tr("Current settings are backed up first. Sharing and agent-browser access stop. Restored sessions stay asleep."));
-                if !self.can_restore() { ui.label(tr("Stop active sessions and finish or save pending work before restoring settings")); }
-                apply = ui.add_enabled(self.can_restore(), egui::Button::new(tr("Replace settings"))).clicked();
+                if !self.can_restore() {
+                    ui.label(tr(
+                        "Stop active sessions and finish or save pending work before restoring settings",
+                    ));
+                }
+                apply = ui
+                    .add_enabled(self.can_restore(), egui::Button::new(tr("Replace settings")))
+                    .clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
             if apply
                 && let Some(state) = self.restore_preview.take()
-                && let Err(e) = self.restore_settings(state, ui.ctx())
+                && let Err(e) = self.restore_settings(state, ctx)
             {
                 self.backup_status = e;
             }
             if cancel {
                 self.restore_preview = None;
             }
+        }
+    }
+    fn handle_settings_page_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::settings_pages_panel::SettingsPageAction,
+    ) {
+        use crate::settings_pages_panel::SettingsPageAction;
+        match action {
+            SettingsPageAction::ExportSettings => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("tessel-rust-settings.json")
+                    .save_file()
+                {
+                    self.save();
+                    self.backup_status = match crate::backup::export(&path, &self.state) {
+                        Ok(()) => format!("{} {}", tr("Settings exported:"), path.display()),
+                        Err(e) => e,
+                    };
+                }
+            }
+            SettingsPageAction::ImportSettings => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON", &["json"])
+                    .pick_file()
+                {
+                    match crate::backup::import(&path) {
+                        Ok(state) => self.restore_preview = Some(state),
+                        Err(e) => self.backup_status = e,
+                    }
+                }
+            }
+            SettingsPageAction::OpenDataFolder => {
+                if let Some(store) = &self.store {
+                    let dir = store.directory().to_path_buf();
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        ctx.open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                    }
+                }
+            }
+            SettingsPageAction::CopyDiagnostics => {
+                let data_dir = self
+                    .store
+                    .as_ref()
+                    .map(|s| s.directory().display().to_string())
+                    .unwrap_or_else(|| "<in-memory>".into());
+                let diag = format!(
+                    "Tessel Rust v{} ({})\nOS: {} ({})\nTheme: {} (dark={})\nLanguage: {:?}\nProjects: {}\nOpen panes: {}\nData directory: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("TESSEL_BUILD"),
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    crate::theme::active(ctx).as_str(),
+                    self.state.dark,
+                    self.state.language,
+                    self.state.projects.len(),
+                    self.sessions.len(),
+                    data_dir,
+                );
+                ctx.copy_text(diag);
+            }
+            SettingsPageAction::ResetAllSettings => {
+                let defaults = Workspace::default();
+                self.state.theme = defaults.theme;
+                self.state.dark = defaults.dark;
+                self.state.language = defaults.language;
+                self.state.font_size = defaults.font_size;
+                self.state.panels = defaults.panels;
+                self.state.launcher_prefs = defaults.launcher_prefs;
+                self.state.sidebar = defaults.sidebar;
+                self.state.status_bar = defaults.status_bar;
+                self.state.editor_prefs = defaults.editor_prefs;
+                self.state.general_prefs = defaults.general_prefs;
+                self.state.terminal_prefs = defaults.terminal_prefs;
+                self.state.browser_prefs = defaults.browser_prefs;
+                self.state.git_prefs = defaults.git_prefs;
+                self.state.quick_commands = defaults.quick_commands;
+                self.state.stats_prefs = defaults.stats_prefs;
+                self.state.agent_prefs = defaults.agent_prefs;
+                self.state.agent_model_defaults = defaults.agent_model_defaults;
+                for sess in &mut self.sessions {
+                    sess.scrollback = self.state.terminal_prefs.scrollback;
+                }
+                self.explorer_tree
+                    .set_show_dotfiles(self.state.editor_prefs.show_git_ignored);
+                self.explorer_tree
+                    .set_compact_folders(self.state.editor_prefs.compact_folders);
+                self.scm_panel
+                    .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
+                self.scm_panel
+                    .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
+                crate::i18n::set_language(self.state.language);
+                crate::theme::apply(ctx, self.state.dark, self.state.theme);
+                self.refresh_launch_status();
+                self.save();
+                self.backup_status = tr("Settings reset to defaults.").into();
+            }
+            SettingsPageAction::SelectPreferredShell(shell) => {
+                if self.state.launcher_prefs.preferred_shell != shell {
+                    self.state.launcher_prefs.preferred_shell = shell;
+                    self.save();
+                }
+            }
+            SettingsPageAction::SetFontSize(size) => {
+                if size.is_finite() {
+                    let clamped = size.clamp(10.0, 28.0);
+                    if (self.state.font_size - clamped).abs() > f32::EPSILON {
+                        self.state.font_size = clamped;
+                        self.save();
+                    }
+                }
+            }
+            SettingsPageAction::OpenPasswordsVault => {
+                #[cfg(windows)]
+                {
+                    self.settings_section = SettingsSection::Passwords;
+                }
+            }
+            SettingsPageAction::AddQuickCommand {
+                name,
+                text,
+                press_enter,
+            } => {
+                if self.state.quick_commands.len() < 200 {
+                    let next_id = self
+                        .state
+                        .quick_commands
+                        .iter()
+                        .map(|c| c.id)
+                        .max()
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    self.state.quick_commands.push(workspace::QuickCommand {
+                        id: next_id,
+                        name,
+                        text,
+                        press_enter,
+                    });
+                    self.save();
+                }
+            }
+            SettingsPageAction::UpdateQuickCommand(updated) => {
+                if let Some(existing) = self
+                    .state
+                    .quick_commands
+                    .iter_mut()
+                    .find(|c| c.id == updated.id)
+                {
+                    *existing = updated;
+                    self.save();
+                }
+            }
+            SettingsPageAction::RemoveQuickCommand(id) => {
+                let before = self.state.quick_commands.len();
+                self.state.quick_commands.retain(|c| c.id != id);
+                if self.state.quick_commands.len() != before {
+                    self.save();
+                }
+            }
+            SettingsPageAction::RunQuickCommand(id) => {
+                self.run_quick_command_by_id(ctx, id);
+            }
+            SettingsPageAction::OpenGeneralPage => {
+                self.settings_section = SettingsSection::General;
+            }
+            SettingsPageAction::OpenExternalUrl(url) => {
+                self.open_web_link(ctx, url);
+            }
+            SettingsPageAction::OpenNoticeFile(name) => {
+                self.open_embedded_notice(name);
+            }
+        }
+    }
+    fn general_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let has_store = self.store.is_some();
+        let (changed, action) = self.settings_pages.show_general(
+            ui,
+            &mut self.state.general_prefs,
+            &self.backup_status,
+            has_store,
+            french,
+        );
+        if changed {
+            self.save();
+        }
+        if let Some(act) = action {
+            self.handle_settings_page_action(ui.ctx(), act);
+        }
+        self.restore_preview_modal(ui.ctx());
+    }
+    fn terminal_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let preferred = self.state.launcher_prefs.preferred_shell.clone();
+        let font_size = self.state.font_size;
+        let (changed, action) = self.settings_pages.show_terminal(
+            ui,
+            &mut self.state.terminal_prefs,
+            preferred.as_deref(),
+            font_size,
+            self.wsl_available,
+            french,
+        );
+        if changed {
+            let sb = self.state.terminal_prefs.scrollback;
+            for sess in &mut self.sessions {
+                sess.scrollback = sb;
+            }
+            self.save();
+        }
+        if let Some(act) = action {
+            self.handle_settings_page_action(ui.ctx(), act);
+        }
+    }
+    fn editor_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        if self
+            .settings_pages
+            .show_editor(ui, &mut self.state.editor_prefs, french)
+        {
+            self.explorer_tree
+                .set_show_dotfiles(self.state.editor_prefs.show_git_ignored);
+            self.explorer_tree
+                .set_compact_folders(self.state.editor_prefs.compact_folders);
+            self.save();
+        }
+    }
+    fn browser_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let (changed, action) = self.settings_pages.show_browser(
+            ui,
+            &mut self.state.browser_prefs,
+            cfg!(windows),
+            french,
+        );
+        if changed {
+            #[cfg(windows)]
+            if !self.state.browser_prefs.separate_agent_session {
+                self.show_agent_browser = false;
+            }
+            self.save();
+        }
+        if let Some(act) = action {
+            self.handle_settings_page_action(ui.ctx(), act);
+        }
+    }
+    fn git_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        if self.settings_pages.show_git(
+            ui,
+            &mut self.state.git_prefs,
+            self.git_username.as_deref(),
+            french,
+        ) {
+            self.scm_panel
+                .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
+            self.scm_panel
+                .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
+            self.save();
+        }
+    }
+    fn quick_commands_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let can_run = self.sessions.len() < 100
+            || self.sessions.iter().any(|s| {
+                s.project == self.state.active_project
+                    && s.terminal.as_ref().is_some_and(|t| !t.exited())
+            });
+        if let Some(act) =
+            self.settings_pages
+                .show_quick_commands(ui, &self.state.quick_commands, can_run, french)
+        {
+            self.handle_settings_page_action(ui.ctx(), act);
+        }
+    }
+    fn stats_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let report = self.status_telemetry.latest();
+        if report.resources.is_none() {
+            self.status_telemetry.request_stats_refresh();
+        }
+        let (app_rss_bytes, panes_rss_bytes, panes_cpu_pct) = match &report.resources {
+            Some(res) => {
+                let app_rss = res.app.iter().map(|a| a.memory_bytes as u64).sum::<u64>();
+                let pane_rss = res
+                    .terminals
+                    .values()
+                    .map(|t| t.memory_bytes as u64)
+                    .sum::<u64>();
+                let pane_cpu = res
+                    .terminals
+                    .values()
+                    .map(|t| t.cpu_percent as f32)
+                    .sum::<f32>();
+                (app_rss, pane_rss, pane_cpu)
+            }
+            None => (0, 0, 0.0),
+        };
+        let running_agents = self
+            .sessions
+            .iter()
+            .filter(|s| self.session_is_running_agent(s.id))
+            .count();
+        let sleeping_sessions = self
+            .sessions
+            .iter()
+            .filter(|s| s.terminal.is_none() && s.launch.native_chat().is_none())
+            .count();
+        let mut tasks_todo = 0usize;
+        let mut tasks_doing = 0usize;
+        let mut tasks_review = 0usize;
+        let mut tasks_done = 0usize;
+        for t in &self.state.tasks {
+            match t.column {
+                0 => tasks_todo += 1,
+                1 => tasks_doing += 1,
+                2 => tasks_review += 1,
+                _ => tasks_done += 1,
+            }
+        }
+        let snapshot = crate::settings_pages_panel::StatsSnapshot {
+            project_count: self.state.projects.len(),
+            session_count: self.sessions.len(),
+            running_agents,
+            sleeping_sessions,
+            open_documents: self.documents.len(),
+            tasks_todo,
+            tasks_doing,
+            tasks_review,
+            tasks_done,
+            app_rss_bytes,
+            panes_rss_bytes,
+            panes_cpu_pct,
+            listening_ports: report.ports.len(),
+        };
+        if self
+            .settings_pages
+            .show_stats(ui, &mut self.state.stats_prefs, &snapshot, french)
+        {
+            self.save();
+        }
+    }
+    fn updates_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let has_store = self.store.is_some();
+        if let Some(act) = self.settings_pages.show_updates(ui, has_store, french) {
+            self.handle_settings_page_action(ui.ctx(), act);
         }
     }
     fn appearance_settings(&mut self, ui: &mut egui::Ui) {
@@ -6096,24 +6761,7 @@ impl Tessel {
                 "Agents",
                 Group::Ai,
                 Icon::Agent,
-                "agent codex claude install detection visibility command",
-            ),
-            (
-                SettingsSection::Appearance,
-                "appearance",
-                "Appearance",
-                Group::Workspace,
-                Icon::Appearance,
-                "theme language langue police font",
-            ),
-            #[cfg(windows)]
-            (
-                SettingsSection::Passwords,
-                "passwords",
-                "Passwords",
-                Group::Workspace,
-                Icon::Settings,
-                "password mot passe vault coffre csv import",
+                "agent codex claude install detection visibility command model",
             ),
             #[cfg(windows)]
             (
@@ -6125,6 +6773,71 @@ impl Tessel {
                 "account compte login connexion tessel",
             ),
             (
+                SettingsSection::General,
+                "general",
+                "General",
+                Group::Workspace,
+                Icon::SlidersHorizontal,
+                "general startup restore quit close confirm workspace worktree backup export import diagnostics reset sauvegarde",
+            ),
+            (
+                SettingsSection::Appearance,
+                "appearance",
+                "Appearance",
+                Group::Workspace,
+                Icon::Appearance,
+                "theme language langue police font status bar",
+            ),
+            (
+                SettingsSection::Terminal,
+                "terminal",
+                "Terminal",
+                Group::Workspace,
+                Icon::Terminal,
+                "terminal shell powershell cmd wsl scrollback cursor line height paste focus tile",
+            ),
+            (
+                SettingsSection::Editor,
+                "editor",
+                "Editor",
+                Group::Workspace,
+                Icon::Files,
+                "editor editeur auto save syntax line numbers wrap preview tabs tab size dotfiles compact diff",
+            ),
+            (
+                SettingsSection::Browser,
+                "browser",
+                "Browser",
+                Group::Workspace,
+                Icon::MonitorSmartphone,
+                "browser navigateur links webview session agent isolate cookies",
+            ),
+            #[cfg(windows)]
+            (
+                SettingsSection::Passwords,
+                "passwords",
+                "Passwords",
+                Group::Workspace,
+                Icon::ShieldCheck,
+                "password mot passe vault coffre csv import dpapi",
+            ),
+            (
+                SettingsSection::Git,
+                "git",
+                "Git",
+                Group::Workflows,
+                Icon::GitBranch,
+                "git branch prefix worktree changes tree list staged unstaged",
+            ),
+            (
+                SettingsSection::QuickCommands,
+                "quick-commands",
+                "Quick commands",
+                Group::Workflows,
+                Icon::ListChecks,
+                "quick commands commandes rapides snippet macro run",
+            ),
+            (
                 SettingsSection::Hosts,
                 "ssh",
                 "SSH hosts",
@@ -6133,12 +6846,20 @@ impl Tessel {
                 "ssh remote distant server serveur",
             ),
             (
-                SettingsSection::Backup,
-                "backup",
-                "Settings backup",
-                Group::Workflows,
-                Icon::Files,
-                "backup export import sauvegarde restore restaurer",
+                SettingsSection::Stats,
+                "stats",
+                "Stats",
+                Group::Insights,
+                Icon::Activity,
+                "stats statistiques usage telemetry memory cpu ports sessions tasks",
+            ),
+            (
+                SettingsSection::Updates,
+                "updates",
+                "Updates",
+                Group::About,
+                Icon::RefreshCw,
+                "updates mises a jour version build license notices feedback",
             ),
         ];
         let entries: Vec<_> = sections
@@ -6155,7 +6876,7 @@ impl Tessel {
             .iter()
             .find(|(section, ..)| *section == self.settings_section)
             .map(|(_, id, ..)| *id)
-            .unwrap_or("appearance");
+            .unwrap_or("general");
         let host_dialog_open = self.settings_section == SettingsSection::Hosts
             && (self.host_panel.is_form_open() || self.host_panel.is_confirm_remove_open());
         let agents_escape_consumed = self.settings_section == SettingsSection::Agents
@@ -6215,6 +6936,7 @@ impl Tessel {
                                             self.agents_panel.save_open_draft();
                                         }
                                         if self.save_agent_draft() {
+                                            self.settings_pages.reset_transient();
                                             self.settings_section = *section;
                                         }
                                     }
@@ -6231,10 +6953,17 @@ impl Tessel {
                             ui.disable();
                         }
                         crate::settings_surface::body(ui, |ui| match self.settings_section {
+                            SettingsSection::General => self.general_settings(ui),
                             SettingsSection::Appearance => self.appearance_settings(ui),
+                            SettingsSection::Terminal => self.terminal_settings(ui),
+                            SettingsSection::Editor => self.editor_settings(ui),
+                            SettingsSection::Browser => self.browser_settings(ui),
+                            SettingsSection::Git => self.git_settings(ui),
+                            SettingsSection::QuickCommands => self.quick_commands_settings(ui),
                             SettingsSection::Hosts => self.host_settings(ui),
                             SettingsSection::Agents => self.agent_settings(ui),
-                            SettingsSection::Backup => self.backup_controls(ui),
+                            SettingsSection::Stats => self.stats_settings(ui),
+                            SettingsSection::Updates => self.updates_settings(ui),
                             #[cfg(windows)]
                             SettingsSection::Passwords => self.vault.show(
                                 ui,
@@ -6262,6 +6991,7 @@ impl Tessel {
             if self.save_agent_draft() {
                 self.overlay = None;
                 self.settings_nav.reset();
+                self.settings_pages.reset_transient();
             }
         }
     }
@@ -6399,6 +7129,106 @@ impl Tessel {
                 self.rename_project_modal = None;
             } else {
                 self.rename_project_modal = Some((project_id, draft, focused));
+            }
+        }
+        if let Some(session_id) = self.pending_close_session {
+            let label = self
+                .sessions
+                .iter()
+                .find(|s| s.id == session_id)
+                .map(|s| s.label().to_owned())
+                .unwrap_or_default();
+            if label.is_empty() {
+                self.pending_close_session = None;
+            } else {
+                let mut confirm = false;
+                let mut cancel = false;
+                let resp =
+                    egui::Modal::new(egui::Id::new("confirm-close-agent-modal")).show(ctx, |ui| {
+                        ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 420.0));
+                        ui.heading(tr("Close running agent?"));
+                        ui.add_space(4.0);
+                        ui.label(label);
+                        ui.label(tr(
+                            "This pane is still running an agent session. Closing it will stop the session.",
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(tr("Cancel")).clicked() {
+                                cancel = true;
+                            }
+                            let danger = ui.visuals().error_fg_color;
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(tr("Close pane"))
+                                            .color(egui::Color32::WHITE)
+                                            .strong(),
+                                    )
+                                    .fill(danger),
+                                )
+                                .clicked()
+                            {
+                                confirm = true;
+                            }
+                        });
+                    });
+                if cancel || resp.should_close() {
+                    self.pending_close_session = None;
+                } else if confirm {
+                    self.pending_close_session = None;
+                    self.close_session_immediate(session_id);
+                }
+            }
+        }
+        if let Some(project_id) = self.pending_remove_project {
+            let info = self
+                .state
+                .projects
+                .iter()
+                .find(|p| p.id == project_id)
+                .map(|p| format!("{} — {}", p.name, p.path.display()));
+            if let Some(info_line) = info {
+                let mut confirm = false;
+                let mut cancel = false;
+                let resp = egui::Modal::new(egui::Id::new("confirm-remove-project-modal"))
+                    .show(ctx, |ui| {
+                        ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 440.0));
+                        ui.heading(tr("Remove workspace from sidebar?"));
+                        ui.add_space(4.0);
+                        ui.label(info_line);
+                        ui.label(tr(
+                            "Removes this workspace and closes its open panes in Tessel. Files on disk are untouched.",
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(tr("Cancel")).clicked() {
+                                cancel = true;
+                            }
+                            let danger = ui.visuals().error_fg_color;
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(tr("Remove workspace"))
+                                            .color(egui::Color32::WHITE)
+                                            .strong(),
+                                    )
+                                    .fill(danger),
+                                )
+                                .clicked()
+                            {
+                                confirm = true;
+                            }
+                        });
+                    });
+                if cancel || resp.should_close() {
+                    self.pending_remove_project = None;
+                } else if confirm {
+                    self.pending_remove_project = None;
+                    self.remove_project_immediate(project_id);
+                }
+            } else {
+                self.pending_remove_project = None;
             }
         }
         if self.pending_exit {
@@ -6583,6 +7413,10 @@ impl Tessel {
         } else {
             None
         };
+        self.scm_panel
+            .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
+        self.scm_panel
+            .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
         let action = self.scm_panel.show(
             ui,
             ScmChangesInput {
@@ -6635,21 +7469,20 @@ impl Tessel {
                 }
             }
             Some(ScmChangesAction::RequestDiscard { area, paths }) if !self.git_result.busy() => {
-                if paths.is_empty() {
-                    return;
+                if !paths.is_empty() {
+                    let copy = if paths.len() == 1
+                        && let Some(st) = status
+                        && let Some(entry) = st
+                            .entries
+                            .iter()
+                            .find(|e| e.area == area && e.path == paths[0])
+                    {
+                        entry.discard_copy(false, french)
+                    } else {
+                        discard_area_copy(area, paths.len(), false, french)
+                    };
+                    self.pending_scm_discard = Some((area, paths, copy));
                 }
-                let copy = if paths.len() == 1
-                    && let Some(st) = status
-                    && let Some(entry) = st
-                        .entries
-                        .iter()
-                        .find(|e| e.area == area && e.path == paths[0])
-                {
-                    entry.discard_copy(false, french)
-                } else {
-                    discard_area_copy(area, paths.len(), false, french)
-                };
-                self.pending_scm_discard = Some((area, paths, copy));
             }
             Some(ScmChangesAction::Commit { message }) if !self.git_result.busy() => {
                 if let Err(error) = self.scm_state.validate_commit() {
@@ -6671,6 +7504,15 @@ impl Tessel {
                 }
             }
             _ => {}
+        }
+        let new_order = workspace::ScmOrderSetting::from_panel(self.scm_panel.group_order());
+        let new_mode = workspace::ScmViewModeSetting::from_panel(self.scm_panel.view_mode());
+        if self.state.git_prefs.scm_group_order != new_order
+            || self.state.git_prefs.scm_view_mode != new_mode
+        {
+            self.state.git_prefs.scm_group_order = new_order;
+            self.state.git_prefs.scm_view_mode = new_mode;
+            self.save();
         }
     }
 }
@@ -6759,6 +7601,8 @@ impl eframe::App for Tessel {
             || self.share.is_pill_popover_open()
             || self.toolbar_menu_open
             || self.pending_close.is_some()
+            || self.pending_close_session.is_some()
+            || self.pending_remove_project.is_some()
             || self.pending_scm_discard.is_some()
             || self.pending_agent_install.is_some()
             || self.rename_project_modal.is_some()
@@ -7046,14 +7890,16 @@ impl eframe::App for Tessel {
         }) {
             self.close_session(id);
         }
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.allow_exit
-            && (self.documents.iter().any(Document::dirty)
-                || !self.sessions.is_empty()
+        let running_sessions_require_confirm = self.state.general_prefs.confirm_quit_running
+            && (!self.sessions.is_empty()
                 || self.floating.busy()
                 || self.chats.iter().any(crate::chat::Chat::busy)
                 || self.claude_chats.iter().any(crate::claude::Chat::busy)
-                || self.share.hosting()
+                || self.share.hosting());
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.allow_exit
+            && (self.documents.iter().any(Document::dirty)
+                || running_sessions_require_confirm
                 || self.remote.needs_close_confirmation()
                 || self.account_busy()
                 || self.model_discovery.as_ref().is_some_and(|d| d.active())
@@ -7269,10 +8115,15 @@ impl eframe::App for Tessel {
                 View::Remote => self.remote.show(ui, &self.state.hosts),
                 #[cfg(windows)]
                 View::Browser => {
+                    if !self.state.browser_prefs.separate_agent_session {
+                        self.show_agent_browser = false;
+                    }
                     if !self.native_modal_open()
                         && !self.share.has_pending_ask()
                         && !self.pending_exit
                         && self.pending_close.is_none()
+                        && self.pending_close_session.is_none()
+                        && self.pending_remove_project.is_none()
                         && self.pending_scm_discard.is_none()
                         && self.rename_project_modal.is_none()
                         && self.file_action.is_none()
@@ -7283,18 +8134,20 @@ impl eframe::App for Tessel {
                         && !self.status_bar.has_open_popover()
                         && !self.finder.is_open()
                     {
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(
-                                &mut self.show_agent_browser,
-                                false,
-                                tr("Owner browser"),
-                            );
-                            ui.selectable_value(
-                                &mut self.show_agent_browser,
-                                true,
-                                tr("Project agent"),
-                            );
-                        });
+                        if self.state.browser_prefs.separate_agent_session {
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(
+                                    &mut self.show_agent_browser,
+                                    false,
+                                    tr("Owner browser"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.show_agent_browser,
+                                    true,
+                                    tr("Project agent"),
+                                );
+                            });
+                        }
                         if self.show_agent_browser {
                             if let Some(project) = self.state.active() {
                                 self.agent_browsers
@@ -7375,6 +8228,8 @@ impl eframe::App for Tessel {
                 && !self.share.has_pending_ask()
                 && !self.pending_exit
                 && self.pending_close.is_none()
+                && self.pending_close_session.is_none()
+                && self.pending_remove_project.is_none()
                 && self.pending_scm_discard.is_none()
                 && self.pending_agent_install.is_none()
                 && self.rename_project_modal.is_none()
@@ -7680,6 +8535,9 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
             let (sb, eb) = crate::files::char_range_to_byte_range(&d.text, sc, ec);
             d.text.replace_range(sb..eb, &d.tools.replace_text);
             d.preview = None;
+            d.unpinned_preview = false;
+            d.last_edited_at = Some(std::time::Instant::now());
+            d.syntax_cache.invalidate();
             let rep_chars = d.tools.replace_text.chars().count();
             d.tools.pending_char_range = Some((sc, sc + rep_chars));
             d.tools.pending_scroll_line = Some(line);
@@ -7689,6 +8547,9 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
                 d.text.replace_range(sb..eb, &d.tools.replace_text);
             }
             d.preview = None;
+            d.unpinned_preview = false;
+            d.last_edited_at = Some(std::time::Instant::now());
+            d.syntax_cache.invalidate();
             d.tools.match_index = 0;
         }
         if close_find {
@@ -7698,7 +8559,7 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
     }
 }
 
-fn show_diff_document(ui: &mut egui::Ui, d: &Document, font_size: f32) {
+fn show_diff_document(ui: &mut egui::Ui, d: &Document, font_size: f32, diff_word_wrap: bool) {
     let font = egui::FontId::monospace(font_size);
     if d.text.trim().is_empty() {
         ui.weak(tr("No diff output for this file."));
@@ -7710,53 +8571,61 @@ fn show_diff_document(ui: &mut egui::Ui, d: &Document, font_size: f32) {
     let meta_fg = ui.visuals().weak_text_color();
     let base_fg = ui.visuals().text_color();
 
-    egui::ScrollArea::both()
-        .id_salt((&d.path, d.diff_title.as_deref().unwrap_or("diff")))
-        .show(ui, |ui| {
-            let mut job = egui::text::LayoutJob::default();
-            job.wrap.max_width = f32::INFINITY;
-            for (idx, line) in d.text.split('\n').enumerate() {
-                if idx > 0 {
-                    job.append(
-                        "\n",
-                        0.0,
-                        egui::TextFormat {
-                            font_id: font.clone(),
-                            color: base_fg,
-                            ..Default::default()
-                        },
-                    );
-                }
-                let (fg, bg) = if line.starts_with("+++ ")
-                    || line.starts_with("--- ")
-                    || line.starts_with("diff --git")
-                    || line.starts_with("index ")
-                    || line.starts_with("new file")
-                    || line.starts_with("deleted file")
-                {
-                    (meta_fg, egui::Color32::TRANSPARENT)
-                } else if line.starts_with("@@") {
-                    (hunk_fg, hunk_fg.gamma_multiply(0.08_f32))
-                } else if line.starts_with('+') {
-                    (add_fg, add_fg.gamma_multiply(0.10_f32))
-                } else if line.starts_with('-') {
-                    (del_fg, del_fg.gamma_multiply(0.10_f32))
-                } else {
-                    (base_fg, egui::Color32::TRANSPARENT)
-                };
+    let scroll = if diff_word_wrap {
+        egui::ScrollArea::vertical()
+    } else {
+        egui::ScrollArea::both()
+    }
+    .id_salt((&d.path, d.diff_title.as_deref().unwrap_or("diff")));
+    scroll.show(ui, |ui| {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = if diff_word_wrap {
+            ui.available_width().max(80.0_f32)
+        } else {
+            f32::INFINITY
+        };
+        for (idx, line) in d.text.split('\n').enumerate() {
+            if idx > 0 {
                 job.append(
-                    line,
+                    "\n",
                     0.0,
                     egui::TextFormat {
                         font_id: font.clone(),
-                        color: fg,
-                        background: bg,
+                        color: base_fg,
                         ..Default::default()
                     },
                 );
             }
-            ui.add(egui::Label::new(job).selectable(true));
-        });
+            let (fg, bg) = if line.starts_with("+++ ")
+                || line.starts_with("--- ")
+                || line.starts_with("diff --git")
+                || line.starts_with("index ")
+                || line.starts_with("new file")
+                || line.starts_with("deleted file")
+            {
+                (meta_fg, egui::Color32::TRANSPARENT)
+            } else if line.starts_with("@@") {
+                (hunk_fg, hunk_fg.gamma_multiply(0.08_f32))
+            } else if line.starts_with('+') {
+                (add_fg, add_fg.gamma_multiply(0.10_f32))
+            } else if line.starts_with('-') {
+                (del_fg, del_fg.gamma_multiply(0.10_f32))
+            } else {
+                (base_fg, egui::Color32::TRANSPARENT)
+            };
+            job.append(
+                line,
+                0.0,
+                egui::TextFormat {
+                    font_id: font.clone(),
+                    color: fg,
+                    background: bg,
+                    ..Default::default()
+                },
+            );
+        }
+        ui.add(egui::Label::new(job).selectable(true));
+    });
 }
 
 fn document_toolbar(
@@ -7936,6 +8805,7 @@ mod tests {
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: None,
             title: "Synthetic failure".into(),
@@ -8011,6 +8881,7 @@ $lock.Dispose()
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: None,
             title: "Synthetic".into(),
@@ -8196,6 +9067,7 @@ $lock.Dispose()
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: None,
             title: "Synthetic agent metadata".into(),
@@ -8251,6 +9123,7 @@ $lock.Dispose()
                 session_options: None,
                 pane_name: None,
                 broadcast: true,
+                scrollback: 10_000,
                 id: 1,
                 project: Some(1),
                 title: "Native".into(),
@@ -8308,6 +9181,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: None,
             title: "Synthetic Codex".into(),
@@ -8449,6 +9323,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: None,
             title: "Synthetic Claude".into(),
@@ -8503,6 +9378,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id: 1,
             project: Some(1),
             title: "Fixture".into(),
@@ -8544,6 +9420,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             session_options: None,
             pane_name: None,
             broadcast: true,
+            scrollback: 10_000,
             id,
             project: Some(1),
             title: "Provider".into(),

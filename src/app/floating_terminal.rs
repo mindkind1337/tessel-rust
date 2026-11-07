@@ -122,6 +122,15 @@ impl State {
             false
         }
     }
+    pub fn run_quick_command(&mut self, text: &str, press_enter: bool) -> bool {
+        if let Some(terminal) = self.runtime.process()
+            && !terminal.exited()
+        {
+            terminal.run_quick_command(text, press_enter).is_ok()
+        } else {
+            false
+        }
+    }
     pub fn poll(&mut self) {
         let before = self.runtime.phase();
         self.runtime.poll();
@@ -235,9 +244,15 @@ impl Tessel {
             Launch::Ssh(host) => format!("SSH · {}", host.alias),
             _ => "Terminal".into(),
         };
+        let scrollback = self.state.terminal_prefs.scrollback;
+        let preferred_shell = matches!(launch, Launch::Shell)
+            .then(|| self.state.launcher_prefs.preferred_shell.clone())
+            .flatten();
         let make = move || {
-            let command = launch::command_with_preferences(&launch, &cwd, None)?;
-            Terminal::spawn_command(command).map_err(|error| error.to_string())
+            let command =
+                launch::command_with_shell(&launch, &cwd, None, preferred_shell.as_deref())?;
+            Terminal::spawn_command_with_scrollback(command, scrollback)
+                .map_err(|error| error.to_string())
         };
         let result = if restart {
             self.floating.runtime.restart(make)
@@ -340,6 +355,8 @@ impl Tessel {
             || self.native_modal_open()
             || self.pending_exit
             || self.pending_close.is_some()
+            || self.pending_close_session.is_some()
+            || self.pending_remove_project.is_some()
             || self.file_action.is_some()
             || self.restore_preview.is_some()
             || self.toolbar_menu_open
@@ -362,6 +379,7 @@ impl Tessel {
             toggle_button_id: self.floating.toggle_id,
         };
         let runtime = &mut self.floating.runtime;
+        let terminal_prefs = self.state.terminal_prefs;
         let mut start = false;
         let output = Panel::show(
             ctx,
@@ -374,7 +392,12 @@ impl Tessel {
                         ui.colored_label(egui::Color32::LIGHT_RED, crate::i18n::tr(error));
                     }
                     if let Some(terminal) = runtime.process() {
-                        terminal.show_with_id(ui, self.state.font_size, Some(focus_id));
+                        terminal.show_with_prefs(
+                            ui,
+                            self.state.font_size,
+                            &terminal_prefs,
+                            Some(focus_id),
+                        );
                     } else if phase == Phase::Closed {
                         start = ui.button(crate::i18n::tr("Open terminal")).clicked();
                     } else {

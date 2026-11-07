@@ -277,6 +277,7 @@ pub struct Document {
     pub unpinned_preview: bool,
     pub diff_title: Option<String>,
     pub deleted_on_disk: bool,
+    pub last_edited_at: Option<std::time::Instant>,
 }
 impl Document {
     pub fn from_diff(
@@ -304,6 +305,37 @@ impl Document {
             unpinned_preview,
             diff_title: Some(title),
             deleted_on_disk: false,
+            last_edited_at: None,
+        }
+    }
+
+    pub fn from_readonly_text(
+        root: PathBuf,
+        path: PathBuf,
+        title: String,
+        text: String,
+        markdown: bool,
+    ) -> Self {
+        let preview = markdown.then(|| crate::preview::Preview::parse(&text, true));
+        Self {
+            root,
+            path,
+            text,
+            original: vec![],
+            error: String::new(),
+            preview_mode: markdown,
+            preview,
+            image: None,
+            texture: None,
+            media: true,
+            pdf: None,
+            office: None,
+            tools: EditorTools::default(),
+            syntax_cache: crate::syntax::SyntaxCache::default(),
+            unpinned_preview: false,
+            diff_title: Some(title),
+            deleted_on_disk: false,
+            last_edited_at: None,
         }
     }
 
@@ -334,6 +366,7 @@ impl Document {
                 unpinned_preview: false,
                 diff_title: None,
                 deleted_on_disk: false,
+                last_edited_at: None,
             });
         }
         if extension == "pdf" {
@@ -356,6 +389,7 @@ impl Document {
                 unpinned_preview: false,
                 diff_title: None,
                 deleted_on_disk: false,
+                last_edited_at: None,
             });
         }
         if matches!(
@@ -402,6 +436,7 @@ impl Document {
                 unpinned_preview: false,
                 diff_title: None,
                 deleted_on_disk: false,
+                last_edited_at: None,
             });
         }
         let original = read(&path)?;
@@ -428,6 +463,7 @@ impl Document {
             unpinned_preview: false,
             diff_title: None,
             deleted_on_disk: false,
+            last_edited_at: None,
         })
     }
     pub fn original_text(&self) -> Option<&str> {
@@ -452,6 +488,7 @@ impl Document {
         }
         atomic_write(&self.path, self.text.as_bytes())?;
         self.original = self.text.as_bytes().to_vec();
+        self.last_edited_at = None;
         Ok(())
     }
 }
