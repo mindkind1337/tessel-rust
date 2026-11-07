@@ -17,11 +17,39 @@ pub fn definitions() -> Value {
             .unwrap()
             .push(crate::agent_browser::definition());
         definitions
+            .as_array_mut()
+            .unwrap()
+            .extend(crate::teams_relay::dynamic_tool_definitions());
+        definitions
     }
     #[cfg(not(windows))]
     {
         definitions
     }
+}
+
+pub fn execute_for_pane(
+    state: &mut Workspace,
+    teams_hub: &mut crate::teams_relay::TeamsRelayHub,
+    pane_id: u64,
+    project: u64,
+    name: &str,
+    args: &Value,
+) -> Result<(Value, bool)> {
+    if name.starts_with("team_") || name.starts_with("project_") {
+        if !state.projects.iter().any(|p| p.id == project) {
+            return Err("The owning project no longer exists.".into());
+        }
+        return teams_hub.execute_tool(
+            state,
+            pane_id,
+            project,
+            name,
+            args,
+            crate::teams_relay::now_ms(),
+        );
+    }
+    execute(state, project, name, args)
 }
 
 pub fn execute(

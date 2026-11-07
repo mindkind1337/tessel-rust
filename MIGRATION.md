@@ -18,7 +18,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Task board | Per-project cards; persistence; safe movement | Adaptive native board integrated with scoped persistence and native chat tools; broader orchestration parity pending |
 | Git | Nonblocking, bounded status/diff/log; explicit mutations; worktrees; no auto polling storms | Structured Changes panel integrated with on-demand status, diff tabs, `+added / -removed` badges, staging/unstaging, confirmed discard, commits and remote operations; background Git worktree discovery, branch-prefixed creation with `.env*` secret copy, Windows NTFS junction-safe removal, sidebar sub-cards/hidden inbox, launcher toggle and `WorktreeCleanupModal` integrated and tested; native visual acceptance pending |
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; Claude native initialization and streaming/approval/structured-question protocol fixtures pass, with French UI visually checked; Claude live model acceptance currently blocked by CLI sign-in requirement; tool execution and history plus other providers pending |
-| Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions and explicitly enabled project browser tools implemented; agent messaging and broader host tools pending |
+| Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions, explicitly enabled project browser tools, HMAC-SHA256-authenticated Tessel Teams (`team_*`), bounded worker orchestration (`team_worker_*`, `team_heartbeat`), gated inter-project relay (`project_agents`/`project_send`/`project_inbox` with pair approval and untrusted framing) and digit-free idle wake-ups implemented and verified |
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending |
 | Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown, images and bounded original PDF rendering implemented; bounded Office/OpenDocument content previews implemented with synthetic format and native worker acceptance; full webpage rendering and rich Office layout pending |
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
@@ -687,3 +687,19 @@ prompts. `ProjectPanel` adds collapsible workspace folder groups, `Put to sleep`
 session/project actions, and `Hide agent task line`. Toolbar adds non-focus-stealing
 `Agent request` pills, provider `UsageMenu` (`<60%` / `>=60%` / `>=80%`), and
 coalesced `NotificationsMenu` (`unread_count`, `mark_all_read`, `clear`).
+
+Tessel Teams, worker orchestration, inter-project relay and safe idle wake-ups
+integration (`teams_relay.rs` + `teams_ui.rs` + `agent_tools.rs` +
+`pane_header.rs` + `project_panel.rs` + `sidebar_model.rs` + `workspace.rs` +
+`app.rs` + `tests/ui_teams_orchestration_relay.rs`):
+`TeamsRelayHub` implements persistent project teams (`SavedTeam`, `team_number`,
+`dedupe_team_numbers`), per-pane 32-byte HMAC-SHA256 request signing and
+constant-time verification (`TeamAuthRegistry` with `MAX_NONCES = 20_000`),
+`team_create`/`team_bootstrap`/`team_members`/`team_send`/`team_ask`/`team_inbox`/
+`team_task_gate`/`team_gates`, bounded worker orchestration (`WORKER_AGENTS`,
+`CHAT_AGENTS`, `TOTAL_WORKERS_LIMIT = 12`, `8 / 10m` start rate cap, `max_depth`,
+frozen-context confirmation re-verification, `build_worker_brief`), gated
+inter-project relay (`same_team` guard, `20 / 10s` burst cap, canonical
+`pair_key` approval modal with `10`/`30`/`100` hourly caps, `10m` decline
+cooldown, Live Share non-caching bypass, and `| `-prefixed untrusted framing),
+and digit-free idle wake-up planning (`SendPtyReminder` vs `ShowBanner`).

@@ -12,6 +12,17 @@ pub enum SidebarLang {
     Fr,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionTeamBadge {
+    pub team_id: String,
+    pub team_name: String,
+    pub team_number: String,
+    pub is_lead: bool,
+    pub worker_of: Option<String>,
+    pub unread_count: usize,
+}
+
 // ---------------------------------------------------------------------------
 // 1. Agent Dot States, Labels & Summaries (`sidebarModel.js:9-147`)
 // ---------------------------------------------------------------------------

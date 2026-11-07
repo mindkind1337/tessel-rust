@@ -150,6 +150,7 @@ pub enum ProjectAction {
     EditProjectGroup(u64),
     ToggleProjectGroup(String),
     OpenGitHub(u64),
+    ManageTeams(u64),
     CloseSession {
         project: Option<u64>,
         id: u64,
@@ -498,6 +499,7 @@ pub struct ProjectPanel {
     session_worktrees: HashMap<u64, (String, String)>,
     project_groups: HashMap<u64, String>,
     collapsed_groups: HashSet<String>,
+    session_teams: HashMap<u64, crate::sidebar_model::SessionTeamBadge>,
     options: SidebarOptions,
     options_popup_open: bool,
 }
@@ -549,6 +551,14 @@ impl ProjectPanel {
     pub fn set_project_groups(&mut self, groups: HashMap<u64, String>, collapsed: HashSet<String>) {
         self.project_groups = groups;
         self.collapsed_groups = collapsed;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_session_team_badges(
+        &mut self,
+        badges: HashMap<u64, crate::sidebar_model::SessionTeamBadge>,
+    ) {
+        self.session_teams = badges;
     }
 
     fn is_project_in_collapsed_group(&self, project_id: u64) -> bool {
@@ -960,6 +970,15 @@ impl ProjectPanel {
         };
         if ui.button(group_lbl).clicked() {
             act = Some(ProjectAction::EditProjectGroup(project_id));
+            ui.close();
+        }
+        let teams_lbl = if french {
+            "Équipes & exécutants…"
+        } else {
+            "Teams & workers…"
+        };
+        if ui.button(teams_lbl).clicked() {
+            act = Some(ProjectAction::ManageTeams(project_id));
             ui.close();
         }
         if has_awake {
@@ -3218,6 +3237,41 @@ impl ProjectPanel {
                     tag_fg,
                 );
                 text_right = tag_x - 6.0_f32;
+            }
+        }
+
+        if let Some(badge) = self.session_teams.get(&session.id)
+            && row_rect.width() >= 156.0_f32
+        {
+            let mut pill_parts = Vec::new();
+            if !badge.team_number.is_empty() {
+                if badge.is_lead {
+                    pill_parts.push(format!("#{}★", badge.team_number));
+                } else {
+                    pill_parts.push(format!("#{}", badge.team_number));
+                }
+            }
+            if badge.unread_count > 0 {
+                pill_parts.push(format!("✉{}", badge.unread_count));
+            }
+            if !pill_parts.is_empty() {
+                let pill_txt = pill_parts.join(" ");
+                let pill_fg = if badge.is_lead || badge.unread_count > 0 {
+                    accent
+                } else {
+                    muted
+                };
+                let galley =
+                    painter.layout_no_wrap(pill_txt, FontId::proportional(9.5_f32), pill_fg);
+                if text_right - galley.size().x > icon_rect.max.x + 28.0_f32 {
+                    let px = text_right - galley.size().x;
+                    painter.galley(
+                        Pos2::new(px, row_rect.center().y - galley.size().y * 0.5_f32),
+                        galley,
+                        pill_fg,
+                    );
+                    text_right = px - 5.0_f32;
+                }
             }
         }
 

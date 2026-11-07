@@ -129,6 +129,8 @@ mod system_fonts;
 mod system_identity;
 mod task_actions;
 pub mod tasks_board_panel;
+pub mod teams_relay;
+pub mod teams_ui;
 pub mod terminal;
 mod terminal_layout;
 mod terminal_model;

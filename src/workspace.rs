@@ -566,6 +566,8 @@ pub struct Workspace {
     pub project_groups: std::collections::BTreeMap<u64, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub collapsed_project_groups: std::collections::BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<crate::teams_relay::SavedTeam>,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
     pub next_id: u64,
@@ -612,6 +614,7 @@ impl Default for Workspace {
             project_worktrees: Default::default(),
             project_groups: Default::default(),
             collapsed_project_groups: Default::default(),
+            teams: Vec::new(),
             terminal_layouts: Default::default(),
             font_size: 15.0,
             next_id: 1,

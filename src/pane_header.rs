@@ -55,6 +55,9 @@ pub struct MenuState<'a> {
     pub activity: Option<pane_menu_model::PaneAgentActivity>,
     pub needs_you: bool,
     pub worktree: Option<(String, String)>,
+    pub team: Option<pane_menu_model::TeamMembership>,
+    pub can_switch_chat_mode: bool,
+    pub chat_view_open: bool,
     pub has_selection: bool,
     pub voice_typing: bool,
     pub other_panes: Vec<pane_menu_model::OtherPaneTarget>,
@@ -80,6 +83,10 @@ fn build_filtered(
             activity: state.activity,
             needs_you: state.needs_you,
             worktree: state.worktree.clone(),
+            team: state.team.clone(),
+            can_open_as_chat: state.can_switch_chat_mode,
+            chat_view_available: state.can_switch_chat_mode,
+            chat_view_open: state.chat_view_open,
             has_selection: state.has_selection,
             other_panes: if state.terminal_output {
                 state.other_panes.clone()
@@ -135,6 +142,10 @@ fn build_filtered(
                 PaneMenuAction::CopySessionId => state.session_id.is_some_and(|id| !id.is_empty()),
                 PaneMenuAction::Rename => state.can_rename,
                 PaneMenuAction::ChooseModel => state.model_choice,
+                PaneMenuAction::ToggleTeamLead(_) | PaneMenuAction::LeaveTeam(_) => {
+                    state.team.is_some()
+                }
+                PaneMenuAction::OpenOrSwitchChat => state.can_switch_chat_mode,
                 PaneMenuAction::OpenHere
                 | PaneMenuAction::ToggleMaximize
                 | PaneMenuAction::ArrangeGrid

@@ -531,6 +531,8 @@ pub struct Tessel {
     keep_awake: crate::status_metrics::KeepAwakeController,
     side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
     dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState,
+    teams_hub: crate::teams_relay::TeamsRelayHub,
+    teams_ui: crate::teams_ui::TeamsUiState,
     notifications: crate::dialogs_toolbar_model::NotificationCenter,
     notified_waiting_panes: std::collections::HashSet<u64>,
     task_history_store: crate::side_panels_model::TaskHistoryStore,
@@ -739,6 +741,8 @@ impl Tessel {
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
+            teams_hub: Default::default(),
+            teams_ui: Default::default(),
             notifications: Default::default(),
             notified_waiting_panes: Default::default(),
             task_history_store,
@@ -1697,8 +1701,10 @@ impl Tessel {
                     }
                     continue;
                 }
-                let result = crate::agent_tools::execute(
+                let result = crate::agent_tools::execute_for_pane(
                     &mut self.state,
+                    &mut self.teams_hub,
+                    chat.pane,
                     chat.project,
                     &call.name,
                     &call.arguments,
@@ -3676,9 +3682,14 @@ impl Tessel {
                 .collect(),
         );
 
+        self.project_panel
+            .set_session_team_badges(self.teams_hub.session_badges(&self.state));
+
         let panel_disabled = self.native_modal_open()
             || self.side_panels_ui.any_modal_open()
             || self.dialogs_toolbar_ui.any_modal_open()
+            || self.teams_ui.manager_project.is_some()
+            || !self.teams_hub.approval_prompts.is_empty()
             || self.share.has_pending_ask()
             || self.share.is_pill_popover_open()
             || self.overlay.is_some()
@@ -3974,6 +3985,10 @@ impl Tessel {
             }
             Some(ProjectAction::OpenGitHub(pid)) => {
                 self.open_github_modal(Some(pid));
+                return;
+            }
+            Some(ProjectAction::ManageTeams(pid)) => {
+                self.teams_ui.open_manager(pid);
                 return;
             }
             Some(ProjectAction::CloseSession { id, .. }) => {
@@ -4765,6 +4780,8 @@ impl Tessel {
                     .map(|c| c.pane),
             )
             .collect();
+        let mut team_membership_changed = false;
+        let mut deferred_teams_action: Option<crate::teams_ui::TeamsUiAction> = None;
         let ctx_menu_was_just_opened = std::mem::take(&mut self.pane_context_menu_just_opened);
         for tile in &geometry.tiles {
             let Ok(id) = tile.leaf.id.parse::<u64>() else {
@@ -4929,6 +4946,17 @@ impl Tessel {
                                     worktree: session.worktree.as_ref().map(|wt| {
                                         (wt.branch.clone(), wt.path.display().to_string())
                                     }),
+                                    team: self
+                                        .state
+                                        .teams
+                                        .iter()
+                                        .find(|t| t.members.contains(&id))
+                                        .map(|t| crate::pane_menu_model::TeamMembership {
+                                            id: t.id.clone(),
+                                            name: t.name.clone(),
+                                            is_lead: t.lead_pane == Some(id),
+                                            can_set_lead: is_agent_pane,
+                                        }),
                                     ..Default::default()
                                 };
                                 let mut action = None;
@@ -5013,6 +5041,18 @@ impl Tessel {
                                 .context_menu(|ui| {
                                     action = crate::pane_header::show(ui, &menu);
                                 });
+                                if let Some(team_badge) =
+                                    self.teams_hub.session_badges(&self.state).get(&id)
+                                    && crate::teams_ui::paint_pane_team_pills(
+                                        ui,
+                                        &spec.ui,
+                                        team_badge,
+                                        french,
+                                    )
+                                    && let Some(pid) = session.project
+                                {
+                                    self.teams_ui.open_manager(pid);
+                                }
                                 if let Some(tag) = native_tag { crate::host_terminal_panel::show_header_tag(ui, tag, crate::i18n::is_french()); }
                                 if let Launch::Agent(agent) = &session.launch {
                                     let chip = crate::session_option_picker_ui::show_header_model_chip(ui, egui::Id::new(("terminal-model", id)), &crate::session_option_picker_ui::HeaderModelChipInput {
@@ -5161,6 +5201,22 @@ impl Tessel {
                                         PaneMenuAction::Rename => {
                                             rename = Some((id, session.label().to_owned()))
                                         }
+                                        PaneMenuAction::ToggleTeamLead(tid) => {
+                                            team_membership_changed |=
+                                                crate::teams_relay::TeamsRelayHub::toggle_team_lead(
+                                                    &mut self.state,
+                                                    &tid,
+                                                    id,
+                                                );
+                                        }
+                                        PaneMenuAction::LeaveTeam(tid) => {
+                                            team_membership_changed |=
+                                                crate::teams_relay::TeamsRelayHub::leave_team(
+                                                    &mut self.state,
+                                                    &tid,
+                                                    id,
+                                                );
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -5261,6 +5317,14 @@ impl Tessel {
                                         }
                                     });
                             } else if let Some(terminal) = &mut session.terminal {
+                                if let Some(banner) = self.teams_hub.wake_banners.get(&id).cloned()
+                                    && let Some(wake_act) =
+                                        crate::teams_ui::show_unconfirmed_wake_banner(
+                                            ui, &spec.ui, &banner, french,
+                                        )
+                                {
+                                    deferred_teams_action = Some(wake_act);
+                                }
                                 let agent_kind = match &session.launch {
                                     Launch::Agent(agent) => Some(agent.as_str()),
                                     _ => None,
@@ -5315,6 +5379,12 @@ impl Tessel {
                         });
                 },
             );
+        }
+        if team_membership_changed {
+            self.save();
+        }
+        if let Some(t_act) = deferred_teams_action {
+            self.handle_teams_ui_action(t_act);
         }
         #[cfg(windows)]
         if let Some(id) = native_wake {
@@ -10516,6 +10586,168 @@ impl Tessel {
             }
         }
     }
+
+    fn handle_teams_ui_action(&mut self, act: crate::teams_ui::TeamsUiAction) {
+        use crate::teams_ui::TeamsUiAction;
+        let now = crate::teams_relay::now_ms();
+        match act {
+            TeamsUiAction::ApproveWorker(wid) => {
+                if let Err(e) = self.teams_hub.approve_worker_start(&self.state, &wid, now) {
+                    self.error = e;
+                }
+            }
+            TeamsUiAction::RefuseWorker(wid) => {
+                let _ = self.teams_hub.refuse_worker_start(&wid);
+            }
+            TeamsUiAction::ApproveRelayPair { pair, hourly_limit } => {
+                let _ = self
+                    .teams_hub
+                    .resolve_pair_approval(pair, true, hourly_limit, now);
+            }
+            TeamsUiAction::DeclineRelayPair(pair) => {
+                let _ = self.teams_hub.resolve_pair_approval(pair, false, 30, now);
+            }
+            TeamsUiAction::SendWakeReminder(pane_id) => {
+                self.teams_hub.trigger_banner_reminder(pane_id);
+            }
+            TeamsUiAction::DismissWakeBanner(pane_id) => {
+                self.teams_hub.wake_banners.remove(&pane_id);
+            }
+            TeamsUiAction::CreateTeam { project, name } => {
+                let id = crate::teams_relay::generate_team_id();
+                self.state.teams.push(crate::teams_relay::SavedTeam {
+                    id,
+                    project,
+                    name,
+                    lead_pane: None,
+                    members: Vec::new(),
+                });
+                self.save();
+            }
+            TeamsUiAction::DeleteTeam(tid) => {
+                self.state.teams.retain(|t| t.id != tid);
+                self.save();
+            }
+            TeamsUiAction::ToggleMember { team_id, pane_id } => {
+                if let Some(team) = self.state.teams.iter_mut().find(|t| t.id == team_id) {
+                    if team.members.contains(&pane_id) {
+                        team.members.retain(|&m| m != pane_id);
+                        if team.lead_pane == Some(pane_id) {
+                            team.lead_pane = team.members.first().copied();
+                        }
+                    } else {
+                        team.members.push(pane_id);
+                        if team.lead_pane.is_none() {
+                            team.lead_pane = Some(pane_id);
+                        }
+                    }
+                    self.save();
+                }
+            }
+            TeamsUiAction::ToggleLead { team_id, pane_id } => {
+                if crate::teams_relay::TeamsRelayHub::toggle_team_lead(
+                    &mut self.state,
+                    &team_id,
+                    pane_id,
+                ) {
+                    self.save();
+                }
+            }
+            TeamsUiAction::StopWorker(wid) => {
+                if let Some(pid) = self.teams_hub.stop_or_release_worker(&wid, false) {
+                    self.put_session_to_sleep(pid);
+                }
+            }
+            TeamsUiAction::ReleaseWorker(wid) => {
+                let _ = self.teams_hub.stop_or_release_worker(&wid, true);
+            }
+            TeamsUiAction::FocusPane(pane_id) => {
+                if let Some(s) = self.sessions.iter().find(|s| s.id == pane_id) {
+                    let proj = s.project;
+                    if self.state.active_project != proj {
+                        self.state.active_project = proj;
+                        self.refresh_project();
+                    }
+                    self.active_session = Some(pane_id);
+                    self.view = View::Work;
+                }
+            }
+        }
+    }
+
+    fn poll_teams_and_relay(&mut self) {
+        let now = crate::teams_relay::now_ms();
+        while let Some(spec) = self.teams_hub.pending_spawns.pop_front() {
+            let launch = match spec.mode {
+                crate::settings_extra_model::WorkerMode::Chat => match spec.agent.as_str() {
+                    "claude" => Launch::ClaudeChat,
+                    _ => Launch::CodexChat,
+                },
+                crate::settings_extra_model::WorkerMode::Terminal => {
+                    Launch::Agent(spec.agent.clone())
+                }
+            };
+            self.new_session_in_worktree(Some(spec.project_id), launch, None, false, None);
+            if let Some(spawned) = self.sessions.last_mut() {
+                let spawned_id = spawned.id;
+                spawned.pane_name = Some(spec.worker_name.clone());
+                let _ = self.teams_hub.auth.ensure_pane_secret_hex(spawned_id);
+                self.teams_hub.bind_spawned_worker_pane(
+                    &mut self.state,
+                    &spec.worker_id,
+                    spawned_id,
+                    now,
+                );
+                self.save();
+            }
+        }
+
+        let mut candidates = Vec::new();
+        for sess in &self.sessions {
+            if !matches!(sess.launch, Launch::Agent(_)) {
+                continue;
+            }
+            let busy_or_inactive = match &sess.terminal {
+                None => true,
+                Some(t) => t.exited() || t.active_within(Duration::from_secs(5)),
+            };
+            let focused = self.active_session == Some(sess.id);
+            if let Some(oldest_ms) = self.teams_hub.oldest_unread_team_ms(sess.id) {
+                candidates.push(crate::teams_relay::WakeCandidate {
+                    pane_id: sess.id,
+                    channel: crate::teams_relay::WakeChannel::Team,
+                    oldest_unread_ms: oldest_ms,
+                    relay_sender: None,
+                    pane_idle_confirmed: !busy_or_inactive && !focused,
+                    pane_busy_or_sleeping_or_exited: busy_or_inactive,
+                    user_focused_on_pane: focused,
+                    last_user_interaction_ms: 0,
+                });
+            } else if let Some((oldest_ms, sender)) = self.teams_hub.oldest_unread_relay(sess.id) {
+                candidates.push(crate::teams_relay::WakeCandidate {
+                    pane_id: sess.id,
+                    channel: crate::teams_relay::WakeChannel::Relay,
+                    oldest_unread_ms: oldest_ms,
+                    relay_sender: Some(sender),
+                    pane_idle_confirmed: !busy_or_inactive && !focused,
+                    pane_busy_or_sleeping_or_exited: busy_or_inactive,
+                    user_focused_on_pane: focused,
+                    last_user_interaction_ms: 0,
+                });
+            }
+        }
+        self.teams_hub
+            .poll_idle_wakes(&self.state.orchestration_prefs, &candidates, now);
+
+        while let Some((pane_id, line)) = self.teams_hub.pending_pty_sends.pop_front() {
+            if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == pane_id)
+                && let Some(term) = &mut sess.terminal
+                && !term.exited()
+            {
+                let _ = term.run_quick_command(&line, true);
+            }
+        }
+    }
 }
 impl eframe::App for Tessel {
     #[cfg(feature = "visual-test")]
@@ -11385,6 +11617,34 @@ impl eframe::App for Tessel {
             ) {
                 self.handle_dialogs_toolbar_action(ctx, act);
             }
+            let pal = crate::theme::active(ctx).spec().ui;
+            if let Some(act) = crate::teams_ui::show_worker_confirm_modal(
+                ctx,
+                &pal,
+                &self.teams_hub.workers,
+                french,
+            ) {
+                self.handle_teams_ui_action(act);
+            }
+            if let Some(act) = crate::teams_ui::show_relay_approval_modal(
+                ctx,
+                &pal,
+                &mut self.teams_hub.approval_prompts,
+                french,
+            ) {
+                self.handle_teams_ui_action(act);
+            }
+            if let Some(act) = crate::teams_ui::show_team_manager_modal(
+                ctx,
+                &pal,
+                &mut self.teams_ui,
+                &self.state,
+                &self.teams_hub,
+                french,
+            ) {
+                self.handle_teams_ui_action(act);
+            }
+            self.poll_teams_and_relay();
         }
         #[cfg_attr(not(windows), allow(unused_variables))]
         let ask_modal_open = if self.share.hosting() {
@@ -11403,6 +11663,8 @@ impl eframe::App for Tessel {
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
                 && !self.dialogs_toolbar_ui.any_modal_open()
+                && self.teams_ui.manager_project.is_none()
+                && self.teams_hub.approval_prompts.is_empty()
                 && !ask_modal_open
                 && !self.share.has_pending_ask()
                 && !self.pending_exit
