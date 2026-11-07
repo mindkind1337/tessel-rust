@@ -201,23 +201,44 @@ pub fn command_with_shell(
             }
         }
         Launch::Agent(program) => {
-            let preset = crate::agent_catalog::find(program).ok_or("Unknown agent.")?;
-            #[cfg(windows)]
-            let available = crate::command_lookup::lookup(&[preset.executable], &search.value)?
-                .get(preset.executable)
-                .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
-            #[cfg(not(windows))]
-            let available = installed_on(program, &search);
-            let custom_command =
-                prefs.is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
-            if !available && !custom_command {
-                return Err(format!(
-                    "{program} is not installed or not on PATH. Install its CLI, then refresh detection."
-                ));
-            }
-            match prefs {
-                Some(prefs) => configured_agent_command(preset, prefs)?,
-                None => agent_command(preset),
+            if program.starts_with("custom-") {
+                let Some(p) = prefs else {
+                    return Err("Custom agent preferences missing.".into());
+                };
+                let cmd_text = crate::agent_env::trim(&p.command);
+                if cmd_text.is_empty() || cmd_text.contains(['\0', '\r', '\n']) {
+                    return Err("Custom agent command is empty or invalid.".into());
+                }
+                let mut c = CommandBuilder::new(if cfg!(windows) {
+                    "powershell.exe"
+                } else {
+                    "/bin/sh"
+                });
+                if cfg!(windows) {
+                    c.args(["-NoLogo", "-NoProfile", "-Command", cmd_text]);
+                } else {
+                    c.args(["-c", cmd_text]);
+                }
+                c
+            } else {
+                let preset = crate::agent_catalog::find(program).ok_or("Unknown agent.")?;
+                #[cfg(windows)]
+                let available = crate::command_lookup::lookup(&[preset.executable], &search.value)?
+                    .get(preset.executable)
+                    .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
+                #[cfg(not(windows))]
+                let available = installed_on(program, &search);
+                let custom_command =
+                    prefs.is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
+                if !available && !custom_command {
+                    return Err(format!(
+                        "{program} is not installed or not on PATH. Install its CLI, then refresh detection."
+                    ));
+                }
+                match prefs {
+                    Some(prefs) => configured_agent_command(preset, prefs)?,
+                    None => agent_command(preset),
+                }
             }
         }
         Launch::Ssh(host) => {

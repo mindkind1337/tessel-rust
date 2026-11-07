@@ -496,5 +496,15 @@
   "Clean up worktrees\u2026": "Nettoyer les worktrees\u2026",
   "Delete worktree?": "Supprimer le worktree ?",
   "This deletes the worktree folder and its local branch. Open panes in this worktree will be closed.": "Supprime le dossier du worktree et sa branche locale. Les panneaux ouverts dans ce worktree seront ferm\u00e9s.",
-  "Delete worktree": "Supprimer le worktree"
+  "Delete worktree": "Supprimer le worktree",
+  "AI provider accounts": "Comptes de fournisseurs d'IA",
+  "Skills": "Skills",
+  "MCP servers": "Serveurs MCP",
+  "Connections": "Connexions",
+  "Context": "Contexte",
+  "Orchestration": "Orchestration",
+  "Notifications": "Notifications",
+  "Voice typing": "Saisie vocale",
+  "Developer tools": "Outils de d\u00e9veloppement",
+  "Automations": "Automatisations"
 }

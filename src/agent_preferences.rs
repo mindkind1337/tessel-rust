@@ -78,6 +78,17 @@ pub fn for_pane_launch(
     discovered: Option<&[serde_json::Value]>,
     pane_values: Option<&serde_json::Value>,
 ) -> Preferences {
+    if id.starts_with("custom-") {
+        if let Some(custom) = state.custom_agents.iter().find(|c| c.id == id) {
+            return Preferences {
+                enabled: custom.enabled,
+                command: custom.command.clone(),
+                args: String::new(),
+                env: String::new(),
+            };
+        }
+        return Preferences::default();
+    }
     let mut prefs = get(state, id).cloned().unwrap_or_default();
     let global = state
         .agent_model_defaults
@@ -101,6 +112,13 @@ pub fn for_pane_launch(
 }
 
 pub fn enabled(state: &Workspace, id: &str) -> bool {
+    if id.starts_with("custom-") {
+        return state
+            .custom_agents
+            .iter()
+            .find(|c| c.id == id)
+            .is_some_and(|c| c.enabled);
+    }
     get(state, id).is_none_or(|prefs| prefs.enabled)
 }
 

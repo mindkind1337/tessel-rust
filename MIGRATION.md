@@ -642,3 +642,21 @@ secondary worktree sub-cards, context menus and hidden-worktree discovery inbox
 (`ProjectWorktreePrefs`), pane header `MenuState::worktree`, Command Palette
 `worktree:new` / `worktree:cleanup` actions, and the localized EN/FR
 `WorktreeCleanupModal` (`Safe` / `Risk` / `Blocker`).
+
+Complete 22/22 Settings pages + Custom CLI Agents integration
+(`settings_extra_model.rs` + `settings_extra_panel.rs` + `automations.rs` +
+`workspace.rs` + `backup.rs` + `agent_preferences.rs` + `launch.rs` + `app.rs`):
+Settings navigation and Command Palette now expose all 22 `SettingsPageId` pages
+across the 5 groups (`Accounts`, `Skills`, `Mcp`, `Connections`, `Context`,
+`Orchestration`, `Alerts`, `Voice`, `Devtools`, `Automations` added alongside the
+existing 12 pages + Windows `Passwords`). Managed `claude-accounts` /
+`codex-accounts` rosters inject `CLAUDE_CONFIG_DIR` / `CODEX_HOME` per launch;
+provider secrets seal via Windows DPAPI (`provider-secrets.dat`); `scan_skills`
+and `install_skill_from_folder` enforce bounded symlink-free skill management;
+`upsert_json_mcp_server` / `remove_json_mcp_server` create `.tessel-bak` backups
+and `probe_mcp_stdio` runs bounded JSON-RPC `initialize` probes; `scan_project_context`
+estimates model-family token budgets while excluding `.env*`/keys; `AutomationsFile`
+enforces `>= 15m` cron validation, 64-bit FNV-1a `confirmed_sig` gating, concurrency
+caps and file-backed `prompt.md` execution; and up to 30 `CustomAgent` entries
+integrate across `Agents`, `Launcher`, `CommandPalette`, `launch.rs`, and portable
+backup stripping.

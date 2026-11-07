@@ -540,6 +540,18 @@ pub struct Workspace {
     pub git_prefs: GitPreferences,
     pub quick_commands: Vec<QuickCommand>,
     pub stats_prefs: StatsPreferences,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
+    #[serde(default)]
+    pub orchestration_prefs: crate::settings_extra_model::OrchestrationPreferences,
+    #[serde(default)]
+    pub notification_prefs: crate::settings_extra_model::NotificationPreferences,
+    #[serde(default)]
+    pub voice_prefs: crate::settings_extra_model::VoicePreferences,
+    #[serde(default)]
+    pub provider_accounts_prefs: crate::settings_extra_model::ProviderAccountsPreferences,
+    #[serde(default)]
+    pub context_prefs: crate::settings_extra_model::ContextPreferences,
     pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -579,6 +591,12 @@ impl Default for Workspace {
             git_prefs: Default::default(),
             quick_commands: Vec::new(),
             stats_prefs: Default::default(),
+            custom_agents: Vec::new(),
+            orchestration_prefs: Default::default(),
+            notification_prefs: Default::default(),
+            voice_prefs: Default::default(),
+            provider_accounts_prefs: Default::default(),
+            context_prefs: Default::default(),
             status_bar: Default::default(),
             floating: Default::default(),
             project_worktrees: Default::default(),
@@ -659,6 +677,11 @@ impl Workspace {
         ) {
             return Err("Invalid usage refresh interval.".into());
         }
+        crate::settings_extra_model::validate_custom_agents(&self.custom_agents)?;
+        self.orchestration_prefs.validate()?;
+        self.notification_prefs.validate()?;
+        self.voice_prefs.validate()?;
+        self.provider_accounts_prefs.validate()?;
         if self.quick_commands.len() > 200 {
             return Err("Too many quick commands.".into());
         }

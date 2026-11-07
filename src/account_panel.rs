@@ -37,6 +37,9 @@ impl AccountPanel {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    pub fn is_signed_in(&self) -> bool {
+        self.store.as_ref().is_some_and(|s| s.session.is_some())
+    }
     pub fn poll(&mut self) {
         if let Some(rx) = &self.pending {
             match rx.try_recv() {

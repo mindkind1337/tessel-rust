@@ -34,6 +34,7 @@ mod agent_tools;
 pub mod agents_panel;
 mod app;
 pub mod appearance_panel;
+pub mod automations;
 mod backup;
 #[cfg(windows)]
 mod browser;
@@ -105,6 +106,8 @@ mod remote_panel;
 pub mod scm_changes_panel;
 mod scm_state;
 pub mod session_option_picker_ui;
+pub mod settings_extra_model;
+pub mod settings_extra_panel;
 pub mod settings_model;
 pub mod settings_nav;
 pub mod settings_pages_panel;

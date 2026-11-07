@@ -18,10 +18,18 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
     state.validate()?;
     let mut portable = state.clone();
     portable.quick_commands.clear();
+    portable.custom_agents.clear();
+    portable
+        .provider_accounts_prefs
+        .host_account_defaults
+        .clear();
     for prefs in portable.agent_prefs.values_mut() {
         prefs.env.clear();
     }
     for pane in &mut portable.sessions {
+        if matches!(&pane.launch, crate::launch::Launch::Agent(id) if id.starts_with("custom-")) {
+            pane.launch = crate::launch::Launch::Shell;
+        }
         if let Some(native) = &mut pane.native_host {
             native.identity = None;
         }
@@ -64,10 +72,21 @@ pub fn import(path: &Path) -> Result<Workspace> {
     // A portable file must never introduce launch commands or environment
     // secrets. Visibility is inert and remains portable.
     backup.workspace.quick_commands.clear();
+    backup.workspace.custom_agents.clear();
+    backup
+        .workspace
+        .provider_accounts_prefs
+        .host_account_defaults
+        .clear();
+    backup.workspace.orchestration_prefs.team_wake_unconfirmed = false;
+    backup.workspace.orchestration_prefs.confirm_workers = true;
     for prefs in backup.workspace.agent_prefs.values_mut() {
         prefs.reset();
     }
     for pane in &mut backup.workspace.sessions {
+        if matches!(&pane.launch, crate::launch::Launch::Agent(id) if id.starts_with("custom-")) {
+            pane.launch = crate::launch::Launch::Shell;
+        }
         if let Some(native) = &mut pane.native_host {
             native.identity = None;
         }

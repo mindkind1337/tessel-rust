@@ -394,6 +394,16 @@ enum SettingsSection {
     QuickCommands,
     Hosts,
     Agents,
+    Accounts,
+    Skills,
+    Mcp,
+    Connections,
+    Context,
+    Orchestration,
+    Alerts,
+    Voice,
+    Devtools,
+    Automations,
     Stats,
     Updates,
     #[cfg(windows)]
@@ -439,6 +449,19 @@ pub struct Tessel {
     settings_section: SettingsSection,
     settings_nav: crate::settings_nav::SettingsNav,
     settings_pages: crate::settings_pages_panel::SettingsPagesState,
+    settings_extra: crate::settings_extra_panel::SettingsExtraState,
+    claude_managed_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    codex_managed_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    provider_secret_flags: std::collections::BTreeMap<String, bool>,
+    cli_sign_ins: crate::settings_extra_model::CliSignInProbe,
+    scanned_skills: Vec<crate::settings_extra_model::SkillEntry>,
+    installed_mcp_servers: Vec<crate::settings_extra_model::InstalledMcpServer>,
+    context_scan: crate::settings_extra_model::ContextScanReport,
+    devtools_statuses: Vec<crate::settings_extra_model::DevToolStatus>,
+    devtools_rx: Option<Receiver<Vec<crate::settings_extra_model::DevToolStatus>>>,
+    mcp_test_rx: Option<Receiver<Result<String, String>>>,
+    automations_store: crate::automations::AutomationsFile,
+    last_automation_minute: Option<i64>,
     appearance_panel: crate::appearance_panel::AppearancePanel,
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
@@ -557,6 +580,22 @@ impl Tessel {
         let model_discovery = store
             .as_ref()
             .map(|s| crate::agent_model_discovery::Discovery::open(s.directory()));
+        let claude_managed_accounts = store
+            .as_ref()
+            .map(|s| crate::settings_extra_model::load_managed_accounts(s.directory(), "claude"))
+            .unwrap_or_default();
+        let codex_managed_accounts = store
+            .as_ref()
+            .map(|s| crate::settings_extra_model::load_managed_accounts(s.directory(), "codex"))
+            .unwrap_or_default();
+        let provider_secret_flags = store
+            .as_ref()
+            .map(|s| crate::settings_extra_model::load_provider_secret_flags(s.directory()))
+            .unwrap_or_default();
+        let automations_store = store
+            .as_ref()
+            .map(|s| crate::automations::AutomationsFile::load(s.directory()))
+            .unwrap_or_default();
         let mut app = Self {
             #[cfg(windows)]
             window_frame,
@@ -580,6 +619,21 @@ impl Tessel {
             settings_section: SettingsSection::General,
             settings_nav: Default::default(),
             settings_pages: crate::settings_pages_panel::SettingsPagesState::new(),
+            settings_extra: crate::settings_extra_panel::SettingsExtraState::new(),
+            claude_managed_accounts,
+            codex_managed_accounts,
+            provider_secret_flags,
+            cli_sign_ins: directories::BaseDirs::new()
+                .map(|b| crate::settings_extra_model::probe_cli_sign_ins(b.home_dir()))
+                .unwrap_or_default(),
+            scanned_skills: Vec::new(),
+            installed_mcp_servers: Vec::new(),
+            context_scan: Default::default(),
+            devtools_statuses: Vec::new(),
+            devtools_rx: None,
+            mcp_test_rx: None,
+            automations_store,
+            last_automation_minute: None,
             appearance_panel: Default::default(),
             command_palette: Default::default(),
             command_palette_focused: false,
@@ -1532,6 +1586,35 @@ impl Tessel {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
+        if let Some(rx) = &self.devtools_rx {
+            match rx.try_recv() {
+                Ok(statuses) => {
+                    self.devtools_statuses = statuses;
+                    self.devtools_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.devtools_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.mcp_test_rx {
+            match rx.try_recv() {
+                Ok(Ok(msg)) => {
+                    self.settings_extra.mcp_test_status = msg;
+                    self.mcp_test_rx = None;
+                }
+                Ok(Err(err)) => {
+                    self.settings_extra.mcp_test_status = err;
+                    self.mcp_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.mcp_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        self.poll_automations();
         self.agents.poll();
         let mut launch_changed = self
             .model_discovery
@@ -2021,7 +2104,12 @@ impl Tessel {
                 Some("wsl") if cfg!(windows) => "WSL".into(),
                 _ => "Terminal".into(),
             },
-            Launch::Agent(n) => n.clone(),
+            Launch::Agent(n) => self
+                .state
+                .custom_agents
+                .iter()
+                .find(|c| c.id == *n)
+                .map_or_else(|| n.clone(), |c| c.name.clone()),
             Launch::Ssh(h) => format!("SSH · {}", h.alias),
         };
         let id = self.next_session;
@@ -2057,12 +2145,36 @@ impl Tessel {
             error: String::new(),
         };
         let prefs = match &s.launch {
-            Launch::Agent(id) => Some(crate::agent_preferences::for_pane_launch(
-                &self.state,
-                id,
-                self.model_discovery.as_ref().and_then(|d| d.models(id)),
-                s.session_options.as_ref(),
-            )),
+            Launch::Agent(id) => {
+                let mut prefs = crate::agent_preferences::for_pane_launch(
+                    &self.state,
+                    id,
+                    self.model_discovery.as_ref().and_then(|d| d.models(id)),
+                    s.session_options.as_ref(),
+                );
+                if matches!(id.as_str(), "claude" | "codex")
+                    && let Some(store) = &self.store
+                    && let Some(env_line) =
+                        crate::settings_extra_model::active_managed_env_line(store.directory(), id)
+                {
+                    let key_prefix = if id == "claude" {
+                        "CLAUDE_CONFIG_DIR="
+                    } else {
+                        "CODEX_HOME="
+                    };
+                    if !prefs
+                        .env
+                        .lines()
+                        .any(|line| line.trim_start().starts_with(key_prefix))
+                    {
+                        if !prefs.env.trim().is_empty() && !prefs.env.ends_with('\n') {
+                            prefs.env.push('\n');
+                        }
+                        prefs.env.push_str(&env_line);
+                    }
+                }
+                Some(prefs)
+            }
             _ => None,
         };
         let preferred_shell = matches!(s.launch, Launch::Shell)
@@ -2569,6 +2681,13 @@ impl Tessel {
                 ));
             }
         }
+        for custom in self.state.custom_agents.iter().filter(|c| c.enabled) {
+            commands.push(PaletteCommand::new(
+                format!("new:agent:{}", custom.id),
+                new_group,
+                &custom.name,
+            ));
+        }
         if crate::agent_preferences::enabled(&self.state, "codex") {
             commands.push(PaletteCommand::new(
                 "chat",
@@ -2870,6 +2989,18 @@ impl Tessel {
         commands.push(
             PaletteCommand::new("settings", "Tessel", tr("Settings")).with_shortcut("Ctrl+,"),
         );
+        let settings_lang = if french {
+            crate::settings_model::SettingsLang::Fr
+        } else {
+            crate::settings_model::SettingsLang::En
+        };
+        for page in crate::settings_model::ALL_SETTINGS_PAGES {
+            commands.push(PaletteCommand::new(
+                format!("settings:{}", page.as_str()),
+                tr("Settings"),
+                page.title(settings_lang),
+            ));
+        }
         commands.push(
             PaletteCommand::new("help", "Tessel", tr("Keyboard shortcuts")).with_shortcut("F1"),
         );
@@ -3069,13 +3200,19 @@ impl Tessel {
                 id_str if id_str.starts_with("new:agent:") => {
                     if let Some(agent_id) = id_str.strip_prefix("new:agent:")
                         && crate::agent_preferences::enabled(&self.state, agent_id)
-                        && self
-                            .agents
-                            .entries()
-                            .iter()
-                            .any(|(known, installed)| *installed && known == agent_id)
+                        && (agent_id.starts_with("custom-")
+                            || self
+                                .agents
+                                .entries()
+                                .iter()
+                                .any(|(known, installed)| *installed && known == agent_id))
                     {
                         self.new_session(Launch::Agent(agent_id.into()));
+                    }
+                }
+                id_str if id_str.starts_with("settings:") => {
+                    if let Some(page_id) = id_str.strip_prefix("settings:") {
+                        self.open_settings_by_page_id(page_id);
                     }
                 }
                 id_str if id_str.starts_with("quickcmd:") => {
@@ -5713,6 +5850,12 @@ impl Tessel {
                 self.state.stats_prefs = defaults.stats_prefs;
                 self.state.agent_prefs = defaults.agent_prefs;
                 self.state.agent_model_defaults = defaults.agent_model_defaults;
+                self.state.custom_agents = defaults.custom_agents;
+                self.state.orchestration_prefs = defaults.orchestration_prefs;
+                self.state.notification_prefs = defaults.notification_prefs;
+                self.state.voice_prefs = defaults.voice_prefs;
+                self.state.provider_accounts_prefs = defaults.provider_accounts_prefs;
+                self.state.context_prefs = defaults.context_prefs;
                 for sess in &mut self.sessions {
                     sess.scrollback = self.state.terminal_prefs.scrollback;
                 }
@@ -6736,6 +6879,14 @@ impl Tessel {
             }
             _ => {}
         }
+        let french = self.state.language == crate::i18n::Language::French;
+        let custom_snapshot = self.state.custom_agents.clone();
+        if let Some(extra_act) =
+            self.settings_extra
+                .show_custom_agents_section(ui, &custom_snapshot, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), extra_act);
+        }
     }
     fn save_agent_draft(&mut self) -> bool {
         if let Some((id, prefs)) = self.agents_panel.take_save() {
@@ -6827,6 +6978,20 @@ impl Tessel {
                     },
                     available: *available,
                     reason: (!available).then(|| tr("not on PATH").into()),
+                }),
+        );
+        entries.extend(
+            self.state
+                .custom_agents
+                .iter()
+                .filter(|c| c.enabled)
+                .map(|c| LauncherEntry {
+                    item: LaunchMenuItem::Agent {
+                        id: c.id.clone(),
+                        name: c.name.clone(),
+                    },
+                    available: true,
+                    reason: None,
                 }),
         );
         let placements = if target_id.is_some() {
@@ -7265,6 +7430,1042 @@ impl Tessel {
             self.overlay = None;
         }
     }
+    fn open_settings_by_page_id(&mut self, page_id: &str) {
+        self.overlay = Some(Overlay::Settings);
+        let next = match page_id {
+            "agents" => SettingsSection::Agents,
+            "accounts" => SettingsSection::Accounts,
+            "skills" => SettingsSection::Skills,
+            "mcp" => SettingsSection::Mcp,
+            "connections" => SettingsSection::Connections,
+            "context" => SettingsSection::Context,
+            "orchestration" => SettingsSection::Orchestration,
+            #[cfg(windows)]
+            "tessel-account" => SettingsSection::Account,
+            #[cfg(not(windows))]
+            "tessel-account" => SettingsSection::Accounts,
+            "general" => SettingsSection::General,
+            "appearance" => SettingsSection::Appearance,
+            "terminal" => SettingsSection::Terminal,
+            "editor" => SettingsSection::Editor,
+            "browser" => SettingsSection::Browser,
+            "alerts" => SettingsSection::Alerts,
+            "voice" => SettingsSection::Voice,
+            "git" => SettingsSection::Git,
+            "devtools" => SettingsSection::Devtools,
+            "automations" => SettingsSection::Automations,
+            "quick-commands" => SettingsSection::QuickCommands,
+            "ssh" => SettingsSection::Hosts,
+            "stats" => SettingsSection::Stats,
+            "updates" => SettingsSection::Updates,
+            #[cfg(windows)]
+            "passwords" => SettingsSection::Passwords,
+            _ => SettingsSection::General,
+        };
+        self.on_enter_settings_section(next);
+        self.settings_section = next;
+    }
+
+    fn on_enter_settings_section(&mut self, section: SettingsSection) {
+        match section {
+            SettingsSection::Accounts => {
+                self.cli_sign_ins = directories::BaseDirs::new()
+                    .map(|b| crate::settings_extra_model::probe_cli_sign_ins(b.home_dir()))
+                    .unwrap_or_default();
+                if let Some(store) = &self.store {
+                    self.claude_managed_accounts =
+                        crate::settings_extra_model::load_managed_accounts(
+                            store.directory(),
+                            "claude",
+                        );
+                    self.codex_managed_accounts =
+                        crate::settings_extra_model::load_managed_accounts(
+                            store.directory(),
+                            "codex",
+                        );
+                    self.provider_secret_flags =
+                        crate::settings_extra_model::load_provider_secret_flags(store.directory());
+                }
+            }
+            SettingsSection::Skills => {
+                self.refresh_scanned_skills();
+            }
+            SettingsSection::Mcp | SettingsSection::Connections => {
+                self.refresh_installed_mcp_servers();
+            }
+            SettingsSection::Context => {
+                self.refresh_context_scan();
+            }
+            SettingsSection::Devtools => {
+                if self.devtools_statuses.is_empty() && self.devtools_rx.is_none() {
+                    self.spawn_devtools_probe();
+                }
+            }
+            SettingsSection::Automations => {
+                if let Some(store) = &self.store {
+                    self.automations_store =
+                        crate::automations::AutomationsFile::load(store.directory());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn refresh_scanned_skills(&mut self) {
+        let Some(base) = directories::BaseDirs::new() else {
+            return;
+        };
+        let proj = self.state.active().map(|p| p.path.clone());
+        self.scanned_skills =
+            crate::settings_extra_model::scan_skills(base.home_dir(), proj.as_deref());
+    }
+
+    fn refresh_installed_mcp_servers(&mut self) {
+        let Some(base) = directories::BaseDirs::new() else {
+            return;
+        };
+        let proj = self.state.active().map(|p| p.path.clone());
+        self.installed_mcp_servers = crate::settings_extra_model::scan_installed_mcp_servers(
+            base.home_dir(),
+            proj.as_deref(),
+        );
+    }
+
+    fn refresh_context_scan(&mut self) {
+        let Some(base) = directories::BaseDirs::new() else {
+            return;
+        };
+        if self.scanned_skills.is_empty() {
+            self.refresh_scanned_skills();
+        }
+        if self.installed_mcp_servers.is_empty() {
+            self.refresh_installed_mcp_servers();
+        }
+        let proj = self.state.active().map(|p| p.path.clone());
+        self.context_scan = crate::settings_extra_model::scan_project_context(
+            base.home_dir(),
+            proj.as_deref(),
+            &self.scanned_skills,
+            &self.installed_mcp_servers,
+            self.state.context_prefs.model_family,
+        );
+    }
+
+    fn spawn_devtools_probe(&mut self) {
+        if self.devtools_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = crate::settings_extra_model::probe_devtools();
+            let _ = tx.send(res);
+        });
+        self.devtools_rx = Some(rx);
+    }
+
+    fn accounts_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let ssh_aliases: Vec<String> = self.state.hosts.iter().map(|h| h.alias.clone()).collect();
+        let (changed, act) = {
+            let input = crate::settings_extra_panel::AccountsViewInput {
+                claude_roster: &self.claude_managed_accounts,
+                codex_roster: &self.codex_managed_accounts,
+                secret_saved_flags: &self.provider_secret_flags,
+                cli_sign_ins: &self.cli_sign_ins,
+                ssh_host_aliases: &ssh_aliases,
+                french,
+            };
+            self.settings_extra
+                .show_accounts(ui, &mut self.state.provider_accounts_prefs, &input)
+        };
+        if changed {
+            self.save();
+        }
+        if let Some(a) = act {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn skills_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let has_proj = self.state.active_project.is_some();
+        if let Some(a) = self
+            .settings_extra
+            .show_skills(ui, &self.scanned_skills, has_proj, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn mcp_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let targets = directories::BaseDirs::new()
+            .map(|b| {
+                let proj = self.state.active().map(|p| p.path.clone());
+                crate::settings_extra_model::mcp_agent_config_targets(b.home_dir(), proj.as_deref())
+            })
+            .unwrap_or_default();
+        let target_labels: Vec<String> = targets
+            .iter()
+            .map(|(_, label, p)| format!("{label} ({})", p.display()))
+            .collect();
+        if let Some(a) =
+            self.settings_extra
+                .show_mcp(ui, &self.installed_mcp_servers, &target_labels, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn connections_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        #[cfg(windows)]
+        let signed_in = self.account.is_signed_in();
+        #[cfg(not(windows))]
+        let signed_in = false;
+        if let Some(a) =
+            self.settings_extra
+                .show_connections(ui, signed_in, &self.installed_mcp_servers, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn context_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let prev_family = self.state.context_prefs.model_family;
+        let (changed, act) = self.settings_extra.show_context(
+            ui,
+            &mut self.state.context_prefs,
+            &self.context_scan,
+            french,
+        );
+        if changed {
+            if self.state.context_prefs.model_family != prev_family {
+                self.refresh_context_scan();
+            }
+            self.save();
+        }
+        if let Some(a) = act {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn orchestration_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        if self
+            .settings_extra
+            .show_orchestration(ui, &mut self.state.orchestration_prefs, french)
+        {
+            self.save();
+        }
+    }
+
+    fn alerts_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let (changed, act) =
+            self.settings_extra
+                .show_alerts(ui, &mut self.state.notification_prefs, french);
+        if changed {
+            self.save();
+        }
+        if let Some(a) = act {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn voice_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let (changed, act) =
+            self.settings_extra
+                .show_voice(ui, &mut self.state.voice_prefs, french);
+        if changed {
+            self.save();
+        }
+        if let Some(a) = act {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn devtools_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let probing = self.devtools_rx.is_some();
+        if let Some(a) =
+            self.settings_extra
+                .show_devtools(ui, &self.devtools_statuses, probing, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn automations_settings(&mut self, ui: &mut egui::Ui) {
+        let french = self.state.language == crate::i18n::Language::French;
+        let projects: Vec<(u64, String, PathBuf)> = self
+            .state
+            .projects
+            .iter()
+            .map(|p| (p.id, p.name.clone(), p.path.clone()))
+            .collect();
+        if let Some(a) =
+            self.settings_extra
+                .show_automations(ui, &self.automations_store, &projects, french)
+        {
+            self.handle_settings_extra_action(ui.ctx(), a);
+        }
+    }
+
+    fn run_shell_setup_command(
+        &mut self,
+        title: String,
+        command: String,
+        extra_env: Option<String>,
+    ) {
+        if self.sessions.len() >= 100 {
+            self.error = "Session limit: 100".into();
+            return;
+        }
+        let cwd = self
+            .state
+            .active()
+            .map(|p| p.path.clone())
+            .unwrap_or_else(launch::default_directory);
+        let id = self.next_session;
+        let Some(next) = self.next_session.checked_add(1) else {
+            self.error = "Session identifiers exhausted".into();
+            return;
+        };
+        self.next_session = next;
+        let mut s = Session {
+            native_host: None,
+            restarting: None,
+            codex_discovery: None,
+            codex_restore: None,
+            model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
+            settings_changed: false,
+            codex_seed: None,
+            conversation_id: None,
+            launch_fingerprint: None,
+            session_options: None,
+            worktree: None,
+            pane_name: None,
+            broadcast: false,
+            id,
+            project: self.state.active_project,
+            title: title.clone(),
+            launch: Launch::Shell,
+            cwd,
+            scrollback: self.state.terminal_prefs.scrollback,
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        let prefs = extra_env.map(|env| crate::agent_preferences::Preferences {
+            enabled: true,
+            command: String::new(),
+            args: String::new(),
+            env,
+        });
+        let preferred_shell = self.state.launcher_prefs.preferred_shell.clone();
+        s.start_with_shell(prefs, preferred_shell);
+        self.sessions.push(s);
+        self.active_session = Some(id);
+        self.overlay = None;
+        self.view = View::Work;
+        self.active_agent_installs.push(ActiveAgentInstall {
+            session_id: id,
+            agent_name: title,
+            pending_command: Some(command),
+            attached_at: None,
+            finished: false,
+        });
+        self.save();
+    }
+
+    fn handle_settings_extra_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::settings_extra_panel::SettingsExtraAction,
+    ) {
+        use crate::settings_extra_panel::SettingsExtraAction as Act;
+        let french = self.state.language == crate::i18n::Language::French;
+        match action {
+            Act::AddManagedAccount { provider, label } => {
+                if let Some(store) = &self.store {
+                    match crate::settings_extra_model::add_managed_account(
+                        store.directory(),
+                        &provider,
+                        &label,
+                    ) {
+                        Ok(_) => {
+                            let roster = crate::settings_extra_model::load_managed_accounts(
+                                store.directory(),
+                                &provider,
+                            );
+                            if provider == "claude" {
+                                self.claude_managed_accounts = roster;
+                            } else {
+                                self.codex_managed_accounts = roster;
+                            }
+                            self.settings_extra.accounts_notice = if french {
+                                "Profil ajouté.".into()
+                            } else {
+                                "Managed profile added.".into()
+                            };
+                        }
+                        Err(e) => self.settings_extra.accounts_notice = e,
+                    }
+                }
+            }
+            Act::SelectManagedAccount {
+                provider,
+                account_id,
+            } => {
+                if let Some(store) = &self.store {
+                    let mut roster = crate::settings_extra_model::load_managed_accounts(
+                        store.directory(),
+                        &provider,
+                    );
+                    roster.selected_id = account_id;
+                    if let Err(e) = crate::settings_extra_model::save_managed_accounts(
+                        store.directory(),
+                        &provider,
+                        &roster,
+                    ) {
+                        self.settings_extra.accounts_notice = e;
+                    } else if provider == "claude" {
+                        self.claude_managed_accounts = roster;
+                    } else {
+                        self.codex_managed_accounts = roster;
+                    }
+                }
+            }
+            Act::RemoveManagedAccount {
+                provider,
+                account_id,
+            } => {
+                if let Some(store) = &self.store {
+                    let mut roster = crate::settings_extra_model::load_managed_accounts(
+                        store.directory(),
+                        &provider,
+                    );
+                    roster.accounts.retain(|a| a.id != account_id);
+                    if roster.selected_id.as_deref() == Some(account_id.as_str()) {
+                        roster.selected_id = None;
+                    }
+                    if let Some(dir) = crate::settings_extra_model::managed_account_profile_dir(
+                        store.directory(),
+                        &provider,
+                        &account_id,
+                    ) {
+                        let _ = std::fs::remove_dir_all(dir);
+                    }
+                    let _ = crate::settings_extra_model::save_managed_accounts(
+                        store.directory(),
+                        &provider,
+                        &roster,
+                    );
+                    if provider == "claude" {
+                        self.claude_managed_accounts = roster;
+                    } else {
+                        self.codex_managed_accounts = roster;
+                    }
+                }
+            }
+            Act::LaunchManagedAccountSignIn {
+                provider,
+                account_id,
+            } => {
+                if let Some(store) = &self.store
+                    && let Some(dir) = crate::settings_extra_model::managed_account_profile_dir(
+                        store.directory(),
+                        &provider,
+                        &account_id,
+                    )
+                {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let (env_key, cmd, title) = if provider == "claude" {
+                        ("CLAUDE_CONFIG_DIR", "claude", "Claude sign-in")
+                    } else {
+                        ("CODEX_HOME", "codex login", "Codex sign-in")
+                    };
+                    let env_line = format!("{env_key}={}", dir.display());
+                    self.run_shell_setup_command(title.into(), cmd.into(), Some(env_line));
+                }
+            }
+            Act::SaveProviderSecret { key, value } => {
+                if let Some(store) = &self.store {
+                    match crate::settings_extra_model::set_provider_secret(
+                        store.directory(),
+                        &key,
+                        &value,
+                    ) {
+                        Ok(()) => {
+                            self.provider_secret_flags =
+                                crate::settings_extra_model::load_provider_secret_flags(
+                                    store.directory(),
+                                );
+                            self.settings_extra.accounts_notice = if french {
+                                "Jeton chiffré localement.".into()
+                            } else {
+                                "Credential encrypted locally.".into()
+                            };
+                        }
+                        Err(e) => self.settings_extra.accounts_notice = e,
+                    }
+                }
+            }
+            Act::ClearProviderSecret { key } => {
+                if let Some(store) = &self.store
+                    && crate::settings_extra_model::set_provider_secret(store.directory(), &key, "")
+                        .is_ok()
+                {
+                    self.provider_secret_flags =
+                        crate::settings_extra_model::load_provider_secret_flags(store.directory());
+                }
+            }
+            Act::RefreshSkills => {
+                self.refresh_scanned_skills();
+            }
+            Act::PickSkillFolder { project_scope } => {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let dest_root = if project_scope {
+                        self.state
+                            .active()
+                            .map(|p| p.path.join(".agents").join("skills"))
+                    } else {
+                        directories::BaseDirs::new()
+                            .map(|b| b.home_dir().join(".agents").join("skills"))
+                    };
+                    if let Some(dest) = dest_root {
+                        match crate::settings_extra_model::install_skill_from_folder(&folder, &dest)
+                        {
+                            Ok(installed) => {
+                                self.settings_extra.skills_status = format!(
+                                    "{}: {}",
+                                    if french { "Installé" } else { "Installed" },
+                                    installed.display()
+                                );
+                                self.refresh_scanned_skills();
+                            }
+                            Err(e) => self.settings_extra.skills_status = e,
+                        }
+                    }
+                }
+            }
+            Act::CloneSkillFromGit {
+                repo_url,
+                project_scope,
+            } => {
+                let url_trimmed = repo_url.trim();
+                let valid_scheme =
+                    url_trimmed.starts_with("https://") || url_trimmed.starts_with("git@");
+                if !valid_scheme || url_trimmed.starts_with('-') {
+                    self.settings_extra.skills_status = if french {
+                        "URL Git refusée (utilisez https:// ou git@).".into()
+                    } else {
+                        "Git URL rejected (use https:// or git@).".into()
+                    };
+                    return;
+                }
+                let dest_root = if project_scope {
+                    self.state
+                        .active()
+                        .map(|p| p.path.join(".agents").join("skills"))
+                } else {
+                    directories::BaseDirs::new()
+                        .map(|b| b.home_dir().join(".agents").join("skills"))
+                };
+                if let Some(dest) = dest_root {
+                    let tmp_dir = std::env::temp_dir()
+                        .join(format!("tessel-skill-clone-{}", std::process::id()));
+                    let _ = std::fs::remove_dir_all(&tmp_dir);
+                    let mut cmd = std::process::Command::new("git");
+                    cmd.args([
+                        "-c",
+                        "protocol.ext.allow=never",
+                        "-c",
+                        "protocol.fd.allow=never",
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--",
+                        url_trimmed,
+                    ])
+                    .arg(&tmp_dir);
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x0800_0000);
+                    }
+                    match cmd.output() {
+                        Ok(out) if out.status.success() => {
+                            let repo_name = url_trimmed
+                                .trim_end_matches('/')
+                                .trim_end_matches(".git")
+                                .rsplit(['/', ':'])
+                                .next()
+                                .unwrap_or("skill");
+                            let named_src = tmp_dir.parent().unwrap_or(&tmp_dir).join(repo_name);
+                            let _ = std::fs::remove_dir_all(&named_src);
+                            let src_to_copy = if std::fs::rename(&tmp_dir, &named_src).is_ok() {
+                                named_src.clone()
+                            } else {
+                                tmp_dir.clone()
+                            };
+                            let res = crate::settings_extra_model::install_skill_from_folder(
+                                &src_to_copy,
+                                &dest,
+                            );
+                            let _ = std::fs::remove_dir_all(&tmp_dir);
+                            let _ = std::fs::remove_dir_all(&named_src);
+                            match res {
+                                Ok(installed) => {
+                                    self.settings_extra.skills_status =
+                                        format!("Installed: {}", installed.display());
+                                    self.refresh_scanned_skills();
+                                }
+                                Err(e) => self.settings_extra.skills_status = e,
+                            }
+                        }
+                        Ok(out) => {
+                            let _ = std::fs::remove_dir_all(&tmp_dir);
+                            self.settings_extra.skills_status =
+                                String::from_utf8_lossy(&out.stderr).trim().to_owned();
+                        }
+                        Err(e) => {
+                            self.settings_extra.skills_status = e.to_string();
+                        }
+                    }
+                }
+            }
+            Act::OpenSkillMarkdown(md_path) => {
+                if let Some(parent) = md_path.parent().map(PathBuf::from) {
+                    self.overlay = None;
+                    self.open_document_at(parent, md_path);
+                }
+            }
+            Act::RemoveSkillDir(skill_dir) => {
+                match crate::settings_extra_model::remove_skill_dir(&skill_dir) {
+                    Ok(()) => {
+                        self.settings_extra.skills_status = if french {
+                            "Compétence supprimée.".into()
+                        } else {
+                            "Skill removed.".into()
+                        };
+                        self.refresh_scanned_skills();
+                    }
+                    Err(e) => self.settings_extra.skills_status = e,
+                }
+            }
+            Act::RefreshMcp => {
+                self.refresh_installed_mcp_servers();
+            }
+            Act::InstallCatalogMcp {
+                catalog_id,
+                target_agent_idx,
+                env_values,
+            } => {
+                if let Some(entry) = crate::settings_extra_model::MCP_CATALOG
+                    .iter()
+                    .find(|e| e.id == catalog_id)
+                    && let Some(base) = directories::BaseDirs::new()
+                {
+                    let proj = self.state.active().map(|p| p.path.clone());
+                    let targets = crate::settings_extra_model::mcp_agent_config_targets(
+                        base.home_dir(),
+                        proj.as_deref(),
+                    );
+                    if let Some((agent_id, _, cfg_path)) = targets.get(target_agent_idx) {
+                        let args: Vec<String> =
+                            entry.args.iter().map(|s| (*s).to_owned()).collect();
+                        match crate::settings_extra_model::upsert_json_mcp_server(
+                            cfg_path,
+                            agent_id,
+                            entry.id,
+                            entry.transport,
+                            entry.command_or_url,
+                            &args,
+                            &env_values,
+                        ) {
+                            Ok(()) => {
+                                self.settings_extra.mcp_test_status = format!(
+                                    "{}: {}",
+                                    if french { "Ajouté" } else { "Added" },
+                                    entry.name
+                                );
+                                self.refresh_installed_mcp_servers();
+                            }
+                            Err(e) => self.settings_extra.mcp_test_status = e,
+                        }
+                    }
+                }
+            }
+            Act::AddCustomMcp {
+                target_agent_idx,
+                name,
+                transport,
+                endpoint,
+                args,
+                env_values,
+            } => {
+                if let Some(base) = directories::BaseDirs::new() {
+                    let proj = self.state.active().map(|p| p.path.clone());
+                    let targets = crate::settings_extra_model::mcp_agent_config_targets(
+                        base.home_dir(),
+                        proj.as_deref(),
+                    );
+                    if let Some((agent_id, _, cfg_path)) = targets.get(target_agent_idx) {
+                        match crate::settings_extra_model::upsert_json_mcp_server(
+                            cfg_path,
+                            agent_id,
+                            &name,
+                            transport,
+                            &endpoint,
+                            &args,
+                            &env_values,
+                        ) {
+                            Ok(()) => {
+                                self.settings_extra.mcp_test_status = format!("Saved {name}.");
+                                self.refresh_installed_mcp_servers();
+                            }
+                            Err(e) => self.settings_extra.mcp_error = e,
+                        }
+                    }
+                }
+            }
+            Act::RemoveInstalledMcp {
+                config_path,
+                agent_id,
+                name,
+            } => {
+                match crate::settings_extra_model::remove_json_mcp_server(
+                    &config_path,
+                    &agent_id,
+                    &name,
+                ) {
+                    Ok(()) => self.refresh_installed_mcp_servers(),
+                    Err(e) => self.settings_extra.mcp_test_status = e,
+                }
+            }
+            Act::TestMcpServer {
+                name,
+                transport,
+                endpoint,
+            } => {
+                if self.mcp_test_rx.is_none() {
+                    self.settings_extra.mcp_test_status = format!("Testing {name}…");
+                    let (tx, rx) = mpsc::channel();
+                    thread::spawn(move || {
+                        let res = match transport {
+                            crate::settings_extra_model::McpTransport::Stdio => {
+                                let parts: Vec<String> =
+                                    endpoint.split_whitespace().map(str::to_owned).collect();
+                                if let Some((cmd, rest)) = parts.split_first() {
+                                    crate::settings_extra_model::probe_mcp_stdio(cmd, rest)
+                                } else {
+                                    Err("Empty command.".into())
+                                }
+                            }
+                            crate::settings_extra_model::McpTransport::Http => {
+                                match url::Url::parse(&endpoint) {
+                                    Ok(u) if matches!(u.scheme(), "http" | "https") => {
+                                        Ok(format!("{name}: valid HTTP MCP endpoint ({u})"))
+                                    }
+                                    _ => Err("Invalid HTTP MCP URL.".into()),
+                                }
+                            }
+                        };
+                        let _ = tx.send(res);
+                    });
+                    self.mcp_test_rx = Some(rx);
+                }
+            }
+            Act::OpenTesselAccountSettings => {
+                #[cfg(windows)]
+                {
+                    self.settings_section = SettingsSection::Account;
+                }
+            }
+            Act::QuickAddProductivityMcp(catalog_id) => {
+                self.settings_section = SettingsSection::Mcp;
+                self.settings_extra.mcp_tab = crate::settings_extra_panel::McpTab::Catalog;
+                self.settings_extra.mcp_catalog_filter = catalog_id.to_owned();
+                self.refresh_installed_mcp_servers();
+            }
+            Act::RefreshContext => {
+                self.refresh_context_scan();
+            }
+            Act::SendTestNotification => {
+                #[cfg(windows)]
+                if self.state.notification_prefs.alert_sound
+                    != crate::settings_extra_model::AlertSound::None
+                {
+                    unsafe extern "system" {
+                        fn MessageBeep(utype: u32) -> i32;
+                    }
+                    // MB_ICONASTERISK = 0x00000040
+                    unsafe {
+                        let _ = MessageBeep(0x0000_0040);
+                    }
+                }
+                ctx.request_repaint();
+            }
+            Act::TriggerWindowsVoiceTyping => {
+                #[cfg(windows)]
+                {
+                    // Synthesize Win+H to invoke native Windows Voice Typing.
+                    use windows::Win32::UI::Input::KeyboardAndMouse::{
+                        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+                        VIRTUAL_KEY, VK_LWIN,
+                    };
+                    let vk_h = VIRTUAL_KEY(0x48);
+                    let inputs = [
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_LWIN,
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: vk_h,
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: vk_h,
+                                    dwFlags: KEYEVENTF_KEYUP,
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_LWIN,
+                                    dwFlags: KEYEVENTF_KEYUP,
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                    ];
+                    unsafe {
+                        let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                    }
+                }
+            }
+            Act::RefreshDevtools => {
+                self.spawn_devtools_probe();
+            }
+            Act::RunTerminalSetupCommand { title, command } => {
+                self.run_shell_setup_command(title, command, None);
+            }
+            Act::OpenExternalUrl(url) => {
+                self.open_web_link(ctx, url);
+            }
+            Act::UpsertAutomation(auto) => {
+                if let Some(existing) = self
+                    .automations_store
+                    .automations
+                    .iter_mut()
+                    .find(|a| a.id == auto.id)
+                {
+                    *existing = auto;
+                } else if self.automations_store.automations.len()
+                    < crate::automations::MAX_AUTOMATIONS
+                {
+                    self.automations_store.automations.push(auto);
+                }
+                if let Some(store) = &self.store
+                    && let Err(e) = self.automations_store.save(store.directory())
+                {
+                    self.settings_extra.automations_status = e;
+                }
+            }
+            Act::DeleteAutomation(id) => {
+                self.automations_store.automations.retain(|a| a.id != id);
+                if let Some(store) = &self.store {
+                    let _ = self.automations_store.save(store.directory());
+                }
+            }
+            Act::ConfirmAndEnableAutomation(id) => {
+                if let Some(auto) = self
+                    .automations_store
+                    .automations
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
+                    auto.mark_confirmed();
+                    auto.enabled = true;
+                }
+                if let Some(store) = &self.store {
+                    let _ = self.automations_store.save(store.directory());
+                }
+            }
+            Act::RunAutomationNow(id) => {
+                self.trigger_automation_by_id(&id);
+            }
+            Act::SetAutomationsMaxConcurrent(val) => {
+                self.automations_store.max_concurrent = val.clamp(1, 8);
+                if let Some(store) = &self.store {
+                    let _ = self.automations_store.save(store.directory());
+                }
+            }
+            Act::UpsertCustomAgent(agent) => {
+                if let Some(existing) = self
+                    .state
+                    .custom_agents
+                    .iter_mut()
+                    .find(|c| c.id == agent.id)
+                {
+                    *existing = agent;
+                } else if self.state.custom_agents.len()
+                    < crate::settings_extra_model::MAX_CUSTOM_AGENTS
+                {
+                    self.state.custom_agents.push(agent);
+                }
+                self.save();
+            }
+            Act::DeleteCustomAgent(id) => {
+                self.state.custom_agents.retain(|c| c.id != id);
+                self.save();
+            }
+            Act::ToggleCustomAgent { id, enabled } => {
+                if let Some(c) = self.state.custom_agents.iter_mut().find(|c| c.id == id) {
+                    c.enabled = enabled;
+                    self.save();
+                }
+            }
+        }
+    }
+
+    fn trigger_automation_by_id(&mut self, automation_id: &str) {
+        let Some(store_dir) = self.store.as_ref().map(|s| s.directory().to_path_buf()) else {
+            return;
+        };
+        let Some(idx) = self
+            .automations_store
+            .automations
+            .iter()
+            .position(|a| a.id == automation_id)
+        else {
+            return;
+        };
+        let auto = self.automations_store.automations[idx].clone();
+        if !auto.is_confirmed() {
+            self.settings_extra.pending_confirm_automation = Some(auto.id.clone());
+            return;
+        }
+        let Some(project) = self
+            .state
+            .projects
+            .iter()
+            .find(|p| p.id == auto.project_id)
+            .cloned()
+        else {
+            return;
+        };
+        let open_for_this = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.pane_name
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with(&format!("auto:{}:", auto.id)))
+            })
+            .count();
+        if open_for_this >= crate::automations::MAX_OPEN_PANES_PER_AUTOMATION {
+            return;
+        }
+        let run_id = crate::automations::generate_automation_id("run");
+        let Ok(prompt_file) =
+            crate::automations::write_automation_prompt_file(&store_dir, &run_id, &auto.prompt)
+        else {
+            return;
+        };
+        let instruction = crate::automations::safe_prompt_instruction(&prompt_file);
+        let agent_id = auto.agent.as_id().to_owned();
+        let before_next = self.next_session;
+        self.new_session_in_worktree(Some(project.id), Launch::Agent(agent_id), None, false, None);
+        let spawned_pane_id =
+            self.sessions
+                .iter_mut()
+                .find(|s| s.id == before_next)
+                .map(|created| {
+                    created.pane_name = Some(format!("auto:{}:{}", auto.id, auto.name));
+                    self.active_agent_installs.push(ActiveAgentInstall {
+                        session_id: created.id,
+                        agent_name: auto.name.clone(),
+                        pending_command: Some(instruction),
+                        attached_at: None,
+                        finished: false,
+                    });
+                    created.id
+                });
+        let started_at_unix = chrono::Local::now().timestamp().max(0) as u64;
+        if let Some(stored) = self.automations_store.automations.get_mut(idx) {
+            stored.runs.push(crate::automations::AutomationRunRecord {
+                run_id,
+                started_at_unix,
+                trigger: "run".into(),
+                pane_id: spawned_pane_id,
+                prompt_file,
+            });
+            if stored.runs.len() > crate::automations::MAX_RUNS_PER_AUTOMATION {
+                let drop_n = stored.runs.len() - crate::automations::MAX_RUNS_PER_AUTOMATION;
+                stored.runs.drain(0..drop_n);
+            }
+        }
+        let _ = self.automations_store.save(&store_dir);
+    }
+
+    fn poll_automations(&mut self) {
+        let now = chrono::Local::now();
+        let minute_key = now.timestamp() / 60;
+        if self.last_automation_minute == Some(minute_key) {
+            return;
+        }
+        self.last_automation_minute = Some(minute_key);
+        let max_conc = usize::from(self.automations_store.max_concurrent.clamp(1, 8));
+        let running_auto_panes = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.pane_name
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("auto:"))
+                    && s.terminal.as_ref().is_some_and(|t| !t.exited())
+            })
+            .count();
+        if running_auto_panes >= max_conc {
+            return;
+        }
+        let slots = max_conc - running_auto_panes;
+        let due_ids: Vec<String> = self
+            .automations_store
+            .automations
+            .iter()
+            .filter(|a| a.enabled && a.is_confirmed() && a.schedule.matches(&now))
+            .take(slots)
+            .map(|a| a.id.clone())
+            .collect();
+        for id in due_ids {
+            self.trigger_automation_by_id(&id);
+        }
+    }
+
     fn show_settings(&mut self, ctx: &egui::Context) {
         use crate::icons::Icon;
         use crate::settings_model::{SettingsGroupId as Group, SettingsLang};
@@ -7276,7 +8477,55 @@ impl Tessel {
                 "Agents",
                 Group::Ai,
                 Icon::Agent,
-                "agent codex claude install detection visibility command model",
+                "agent codex claude custom cli install detection visibility command model",
+            ),
+            (
+                SettingsSection::Accounts,
+                "accounts",
+                "AI provider accounts",
+                Group::Ai,
+                Icon::Account,
+                "accounts comptes provider claude codex gemini opencode minimax zcode quota oauth api key",
+            ),
+            (
+                SettingsSection::Skills,
+                "skills",
+                "Skills",
+                Group::Ai,
+                Icon::FolderPlus,
+                "skills competences skill.md instructions folder git install",
+            ),
+            (
+                SettingsSection::Mcp,
+                "mcp",
+                "MCP servers",
+                Group::Ai,
+                Icon::Plug,
+                "mcp servers serveurs model context protocol catalog stdio http sse tools",
+            ),
+            (
+                SettingsSection::Connections,
+                "connections",
+                "Connections",
+                Group::Ai,
+                Icon::Cable,
+                "connections connexions gmail calendar drive outlook dropbox github notion linear sentry",
+            ),
+            (
+                SettingsSection::Context,
+                "context",
+                "Context",
+                Group::Ai,
+                Icon::Files,
+                "context contexte tokens claude.md agents.md instructions rules budget",
+            ),
+            (
+                SettingsSection::Orchestration,
+                "orchestration",
+                "Orchestration",
+                Group::Ai,
+                Icon::Layout,
+                "orchestration teams equipes workers subagents relay inter-project",
             ),
             #[cfg(windows)]
             (
@@ -7327,6 +8576,22 @@ impl Tessel {
                 Icon::MonitorSmartphone,
                 "browser navigateur links webview session agent isolate cookies",
             ),
+            (
+                SettingsSection::Alerts,
+                "alerts",
+                "Notifications",
+                Group::Workspace,
+                Icon::Bell,
+                "notifications alertes sound chime ping desktop toast bell volume",
+            ),
+            (
+                SettingsSection::Voice,
+                "voice",
+                "Voice typing",
+                Group::Workspace,
+                Icon::MonitorSmartphone,
+                "voice dictee vocale dictation speech microphone language",
+            ),
             #[cfg(windows)]
             (
                 SettingsSection::Passwords,
@@ -7343,6 +8608,22 @@ impl Tessel {
                 Group::Workflows,
                 Icon::GitBranch,
                 "git branch prefix worktree changes tree list staged unstaged",
+            ),
+            (
+                SettingsSection::Devtools,
+                "devtools",
+                "Developer tools",
+                Group::Workflows,
+                Icon::Terminal,
+                "developer tools outils developpement git gh node python rustup go docker rg fd jq winget",
+            ),
+            (
+                SettingsSection::Automations,
+                "automations",
+                "Automations",
+                Group::Workflows,
+                Icon::RefreshCw,
+                "automations automatisations cron schedule planifie templates background runs",
             ),
             (
                 SettingsSection::QuickCommands,
@@ -7452,6 +8733,7 @@ impl Tessel {
                                         }
                                         if self.save_agent_draft() {
                                             self.settings_pages.reset_transient();
+                                            self.on_enter_settings_section(*section);
                                             self.settings_section = *section;
                                         }
                                     }
@@ -7477,6 +8759,16 @@ impl Tessel {
                             SettingsSection::QuickCommands => self.quick_commands_settings(ui),
                             SettingsSection::Hosts => self.host_settings(ui),
                             SettingsSection::Agents => self.agent_settings(ui),
+                            SettingsSection::Accounts => self.accounts_settings(ui),
+                            SettingsSection::Skills => self.skills_settings(ui),
+                            SettingsSection::Mcp => self.mcp_settings(ui),
+                            SettingsSection::Connections => self.connections_settings(ui),
+                            SettingsSection::Context => self.context_settings(ui),
+                            SettingsSection::Orchestration => self.orchestration_settings(ui),
+                            SettingsSection::Alerts => self.alerts_settings(ui),
+                            SettingsSection::Voice => self.voice_settings(ui),
+                            SettingsSection::Devtools => self.devtools_settings(ui),
+                            SettingsSection::Automations => self.automations_settings(ui),
                             SettingsSection::Stats => self.stats_settings(ui),
                             SettingsSection::Updates => self.updates_settings(ui),
                             #[cfg(windows)]
