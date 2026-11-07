@@ -673,3 +673,17 @@ transcript search, `ActivityStore` thread builder with media chips, `.tessel/not
 `NotesModel` with disk `mtime` conflict resolution, 5-color topological Git
 swimlane graph (`build_git_history_lanes`), and `load_branch_review` /
 `merge_review_branch` with `expect_head_oid` safety checks.
+
+`AddProjectDialog`, `GitHubDialog`, sidebar groups/sleep, `UsageMenu` and
+`NotificationsMenu` integration (`dialogs_toolbar_model.rs` +
+`dialogs_toolbar_ui.rs` + `project_panel.rs` + `chrome.rs` + `workspace.rs` +
+`app.rs` + `tests/ui_dialogs_usage_notifications.rs`):
+`AddProjectDialog` (`512px`) unifies local folder selection (with bounded BFS
+nested Git repository discovery), option-injection-safe `git clone`, `git init`
+new-project creation, and SSH `RemoteFolderBrowser` browsing. `GitHubDialog`
+(`760x540px`) queries `gh` PRs/Issues, rolls up CI checks (`Passing`, `Pending`,
+`Failing`), launches branch worktrees, and formats `Fix failing checks` agent
+prompts. `ProjectPanel` adds collapsible workspace folder groups, `Put to sleep`
+session/project actions, and `Hide agent task line`. Toolbar adds non-focus-stealing
+`Agent request` pills, provider `UsageMenu` (`<60%` / `>=60%` / `>=80%`), and
+coalesced `NotificationsMenu` (`unread_count`, `mark_all_read`, `clear`).

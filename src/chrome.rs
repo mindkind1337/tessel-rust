@@ -101,7 +101,7 @@ pub fn side_tab_with_badge(
 }
 
 pub fn regions(room: Rect) -> ToolbarRegions {
-    let actions_width = 300.0_f32.min(room.width() * 0.6);
+    let actions_width = 380.0_f32.min(room.width() * 0.62);
     let brand_width = 160.0_f32.min((room.width() - actions_width).max(0.0));
     let brand = Rect::from_min_size(room.min, Vec2::new(brand_width, room.height()));
     let actions = Rect::from_min_max(egui::pos2(room.max.x - actions_width, room.min.y), room.max);

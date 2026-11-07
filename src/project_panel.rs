@@ -35,6 +35,7 @@ pub struct SidebarOptions {
     pub sort_by_activity: bool,
     pub compact_rows: bool,
     pub hide_sleeping: bool,
+    pub hide_agent_task_line: bool,
 }
 
 /// Runtime kind of a session row displayed in [`ProjectPanel`].
@@ -141,6 +142,14 @@ pub enum ProjectAction {
         project: Option<u64>,
         id: u64,
     },
+    SleepSession {
+        project: Option<u64>,
+        id: u64,
+    },
+    SleepProject(u64),
+    EditProjectGroup(u64),
+    ToggleProjectGroup(String),
+    OpenGitHub(u64),
     CloseSession {
         project: Option<u64>,
         id: u64,
@@ -487,6 +496,8 @@ pub struct ProjectPanel {
     project_branches: HashMap<u64, String>,
     project_worktrees: HashMap<u64, ProjectWorktreesInfo>,
     session_worktrees: HashMap<u64, (String, String)>,
+    project_groups: HashMap<u64, String>,
+    collapsed_groups: HashSet<String>,
     options: SidebarOptions,
     options_popup_open: bool,
 }
@@ -527,10 +538,23 @@ impl ProjectPanel {
         self.session_worktrees = session_worktrees;
     }
 
-    /// Updates persisted Workspace sidebar display options (`sort_by_activity`, `compact_rows`, `hide_sleeping`).
+    /// Updates persisted Workspace sidebar display options (`sort_by_activity`, `compact_rows`, `hide_sleeping`, `hide_agent_task_line`).
     #[allow(dead_code)]
     pub fn set_options(&mut self, options: SidebarOptions) {
         self.options = options;
+    }
+
+    /// Updates optional sidebar folder grouping (`project_id -> group_name`) and collapsed groups.
+    #[allow(dead_code)]
+    pub fn set_project_groups(&mut self, groups: HashMap<u64, String>, collapsed: HashSet<String>) {
+        self.project_groups = groups;
+        self.collapsed_groups = collapsed;
+    }
+
+    fn is_project_in_collapsed_group(&self, project_id: u64) -> bool {
+        self.project_groups
+            .get(&project_id)
+            .is_some_and(|g| self.collapsed_groups.contains(g))
     }
 
     fn is_secondary_worktree_session(&self, session_id: u64, project_path: &str) -> bool {
@@ -799,6 +823,7 @@ impl ProjectPanel {
                         );
                     }
                     let rail_wt_info = self.project_worktrees.get(&project.id).cloned();
+                    let has_awake = project.sessions.iter().any(|s| !s.sleeping);
                     resp.context_menu(|ui| {
                         if let Some(ctx_act) = Self::project_context_menu(
                             ui,
@@ -806,6 +831,7 @@ impl ProjectPanel {
                             idx,
                             proj_count,
                             rail_wt_info.as_ref(),
+                            has_awake,
                             input.french,
                         ) {
                             action = Some(ctx_act);
@@ -881,6 +907,7 @@ impl ProjectPanel {
         index: usize,
         total: usize,
         wt_info: Option<&ProjectWorktreesInfo>,
+        has_awake: bool,
         french: bool,
     ) -> Option<ProjectAction> {
         let mut act = None;
@@ -915,6 +942,35 @@ impl ProjectPanel {
                     act = Some(ProjectAction::CleanUpWorktrees(project_id));
                     ui.close();
                 }
+            }
+            let gh_lbl = if french {
+                "PRs et issues GitHub…"
+            } else {
+                "GitHub PRs & Issues…"
+            };
+            if ui.button(gh_lbl).clicked() {
+                act = Some(ProjectAction::OpenGitHub(project_id));
+                ui.close();
+            }
+        }
+        let group_lbl = if french {
+            "Groupe d'espace…"
+        } else {
+            "Workspace group…"
+        };
+        if ui.button(group_lbl).clicked() {
+            act = Some(ProjectAction::EditProjectGroup(project_id));
+            ui.close();
+        }
+        if has_awake {
+            let sleep_proj_lbl = if french {
+                "Mettre le projet en veille"
+            } else {
+                "Put project to sleep"
+            };
+            if ui.button(sleep_proj_lbl).clicked() {
+                act = Some(ProjectAction::SleepProject(project_id));
+                ui.close();
             }
         }
         let rename_lbl = if french {
@@ -1000,6 +1056,20 @@ impl ProjectPanel {
             });
             ui.close();
         }
+        if !session.sleeping {
+            let sleep_lbl = if french {
+                "Mettre en veille"
+            } else {
+                "Put to sleep"
+            };
+            if ui.button(sleep_lbl).clicked() {
+                act = Some(ProjectAction::SleepSession {
+                    project,
+                    id: session.id,
+                });
+                ui.close();
+            }
+        }
         ui.separator();
         let close_lbl = if french {
             "Fermer la session"
@@ -1046,6 +1116,9 @@ impl ProjectPanel {
     fn build_nav_items(&self, input: &ProjectPanelInput<'_>) -> Vec<NavItem> {
         let mut out = Vec::new();
         for project in self.ordered_projects(input.projects) {
+            if self.is_project_in_collapsed_group(project.id) {
+                continue;
+            }
             out.push(NavItem::Project(project.id));
             if !self.collapsed_projects.contains(&project.id) {
                 let visible = self.visible_sessions(&project.sessions, input.active_session);
@@ -1509,7 +1582,38 @@ impl ProjectPanel {
                     return;
                 }
 
-                for (proj_idx, project) in ordered.into_iter().enumerate() {
+                let mut rendered_groups: HashSet<String> = HashSet::new();
+                for (proj_idx, project) in ordered.iter().copied().enumerate() {
+                    if let Some(group_name) = self.project_groups.get(&project.id).cloned() {
+                        if rendered_groups.insert(group_name.clone()) {
+                            let grp_collapsed = self.collapsed_groups.contains(&group_name);
+                            let grp_count = ordered
+                                .iter()
+                                .filter(|p| self.project_groups.get(&p.id) == Some(&group_name))
+                                .count();
+                            let arrow = if grp_collapsed { "▸" } else { "▾" };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!(
+                                            "{arrow} {group_name} ({grp_count})"
+                                        ))
+                                        .size(11.0_f32)
+                                        .strong()
+                                        .color(ui.visuals().weak_text_color()),
+                                    )
+                                    .frame(false),
+                                )
+                                .clicked()
+                            {
+                                action =
+                                    Some(ProjectAction::ToggleProjectGroup(group_name.clone()));
+                            }
+                        }
+                        if self.collapsed_groups.contains(&group_name) {
+                            continue;
+                        }
+                    }
                     if let Some(proj_act) = self.render_project_group(
                         ui,
                         panel_id,
@@ -1786,7 +1890,8 @@ impl ProjectPanel {
             let opts_active = self.options_popup_open
                 || self.options.sort_by_activity
                 || self.options.compact_rows
-                || self.options.hide_sleeping;
+                || self.options.hide_sleeping
+                || self.options.hide_agent_task_line;
             if opts_resp.hovered() || self.options_popup_open {
                 ui.painter()
                     .rect_filled(opts_rect, 6.0_f32, ui.visuals().widgets.hovered.bg_fill);
@@ -1870,10 +1975,18 @@ impl ProjectPanel {
                             } else {
                                 "Hide sleeping sessions"
                             };
+                            let hide_task_lbl = if french {
+                                "Masquer l'état de l'agent"
+                            } else {
+                                "Hide agent task line"
+                            };
                             let mut changed = false;
                             changed |= ui.checkbox(&mut next.sort_by_activity, sort_lbl).changed();
                             changed |= ui.checkbox(&mut next.compact_rows, compact_lbl).changed();
                             changed |= ui.checkbox(&mut next.hide_sleeping, hide_lbl).changed();
+                            changed |= ui
+                                .checkbox(&mut next.hide_agent_task_line, hide_task_lbl)
+                                .changed();
                             if changed {
                                 self.options = next;
                                 action = Some(ProjectAction::UpdateOptions(next));
@@ -2292,6 +2405,7 @@ impl ProjectPanel {
         }
 
         let wt_info_snapshot = self.project_worktrees.get(&project.id).cloned();
+        let has_awake = project.sessions.iter().any(|s| !s.sleeping);
         card_resp.context_menu(|ui| {
             if let Some(ctx_act) = Self::project_context_menu(
                 ui,
@@ -2299,6 +2413,7 @@ impl ProjectPanel {
                 proj_idx,
                 proj_total,
                 wt_info_snapshot.as_ref(),
+                has_awake,
                 input.french,
             ) {
                 action = Some(ctx_act);
@@ -3062,14 +3177,18 @@ impl ProjectPanel {
             }
         }
 
-        let active_agent_tag = dot_state.and_then(|st| match st {
-            AgentDotState::Waiting
-            | AgentDotState::Blocked
-            | AgentDotState::Working
-            | AgentDotState::Monitoring
-            | AgentDotState::Interrupted => Some(summary_state_word(st, lang)),
-            _ => None,
-        });
+        let active_agent_tag = if self.options.hide_agent_task_line {
+            None
+        } else {
+            dot_state.and_then(|st| match st {
+                AgentDotState::Waiting
+                | AgentDotState::Blocked
+                | AgentDotState::Working
+                | AgentDotState::Monitoring
+                | AgentDotState::Interrupted => Some(summary_state_word(st, lang)),
+                _ => None,
+            })
+        };
         let right_tag: Option<&str> = if session.sleeping {
             Some(WorktreeCardStatus::Sleeping.label(lang))
         } else if let Some(tag) = active_agent_tag {

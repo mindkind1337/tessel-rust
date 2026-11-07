@@ -205,6 +205,7 @@ fn project_panel_collapsed_rail_options_branches_and_reorder() {
         sort_by_activity: true,
         compact_rows: true,
         hide_sleeping: true,
+        hide_agent_task_line: false,
     });
 
     let out_open = ctx.run(

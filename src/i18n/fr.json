@@ -520,5 +520,8 @@
   "Show past conversations": "Afficher les conversations pass\u00e9es",
   "Hide past conversations": "Masquer les conversations pass\u00e9es",
   "Show conversation threads": "Afficher les fils de conversation",
-  "Hide conversation threads": "Masquer les fils de conversation"
+  "Hide conversation threads": "Masquer les fils de conversation",
+  "Add workspace (Clone / Init / SSH)\u2026": "Ajouter un espace (Cloner / Init / SSH)\u2026",
+  "GitHub PRs & Issues\u2026": "PRs et issues GitHub\u2026",
+  "Clear notifications": "Effacer les notifications"
 }

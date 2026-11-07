@@ -119,6 +119,7 @@ pub struct SidebarPreferences {
     pub sort_by_activity: bool,
     pub compact_rows: bool,
     pub hide_sleeping: bool,
+    pub hide_agent_task_line: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -561,6 +562,10 @@ pub struct Workspace {
     pub floating: FloatingPreferences,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub project_worktrees: std::collections::BTreeMap<u64, ProjectWorktreePrefs>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub project_groups: std::collections::BTreeMap<u64, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub collapsed_project_groups: std::collections::BTreeSet<String>,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
     pub next_id: u64,
@@ -605,6 +610,8 @@ impl Default for Workspace {
             status_bar: Default::default(),
             floating: Default::default(),
             project_worktrees: Default::default(),
+            project_groups: Default::default(),
+            collapsed_project_groups: Default::default(),
             terminal_layouts: Default::default(),
             font_size: 15.0,
             next_id: 1,
@@ -874,6 +881,20 @@ impl Workspace {
             })
         {
             return Err("Invalid project worktree visibility metadata.".into());
+        }
+        if self.project_groups.len() > 1000
+            || self.project_groups.iter().any(|(pid, g)| {
+                *pid >= self.next_id
+                    || g.trim().is_empty()
+                    || g.chars().count() > 120
+                    || g.chars().any(char::is_control)
+            })
+            || self.collapsed_project_groups.len() > 1000
+            || self.collapsed_project_groups.iter().any(|g| {
+                g.trim().is_empty() || g.chars().count() > 120 || g.chars().any(char::is_control)
+            })
+        {
+            return Err("Invalid project group metadata.".into());
         }
         if self.terminal_layouts.len() > 101 {
             return Err("Too many terminal layouts".into());

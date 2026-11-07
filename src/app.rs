@@ -353,6 +353,9 @@ impl Session {
 enum Message {
     FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
+    AddProjectPickedFolder(Option<PathBuf>),
+    CloneParentPicked(Option<PathBuf>),
+    InitParentPicked(Option<PathBuf>),
     Document {
         path: PathBuf,
         pinned: bool,
@@ -527,6 +530,9 @@ pub struct Tessel {
     status_telemetry: crate::status_metrics::StatusTelemetry,
     keep_awake: crate::status_metrics::KeepAwakeController,
     side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
+    dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState,
+    notifications: crate::dialogs_toolbar_model::NotificationCenter,
+    notified_waiting_panes: std::collections::HashSet<u64>,
     task_history_store: crate::side_panels_model::TaskHistoryStore,
     activity_store: crate::side_panels_model::ActivityStore,
     past_sessions_cache: Vec<crate::side_panels_model::SessionHistoryEntry>,
@@ -732,6 +738,9 @@ impl Tessel {
             }),
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
+            notifications: Default::default(),
+            notified_waiting_panes: Default::default(),
             task_history_store,
             activity_store,
             past_sessions_cache: Vec::new(),
@@ -1803,6 +1812,18 @@ impl Tessel {
                     Err(e) => self.error = e,
                 },
                 Message::Folder(None) => {}
+                Message::AddProjectPickedFolder(Some(path)) => {
+                    self.dialogs_toolbar_ui.set_picked_local_folder(path);
+                }
+                Message::AddProjectPickedFolder(None) => {}
+                Message::CloneParentPicked(Some(path)) => {
+                    self.dialogs_toolbar_ui.clone_parent = path;
+                }
+                Message::CloneParentPicked(None) => {}
+                Message::InitParentPicked(Some(path)) => {
+                    self.dialogs_toolbar_ui.init_parent = path;
+                }
+                Message::InitParentPicked(None) => {}
                 Message::Document {
                     path,
                     pinned,
@@ -3017,7 +3038,22 @@ impl Tessel {
                 task_group,
                 tr("Review task branch…"),
             ));
+            commands.push(PaletteCommand::new(
+                "github",
+                task_group,
+                tr("GitHub PRs & Issues…"),
+            ));
         }
+        commands.push(PaletteCommand::new(
+            "project:add",
+            tr("Projects"),
+            tr("Add workspace (Clone / Init / SSH)…"),
+        ));
+        commands.push(PaletteCommand::new(
+            "notifications:clear",
+            "Tessel",
+            tr("Clear notifications"),
+        ));
 
         // 6. Theme
         let theme_group = tr("Theme");
@@ -3154,7 +3190,10 @@ impl Tessel {
                 "launcher" => self.open_launcher(),
                 "chat" => self.new_session(Launch::CodexChat),
                 "claude-chat" => self.new_session(Launch::ClaudeChat),
-                "project:new" => self.choose_project(),
+                "project:new" => self.open_add_project_modal(),
+                "project:add" => self.open_add_project_modal(),
+                "github" => self.open_github_modal(self.state.active_project),
+                "notifications:clear" => self.notifications.clear(),
                 "worktree:new" => {
                     if let Some(pid) = self.state.active_project {
                         self.start_new_worktree_pane(
@@ -3622,9 +3661,24 @@ impl Tessel {
             sort_by_activity: self.state.sidebar.sort_by_activity,
             compact_rows: self.state.sidebar.compact_rows,
             hide_sleeping: self.state.sidebar.hide_sleeping,
+            hide_agent_task_line: self.state.sidebar.hide_agent_task_line,
         });
+        self.project_panel.set_project_groups(
+            self.state
+                .project_groups
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            self.state
+                .collapsed_project_groups
+                .iter()
+                .cloned()
+                .collect(),
+        );
 
         let panel_disabled = self.native_modal_open()
+            || self.side_panels_ui.any_modal_open()
+            || self.dialogs_toolbar_ui.any_modal_open()
             || self.share.has_pending_ask()
             || self.share.is_pill_popover_open()
             || self.overlay.is_some()
@@ -3682,7 +3736,7 @@ impl Tessel {
                 return;
             }
             Some(ProjectAction::OpenFolder) => {
-                self.choose_project();
+                self.open_add_project_modal();
                 return;
             }
             Some(ProjectAction::ExpandSidebar) => {
@@ -3885,6 +3939,43 @@ impl Tessel {
                 }
                 return;
             }
+            Some(ProjectAction::SleepSession { id, .. }) => {
+                self.put_session_to_sleep(id);
+                return;
+            }
+            Some(ProjectAction::SleepProject(pid)) => {
+                let ids: Vec<u64> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project == Some(pid))
+                    .map(|s| s.id)
+                    .collect();
+                for sid in ids {
+                    self.put_session_to_sleep(sid);
+                }
+                return;
+            }
+            Some(ProjectAction::EditProjectGroup(pid)) => {
+                self.dialogs_toolbar_ui.group_modal_project = Some(pid);
+                self.dialogs_toolbar_ui.group_modal_draft = self
+                    .state
+                    .project_groups
+                    .get(&pid)
+                    .cloned()
+                    .unwrap_or_default();
+                return;
+            }
+            Some(ProjectAction::ToggleProjectGroup(group)) => {
+                if !self.state.collapsed_project_groups.remove(&group) {
+                    self.state.collapsed_project_groups.insert(group);
+                }
+                self.save();
+                return;
+            }
+            Some(ProjectAction::OpenGitHub(pid)) => {
+                self.open_github_modal(Some(pid));
+                return;
+            }
             Some(ProjectAction::CloseSession { id, .. }) => {
                 self.close_session(id);
                 return;
@@ -3893,6 +3984,7 @@ impl Tessel {
                 self.state.sidebar.sort_by_activity = opts.sort_by_activity;
                 self.state.sidebar.compact_rows = opts.compact_rows;
                 self.state.sidebar.hide_sleeping = opts.hide_sleeping;
+                self.state.sidebar.hide_agent_task_line = opts.hide_agent_task_line;
                 self.save();
                 return;
             }
@@ -3910,6 +4002,7 @@ impl Tessel {
         };
         self.state.projects.remove(pos);
         self.state.project_worktrees.remove(&id);
+        self.state.project_groups.remove(&id);
         self.worktree_state.retain_projects(&self.state.projects);
         self.state.tasks.retain(|t| t.project != id);
         let session_ids: Vec<u64> = self
@@ -8637,6 +8730,16 @@ impl Tessel {
                 stored.runs.drain(0..drop_n);
             }
         }
+        if self.state.notification_prefs.notifications_enabled
+            && self.state.notification_prefs.in_app_alerts
+        {
+            self.notifications.push_coalesced(
+                crate::dialogs_toolbar_model::NotificationKind::AutomationRan,
+                format!("Automation started: {}", auto.name),
+                project.name.clone(),
+                spawned_pane_id,
+            );
+        }
         let _ = self.automations_store.save(&store_dir);
     }
 
@@ -10185,6 +10288,234 @@ impl Tessel {
             }
         }
     }
+
+    fn open_add_project_modal(&mut self) {
+        self.dialogs_toolbar_ui.add_project_open = true;
+        self.dialogs_toolbar_ui.add_error.clear();
+    }
+
+    fn open_github_modal(&mut self, project_id: Option<u64>) {
+        if let Some(pid) = project_id
+            && self.state.projects.iter().any(|p| p.id == pid)
+            && self.state.active_project != Some(pid)
+        {
+            self.state.active_project = Some(pid);
+            self.refresh_project();
+        }
+        self.dialogs_toolbar_ui.github_open = true;
+        self.refresh_github_modal();
+    }
+
+    fn refresh_github_modal(&mut self) {
+        let Some(proj) = self.state.active().cloned() else {
+            self.dialogs_toolbar_ui.github_error = "Select a project first.".into();
+            return;
+        };
+        self.dialogs_toolbar_ui.github_error.clear();
+        match crate::dialogs_toolbar_model::load_gh_prs(&proj.path, 40) {
+            Ok(prs) => self.dialogs_toolbar_ui.github_prs = prs,
+            Err(e) => {
+                self.dialogs_toolbar_ui.github_prs.clear();
+                self.dialogs_toolbar_ui.github_error = e;
+            }
+        }
+        if let Ok(issues) = crate::dialogs_toolbar_model::load_gh_issues(&proj.path, 40) {
+            self.dialogs_toolbar_ui.github_issues = issues;
+        }
+    }
+
+    fn put_session_to_sleep(&mut self, id: u64) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            session.terminal = None;
+            session.loading = None;
+            session.restarting = None;
+        }
+    }
+
+    fn add_multiple_projects(&mut self, paths: Vec<PathBuf>) {
+        let mut last_id = None;
+        for path in paths {
+            match self.state.add_project(&path) {
+                Ok(pid) => last_id = Some(pid),
+                Err(e) => self.error = e,
+            }
+        }
+        if let Some(project_id) = last_id {
+            self.save();
+            self.refresh_project();
+            if !self.sessions.iter().any(|s| s.project == Some(project_id))
+                && let Some(default_id) = self.state.launcher_prefs.remember_default.clone()
+            {
+                self.launch_empty_state_entry(&default_id);
+            }
+        }
+    }
+
+    fn handle_dialogs_toolbar_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::dialogs_toolbar_ui::DialogsToolbarAction,
+    ) {
+        use crate::dialogs_toolbar_ui::DialogsToolbarAction;
+        match action {
+            DialogsToolbarAction::PickLocalProjectFolder => {
+                let sender = self.sender.clone();
+                thread::spawn(move || {
+                    let _ = sender.send(Message::AddProjectPickedFolder(
+                        rfd::FileDialog::new()
+                            .set_title("Open project or workspace folder")
+                            .pick_folder(),
+                    ));
+                });
+            }
+            DialogsToolbarAction::PickCloneParentFolder => {
+                let sender = self.sender.clone();
+                thread::spawn(move || {
+                    let _ = sender.send(Message::CloneParentPicked(
+                        rfd::FileDialog::new()
+                            .set_title("Choose clone parent folder")
+                            .pick_folder(),
+                    ));
+                });
+            }
+            DialogsToolbarAction::PickInitParentFolder => {
+                let sender = self.sender.clone();
+                thread::spawn(move || {
+                    let _ = sender.send(Message::InitParentPicked(
+                        rfd::FileDialog::new()
+                            .set_title("Choose parent folder for new project")
+                            .pick_folder(),
+                    ));
+                });
+            }
+            DialogsToolbarAction::AddProjects(paths) => {
+                self.dialogs_toolbar_ui.add_project_open = false;
+                self.add_multiple_projects(paths);
+            }
+            DialogsToolbarAction::CloneRepository {
+                url,
+                parent_dir,
+                folder_name,
+            } => match crate::dialogs_toolbar_model::clone_git_repository(
+                &url,
+                &parent_dir,
+                &folder_name,
+            ) {
+                Ok(dest) => {
+                    self.dialogs_toolbar_ui.add_project_open = false;
+                    self.dialogs_toolbar_ui.add_error.clear();
+                    self.add_multiple_projects(vec![dest]);
+                }
+                Err(e) => {
+                    self.dialogs_toolbar_ui.add_error = e;
+                }
+            },
+            DialogsToolbarAction::InitNewProject {
+                parent_dir,
+                folder_name,
+            } => {
+                match crate::dialogs_toolbar_model::init_new_git_project(&parent_dir, &folder_name)
+                {
+                    Ok(dest) => {
+                        self.dialogs_toolbar_ui.add_project_open = false;
+                        self.dialogs_toolbar_ui.add_error.clear();
+                        self.add_multiple_projects(vec![dest]);
+                    }
+                    Err(e) => {
+                        self.dialogs_toolbar_ui.add_error = e;
+                    }
+                }
+            }
+            DialogsToolbarAction::BrowseRemoteDirs {
+                host_alias,
+                remote_dir,
+            } => match crate::dialogs_toolbar_model::list_remote_directories(
+                &host_alias,
+                &remote_dir,
+            ) {
+                Ok(entries) => {
+                    self.dialogs_toolbar_ui.ssh_remote_entries = entries;
+                    self.dialogs_toolbar_ui.add_error.clear();
+                }
+                Err(e) => {
+                    self.dialogs_toolbar_ui.add_error = e;
+                }
+            },
+            DialogsToolbarAction::OpenSshWorkspace {
+                host_alias,
+                remote_dir,
+            } => {
+                self.dialogs_toolbar_ui.add_project_open = false;
+                self.new_session(Launch::Ssh(workspace::Host {
+                    alias: host_alias,
+                    folder: remote_dir,
+                }));
+            }
+            DialogsToolbarAction::CloseAddProjectModal => {
+                self.dialogs_toolbar_ui.add_project_open = false;
+            }
+            DialogsToolbarAction::RefreshGitHub => {
+                self.refresh_github_modal();
+            }
+            DialogsToolbarAction::StartWorktreeFromSlug(slug) => {
+                if let Some(pid) = self.state.active_project {
+                    self.dialogs_toolbar_ui.github_open = false;
+                    self.start_new_worktree_pane(
+                        pid,
+                        &slug,
+                        crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
+                    );
+                }
+            }
+            DialogsToolbarAction::SendPromptToActiveAgent(prompt) => {
+                self.dialogs_toolbar_ui.github_open = false;
+                let _ = self.paste_into_active_terminal(ctx, &prompt);
+            }
+            DialogsToolbarAction::OpenExternalUrl(url) => {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
+            DialogsToolbarAction::CloseGitHubModal => {
+                self.dialogs_toolbar_ui.github_open = false;
+            }
+            DialogsToolbarAction::SaveProjectGroup { project_id, group } => {
+                if let Some(g) = group {
+                    self.state.project_groups.insert(project_id, g);
+                } else {
+                    self.state.project_groups.remove(&project_id);
+                }
+                self.dialogs_toolbar_ui.group_modal_project = None;
+                self.save();
+            }
+            DialogsToolbarAction::CloseProjectGroupModal => {
+                self.dialogs_toolbar_ui.group_modal_project = None;
+            }
+            DialogsToolbarAction::OpenStatsSettings => {
+                self.settings_section = SettingsSection::Stats;
+                self.overlay = Some(Overlay::Settings);
+            }
+            DialogsToolbarAction::OpenAlertsSettings => {
+                self.settings_section = SettingsSection::Alerts;
+                self.overlay = Some(Overlay::Settings);
+            }
+            DialogsToolbarAction::FocusPane(pane_id) => {
+                if let Some(s) = self.sessions.iter().find(|s| s.id == pane_id) {
+                    let proj = s.project;
+                    if self.state.active_project != proj {
+                        self.state.active_project = proj;
+                        self.refresh_project();
+                    }
+                    self.active_session = Some(pane_id);
+                    self.view = View::Work;
+                }
+            }
+            DialogsToolbarAction::MarkAllNotificationsRead => {
+                self.notifications.mark_all_read();
+            }
+            DialogsToolbarAction::ClearNotifications => {
+                self.notifications.clear();
+            }
+        }
+    }
 }
 impl eframe::App for Tessel {
     #[cfg(feature = "visual-test")]
@@ -10716,6 +11047,110 @@ impl eframe::App for Tessel {
                     self.apply_layout_action(action);
                 }
                 self.floating_toolbar(ui);
+                // Sync waiting-for-user notifications (non-focus-stealing)
+                let waiting_panes: Vec<(u64, String)> = self
+                    .chats
+                    .iter()
+                    .filter(|c| c.waiting_for_user())
+                    .map(|c| (c.pane, "Codex chat waiting for input".to_owned()))
+                    .chain(
+                        self.claude_chats
+                            .iter()
+                            .filter(|c| c.waiting_for_user())
+                            .map(|c| (c.pane, "Claude chat waiting for input".to_owned())),
+                    )
+                    .collect();
+                self.notified_waiting_panes
+                    .retain(|pid| waiting_panes.iter().any(|(id, _)| id == pid));
+                for (pid, detail) in &waiting_panes {
+                    if self.notified_waiting_panes.insert(*pid)
+                        && self.state.notification_prefs.notifications_enabled
+                        && self.state.notification_prefs.in_app_alerts
+                    {
+                        self.notifications.push_coalesced(
+                            crate::dialogs_toolbar_model::NotificationKind::ApprovalNeeded,
+                            "Agent waiting for response",
+                            detail.clone(),
+                            Some(*pid),
+                        );
+                    }
+                }
+                if self.state.notification_prefs.in_app_alerts
+                    && let Some(pill_resp) = crate::dialogs_toolbar_ui::paint_agent_request_pill(
+                        ui,
+                        &toolbar_spec.ui,
+                        waiting_panes.len(),
+                        toolbar_french,
+                    )
+                    && pill_resp.clicked()
+                    && let Some((first_pane, _)) = waiting_panes.first()
+                {
+                    self.handle_dialogs_toolbar_action(
+                        ctx,
+                        crate::dialogs_toolbar_ui::DialogsToolbarAction::FocusPane(*first_pane),
+                    );
+                }
+                let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
+                    &self.task_history_store.records,
+                    10.0,
+                    crate::dialogs_toolbar_model::now_ms(),
+                );
+                let usage_popup_id = egui::Id::new("toolbar-usage-menu");
+                let usage_open = egui::Popup::is_id_open(ui.ctx(), usage_popup_id);
+                let usage_btn = crate::dialogs_toolbar_ui::paint_usage_toolbar_button(
+                    ui,
+                    &toolbar_spec.ui,
+                    usage_summary.level,
+                    toolbar_french,
+                    usage_open,
+                );
+                let mut toolbar_dlg_act = None;
+                let usage_popup = egui::Popup::menu(&usage_btn)
+                    .id(usage_popup_id)
+                    .align(egui::RectAlign::BOTTOM_END)
+                    .gap(6.0);
+                let shown_usage = usage_popup.show(|ui| {
+                    if let Some(act) = crate::dialogs_toolbar_ui::show_usage_menu_contents(
+                        ui,
+                        &toolbar_spec.ui,
+                        &usage_summary,
+                        toolbar_french,
+                    ) {
+                        toolbar_dlg_act = Some(act);
+                        ui.close();
+                    }
+                });
+                self.toolbar_menu_open |= shown_usage.is_some();
+
+                let notif_popup_id = egui::Id::new("toolbar-notifications-menu");
+                let notif_open = egui::Popup::is_id_open(ui.ctx(), notif_popup_id);
+                let notif_btn = crate::dialogs_toolbar_ui::paint_notifications_toolbar_button(
+                    ui,
+                    &toolbar_spec.ui,
+                    self.notifications.unread_count(),
+                    toolbar_french,
+                    notif_open,
+                );
+                let notif_popup = egui::Popup::menu(&notif_btn)
+                    .id(notif_popup_id)
+                    .align(egui::RectAlign::BOTTOM_END)
+                    .gap(6.0);
+                let shown_notif = notif_popup.show(|ui| {
+                    if let Some(act) = crate::dialogs_toolbar_ui::show_notifications_menu_contents(
+                        ui,
+                        &toolbar_spec.ui,
+                        &self.notifications,
+                        toolbar_french,
+                    ) {
+                        toolbar_dlg_act = Some(act);
+                        ui.close();
+                    }
+                });
+                self.toolbar_menu_open |= shown_notif.is_some();
+                if let Some(act) = toolbar_dlg_act {
+                    self.handle_dialogs_toolbar_action(ctx, act);
+                }
+
                 let left_icon = if self.state.panels.left_open {
                     Icon::PanelLeftOpen
                 } else {
@@ -10763,6 +11198,8 @@ impl eframe::App for Tessel {
         }
         let central = egui::CentralPanel::default().show(ctx, |ui| {
             if self.native_modal_open()
+                || self.side_panels_ui.any_modal_open()
+                || self.dialogs_toolbar_ui.any_modal_open()
                 || self.share.has_pending_ask()
                 || self.finder.is_open()
                 || self.toolbar_menu_open
@@ -10916,6 +11353,38 @@ impl eframe::App for Tessel {
             ) {
                 self.handle_side_panels_action(ctx, act);
             }
+            let ssh_aliases: Vec<String> =
+                self.state.hosts.iter().map(|h| h.alias.clone()).collect();
+            if let Some(act) = crate::dialogs_toolbar_ui::show_add_project_modal(
+                ctx,
+                &mut self.dialogs_toolbar_ui,
+                &ssh_aliases,
+                french,
+            ) {
+                self.handle_dialogs_toolbar_action(ctx, act);
+            }
+            if let Some(act) = crate::dialogs_toolbar_ui::show_github_modal(
+                ctx,
+                &mut self.dialogs_toolbar_ui,
+                &proj_name,
+                french,
+            ) {
+                self.handle_dialogs_toolbar_action(ctx, act);
+            }
+            let existing_groups: Vec<String> = {
+                let mut set: std::collections::BTreeSet<String> =
+                    self.state.project_groups.values().cloned().collect();
+                set.extend(self.state.collapsed_project_groups.iter().cloned());
+                set.into_iter().collect()
+            };
+            if let Some(act) = crate::dialogs_toolbar_ui::show_project_group_modal(
+                ctx,
+                &mut self.dialogs_toolbar_ui,
+                &existing_groups,
+                french,
+            ) {
+                self.handle_dialogs_toolbar_action(ctx, act);
+            }
         }
         #[cfg_attr(not(windows), allow(unused_variables))]
         let ask_modal_open = if self.share.hosting() {
@@ -10933,6 +11402,7 @@ impl eframe::App for Tessel {
             let browser_unblocked = self.view == View::Browser
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
+                && !self.dialogs_toolbar_ui.any_modal_open()
                 && !ask_modal_open
                 && !self.share.has_pending_ask()
                 && !self.pending_exit

@@ -51,6 +51,8 @@ mod codex_terminal;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
+pub mod dialogs_toolbar_model;
+pub mod dialogs_toolbar_ui;
 mod empty_state_panel;
 pub mod explorer_scm_model;
 pub mod explorer_tree;
