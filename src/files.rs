@@ -278,6 +278,8 @@ pub struct Document {
     pub diff_title: Option<String>,
     pub deleted_on_disk: bool,
     pub last_edited_at: Option<std::time::Instant>,
+    pub force_large_markdown_render: bool,
+    pub sheet_cache: Option<crate::rich_previews::SheetTable>,
 }
 impl Document {
     pub fn from_diff(
@@ -306,6 +308,8 @@ impl Document {
             diff_title: Some(title),
             deleted_on_disk: false,
             last_edited_at: None,
+            force_large_markdown_render: false,
+            sheet_cache: None,
         }
     }
 
@@ -336,6 +340,8 @@ impl Document {
             diff_title: Some(title),
             deleted_on_disk: false,
             last_edited_at: None,
+            force_large_markdown_render: false,
+            sheet_cache: None,
         }
     }
 
@@ -367,6 +373,8 @@ impl Document {
                 diff_title: None,
                 deleted_on_disk: false,
                 last_edited_at: None,
+                force_large_markdown_render: false,
+                sheet_cache: None,
             });
         }
         if extension == "pdf" {
@@ -390,6 +398,8 @@ impl Document {
                 diff_title: None,
                 deleted_on_disk: false,
                 last_edited_at: None,
+                force_large_markdown_render: false,
+                sheet_cache: None,
             });
         }
         if matches!(
@@ -437,6 +447,8 @@ impl Document {
                 diff_title: None,
                 deleted_on_disk: false,
                 last_edited_at: None,
+                force_large_markdown_render: false,
+                sheet_cache: None,
             });
         }
         let original = read(&path)?;
@@ -445,13 +457,23 @@ impl Document {
         }
         let text = String::from_utf8(original.clone())
             .map_err(|_| "This file is not UTF-8 text.".to_string())?;
+        let is_md = matches!(extension.as_str(), "md" | "markdown");
+        let md_source_only = is_md
+            && matches!(
+                crate::rich_previews::classify_markdown_size(text.len()),
+                crate::rich_previews::MarkdownSizeDecision::SourceOnly { .. }
+            );
         Ok(Self {
             root: root.to_owned(),
             path,
             text,
             original,
             error: String::new(),
-            preview_mode: matches!(extension.as_str(), "html" | "htm" | "md" | "markdown"),
+            preview_mode: !md_source_only
+                && matches!(
+                    extension.as_str(),
+                    "html" | "htm" | "md" | "markdown" | "csv" | "tsv"
+                ),
             preview: None,
             image: None,
             texture: None,
@@ -464,6 +486,8 @@ impl Document {
             diff_title: None,
             deleted_on_disk: false,
             last_edited_at: None,
+            force_large_markdown_render: false,
+            sheet_cache: None,
         })
     }
     pub fn original_text(&self) -> Option<&str> {

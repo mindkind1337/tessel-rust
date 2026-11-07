@@ -56,7 +56,7 @@ impl Book {
                 bytes += paragraph.text.len();
             }
             for row in &page.rows {
-                if row.len() > 100 {
+                if row.len() > 200 {
                     return Err("Office column limit reached".into());
                 }
                 cells += row.len();
@@ -256,38 +256,19 @@ impl OfficeView {
                         }
                     }
                     if !page.rows.is_empty() {
-                        let cols = page.rows.iter().map(Vec::len).max().unwrap_or(0);
-                        ui.horizontal(|ui| {
-                            ui.add_sized([55.0, 22.0], egui::Label::new(""));
-                            for col in 0..cols {
-                                ui.add_sized(
-                                    [120.0, 22.0],
-                                    egui::Label::new(column(page.start_col as usize + col))
-                                        .truncate(),
-                                );
-                            }
-                        });
-                        egui::ScrollArea::vertical()
-                            .id_salt("office-rows")
-                            .show_rows(ui, 24.0, page.rows.len(), |ui, rows| {
-                                for index in rows {
-                                    ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [55.0, 22.0],
-                                            egui::Label::new(
-                                                (page.start_row as usize + index + 1).to_string(),
-                                            ),
-                                        );
-                                        for cell in &page.rows[index] {
-                                            ui.add_sized(
-                                                [120.0, 22.0],
-                                                egui::Label::new(cell).truncate().selectable(true),
-                                            )
-                                            .on_hover_text(cell);
-                                        }
-                                    });
-                                }
-                            });
+                        let sheet = crate::rich_previews::SheetTable {
+                            rows: page.rows.clone(),
+                            start_row: page.start_row as usize,
+                            start_col: page.start_col as usize,
+                            truncated_rows: usize::from(book.truncated),
+                            truncated_cols: 0,
+                            delimiter_label: "Workbook sheet",
+                        };
+                        crate::rich_previews::show_sheet_grid(
+                            ui,
+                            ("office-sheet", self.selected),
+                            &sheet,
+                        );
                     }
                 });
         } else if !self.error.is_empty() {
@@ -318,6 +299,7 @@ impl Drop for OfficeView {
         self.cancel.store(true, Ordering::Relaxed);
     }
 }
+#[cfg_attr(not(test), allow(dead_code))]
 fn column(mut index: usize) -> String {
     let mut name = String::new();
     loop {

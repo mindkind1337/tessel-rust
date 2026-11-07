@@ -59,6 +59,8 @@ pub struct Terminal {
     find_focus_pending: bool,
     pending_multiline_paste: Option<String>,
     shift_context_requested: Option<egui::Pos2>,
+    device_login: crate::device_login::DeviceLoginDetector,
+    pending_tessel_url: Option<String>,
     #[cfg(windows)]
     native_panel: crate::host_terminal_panel::HostTerminalPanel,
     #[cfg(windows)]
@@ -78,6 +80,10 @@ impl Terminal {
     }
     pub fn take_broadcast_inputs(&mut self) -> Vec<BroadcastInput> {
         std::mem::take(&mut self.broadcast_outbox)
+    }
+
+    pub fn take_pending_tessel_url(&mut self) -> Option<String> {
+        self.pending_tessel_url.take()
     }
 
     pub fn set_agent_kind(&mut self, agent: Option<&str>) {
@@ -762,6 +768,8 @@ impl Terminal {
             find_focus_pending: false,
             pending_multiline_paste: None,
             shift_context_requested: None,
+            device_login: Default::default(),
+            pending_tessel_url: None,
             #[cfg(windows)]
             native_panel: Default::default(),
             #[cfg(windows)]
@@ -891,6 +899,42 @@ impl Terminal {
             } else if cancel_paste {
                 self.pending_multiline_paste = None;
                 refocus_terminal = true;
+            }
+        }
+        if matches!(self.backend, backend::Backend::Local(_)) {
+            let rev = self.output_revision;
+            let cols = self.size.1;
+            let parser_ref = &self.parser;
+            self.device_login
+                .tick(ui.ctx(), rev, cols, || parser_ref.screen().contents());
+            if let Some(prompt) = self.device_login.active_prompt().cloned()
+                && let Some(act) = crate::device_login::show_device_login_banner(
+                    ui,
+                    &prompt,
+                    crate::i18n::is_french(),
+                )
+            {
+                use crate::device_login::DeviceLoginAction as Act;
+                match act {
+                    Act::OpenInTessel(url) => {
+                        self.pending_tessel_url = Some(url);
+                        self.device_login.dismiss_current();
+                    }
+                    Act::OpenInSystemBrowser(url) => {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        self.device_login.dismiss_current();
+                    }
+                    Act::CopyLink(url) => {
+                        ui.ctx().copy_text(url);
+                    }
+                    Act::CopyCode(code) => {
+                        ui.ctx().copy_text(code);
+                    }
+                    Act::Dismiss => {
+                        self.device_login.dismiss_current();
+                        refocus_terminal = true;
+                    }
+                }
             }
         }
         if self.find_open {

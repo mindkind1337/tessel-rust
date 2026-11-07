@@ -20,10 +20,10 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; Claude native initialization and streaming/approval/structured-question protocol fixtures pass, with French UI visually checked; Claude live model acceptance currently blocked by CLI sign-in requirement; tool execution and history plus other providers pending |
 | Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions, explicitly enabled project browser tools, HMAC-SHA256-authenticated Tessel Teams (`team_*`), bounded worker orchestration (`team_worker_*`, `team_heartbeat`), gated inter-project relay (`project_agents`/`project_send`/`project_inbox` with pair approval and untrusted framing) and digit-free idle wake-ups implemented and verified |
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending |
-| Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown, images and bounded original PDF rendering implemented; bounded Office/OpenDocument content previews implemented with synthetic format and native worker acceptance; full webpage rendering and rich Office layout pending |
+| Documents | HTML trust, PDF, images, Markdown, office documents | Native readable HTML/Markdown (with `600 KiB` / `1 MiB` size gate and native vector Mermaid `flowchart`/`sequenceDiagram` rendering), sticky-header `SheetView` (`5,000 × 200` CSV/TSV + XLSX/XLSM/ODS), collapsible JSON/JSONC/JSONL tree viewer, images and bounded original PDF/Office workers implemented and tested |
 | Credentials | OS-protected storage; explicit agent opt-in; never available to guests | Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending |
 | Live Share | Authenticated transport; project scope; explicit guest rights; secret-isolation tests | Duplex TLS 1.3 LAN session with 8-flag `ShareRights`, 6-digit SAS knock approval (`900ms` arming delay + trust gating), multi-invitation management (`MAX_INVITES = 20`), `720px` dialog (`Overview`/`People`/`Invitations`/`Settings`), `24px` toolbar pill + `360px` popover, pane presence and `.osb-live` sidebar badges implemented and verified; cloud relay and Electron wire compatibility pending |
-| Connectors/account/sync | Match existing service contracts; token isolation and consent | Native account PKCE, callback, DPAPI and HTTP fixture tests pass; backend activation, real sign-in, connectors and sync pending |
+| Connectors/account/sync | Match existing service contracts; token isolation and consent | Native account PKCE, callback, DPAPI, HTTP fixture tests and end-to-end encrypted `scrypt` + `AES-256-GCM` cloud sync (`"rust_schema": 1`, bucket padding, shrink guard, `sync-floor.json` anti-rollback and restore preview) pass; backend callback deployment and OAuth connectors pending |
 | Packaging/update | Native installer, integrity verification, safe restart, CI artifacts | Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending |
 | Localization/accessibility | EN/FR; keyboard navigation; screen reader acceptance | Persisted EN/FR interface selection and main-panel translations implemented; searchable native shortcut help visually checked, modal Escape/focus and document shortcut isolation tests pass; external/technical diagnostics and screen-reader acceptance pending |
 
@@ -703,3 +703,21 @@ inter-project relay (`same_team` guard, `20 / 10s` burst cap, canonical
 `pair_key` approval modal with `10`/`30`/`100` hourly caps, `10m` decline
 cooldown, Live Share non-caching bypass, and `| `-prefixed untrusted framing),
 and digit-free idle wake-up planning (`SendPtyReminder` vs `ShowBanner`).
+
+Encrypted Tessel Account Sync, rich document previews, terminal OAuth sign-in
+banner, and in-place `NativeChat` ↔ `Terminal` mode switching integration
+(`tessel_sync.rs` + `account_panel.rs` + `rich_previews.rs` + `device_login.rs` +
+`office.rs` + `files.rs` + `preview.rs` + `terminal.rs` + `workspace.rs` +
+`app.rs` + `tests/ui_sync_previews_signin_switch.rs`):
+`tessel_sync` implements NFKC passphrase normalization, `phrase_is_weak`,
+unambiguous 29-char `suggest_phrase()`, RFC 7914 `scrypt` (`log_n = 17`, `r = 8`,
+`p = 1`), Windows DPAPI `sync-key.dat` caching, gzip + `[64 KiB .. 1.4 MB]`
+bucket padding, `AES-256-GCM` (`0x01 || nonce || tag || ciphertext` with AAD
+`"tessel-sync\n1\n{user_id}"`), `"rust_schema": 1` separation, sensitive field
+stripping, project-shrink confirmation, and `SyncFloorFile` monotonic `seq`
+anti-rollback. `rich_previews` adds `SheetTable` (`5,000 × 200` sticky grid +
+RFC 4180 CSV/TSV), JSON/JSONC/JSONL collapsible tree preview, `MarkdownSizeGate`
+(`600 KiB` / `1 MiB`), and vector Mermaid `flowchart`/`sequenceDiagram` painting.
+`device_login` adds `400 ms`-debounced local PTY OAuth detection, and
+`Workspace::switch_saved_session_chat_mode` switches Claude/Codex panes in-place
+between `Terminal` and `NativeChat` while preserving pane identity and thread IDs.

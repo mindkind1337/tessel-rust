@@ -51,6 +51,7 @@ mod codex_terminal;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
+pub mod device_login;
 pub mod dialogs_toolbar_model;
 pub mod dialogs_toolbar_ui;
 mod empty_state_panel;
@@ -105,6 +106,7 @@ pub mod project_panel;
 mod regional_date;
 mod remote;
 mod remote_panel;
+pub mod rich_previews;
 pub mod scm_changes_panel;
 mod scm_state;
 pub mod session_option_picker_ui;
@@ -134,6 +136,8 @@ pub mod teams_ui;
 pub mod terminal;
 mod terminal_layout;
 mod terminal_model;
+#[cfg(windows)]
+pub mod tessel_sync;
 mod theme;
 pub mod theme_palettes;
 #[cfg(windows)]

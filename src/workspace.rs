@@ -1039,6 +1039,110 @@ impl Workspace {
         Ok(true)
     }
 
+    /// Converts a saved Claude/Codex session in-place between `Launch::Agent` (Terminal)
+    /// and `Launch::ClaudeChat` / `Launch::CodexChat` (Native Chat) on the same pane `id`,
+    /// preserving `pane_name`, `project`, `cwd`, `worktree`, model options, and conversation ID.
+    pub fn switch_saved_session_chat_mode(
+        &mut self,
+        pane_id: u64,
+        live_chat_thread: Option<&str>,
+    ) -> Result<bool> {
+        let Some(idx) = self.sessions.iter().position(|s| s.id == pane_id) else {
+            return Ok(false);
+        };
+        let Some(project_id) = self.sessions[idx].project else {
+            return Err("Native chat requires an active workspace project.".into());
+        };
+        let allowed_cwd = self
+            .projects
+            .iter()
+            .find(|p| p.id == project_id)
+            .is_some_and(|p| {
+                p.path == self.sessions[idx].cwd
+                    || self.sessions[idx]
+                        .worktree
+                        .as_ref()
+                        .is_some_and(|wt| wt.path == self.sessions[idx].cwd)
+            });
+        if !allowed_cwd {
+            return Err("Session working directory is outside the project.".into());
+        }
+        if self.sessions[idx].native_host.is_some() {
+            return Err("SSH host terminals cannot switch to local native chat.".into());
+        }
+
+        let current_launch = self.sessions[idx].launch.clone();
+        match current_launch {
+            crate::launch::Launch::Agent(agent) if agent == "claude" || agent == "codex" => {
+                let (provider, next_launch, next_title) = if agent == "claude" {
+                    (
+                        "Claude",
+                        crate::launch::Launch::ClaudeChat,
+                        "Claude Chat".to_owned(),
+                    )
+                } else {
+                    (
+                        "Codex",
+                        crate::launch::Launch::CodexChat,
+                        "Codex Chat".to_owned(),
+                    )
+                };
+                let conv = self.sessions[idx].conversation_id.take();
+                let prev_opts = self.sessions[idx].session_options.take();
+                let mut native_opts =
+                    crate::native_chat_options::Options::from_value(prev_opts.as_ref());
+                native_opts.normalize();
+                self.sessions[idx].last_model = None;
+                self.sessions[idx].codex_seed = None;
+                self.sessions[idx].launch_fingerprint = None;
+                self.sessions[idx].native_options = native_opts
+                    .valid_for(&agent)
+                    .then(|| native_opts.value())
+                    .flatten();
+                self.sessions[idx].launch = next_launch;
+                self.sessions[idx].title = next_title;
+                if let Some(tid) = conv.as_deref().or(live_chat_thread)
+                    && valid_native_thread(provider, tid)
+                {
+                    self.native_threads.insert(
+                        pane_id,
+                        NativeThread {
+                            project: project_id,
+                            provider: provider.to_owned(),
+                            thread: tid.to_owned(),
+                        },
+                    );
+                }
+                self.validate()?;
+                Ok(true)
+            }
+            crate::launch::Launch::ClaudeChat | crate::launch::Launch::CodexChat => {
+                let (agent, next_title) =
+                    if matches!(current_launch, crate::launch::Launch::ClaudeChat) {
+                        ("claude", "Claude Code".to_owned())
+                    } else {
+                        ("codex", "Codex".to_owned())
+                    };
+                let removed = self.native_threads.remove(&pane_id);
+                let chosen_thread = live_chat_thread
+                    .map(str::to_owned)
+                    .or_else(|| removed.map(|nt| nt.thread));
+                let prev_native = self.sessions[idx].native_options.take();
+                self.sessions[idx].session_options = prev_native.filter(valid_session_options);
+                self.sessions[idx].conversation_id =
+                    chosen_thread.filter(|id| crate::claude::valid_uuid(id));
+                self.sessions[idx].codex_seed = None;
+                self.sessions[idx].last_model = None;
+                self.sessions[idx].launch_fingerprint = None;
+                self.sessions[idx].launch = crate::launch::Launch::Agent(agent.to_owned());
+                self.sessions[idx].title = next_title;
+                self.validate()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub fn id(&mut self) -> Result<u64> {
         let id = self.next_id;
         self.next_id = id
@@ -1075,7 +1179,7 @@ impl Workspace {
 
 /// Persisted pane choices are complete, bounded model/option objects.
 /// Interactive source-compatible normalization happens before saving them.
-fn valid_session_options(value: &serde_json::Value) -> bool {
+pub fn valid_session_options(value: &serde_json::Value) -> bool {
     // The source always keeps model, plus up to ten entries encountered
     // before model in the incoming object.
     let Some(values) = value.as_object().filter(|v| v.len() <= 11) else {
@@ -1096,7 +1200,7 @@ fn valid_session_options(value: &serde_json::Value) -> bool {
     .validate()
 }
 
-fn valid_native_thread(provider: &str, thread: &str) -> bool {
+pub fn valid_native_thread(provider: &str, thread: &str) -> bool {
     match provider {
         "Codex" => {
             !thread.is_empty()
@@ -1785,5 +1889,58 @@ mod tests {
         let (_, reopened) = Store::open(dir.path()).unwrap();
         assert!(reopened.broadcast);
         assert!(!reopened.sessions[0].broadcast);
+    }
+
+    #[test]
+    fn switch_saved_session_chat_mode_preserves_pane_identity_and_conversation_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj_dir = dir.path().join("demo");
+        fs::create_dir_all(&proj_dir).unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let pid = state.add_project(&proj_dir).unwrap();
+        let proj_path = state.projects[0].path.clone();
+        let uuid = "123e4567-e89b-42d3-a456-426614174000";
+
+        state.sessions.push(SavedSession {
+            native_host: None,
+            last_model: None,
+            codex_seed: None,
+            conversation_id: Some(uuid.to_owned()),
+            launch_fingerprint: None,
+            session_options: Some(serde_json::json!({"model": "claude-sonnet-4-6"})),
+            native_options: None,
+            worktree: None,
+            pane_name: Some("Architect".to_owned()),
+            broadcast: true,
+            id: 7,
+            project: Some(pid),
+            title: "Claude Code".to_owned(),
+            launch: crate::launch::Launch::Agent("claude".into()),
+            cwd: proj_path,
+        });
+        store.save(&state).unwrap();
+
+        // 1. Switch Terminal (`Agent("claude")`) -> NativeChat (`ClaudeChat`) in-place:
+        assert!(state.switch_saved_session_chat_mode(7, None).unwrap());
+        assert_eq!(state.sessions[0].id, 7);
+        assert_eq!(state.sessions[0].pane_name.as_deref(), Some("Architect"));
+        assert!(matches!(
+            state.sessions[0].launch,
+            crate::launch::Launch::ClaudeChat
+        ));
+        assert_eq!(state.native_resume(7, pid, "Claude"), Some(uuid));
+        store.save(&state).unwrap();
+
+        // 2. Switch NativeChat (`ClaudeChat`) -> Terminal (`Agent("claude")`) in-place:
+        assert!(state.switch_saved_session_chat_mode(7, None).unwrap());
+        assert_eq!(state.sessions[0].id, 7);
+        assert_eq!(state.sessions[0].pane_name.as_deref(), Some("Architect"));
+        assert!(matches!(
+            &state.sessions[0].launch,
+            crate::launch::Launch::Agent(agent) if agent == "claude"
+        ));
+        assert_eq!(state.sessions[0].conversation_id.as_deref(), Some(uuid));
+        assert!(!state.native_threads.contains_key(&7));
+        store.save(&state).unwrap();
     }
 }

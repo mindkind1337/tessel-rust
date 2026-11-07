@@ -192,6 +192,9 @@ pub struct Store {
     pub session: Option<Session>,
 }
 impl Store {
+    pub fn directory(&self) -> &Path {
+        &self.dir
+    }
     pub fn open_default() -> Result<Self, String> {
         Self::open(&default_dir()?)
     }

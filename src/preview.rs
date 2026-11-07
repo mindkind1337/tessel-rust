@@ -12,12 +12,12 @@ pub struct Preview {
 }
 impl Preview {
     pub fn parse(source: &str, markdown: bool) -> Self {
-        if source.len() > 512 * 1024 {
+        if source.len() > 1024 * 1024 {
             return Self {
                 blocks: vec![Block {
                     heading: false,
                     spans: vec![(
-                        "Readable preview limit is 512 KiB. Use Source to view the full document."
+                        "Readable preview limit is 1 MiB. Use Source to view the full document."
                             .into(),
                         None,
                     )],

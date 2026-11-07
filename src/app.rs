@@ -1678,6 +1678,9 @@ impl Tessel {
         {
             self.browser.poll();
             self.account.poll();
+            if let Some(ws) = self.account.take_restored_workspace() {
+                self.restore_preview = Some(ws);
+            }
             self.agent_browsers.retain(&self.state.projects);
         }
         let mut chat_metadata_changed = false;
@@ -4733,6 +4736,8 @@ impl Tessel {
         let mut model_choice = None;
         let mut send_selection: Option<(String, String)> = None;
         let mut open_here: Option<u64> = None;
+        let mut switch_chat_mode: Option<u64> = None;
+        let mut pending_tessel_browser_url: Option<String> = None;
         let mut observed_updates = Vec::new();
         let mut native_options_changed = false;
         #[cfg(windows)]
@@ -4883,6 +4888,26 @@ impl Tessel {
                                     session.launch,
                                     Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
                                 );
+                                let chat_view_open = session.launch.native_chat().is_some();
+                                let allowed_native_cwd = session
+                                    .project
+                                    .and_then(|pid| self.state.projects.iter().find(|p| p.id == pid))
+                                    .is_some_and(|p| {
+                                        p.path == session.cwd
+                                            || session
+                                                .worktree
+                                                .as_ref()
+                                                .is_some_and(|wt| wt.path == session.cwd)
+                                    });
+                                let can_switch_chat_mode = session.native_host.is_none()
+                                    && session.loading.is_none()
+                                    && session.restarting.is_none()
+                                    && allowed_native_cwd
+                                    && (chat_view_open
+                                        || matches!(
+                                            &session.launch,
+                                            Launch::Agent(a) if a == "claude" || a == "codex"
+                                        ));
                                 let id_str_self = id.to_string();
                                 let peer_targets: Vec<_> = workspace_targets
                                     .iter()
@@ -4893,6 +4918,8 @@ impl Tessel {
                                     model_choice: session.has_model_choice(),
                                     model_pending: !session.can_pick_model(),
                                     model_manual: session.session_options.is_some(),
+                                    can_switch_chat_mode,
+                                    chat_view_open,
                                     model_text: match &session.launch {
                                         Launch::Agent(agent) => {
                                             let values = crate::pane_session_model::launch_session_values(session.session_options.as_ref(), &self.state.agent_model_defaults, agent);
@@ -5186,6 +5213,9 @@ impl Tessel {
                                                 send_selection = Some((target_id, text));
                                             }
                                         }
+                                        PaneMenuAction::OpenOrSwitchChat => {
+                                            switch_chat_mode = Some(id);
+                                        }
                                         PaneMenuAction::OpenHere => {
                                             open_here = Some(id);
                                         }
@@ -5335,6 +5365,9 @@ impl Tessel {
                                     self.pane_context_menu = Some((id, pos));
                                     self.pane_context_menu_just_opened = true;
                                 }
+                                if let Some(url) = terminal.take_pending_tessel_url() {
+                                    pending_tessel_browser_url = Some(url);
+                                }
                                 let batch = terminal.take_broadcast_inputs();
                                 if self.state.broadcast
                                     && session.broadcast
@@ -5393,6 +5426,12 @@ impl Tessel {
         if let Some(target_pane) = open_here {
             self.active_session = Some(target_pane);
             self.open_launcher();
+        }
+        if let Some(pane_id) = switch_chat_mode {
+            self.switch_session_chat_mode(pane_id);
+        }
+        if let Some(url) = pending_tessel_browser_url {
+            self.open_url_in_tessel_browser(ui.ctx(), url);
         }
         if let Some((target_id_str, text)) = send_selection
             && let Ok(target_id) = target_id_str.parse::<u64>()
@@ -5592,7 +5631,19 @@ impl Tessel {
             .to_string_lossy()
             .to_lowercase();
         let readable = d.diff_title.is_none()
-            && matches!(extension.as_str(), "html" | "htm" | "md" | "markdown");
+            && matches!(
+                extension.as_str(),
+                "html"
+                    | "htm"
+                    | "md"
+                    | "markdown"
+                    | "csv"
+                    | "tsv"
+                    | "json"
+                    | "jsonc"
+                    | "jsonl"
+                    | "ndjson"
+            );
         let (close_clicked, prefs_changed) =
             document_toolbar(ui, d, readable, &mut self.state.editor_prefs);
         if close_clicked {
@@ -5636,23 +5687,107 @@ impl Tessel {
                     });
             }
         } else if readable && d.preview_mode {
-            ui.small(tr(
-                "Native readable view · scripts, CSS and external resources are not loaded",
-            ));
-            let preview = d.preview.get_or_insert_with(|| {
-                crate::preview::Preview::parse(
-                    &d.text,
-                    matches!(extension.as_str(), "md" | "markdown"),
-                )
-            });
-            if ui.button(tr("Copy plain text")).clicked() {
-                ui.ctx().copy_text(preview.plain());
-            }
-            egui::ScrollArea::vertical()
-                .id_salt((&d.path, "preview"))
-                .show(ui, |ui| {
-                    link = preview.show(ui);
+            if matches!(extension.as_str(), "csv" | "tsv") {
+                let explicit = (extension == "tsv").then_some(b'\t');
+                let text_ref = &d.text;
+                let sheet = d.sheet_cache.get_or_insert_with(|| {
+                    crate::rich_previews::parse_delimited_sheet(text_ref, explicit)
                 });
+                crate::rich_previews::show_sheet_grid(ui, &d.path, sheet);
+            } else if matches!(extension.as_str(), "json" | "jsonc" | "jsonl" | "ndjson") {
+                crate::rich_previews::show_json_preview(ui, &d.path, &d.text, &extension);
+            } else if matches!(extension.as_str(), "md" | "markdown") {
+                match crate::rich_previews::classify_markdown_size(d.text.len()) {
+                    crate::rich_previews::MarkdownSizeDecision::SourceOnly { byte_len } => {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!(
+                                "Markdown file exceeds 1 MiB ({} KiB) — opening in Source view.",
+                                byte_len / 1024
+                            ),
+                        );
+                        if ui.button(tr("Source")).clicked() {
+                            d.preview_mode = false;
+                        }
+                    }
+                    crate::rich_previews::MarkdownSizeDecision::PromptUser { byte_len }
+                        if !d.force_large_markdown_render =>
+                    {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!(
+                                "Large Markdown document ({} KiB). Rendering may take a moment.",
+                                byte_len / 1024
+                            ),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Render anyway").clicked() {
+                                d.force_large_markdown_render = true;
+                            }
+                            if ui.button("Show source").clicked() {
+                                d.preview_mode = false;
+                            }
+                        });
+                    }
+                    _ => {
+                        ui.small(tr(
+                            "Native readable view · scripts, CSS and external resources are not loaded",
+                        ));
+                        let segments = crate::rich_previews::extract_markdown_segments(&d.text);
+                        let has_mermaid = segments.iter().any(|s| {
+                            matches!(s, crate::rich_previews::MarkdownSegment::Mermaid(_))
+                        });
+                        if !has_mermaid {
+                            let preview = d.preview.get_or_insert_with(|| {
+                                crate::preview::Preview::parse(&d.text, true)
+                            });
+                            if ui.button(tr("Copy plain text")).clicked() {
+                                ui.ctx().copy_text(preview.plain());
+                            }
+                            egui::ScrollArea::vertical()
+                                .id_salt((&d.path, "preview"))
+                                .show(ui, |ui| {
+                                    link = preview.show(ui);
+                                });
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .id_salt((&d.path, "preview-mermaid"))
+                                .show(ui, |ui| {
+                                    for seg in &segments {
+                                        match seg {
+                                            crate::rich_previews::MarkdownSegment::Prose(p) => {
+                                                let parsed =
+                                                    crate::preview::Preview::parse(p, true);
+                                                if let Some(clicked) = parsed.show(ui) {
+                                                    link = Some(clicked);
+                                                }
+                                            }
+                                            crate::rich_previews::MarkdownSegment::Mermaid(m) => {
+                                                crate::rich_previews::show_mermaid_block(ui, m);
+                                                ui.add_space(8.0_f32);
+                                            }
+                                        }
+                                    }
+                                });
+                        }
+                    }
+                }
+            } else {
+                ui.small(tr(
+                    "Native readable view · scripts, CSS and external resources are not loaded",
+                ));
+                let preview = d
+                    .preview
+                    .get_or_insert_with(|| crate::preview::Preview::parse(&d.text, false));
+                if ui.button(tr("Copy plain text")).clicked() {
+                    ui.ctx().copy_text(preview.plain());
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt((&d.path, "preview"))
+                    .show(ui, |ui| {
+                        link = preview.show(ui);
+                    });
+            }
         } else {
             show_editor_bars(ui, d);
             let font = egui::FontId::monospace(self.state.font_size);
@@ -5707,6 +5842,7 @@ impl Tessel {
                         tools,
                         syntax_cache,
                         preview,
+                        sheet_cache,
                         unpinned_preview,
                         last_edited_at,
                         ..
@@ -5764,6 +5900,7 @@ impl Tessel {
                     }
                     if out.response.changed() {
                         *preview = None;
+                        *sheet_cache = None;
                         *unpinned_preview = false;
                         *last_edited_at = Some(std::time::Instant::now());
                         syntax_cache.invalidate();
@@ -5789,6 +5926,96 @@ impl Tessel {
             self.request_document_close(i);
         }
     }
+    fn open_url_in_tessel_browser(&mut self, ctx: &egui::Context, url: String) {
+        #[cfg(windows)]
+        {
+            let _ = ctx;
+            self.overlay = None;
+            self.show_agent_browser = false;
+            self.browser_tab_open = true;
+            self.browser.open_address(url);
+            self.view = View::Browser;
+        }
+        #[cfg(not(windows))]
+        {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+    }
+
+    fn switch_session_chat_mode(&mut self, pane_id: u64) {
+        // Capture any active native-chat thread ID before tearing down its runtime view:
+        let live_chat_thread = self
+            .chats
+            .iter()
+            .find(|c| c.pane == pane_id)
+            .and_then(|c| c.thread_id.clone())
+            .or_else(|| {
+                self.claude_chats
+                    .iter()
+                    .find(|c| c.pane == pane_id)
+                    .and_then(|c| c.saved_session.clone())
+            });
+
+        // Flush live `self.sessions` into `self.state.sessions` before running the transition:
+        self.save();
+        match self
+            .state
+            .switch_saved_session_chat_mode(pane_id, live_chat_thread.as_deref())
+        {
+            Ok(true) => {
+                let Some(saved) = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == pane_id)
+                    .cloned()
+                else {
+                    return;
+                };
+                self.chats.retain(|c| c.pane != pane_id);
+                self.claude_chats.retain(|c| c.pane != pane_id);
+                if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id) {
+                    if let Some(mut term) = session.terminal.take() {
+                        thread::spawn(move || {
+                            let _ = term.stop_for_restart();
+                        });
+                    }
+                    session.loading = None;
+                    session.restarting = None;
+                    session.codex_discovery = None;
+                    session.codex_restore = None;
+                    session.codex_seed = saved.codex_seed;
+                    session.last_model = saved.last_model;
+                    session.launch_fingerprint = saved.launch_fingerprint;
+                    session.conversation_id = saved.conversation_id;
+                    session.session_options = if saved.launch.native_chat().is_some() {
+                        saved.native_options
+                    } else {
+                        saved.session_options
+                    };
+                    session.launch = saved.launch.clone();
+                    session.title = saved.title;
+                    session.settings_changed = false;
+                    session.error.clear();
+
+                    if let Launch::Agent(agent) = &saved.launch {
+                        let prefs = crate::agent_preferences::for_pane_launch(
+                            &self.state,
+                            agent,
+                            self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                            session.session_options.as_ref(),
+                        );
+                        let preferred_shell = self.state.launcher_prefs.preferred_shell.clone();
+                        session.start_with_shell(Some(prefs), preferred_shell);
+                    }
+                }
+                self.save();
+            }
+            Ok(false) => {}
+            Err(err) => self.error = err,
+        }
+    }
+
     fn open_web_link(&mut self, ctx: &egui::Context, url: String) {
         if self.state.browser_prefs.open_links_in == workspace::OpenLinksTarget::System {
             ctx.open_url(egui::OpenUrl::new_tab(url));
@@ -9160,7 +9387,9 @@ impl Tessel {
                                 self.state.language == crate::i18n::Language::French,
                             ),
                             #[cfg(windows)]
-                            SettingsSection::Account => self.account.show(ui),
+                            SettingsSection::Account => {
+                                self.account.show_with_workspace(ui, &self.state)
+                            }
                         })
                     },
                 );
