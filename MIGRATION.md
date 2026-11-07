@@ -721,3 +721,14 @@ RFC 4180 CSV/TSV), JSON/JSONC/JSONL collapsible tree preview, `MarkdownSizeGate`
 `device_login` adds `400 ms`-debounced local PTY OAuth detection, and
 `Workspace::switch_saved_session_chat_mode` switches Claude/Codex panes in-place
 between `Terminal` and `NativeChat` while preserving pane identity and thread IDs.
+
+Phase A full-suite acceptance audit (`Lot b173`):
+`cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+and `cargo test --all-targets -- --test-threads=2` pass with **57 test suites
+and 1,041 passing tests (`0` failures)** (`393` binary unit tests, `4` synthetic
+child/reference tests explicitly ignored, and `648` integration tests across `56`
+integration suites), including the rounded dual-arc `Icon::Moon` vector fix across
+`10px`–`24px` viewports. Phase A (shared UI-agnostic Rust models + universal
+`eframe`/`egui` compatibility renderer) is complete; Phase B layers the native
+1:1 `GPUI` primary renderer with `--renderer gpui` / `--renderer compat` and
+automatic runtime fallback.

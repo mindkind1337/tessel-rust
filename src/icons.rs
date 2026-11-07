@@ -759,7 +759,7 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                     paint_svg_path(
                         painter,
                         vp,
-                        "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z",
+                        "M12 3a6 6 0 0 0 9 9M21 12a9 9 0 1 1-9-9",
                         stroke,
                         true,
                     );
