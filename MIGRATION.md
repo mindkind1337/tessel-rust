@@ -16,7 +16,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | SSH | Host verification, keepalive, explicit reconnect, remote cwd | In progress; live host acceptance pending |
 | Remote filesystem | SFTP listing/read/save/download/create/rename/delete/previews; host verification; conflict protection | Protocol fixture including exclusive creation, collisions and scope rejection passes; rename/deletion refusal and bounded preview fixtures pass; live SSH authentication and real-server acceptance pending |
 | Task board | Per-project cards; persistence; safe movement | Adaptive native board integrated with scoped persistence and native chat tools; broader orchestration parity pending |
-| Git | Nonblocking, bounded status/diff/log; explicit mutations; no auto polling storms | Structured Changes panel integrated with on-demand status and project-confined file opening; nested-project path mapping and stale-worker tests pass. Legacy explicit commands remain available; explicit row/group staging and unstaging are now wired with complete-status and membership validation; discard, remote operations and native visual acceptance of the integrated panel remain pending |
+| Git | Nonblocking, bounded status/diff/log; explicit mutations; worktrees; no auto polling storms | Structured Changes panel integrated with on-demand status, diff tabs, `+added / -removed` badges, staging/unstaging, confirmed discard, commits and remote operations; background Git worktree discovery, branch-prefixed creation with `.env*` secret copy, Windows NTFS junction-safe removal, sidebar sub-cards/hidden inbox, launcher toggle and `WorktreeCleanupModal` integrated and tested; native visual acceptance pending |
 | Native agent chat | Provider transports, streaming, approvals, resume and history | Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; Claude native initialization and streaming/approval/structured-question protocol fixtures pass, with French UI visually checked; Claude live model acceptance currently blocked by CLI sign-in requirement; tool execution and history plus other providers pending |
 | Agent tools | Authenticated scoped tools, approval UI, messages and task board | Task tools, scoped structured questions and explicitly enabled project browser tools implemented; agent messaging and broader host tools pending |
 | Browser | Engine integration; isolated profiles; navigation/download tests | Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending |
@@ -621,3 +621,24 @@ snippets run in active or newly spawned shells from Settings or Command Palette
 and are stripped from portable backups (`backup::export`/`import`). `Stats`
 surfaces live telemetry and `Updates` opens embedded `LICENSE` /
 `THIRD_PARTY_NOTICES.md` tabs offline.
+
+Git Worktrees parity integration (`worktree.rs` + `worktree_state.rs` +
+`worktree_cleanup_panel.rs` + `launcher_panel.rs` + `project_panel.rs` +
+`workspace.rs` + `app.rs`): bounded read-only background discovery (`MAX_CONCURRENT_INSPECTS = 2`,
+`core.fsmonitor=false`, disabled `hooksPath`) inspects all workspace repositories
+and secondary worktrees without index contention. `create_worktree` resolves
+`GeneralPreferences::workspace_dir` (`~/.tessel/worktrees/<project>/<slug>` by
+default, rejecting `..` and symlink/reparse bases) and `GitPreferences` branch
+prefixes, runs `git -c core.longpaths=true worktree add -b`, and copies bounded
+git-ignored `.env` / `.env.*` files while skipping template suffixes and links.
+`remove_worktree` refuses primary/ancestor/home/root targets, closes open panes
+in matching worktree paths first, unlinks directory symlinks and Windows NTFS
+reparse-point junctions (`FILE_ATTRIBUTE_REPARSE_POINT`) via `fs::remove_dir`
+before `git worktree remove` so external junction targets survive intact, retries
+transient Windows locks, prunes metadata and deletes safe/forced local branches.
+UI surfaces integrate the `LauncherPanel` `"Separate copy on its own branch"`
+toggle (for shells, agent CLIs and native Codex/Claude chats), `ProjectPanel`
+secondary worktree sub-cards, context menus and hidden-worktree discovery inbox
+(`ProjectWorktreePrefs`), pane header `MenuState::worktree`, Command Palette
+`worktree:new` / `worktree:cleanup` actions, and the localized EN/FR
+`WorktreeCleanupModal` (`Safe` / `Risk` / `Blocker`).

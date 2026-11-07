@@ -73,6 +73,26 @@ pub struct ProjectPanelInput<'a> {
     pub french: bool,
 }
 
+/// Visible secondary Git worktree copy card under a sidebar project (`WorktreeCard.vue`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectWorktreeView {
+    pub path: String,
+    pub branch: String,
+    pub is_external: bool,
+    pub locked: bool,
+}
+
+/// Per-project Git worktrees state passed via [`ProjectPanel::set_project_worktrees`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectWorktreesInfo {
+    pub eligible: bool,
+    pub has_secondary: bool,
+    pub visible_copies: Vec<ProjectWorktreeView>,
+    /// `(path, branch)` of hidden non-detached discovered worktrees.
+    pub hidden_inbox: Vec<(String, String)>,
+    pub inbox_dismissed: bool,
+}
+
 /// User action emitted by [`ProjectPanel::show`] or [`ProjectPanel::show_collapsed_rail`].
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,14 +101,50 @@ pub enum ProjectAction {
     OpenFolder,
     ExpandSidebar,
     NewTerminal(Option<u64>),
+    NewWorktree(u64),
+    OpenWorktreeTerminal {
+        project: u64,
+        path: String,
+        branch: String,
+    },
+    ShowHiddenWorktree {
+        project: u64,
+        path: String,
+    },
+    HideWorktree {
+        project: u64,
+        path: String,
+    },
+    DismissWorktreesInbox(u64),
+    DeleteWorktree {
+        project: u64,
+        path: String,
+        branch: String,
+    },
+    CleanUpWorktrees(u64),
     SelectProject(Option<u64>),
-    SelectSession { project: Option<u64>, id: u64 },
+    SelectSession {
+        project: Option<u64>,
+        id: u64,
+    },
     RenameProject(u64),
     RemoveProject(u64),
-    MoveProject { id: u64, delta: i32 },
-    RenameSession { project: Option<u64>, id: u64 },
-    RestartSession { project: Option<u64>, id: u64 },
-    CloseSession { project: Option<u64>, id: u64 },
+    MoveProject {
+        id: u64,
+        delta: i32,
+    },
+    RenameSession {
+        project: Option<u64>,
+        id: u64,
+    },
+    RestartSession {
+        project: Option<u64>,
+        id: u64,
+    },
+    CloseSession {
+        project: Option<u64>,
+        id: u64,
+    },
     UpdateOptions(SidebarOptions),
 }
 
@@ -429,6 +485,8 @@ pub struct ProjectPanel {
     live_share_projects: HashMap<u64, Vec<String>>,
     session_states: HashMap<u64, AgentDotState>,
     project_branches: HashMap<u64, String>,
+    project_worktrees: HashMap<u64, ProjectWorktreesInfo>,
+    session_worktrees: HashMap<u64, (String, String)>,
     options: SidebarOptions,
     options_popup_open: bool,
 }
@@ -457,10 +515,56 @@ impl ProjectPanel {
         self.project_branches = branches;
     }
 
+    /// Updates discovered/visible Git worktrees per project ID.
+    #[allow(dead_code)]
+    pub fn set_project_worktrees(&mut self, worktrees: HashMap<u64, ProjectWorktreesInfo>) {
+        self.project_worktrees = worktrees;
+    }
+
+    /// Updates `(worktree_path, branch)` bindings per session ID for secondary worktree panes.
+    #[allow(dead_code)]
+    pub fn set_session_worktrees(&mut self, session_worktrees: HashMap<u64, (String, String)>) {
+        self.session_worktrees = session_worktrees;
+    }
+
     /// Updates persisted Workspace sidebar display options (`sort_by_activity`, `compact_rows`, `hide_sleeping`).
     #[allow(dead_code)]
     pub fn set_options(&mut self, options: SidebarOptions) {
         self.options = options;
+    }
+
+    fn is_secondary_worktree_session(&self, session_id: u64, project_path: &str) -> bool {
+        self.session_worktrees
+            .get(&session_id)
+            .is_some_and(|(wt_path, _)| {
+                !wt_path.is_empty() && !crate::sidebar_model::same_path(wt_path, project_path)
+            })
+    }
+
+    fn effective_copies_for_project(&self, project: &ProjectEntry) -> Vec<ProjectWorktreeView> {
+        let mut copies = self
+            .project_worktrees
+            .get(&project.id)
+            .map(|info| info.visible_copies.clone())
+            .unwrap_or_default();
+
+        for session in &project.sessions {
+            if let Some((wt_path, branch)) = self.session_worktrees.get(&session.id)
+                && !wt_path.is_empty()
+                && !crate::sidebar_model::same_path(wt_path, &project.path)
+                && !copies
+                    .iter()
+                    .any(|c| crate::sidebar_model::same_path(&c.path, wt_path))
+            {
+                copies.push(ProjectWorktreeView {
+                    path: wt_path.clone(),
+                    branch: branch.clone(),
+                    is_external: false,
+                    locked: false,
+                });
+            }
+        }
+        copies
     }
 
     fn ordered_projects<'a>(&self, projects: &'a [ProjectEntry]) -> Vec<&'a ProjectEntry> {
@@ -694,12 +798,14 @@ impl ProjectPanel {
                             Color32::from_rgb(0xef, 0x44, 0x44),
                         );
                     }
+                    let rail_wt_info = self.project_worktrees.get(&project.id).cloned();
                     resp.context_menu(|ui| {
                         if let Some(ctx_act) = Self::project_context_menu(
                             ui,
                             project.id,
                             idx,
                             proj_count,
+                            rail_wt_info.as_ref(),
                             input.french,
                         ) {
                             action = Some(ctx_act);
@@ -774,6 +880,7 @@ impl ProjectPanel {
         project_id: u64,
         index: usize,
         total: usize,
+        wt_info: Option<&ProjectWorktreesInfo>,
         french: bool,
     ) -> Option<ProjectAction> {
         let mut act = None;
@@ -785,6 +892,30 @@ impl ProjectPanel {
         if ui.button(new_term).clicked() {
             act = Some(ProjectAction::NewTerminal(Some(project_id)));
             ui.close();
+        }
+        if let Some(info) = wt_info
+            && info.eligible
+        {
+            let new_wt_lbl = if french {
+                "Nouveau panneau dans un worktree"
+            } else {
+                "New worktree pane"
+            };
+            if ui.button(new_wt_lbl).clicked() {
+                act = Some(ProjectAction::NewWorktree(project_id));
+                ui.close();
+            }
+            if info.has_secondary || !info.visible_copies.is_empty() {
+                let cleanup_lbl = if french {
+                    "Nettoyer les worktrees…"
+                } else {
+                    "Clean up worktrees…"
+                };
+                if ui.button(cleanup_lbl).clicked() {
+                    act = Some(ProjectAction::CleanUpWorktrees(project_id));
+                    ui.close();
+                }
+            }
         }
         let rename_lbl = if french {
             "Renommer le projet…"
@@ -917,11 +1048,30 @@ impl ProjectPanel {
         for project in self.ordered_projects(input.projects) {
             out.push(NavItem::Project(project.id));
             if !self.collapsed_projects.contains(&project.id) {
-                for session in self.visible_sessions(&project.sessions, input.active_session) {
-                    out.push(NavItem::Session {
-                        project: Some(project.id),
-                        id: session.id,
-                    });
+                let visible = self.visible_sessions(&project.sessions, input.active_session);
+                for session in &visible {
+                    if !self.is_secondary_worktree_session(session.id, &project.path) {
+                        out.push(NavItem::Session {
+                            project: Some(project.id),
+                            id: session.id,
+                        });
+                    }
+                }
+                for copy in self.effective_copies_for_project(project) {
+                    for session in &visible {
+                        if self
+                            .session_worktrees
+                            .get(&session.id)
+                            .is_some_and(|(wt_path, _)| {
+                                crate::sidebar_model::same_path(wt_path, &copy.path)
+                            })
+                        {
+                            out.push(NavItem::Session {
+                                project: Some(project.id),
+                                id: session.id,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1373,6 +1523,19 @@ impl ProjectPanel {
                     ) {
                         action = Some(proj_act);
                     }
+                    if !self.collapsed_projects.contains(&project.id)
+                        && let Some(wt_act) = self.render_project_worktrees_section(
+                            ui,
+                            panel_id,
+                            project,
+                            &input,
+                            lang,
+                            active_focused_nav,
+                            scroll_to_focused,
+                        )
+                    {
+                        action = Some(wt_act);
+                    }
                 }
 
                 if !input.global_sessions.is_empty() {
@@ -1782,7 +1945,11 @@ impl ProjectPanel {
         let collapsed = self.collapsed_projects.contains(&project.id);
         let is_active = input.active_project == Some(project.id);
         let status = group_status(&project.sessions);
-        let shown_sessions = self.visible_sessions(&project.sessions, input.active_session);
+        let shown_sessions: Vec<&SessionEntry> = self
+            .visible_sessions(&project.sessions, input.active_session)
+            .into_iter()
+            .filter(|s| !self.is_secondary_worktree_session(s.id, &project.path))
+            .collect();
         let show_path = !collapsed
             && !project.path.trim().is_empty()
             && (!self.options.compact_rows || is_active);
@@ -2124,10 +2291,16 @@ impl ProjectPanel {
             ui.ctx().memory_mut(|m| m.request_focus(list_id));
         }
 
+        let wt_info_snapshot = self.project_worktrees.get(&project.id).cloned();
         card_resp.context_menu(|ui| {
-            if let Some(ctx_act) =
-                Self::project_context_menu(ui, project.id, proj_idx, proj_total, input.french)
-            {
+            if let Some(ctx_act) = Self::project_context_menu(
+                ui,
+                project.id,
+                proj_idx,
+                proj_total,
+                wt_info_snapshot.as_ref(),
+                input.french,
+            ) {
                 action = Some(ctx_act);
             }
         });
@@ -2173,6 +2346,358 @@ impl ProjectPanel {
                 }
                 row_y += row_h + 2.0_f32;
             }
+        }
+
+        action
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_project_worktrees_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        panel_id: Id,
+        project: &ProjectEntry,
+        input: &ProjectPanelInput<'_>,
+        lang: SidebarLang,
+        focused_nav: Option<NavItem>,
+        scroll_to_focused: bool,
+    ) -> Option<ProjectAction> {
+        let copies = self.effective_copies_for_project(project);
+        let hidden_info = self
+            .project_worktrees
+            .get(&project.id)
+            .filter(|info| !info.inbox_dismissed && !info.hidden_inbox.is_empty())
+            .map(|info| info.hidden_inbox.clone())
+            .unwrap_or_default();
+
+        if copies.is_empty() && hidden_info.is_empty() {
+            return None;
+        }
+
+        let mut action = None;
+        let is_active = input.active_project == Some(project.id);
+        let all_visible = self.visible_sessions(&project.sessions, input.active_session);
+        let row_h = if self.options.compact_rows {
+            20.0_f32
+        } else {
+            24.0_f32
+        };
+
+        for (copy_idx, copy) in copies.iter().enumerate() {
+            let copy_sessions: Vec<&SessionEntry> = all_visible
+                .iter()
+                .copied()
+                .filter(|s| {
+                    self.session_worktrees
+                        .get(&s.id)
+                        .is_some_and(|(wt_path, _)| {
+                            crate::sidebar_model::same_path(wt_path, &copy.path)
+                        })
+                })
+                .collect();
+
+            let header_h = 26.0_f32;
+            let sessions_h = if !copy_sessions.is_empty() {
+                (copy_sessions.len() as f32) * row_h
+                    + (copy_sessions.len().saturating_sub(1) as f32) * 2.0_f32
+                    + 6.0_f32
+            } else {
+                0.0_f32
+            };
+            let card_h = header_h + sessions_h + 4.0_f32;
+            let full_w = ui.available_width().max(80.0_f32);
+            let (_, outer_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
+            let card_rect = Rect::from_min_max(
+                Pos2::new(outer_rect.min.x + 10.0_f32, outer_rect.min.y),
+                Pos2::new(outer_rect.max.x - 2.0_f32, outer_rect.max.y),
+            );
+
+            let copy_id = panel_id.with(("worktree-copy-card", project.id, copy_idx));
+            let plus_id = panel_id.with(("worktree-copy-plus", project.id, copy_idx));
+            let top_band_rect = Rect::from_min_size(
+                Pos2::new(card_rect.min.x, card_rect.min.y + 2.0_f32),
+                Vec2::new(card_rect.width(), header_h),
+            );
+            let plus_rect = Rect::from_center_size(
+                Pos2::new(card_rect.max.x - 13.0_f32, card_rect.min.y + 15.0_f32),
+                Vec2::splat(18.0_f32),
+            );
+            let header_click_rect = Rect::from_min_max(
+                top_band_rect.min,
+                Pos2::new(
+                    (plus_rect.min.x - 2.0_f32).max(top_band_rect.min.x + 20.0_f32),
+                    top_band_rect.max.y,
+                ),
+            );
+
+            let header_resp = ui.interact(header_click_rect, copy_id, Sense::CLICK);
+            let plus_resp = ui.interact(plus_rect, plus_id, Sense::CLICK);
+
+            let painter = ui.painter().with_clip_rect(card_rect);
+            let bg = if header_resp.hovered() {
+                ui.visuals()
+                    .widgets
+                    .hovered
+                    .bg_fill
+                    .gamma_multiply(0.35_f32)
+            } else {
+                ui.visuals()
+                    .widgets
+                    .noninteractive
+                    .bg_fill
+                    .gamma_multiply(0.45_f32)
+            };
+            let stroke = Stroke::new(
+                1.0_f32,
+                ui.visuals()
+                    .widgets
+                    .noninteractive
+                    .bg_stroke
+                    .color
+                    .gamma_multiply(0.70_f32),
+            );
+            painter.rect(card_rect, 7.0_f32, bg, stroke, StrokeKind::Inside);
+
+            let row_y_center = card_rect.min.y + 15.0_f32;
+            let icon_rect = Rect::from_center_size(
+                Pos2::new(card_rect.min.x + 12.0_f32, row_y_center),
+                Vec2::splat(12.5_f32),
+            );
+            icons::paint(
+                &painter,
+                icon_rect,
+                Icon::GitBranch,
+                ui.visuals().selection.stroke.color,
+            );
+
+            let branch_display = if copy.branch.trim().is_empty() {
+                if input.french {
+                    "(détaché)"
+                } else {
+                    "(detached)"
+                }
+            } else {
+                copy.branch.as_str()
+            };
+            let folder_short = crate::sidebar_model::folder_name(&copy.path);
+            let label_text = if folder_short.is_empty() || folder_short == branch_display {
+                branch_display.to_owned()
+            } else {
+                format!("{branch_display} · {folder_short}")
+            };
+
+            let title_rect = Rect::from_min_max(
+                Pos2::new(icon_rect.max.x + 5.0_f32, card_rect.min.y + 3.0_f32),
+                Pos2::new(
+                    (plus_rect.min.x - 4.0_f32).max(icon_rect.max.x + 16.0_f32),
+                    card_rect.min.y + 27.0_f32,
+                ),
+            );
+            paint_single_line_ellipsis(
+                &painter,
+                title_rect,
+                &label_text,
+                FontId::monospace(11.0_f32),
+                ui.visuals().strong_text_color(),
+            );
+
+            if plus_resp.hovered() {
+                painter.rect(
+                    plus_rect,
+                    4.0_f32,
+                    ui.visuals().widgets.hovered.bg_fill,
+                    Stroke::NONE,
+                    StrokeKind::Inside,
+                );
+            }
+            let plus_icon_rect = Rect::from_center_size(plus_rect.center(), Vec2::splat(11.5_f32));
+            icons::paint(
+                &painter,
+                plus_icon_rect,
+                Icon::Plus,
+                if plus_resp.hovered() {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().weak_text_color()
+                },
+            );
+
+            let new_here_tip = if input.french {
+                "Nouveau terminal dans ce worktree"
+            } else {
+                "New terminal in this worktree"
+            };
+            if plus_resp.on_hover_text(new_here_tip).clicked() {
+                action = Some(ProjectAction::OpenWorktreeTerminal {
+                    project: project.id,
+                    path: copy.path.clone(),
+                    branch: copy.branch.clone(),
+                });
+            }
+
+            let copy_clone = copy.clone();
+            let french = input.french;
+            let pid = project.id;
+            header_resp.context_menu(|ui| {
+                let open_lbl = if french {
+                    "Nouveau terminal ici"
+                } else {
+                    "New terminal here"
+                };
+                if ui.button(open_lbl).clicked() {
+                    action = Some(ProjectAction::OpenWorktreeTerminal {
+                        project: pid,
+                        path: copy_clone.path.clone(),
+                        branch: copy_clone.branch.clone(),
+                    });
+                    ui.close();
+                }
+                if copy_clone.is_external {
+                    let hide_lbl = if french {
+                        "Masquer de la barre latérale"
+                    } else {
+                        "Hide from sidebar"
+                    };
+                    if ui.button(hide_lbl).clicked() {
+                        action = Some(ProjectAction::HideWorktree {
+                            project: pid,
+                            path: copy_clone.path.clone(),
+                        });
+                        ui.close();
+                    }
+                }
+                if !copy_clone.locked {
+                    ui.separator();
+                    let del_lbl = if french {
+                        "Supprimer le worktree…"
+                    } else {
+                        "Delete worktree…"
+                    };
+                    if ui.button(del_lbl).clicked() {
+                        action = Some(ProjectAction::DeleteWorktree {
+                            project: pid,
+                            path: copy_clone.path.clone(),
+                            branch: copy_clone.branch.clone(),
+                        });
+                        ui.close();
+                    }
+                }
+            });
+
+            let hover = format!("{branch_display}\n{}", copy.path);
+            if header_resp.on_hover_text(hover).clicked() && copy_sessions.is_empty() {
+                action = Some(ProjectAction::OpenWorktreeTerminal {
+                    project: project.id,
+                    path: copy.path.clone(),
+                    branch: copy.branch.clone(),
+                });
+            }
+
+            if !copy_sessions.is_empty() {
+                let mut row_y = card_rect.min.y + 2.0_f32 + header_h + 3.0_f32;
+                let row_min_x = card_rect.min.x + 6.0_f32;
+                let row_max_x = (card_rect.max.x - 6.0_f32).max(row_min_x + 32.0_f32);
+                for session in copy_sessions {
+                    let row_rect = Rect::from_min_max(
+                        Pos2::new(row_min_x, row_y),
+                        Pos2::new(row_max_x, row_y + row_h),
+                    );
+                    if let Some(sess_act) = self.render_session_row(
+                        ui,
+                        panel_id,
+                        row_rect,
+                        Some(project.id),
+                        session,
+                        is_active && input.active_session == Some(session.id),
+                        lang,
+                        focused_nav,
+                        scroll_to_focused,
+                    ) {
+                        action = Some(sess_act);
+                    }
+                    row_y += row_h + 2.0_f32;
+                }
+            }
+        }
+
+        if !hidden_info.is_empty() {
+            let n = hidden_info.len();
+            let banner_title = match (n, input.french) {
+                (1, false) => "Hiding 1 discovered worktree".to_owned(),
+                (cnt, false) => format!("Hiding {cnt} discovered worktrees"),
+                (1, true) => "1 worktree découvert masqué".to_owned(),
+                (cnt, true) => format!("{cnt} worktrees découverts masqués"),
+            };
+            egui::Frame::new()
+                .fill(
+                    ui.visuals()
+                        .widgets
+                        .noninteractive
+                        .bg_fill
+                        .gamma_multiply(0.38_f32),
+                )
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    ui.visuals()
+                        .widgets
+                        .noninteractive
+                        .bg_stroke
+                        .color
+                        .gamma_multiply(0.60_f32),
+                ))
+                .corner_radius(6.0_f32)
+                .inner_margin(egui::Margin {
+                    left: 10,
+                    right: 6,
+                    top: 5,
+                    bottom: 5,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(banner_title)
+                                .size(11.0_f32)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let dismiss_tip = if input.french { "Ignorer" } else { "Dismiss" };
+                            if ui.small_button("×").on_hover_text(dismiss_tip).clicked() {
+                                action = Some(ProjectAction::DismissWorktreesInbox(project.id));
+                            }
+                        });
+                    });
+                    for (wt_path, wt_branch) in hidden_info.iter().take(6) {
+                        ui.horizontal(|ui| {
+                            let label = if wt_branch.is_empty() {
+                                crate::sidebar_model::folder_name(wt_path)
+                            } else {
+                                wt_branch.clone()
+                            };
+                            ui.label(
+                                egui::RichText::new(label)
+                                    .monospace()
+                                    .size(10.5_f32)
+                                    .color(ui.visuals().strong_text_color()),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let show_lbl = if input.french { "Afficher" } else { "Show" };
+                                    if ui
+                                        .small_button(show_lbl)
+                                        .on_hover_text(wt_path.as_str())
+                                        .clicked()
+                                    {
+                                        action = Some(ProjectAction::ShowHiddenWorktree {
+                                            project: project.id,
+                                            path: wt_path.clone(),
+                                        });
+                                    }
+                                },
+                            );
+                        });
+                    }
+                });
         }
 
         action

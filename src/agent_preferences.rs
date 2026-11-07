@@ -337,6 +337,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
+            worktree: None,
             pane_name: Some("Existing pane".into()),
             broadcast: true,
             id: 1,

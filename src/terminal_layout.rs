@@ -48,7 +48,10 @@ impl TerminalLayout {
                         && id.to_string() == leaf.id
                         && names.insert(leaf.id.clone())
                         && matches!(leaf.kind, LeafKind::Shell | LeafKind::Agent)
-                        && leaf.worktree_path.is_none()
+                        && leaf
+                            .worktree_path
+                            .as_ref()
+                            .is_none_or(|p| !p.is_empty() && p.len() <= 4096 && !p.contains('\0'))
                         && leaf.view_path.is_none()
                         && !leaf.live_share_page
                 }

@@ -138,6 +138,9 @@ pub mod view_tabs_browser_model;
 #[cfg(windows)]
 mod window_frame;
 mod workspace;
+pub mod worktree;
+pub mod worktree_cleanup_panel;
+pub mod worktree_state;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
         println!(

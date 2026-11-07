@@ -35,6 +35,7 @@ struct Session {
     settings_changed: bool,
     launch_fingerprint: Option<String>,
     session_options: Option<serde_json::Value>,
+    worktree: Option<workspace::SavedWorktree>,
     pane_name: Option<String>,
     broadcast: bool,
     id: u64,
@@ -487,6 +488,9 @@ pub struct Tessel {
     pending_close_session: Option<u64>,
     pending_remove_project: Option<u64>,
     pending_quick_command: Option<(u64, String, bool)>,
+    worktree_state: crate::worktree_state::WorktreeState,
+    worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
+    pending_delete_worktree: Option<(u64, PathBuf, String)>,
     git_username: Option<String>,
     git_username_rx: Option<Receiver<Option<String>>>,
     right_fullscreen: bool,
@@ -621,6 +625,9 @@ impl Tessel {
             pending_close_session: None,
             pending_remove_project: None,
             pending_quick_command: None,
+            worktree_state: Default::default(),
+            worktree_cleanup: None,
+            pending_delete_worktree: None,
             git_username: None,
             git_username_rx: {
                 let (tx, rx) = mpsc::channel();
@@ -698,6 +705,7 @@ impl Tessel {
                     } else {
                         saved.session_options.clone()
                     },
+                    worktree: saved.worktree.clone(),
                     pane_name: saved.pane_name.clone(),
                     broadcast: saved.broadcast,
                     id: saved.id,
@@ -840,6 +848,7 @@ impl Tessel {
                 .insert(agent.into(), defaults);
         }
         app.refresh_project();
+        app.worktree_state.refresh_all(&app.state.projects);
         #[cfg(feature = "visual-test")]
         if std::env::args().any(|a| a == "--finder-fixture") {
             let root = std::env::current_dir().expect("fixture cwd");
@@ -896,6 +905,7 @@ impl Tessel {
                         conversation_id: None,
                         launch_fingerprint: None,
                         session_options: None,
+                        worktree: None,
                         pane_name: None,
                         broadcast: true,
                         id,
@@ -985,6 +995,7 @@ impl Tessel {
                     conversation_id: None,
                     launch_fingerprint: None,
                     session_options: None,
+                    worktree: None,
                     pane_name: None,
                     broadcast: true,
                     id,
@@ -1068,6 +1079,7 @@ impl Tessel {
                 } else {
                     None
                 },
+                worktree: s.worktree.clone(),
                 pane_name: s.pane_name.clone(),
                 broadcast: s.broadcast,
                 id: s.id,
@@ -1164,6 +1176,215 @@ impl Tessel {
         self.sync_git_project();
         self.explorer_tree
             .set_root(self.state.active().map(|p| p.path.as_path()));
+        self.worktree_state.retain_projects(&self.state.projects);
+        self.worktree_state.refresh_missing(&self.state.projects);
+        if let Some(proj) = self.state.active() {
+            self.worktree_state
+                .refresh_project(proj.id, proj.path.clone());
+        }
+    }
+
+    fn worktree_open_pane_counts(
+        &self,
+        project_id: u64,
+    ) -> std::collections::HashMap<String, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for s in &self.sessions {
+            if s.project != Some(project_id) {
+                continue;
+            }
+            let key = if let Some(wt) = &s.worktree {
+                crate::sidebar_model::norm_sidebar_path(&wt.path.to_string_lossy())
+            } else {
+                crate::sidebar_model::norm_sidebar_path(&s.cwd.to_string_lossy())
+            };
+            if !key.is_empty() {
+                *counts.entry(key).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    fn open_worktree_cleanup(&mut self, project_id: u64) {
+        let Some(proj) = self.state.projects.iter().find(|p| p.id == project_id) else {
+            return;
+        };
+        let counts = self.worktree_open_pane_counts(project_id);
+        self.worktree_cleanup = Some(
+            crate::worktree_cleanup_panel::WorktreeCleanupModal::new_scanning(
+                project_id,
+                proj.name.clone(),
+            ),
+        );
+        self.worktree_state
+            .request_cleanup_scan(project_id, proj.path.clone(), counts);
+    }
+
+    fn start_new_worktree_pane(
+        &mut self,
+        project_id: u64,
+        label: &str,
+        target: crate::worktree_state::WorktreeLaunchTarget,
+    ) {
+        let Some(proj) = self.state.projects.iter().find(|p| p.id == project_id) else {
+            return;
+        };
+        self.worktree_state.request_create(
+            project_id,
+            proj.path.clone(),
+            label.to_owned(),
+            self.state.general_prefs.clone(),
+            self.state.git_prefs.clone(),
+            target,
+        );
+    }
+
+    fn close_sessions_for_worktree_paths(&mut self, project_id: u64, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let matching_ids: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.project == Some(project_id)
+                    && paths.iter().any(|p| {
+                        let p_str = p.to_string_lossy();
+                        crate::sidebar_model::same_path(&s.cwd.to_string_lossy(), &p_str)
+                            || s.worktree.as_ref().is_some_and(|wt| {
+                                crate::sidebar_model::same_path(&wt.path.to_string_lossy(), &p_str)
+                            })
+                    })
+            })
+            .map(|s| s.id)
+            .collect();
+        for sid in matching_ids {
+            self.close_session_immediate(sid);
+        }
+    }
+
+    fn poll_worktrees(&mut self) {
+        use crate::finder_model::{LaunchMenuItem, LaunchPlacement};
+        use crate::worktree_state::{WorktreeEvent, WorktreeLaunchTarget};
+
+        for ev in self.worktree_state.poll() {
+            match ev {
+                WorktreeEvent::Inspected { .. } => {}
+                WorktreeEvent::Created {
+                    project_id,
+                    target,
+                    result,
+                } => match result {
+                    Err(err) => self.error = err,
+                    Ok((created, _)) => {
+                        if self.state.active_project != Some(project_id) {
+                            self.state.active_project = Some(project_id);
+                            self.refresh_project();
+                        }
+                        let saved_wt = workspace::SavedWorktree {
+                            path: created.path,
+                            branch: created.branch,
+                        };
+                        match target {
+                            WorktreeLaunchTarget::ShellNewPane => {
+                                self.new_session_in_worktree(
+                                    Some(project_id),
+                                    Launch::Shell,
+                                    None,
+                                    false,
+                                    Some(saved_wt),
+                                );
+                            }
+                            WorktreeLaunchTarget::Menu { item, placement } => {
+                                let launch = match item {
+                                    LaunchMenuItem::Shell { .. } => Launch::Shell,
+                                    LaunchMenuItem::Agent { id, .. } => Launch::Agent(id),
+                                    LaunchMenuItem::ChatAgent { id, .. } if id == "codex" => {
+                                        Launch::CodexChat
+                                    }
+                                    LaunchMenuItem::ChatAgent { id, .. } if id == "claude" => {
+                                        Launch::ClaudeChat
+                                    }
+                                    _ => Launch::Shell,
+                                };
+                                let active_target = self
+                                    .sessions
+                                    .iter()
+                                    .find(|s| {
+                                        Some(s.id) == self.active_session
+                                            && s.project == Some(project_id)
+                                    })
+                                    .map(|s| s.id);
+                                let split = active_target.and_then(|id| match placement {
+                                    LaunchPlacement::Auto => None,
+                                    LaunchPlacement::Left | LaunchPlacement::Right => {
+                                        Some((id, crate::pane_grid::SplitDir::Row))
+                                    }
+                                    LaunchPlacement::Down => {
+                                        Some((id, crate::pane_grid::SplitDir::Col))
+                                    }
+                                });
+                                self.new_session_in_worktree(
+                                    Some(project_id),
+                                    launch,
+                                    split,
+                                    placement == LaunchPlacement::Left,
+                                    Some(saved_wt),
+                                );
+                            }
+                        }
+                    }
+                },
+                WorktreeEvent::CleanupScanned { project_id, result } => {
+                    if let Some(modal) = &mut self.worktree_cleanup
+                        && modal.project_id == project_id
+                    {
+                        match result {
+                            Ok((default_branch, items)) => {
+                                modal.set_scan_results(default_branch, items);
+                            }
+                            Err(err) => modal.set_error(err),
+                        }
+                    }
+                }
+                WorktreeEvent::Removed {
+                    project_id,
+                    removed,
+                    errors,
+                    ..
+                } => {
+                    if !removed.is_empty() {
+                        self.close_sessions_for_worktree_paths(project_id, &removed);
+                        if let Some(prefs) = self.state.project_worktrees.get_mut(&project_id) {
+                            prefs.shown_worktrees.retain(|shown| {
+                                !removed.iter().any(|r| {
+                                    crate::sidebar_model::same_path(shown, &r.to_string_lossy())
+                                })
+                            });
+                        }
+                        self.save();
+                    }
+                    if errors.is_empty() {
+                        if self
+                            .worktree_cleanup
+                            .as_ref()
+                            .is_some_and(|m| m.project_id == project_id)
+                        {
+                            self.worktree_cleanup = None;
+                        }
+                    } else {
+                        let joined = errors.join("\n");
+                        if let Some(modal) = &mut self.worktree_cleanup
+                            && modal.project_id == project_id
+                        {
+                            modal.set_error(joined);
+                        } else {
+                            self.error = joined;
+                        }
+                    }
+                }
+            }
+        }
     }
     fn open_document(&mut self, path: PathBuf) {
         self.open_document_mode(path, true);
@@ -1333,6 +1554,7 @@ impl Tessel {
             }
         }
         self.scm_state.poll();
+        self.poll_worktrees();
         self.explorer_tree.poll();
         self.remote.poll();
         self.finder.poll();
@@ -1654,6 +1876,7 @@ impl Tessel {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: false,
             id,
@@ -1758,7 +1981,18 @@ impl Tessel {
         split: Option<(u64, crate::pane_grid::SplitDir)>,
         before: bool,
     ) {
-        if launch.native_chat().is_some() && self.state.active_project.is_none() {
+        self.new_session_in_worktree(self.state.active_project, launch, split, before, None);
+    }
+
+    fn new_session_in_worktree(
+        &mut self,
+        project_id: Option<u64>,
+        launch: Launch,
+        split: Option<(u64, crate::pane_grid::SplitDir)>,
+        before: bool,
+        worktree: Option<workspace::SavedWorktree>,
+    ) {
+        if launch.native_chat().is_some() && project_id.is_none() {
             self.error = tr("Select a project for native chat.").into();
             return;
         }
@@ -1766,10 +2000,18 @@ impl Tessel {
             self.error = "Session limit: 100".into();
             return;
         }
-        let cwd = self
-            .state
-            .active()
-            .map(|p| p.path.clone())
+        let cwd = worktree
+            .as_ref()
+            .map(|wt| wt.path.clone())
+            .or_else(|| {
+                project_id.and_then(|pid| {
+                    self.state
+                        .projects
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.path.clone())
+                })
+            })
             .unwrap_or_else(launch::default_directory);
         let title = match &launch {
             Launch::CodexChat => "Codex".into(),
@@ -1801,10 +2043,11 @@ impl Tessel {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            worktree,
             pane_name: None,
             broadcast: true,
             id,
-            project: self.state.active_project,
+            project: project_id,
             title,
             launch,
             cwd,
@@ -1831,9 +2074,7 @@ impl Tessel {
             let layout = self
                 .state
                 .terminal_layouts
-                .entry(crate::terminal_layout::project_key(
-                    self.state.active_project,
-                ))
+                .entry(crate::terminal_layout::project_key(project_id))
                 .or_default();
             if before {
                 layout.split_with_order(target, id, dir, true);
@@ -1844,7 +2085,7 @@ impl Tessel {
             && self
                 .sessions
                 .iter()
-                .filter(|sess| sess.project == self.state.active_project)
+                .filter(|sess| sess.project == project_id)
                 .count()
                 > 1
         {
@@ -2349,6 +2590,23 @@ impl Tessel {
             PaletteCommand::new("project:new", proj_group, tr("Open project folder…"))
                 .with_shortcut("Ctrl+Shift+N"),
         );
+        if let Some(active_pid) = self.state.active_project
+            && let Some(summary) = self.worktree_state.summary(active_pid)
+            && summary.has_commits
+        {
+            commands.push(PaletteCommand::new(
+                "worktree:new",
+                proj_group,
+                tr("New worktree pane"),
+            ));
+            if summary.non_primary_count() > 0 {
+                commands.push(PaletteCommand::new(
+                    "worktree:cleanup",
+                    proj_group,
+                    tr("Clean up worktrees…"),
+                ));
+            }
+        }
         if self.state.projects.len() > 1 {
             commands.push(
                 PaletteCommand::new("project:prev", proj_group, tr("Previous workspace"))
@@ -2687,6 +2945,20 @@ impl Tessel {
                 "chat" => self.new_session(Launch::CodexChat),
                 "claude-chat" => self.new_session(Launch::ClaudeChat),
                 "project:new" => self.choose_project(),
+                "worktree:new" => {
+                    if let Some(pid) = self.state.active_project {
+                        self.start_new_worktree_pane(
+                            pid,
+                            "worktree",
+                            crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
+                        );
+                    }
+                }
+                "worktree:cleanup" => {
+                    if let Some(pid) = self.state.active_project {
+                        self.open_worktree_cleanup(pid);
+                    }
+                }
                 "project:prev" => self.cycle_workspace(-1),
                 "project:next" => self.cycle_workspace(1),
                 "finder" => self.open_finder(),
@@ -3005,12 +3277,118 @@ impl Tessel {
             .set_live_share_projects(self.share.shared_projects_sidebar_map());
         self.project_panel.set_session_states(session_states);
         let mut branches = std::collections::HashMap::new();
+        for p in &self.state.projects {
+            if let Some(summary) = self.worktree_state.summary(p.id)
+                && !summary.branch.is_empty()
+            {
+                branches.insert(p.id, summary.branch.clone());
+            }
+        }
         if let Some(active_id) = self.state.active_project
             && let Some(branch) = self.scm_state.branch_name()
         {
             branches.insert(active_id, branch.to_owned());
         }
         self.project_panel.set_project_branches(branches);
+
+        let mut session_worktrees = std::collections::HashMap::new();
+        for s in &self.sessions {
+            if let Some(wt) = &s.worktree {
+                session_worktrees.insert(s.id, (wt.path.display().to_string(), wt.branch.clone()));
+            }
+        }
+        self.project_panel.set_session_worktrees(session_worktrees);
+
+        let mut project_worktrees = std::collections::HashMap::new();
+        for p in &self.state.projects {
+            let p_str = p.path.display().to_string();
+            let prefs = self
+                .state
+                .project_worktrees
+                .get(&p.id)
+                .cloned()
+                .unwrap_or_default();
+            let mut task_copies = Vec::new();
+            for s in self.sessions.iter().filter(|s| s.project == Some(p.id)) {
+                if let Some(wt) = &s.worktree {
+                    let wt_str = wt.path.display().to_string();
+                    if !crate::sidebar_model::same_path(&wt_str, &p_str)
+                        && !task_copies
+                            .iter()
+                            .any(|c: &crate::sidebar_model::TaskCopyInput| {
+                                crate::sidebar_model::same_path(&c.path, &wt_str)
+                            })
+                    {
+                        task_copies.push(crate::sidebar_model::TaskCopyInput {
+                            path: wt_str,
+                            branch: wt.branch.clone(),
+                            created_at: 0,
+                        });
+                    }
+                }
+            }
+            let summary = self.worktree_state.summary(p.id);
+            let discovered = summary.map(|s| s.worktrees.clone()).unwrap_or_default();
+            let sidebar_proj = crate::sidebar_model::SidebarProjectInput {
+                id: p.id.to_string(),
+                name: p.name.clone(),
+                cwd: p_str,
+                task_copies: task_copies.clone(),
+                shown_worktree_paths: prefs.shown_worktrees.clone(),
+                worktrees_inbox_dismissed: prefs.inbox_dismissed,
+                discovered_worktrees: discovered,
+                ..Default::default()
+            };
+            let vis = crate::sidebar_model::project_worktree_visibility(&sidebar_proj);
+            let mut visible_copies: Vec<crate::project_panel::ProjectWorktreeView> = task_copies
+                .into_iter()
+                .map(|c| {
+                    let locked = summary
+                        .and_then(|sum| {
+                            sum.worktrees
+                                .iter()
+                                .find(|w| crate::sidebar_model::same_path(&w.path, &c.path))
+                        })
+                        .is_some_and(|w| w.locked);
+                    crate::project_panel::ProjectWorktreeView {
+                        path: c.path,
+                        branch: c.branch,
+                        is_external: false,
+                        locked,
+                    }
+                })
+                .collect();
+            for wt in vis.shown {
+                if !visible_copies
+                    .iter()
+                    .any(|c| crate::sidebar_model::same_path(&c.path, &wt.path))
+                {
+                    visible_copies.push(crate::project_panel::ProjectWorktreeView {
+                        path: wt.path.clone(),
+                        branch: wt.branch.clone(),
+                        is_external: true,
+                        locked: wt.locked,
+                    });
+                }
+            }
+            let hidden_inbox: Vec<(String, String)> = vis
+                .inbox
+                .into_iter()
+                .map(|w| (w.path.clone(), w.branch.clone()))
+                .collect();
+            project_worktrees.insert(
+                p.id,
+                crate::project_panel::ProjectWorktreesInfo {
+                    eligible: summary.is_some_and(|s| s.has_commits),
+                    has_secondary: summary.is_some_and(|s| s.non_primary_count() > 0),
+                    visible_copies,
+                    hidden_inbox,
+                    inbox_dismissed: prefs.inbox_dismissed,
+                },
+            );
+        }
+        self.project_panel.set_project_worktrees(project_worktrees);
+
         self.project_panel.set_options(SidebarOptions {
             sort_by_activity: self.state.sidebar.sort_by_activity,
             compact_rows: self.state.sidebar.compact_rows,
@@ -3030,6 +3408,8 @@ impl Tessel {
             || self.pending_scm_discard.is_some()
             || self.pending_agent_install.is_some()
             || self.rename_project_modal.is_some()
+            || self.worktree_cleanup.is_some()
+            || self.pending_delete_worktree.is_some()
             || self.pending_exit
             || self.file_action.is_some()
             || self.restore_preview.is_some();
@@ -3092,6 +3472,95 @@ impl Tessel {
                     }
                     self.new_session(Launch::Shell);
                 }
+                return;
+            }
+            Some(ProjectAction::NewWorktree(pid)) => {
+                self.start_new_worktree_pane(
+                    pid,
+                    "worktree",
+                    crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
+                );
+                return;
+            }
+            Some(ProjectAction::OpenWorktreeTerminal {
+                project,
+                path,
+                branch,
+            }) => {
+                if self.state.projects.iter().any(|p| p.id == project) {
+                    if self.state.active_project != Some(project) {
+                        self.state.active_project = Some(project);
+                        self.refresh_project();
+                    }
+                    self.new_session_in_worktree(
+                        Some(project),
+                        Launch::Shell,
+                        None,
+                        false,
+                        Some(workspace::SavedWorktree {
+                            path: PathBuf::from(path),
+                            branch,
+                        }),
+                    );
+                }
+                return;
+            }
+            Some(ProjectAction::ShowHiddenWorktree { project, path }) => {
+                let prefs = self.state.project_worktrees.entry(project).or_default();
+                if !prefs
+                    .shown_worktrees
+                    .iter()
+                    .any(|p| crate::sidebar_model::same_path(p, &path))
+                {
+                    prefs.shown_worktrees.push(path);
+                    self.save();
+                }
+                return;
+            }
+            Some(ProjectAction::HideWorktree { project, path }) => {
+                if let Some(prefs) = self.state.project_worktrees.get_mut(&project) {
+                    prefs
+                        .shown_worktrees
+                        .retain(|p| !crate::sidebar_model::same_path(p, &path));
+                    self.save();
+                }
+                return;
+            }
+            Some(ProjectAction::DismissWorktreesInbox(project)) => {
+                self.state
+                    .project_worktrees
+                    .entry(project)
+                    .or_default()
+                    .inbox_dismissed = true;
+                self.save();
+                return;
+            }
+            Some(ProjectAction::DeleteWorktree {
+                project,
+                path,
+                branch,
+            }) => {
+                let wt_path = PathBuf::from(path);
+                if self.state.general_prefs.confirm_delete_workspace {
+                    self.pending_delete_worktree = Some((project, wt_path, branch));
+                } else if let Some(proj) = self
+                    .state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == project)
+                    .cloned()
+                {
+                    self.close_sessions_for_worktree_paths(project, std::slice::from_ref(&wt_path));
+                    self.worktree_state.request_remove_batch(
+                        project,
+                        proj.path,
+                        vec![(wt_path, branch, true)],
+                    );
+                }
+                return;
+            }
+            Some(ProjectAction::CleanUpWorktrees(project)) => {
+                self.open_worktree_cleanup(project);
                 return;
             }
             Some(ProjectAction::SelectProject(project)) => {
@@ -3211,6 +3680,8 @@ impl Tessel {
             return;
         };
         self.state.projects.remove(pos);
+        self.state.project_worktrees.remove(&id);
+        self.worktree_state.retain_projects(&self.state.projects);
         self.state.tasks.retain(|t| t.project != id);
         let session_ids: Vec<u64> = self
             .sessions
@@ -3569,6 +4040,7 @@ impl Tessel {
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,
@@ -3834,7 +4306,7 @@ impl Tessel {
             {
                 match session.launch {
                     Launch::CodexChat if !self.chats.iter().any(|c| c.pane == session.id) => {
-                        let mut chat = crate::chat::Chat::new(project.id, project.path.clone());
+                        let mut chat = crate::chat::Chat::new(project.id, session.cwd.clone());
                         chat.pane = session.id;
                         chat.options = crate::native_chat_options::Options::from_value(
                             session.session_options.as_ref(),
@@ -3851,7 +4323,7 @@ impl Tessel {
                     {
                         let mut chat = crate::claude::Chat::new(
                             project.id,
-                            project.path.clone(),
+                            session.cwd.clone(),
                             self.state
                                 .native_resume(session.id, project.id, "Claude")
                                 .map(str::to_owned),
@@ -4082,6 +4554,9 @@ impl Tessel {
                                     } else {
                                         crate::pane_menu_model::PaneMenuLang::En
                                     },
+                                    worktree: session.worktree.as_ref().map(|wt| {
+                                        (wt.branch.clone(), wt.path.display().to_string())
+                                    }),
                                     ..Default::default()
                                 };
                                 let mut action = None;
@@ -5073,6 +5548,7 @@ impl Tessel {
                 } else {
                     saved.session_options.clone()
                 },
+                worktree: saved.worktree.clone(),
                 pane_name: saved.pane_name.clone(),
                 broadcast: saved.broadcast,
                 id: saved.id,
@@ -5096,6 +5572,8 @@ impl Tessel {
             .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
         crate::i18n::set_language(self.state.language);
         crate::theme::apply(ctx, self.state.dark, self.state.theme);
+        self.worktree_cleanup = None;
+        self.pending_delete_worktree = None;
         self.refresh_project();
         self.backup_status = format!(
             "{} {}",
@@ -6361,6 +6839,25 @@ impl Tessel {
         } else {
             vec![]
         };
+        let is_en = self.state.language != crate::i18n::Language::French;
+        match self.state.active_project {
+            Some(pid) => match self.worktree_state.summary(pid) {
+                Some(summary) => {
+                    let (eligible, reason) = summary.launch_availability(is_en);
+                    self.launcher.set_worktree_availability(eligible, reason);
+                }
+                None => {
+                    let msg = if is_en {
+                        "Not a Git repository."
+                    } else {
+                        "Ce dossier n'est pas un dépôt Git."
+                    };
+                    self.launcher
+                        .set_worktree_availability(false, Some(msg.to_owned()));
+                }
+            },
+            None => self.launcher.clear_worktree_availability(),
+        }
         let action = self.launcher.show(
             ui,
             LauncherInput {
@@ -6385,7 +6882,7 @@ impl Tessel {
             Some(LaunchMenuAction::Launch {
                 item,
                 placement,
-                in_worktree: false,
+                in_worktree,
             }) => {
                 if !entries
                     .iter()
@@ -6395,6 +6892,24 @@ impl Tessel {
                 }
                 if let LaunchMenuItem::InstallAgent { id, .. } = item {
                     self.request_agent_install(&id);
+                    return true;
+                }
+                if in_worktree {
+                    let Some(pid) = self.state.active_project else {
+                        return false;
+                    };
+                    let label = match &item {
+                        LaunchMenuItem::Agent { id, .. } | LaunchMenuItem::ChatAgent { id, .. } => {
+                            id.clone()
+                        }
+                        LaunchMenuItem::Shell { .. } => "shell".into(),
+                        _ => "worktree".into(),
+                    };
+                    self.start_new_worktree_pane(
+                        pid,
+                        &label,
+                        crate::worktree_state::WorktreeLaunchTarget::Menu { item, placement },
+                    );
                     return true;
                 }
                 let launch = match item {
@@ -6997,6 +7512,87 @@ impl Tessel {
     }
 
     fn confirmations(&mut self, ctx: &egui::Context) {
+        if let Some(modal) = &mut self.worktree_cleanup {
+            let is_en = self.state.language != crate::i18n::Language::French;
+            let confirm_before_remove = self.state.general_prefs.confirm_delete_workspace;
+            let pid = modal.project_id;
+            let cleanup_action = modal.ui(ctx, is_en, confirm_before_remove);
+            match cleanup_action {
+                Some(crate::worktree_cleanup_panel::WorktreeCleanupAction::Close) => {
+                    self.worktree_cleanup = None;
+                }
+                Some(crate::worktree_cleanup_panel::WorktreeCleanupAction::Refresh) => {
+                    if let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned() {
+                        let counts = self.worktree_open_pane_counts(pid);
+                        self.worktree_state
+                            .request_cleanup_scan(pid, proj.path, counts);
+                    }
+                }
+                Some(crate::worktree_cleanup_panel::WorktreeCleanupAction::RemoveSelected(
+                    targets,
+                )) => {
+                    if let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned() {
+                        let paths: Vec<PathBuf> =
+                            targets.iter().map(|(p, _, _)| p.clone()).collect();
+                        self.close_sessions_for_worktree_paths(pid, &paths);
+                        self.worktree_state
+                            .request_remove_batch(pid, proj.path, targets);
+                    }
+                }
+                None => {}
+            }
+        }
+        if let Some((pid, wt_path, branch)) = self.pending_delete_worktree.clone() {
+            let mut confirm = false;
+            let mut cancel = false;
+            let resp =
+                egui::Modal::new(egui::Id::new("confirm-delete-worktree-modal")).show(ctx, |ui| {
+                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 440.0));
+                    ui.heading(tr("Delete worktree?"));
+                    ui.add_space(4.0);
+                    if !branch.is_empty() {
+                        ui.monospace(&branch);
+                    }
+                    ui.monospace(wt_path.display().to_string());
+                    ui.add_space(4.0);
+                    ui.label(tr(
+                        "This deletes the worktree folder and its local branch. Open panes in this worktree will be closed.",
+                    ));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(tr("Cancel")).clicked() {
+                            cancel = true;
+                        }
+                        let danger = ui.visuals().error_fg_color;
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(tr("Delete worktree"))
+                                        .color(egui::Color32::WHITE)
+                                        .strong(),
+                                )
+                                .fill(danger),
+                            )
+                            .clicked()
+                        {
+                            confirm = true;
+                        }
+                    });
+                });
+            if cancel || resp.should_close() {
+                self.pending_delete_worktree = None;
+            } else if confirm {
+                self.pending_delete_worktree = None;
+                if let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned() {
+                    self.close_sessions_for_worktree_paths(pid, std::slice::from_ref(&wt_path));
+                    self.worktree_state.request_remove_batch(
+                        pid,
+                        proj.path,
+                        vec![(wt_path, branch, true)],
+                    );
+                }
+            }
+        }
         if let Some(index) = self.pending_close {
             egui::Modal::new(egui::Id::new("unsaved-file")).show(ctx, |ui| {
                 ui.label(tr("Save changes before closing this file?"));
@@ -8803,6 +9399,7 @@ mod tests {
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -8879,6 +9476,7 @@ $lock.Dispose()
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9065,6 +9663,7 @@ $lock.Dispose()
             conversation_id: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9121,6 +9720,7 @@ $lock.Dispose()
                 conversation_id: None,
                 launch_fingerprint: None,
                 session_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 scrollback: 10_000,
@@ -9179,6 +9779,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9321,6 +9922,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9376,6 +9978,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9418,6 +10021,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             scrollback: 10_000,
@@ -9462,6 +10066,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,

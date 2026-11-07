@@ -491,5 +491,10 @@
   "Remove workspace from sidebar?": "Retirer l\u2019espace de travail de la barre lat\u00e9rale ?",
   "Removes this workspace and closes its open panes in Tessel. Files on disk are untouched.": "Retire cet espace de travail et ferme ses panneaux ouverts dans Tessel. Les fichiers sur le disque ne sont pas modifi\u00e9s.",
   "Remove workspace": "Retirer l\u2019espace de travail",
-  "Settings reset to defaults.": "Pr\u00e9f\u00e9rences r\u00e9initialis\u00e9es aux valeurs par d\u00e9faut."
+  "Settings reset to defaults.": "Pr\u00e9f\u00e9rences r\u00e9initialis\u00e9es aux valeurs par d\u00e9faut.",
+  "New worktree pane": "Nouveau panneau dans un worktree",
+  "Clean up worktrees\u2026": "Nettoyer les worktrees\u2026",
+  "Delete worktree?": "Supprimer le worktree ?",
+  "This deletes the worktree folder and its local branch. Open panes in this worktree will be closed.": "Supprime le dossier du worktree et sa branche locale. Les panneaux ouverts dans ce worktree seront ferm\u00e9s.",
+  "Delete worktree": "Supprimer le worktree"
 }

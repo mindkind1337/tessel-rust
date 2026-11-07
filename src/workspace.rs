@@ -449,6 +449,22 @@ pub struct NativeThread {
     pub thread: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SavedWorktree {
+    pub path: PathBuf,
+    pub branch: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectWorktreePrefs {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shown_worktrees: Vec<String>,
+    #[serde(default)]
+    pub inbox_dismissed: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
     /// An explicit native marker suppresses the legacy SSH launch path. It is
@@ -467,6 +483,8 @@ pub struct SavedSession {
     pub session_options: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_options: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<SavedWorktree>,
     #[serde(default)]
     pub pane_name: Option<String>,
     #[serde(default = "default_pane_broadcast")]
@@ -524,6 +542,8 @@ pub struct Workspace {
     pub stats_prefs: StatsPreferences,
     pub status_bar: StatusBarPreferences,
     pub floating: FloatingPreferences,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub project_worktrees: std::collections::BTreeMap<u64, ProjectWorktreePrefs>,
     pub terminal_layouts: std::collections::HashMap<String, crate::terminal_layout::TerminalLayout>,
     pub font_size: f32,
     pub next_id: u64,
@@ -561,6 +581,7 @@ impl Default for Workspace {
             stats_prefs: Default::default(),
             status_bar: Default::default(),
             floating: Default::default(),
+            project_worktrees: Default::default(),
             terminal_layouts: Default::default(),
             font_size: 15.0,
             next_id: 1,
@@ -780,11 +801,28 @@ impl Workspace {
                     return Err("Invalid native chat model options.".into());
                 }
             }
+            if let Some(wt) = &session.worktree {
+                let b = wt.branch.trim();
+                if !wt.path.is_absolute()
+                    || b.is_empty()
+                    || wt.branch.len() > 200
+                    || wt.branch.chars().any(char::is_control)
+                {
+                    return Err("Invalid session worktree metadata.".into());
+                }
+            }
             if session.launch.native_chat().is_some() {
                 let project = session
                     .project
                     .and_then(|id| self.projects.iter().find(|p| p.id == id));
-                if project.is_none_or(|p| p.path != session.cwd) {
+                let allowed_cwd = project.is_some_and(|p| {
+                    p.path == session.cwd
+                        || session
+                            .worktree
+                            .as_ref()
+                            .is_some_and(|wt| wt.path == session.cwd)
+                });
+                if !allowed_cwd {
                     return Err("Invalid native chat pane.".into());
                 }
             }
@@ -797,6 +835,17 @@ impl Workspace {
                 crate::launch::Launch::Ssh(host) => validate_host(&host.alias)?,
                 _ => {}
             }
+        }
+        if self.project_worktrees.len() > 1000
+            || self.project_worktrees.values().any(|prefs| {
+                prefs.shown_worktrees.len() > 200
+                    || prefs
+                        .shown_worktrees
+                        .iter()
+                        .any(|p| p.is_empty() || p.len() > 4096 || p.contains('\0'))
+            })
+        {
+            return Err("Invalid project worktree visibility metadata.".into());
         }
         if self.terminal_layouts.len() > 101 {
             return Err("Too many terminal layouts".into());
@@ -1121,6 +1170,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             id: 1,
@@ -1197,6 +1247,7 @@ mod tests {
                 launch_fingerprint: None,
                 session_options: Some(options),
                 native_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,
@@ -1371,6 +1422,7 @@ mod tests {
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: Some(serde_json::json!({"effort":"high"})),
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,
@@ -1432,6 +1484,7 @@ mod tests {
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,
@@ -1471,6 +1524,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             id: 1,
@@ -1500,6 +1554,7 @@ mod tests {
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
+                worktree: None,
                 pane_name: None,
                 broadcast: true,
                 id,
@@ -1517,6 +1572,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             id: 12,
@@ -1584,6 +1640,7 @@ mod tests {
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             id: 11,
@@ -1621,6 +1678,7 @@ mod tests {
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
+                worktree: None,
                 pane_name: name.map(str::to_owned),
                 broadcast: true,
                 project: None,

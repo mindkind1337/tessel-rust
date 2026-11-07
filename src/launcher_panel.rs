@@ -304,6 +304,10 @@ pub struct LauncherPanel {
     selected_item: Option<LaunchMenuItem>,
     picked_placement: Option<LaunchPlacement>,
     last_side: LaunchPlacement,
+    worktree_configured: bool,
+    worktree_eligible: bool,
+    worktree_reason: Option<String>,
+    in_worktree: bool,
 }
 
 impl Default for LauncherPanel {
@@ -314,6 +318,10 @@ impl Default for LauncherPanel {
             selected_item: None,
             picked_placement: None,
             last_side: LaunchPlacement::Right,
+            worktree_configured: false,
+            worktree_eligible: false,
+            worktree_reason: None,
+            in_worktree: false,
         }
     }
 }
@@ -331,6 +339,34 @@ impl LauncherPanel {
         self.selected_entry_idx = None;
         self.selected_item = None;
         self.picked_placement = None;
+        self.in_worktree = false;
+    }
+
+    /// Configures whether the active project supports launching inside a new Git worktree copy.
+    #[allow(dead_code)]
+    pub fn set_worktree_availability(&mut self, eligible: bool, reason: Option<String>) {
+        self.worktree_configured = true;
+        self.worktree_eligible = eligible;
+        self.worktree_reason = reason;
+        if !eligible {
+            self.in_worktree = false;
+        }
+    }
+
+    /// Hides the Git worktree toggle row (e.g., when no local project is active).
+    #[allow(dead_code)]
+    pub fn clear_worktree_availability(&mut self) {
+        self.worktree_configured = false;
+        self.worktree_eligible = false;
+        self.worktree_reason = None;
+        self.in_worktree = false;
+    }
+
+    /// Returns `true` when the `"Separate copy on its own branch"` toggle is active.
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn in_worktree(&self) -> bool {
+        self.in_worktree && self.worktree_eligible
     }
 
     /// Returns the currently selected index into the last rendered `LauncherInput::entries` slice,
@@ -486,16 +522,26 @@ impl LauncherPanel {
         }
 
         self.render_where_header(ui, &input);
+        if self.worktree_configured {
+            self.render_worktree_toggle(ui, input.lang);
+        }
         let active_placement = self.effective_placement(input.placements);
+        let item_supports_worktree = |item: &LaunchMenuItem| {
+            !matches!(
+                item,
+                LaunchMenuItem::Browser | LaunchMenuItem::InstallAgent { .. }
+            )
+        };
+        let want_worktree = self.in_worktree && self.worktree_eligible;
 
         let mut action = if fresh_enter {
             self.selected_entry_idx
                 .and_then(|idx| input.entries.get(idx))
                 .filter(|entry| entry.available)
                 .map(|entry| LaunchMenuAction::Launch {
+                    in_worktree: want_worktree && item_supports_worktree(&entry.item),
                     item: entry.item.clone(),
                     placement: active_placement,
-                    in_worktree: false,
                 })
         } else {
             None
@@ -539,9 +585,9 @@ impl LauncherPanel {
                         self.selected_entry_idx = Some(entry_idx);
                         self.selected_item = Some(entry.item.clone());
                         action = Some(LaunchMenuAction::Launch {
+                            in_worktree: want_worktree && item_supports_worktree(&entry.item),
                             item: entry.item.clone(),
                             placement: active_placement,
-                            in_worktree: false,
                         });
                     }
                 }
@@ -843,6 +889,49 @@ impl LauncherPanel {
             let _ = Align2::LEFT_CENTER;
             resp
         }
+    }
+
+    fn render_worktree_toggle(&mut self, ui: &mut egui::Ui, lang: LauncherLang) {
+        let label = match lang {
+            LauncherLang::En => "Separate copy on its own branch",
+            LauncherLang::Fr => "Copie séparée sur sa propre branche",
+        };
+        ui.add_space(2.0_f32);
+        let fill = if self.in_worktree && self.worktree_eligible {
+            ui.visuals().selection.bg_fill.gamma_multiply(0.32_f32)
+        } else {
+            ui.visuals().extreme_bg_color
+        };
+        let stroke = if self.in_worktree && self.worktree_eligible {
+            Stroke::new(1.0_f32, ui.visuals().selection.stroke.color)
+        } else {
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color)
+        };
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(6.0_f32)
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                let mut checked = self.in_worktree && self.worktree_eligible;
+                let resp = ui.add_enabled(
+                    self.worktree_eligible,
+                    egui::Checkbox::new(&mut checked, egui::RichText::new(label).size(11.5_f32)),
+                );
+                if resp.changed() && self.worktree_eligible {
+                    self.in_worktree = checked;
+                }
+                if let Some(reason) = &self.worktree_reason
+                    && !self.worktree_eligible
+                {
+                    ui.label(
+                        egui::RichText::new(reason.as_str())
+                            .size(10.5_f32)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                }
+            });
+        ui.add_space(4.0_f32);
     }
 
     fn render_footer(&self, ui: &mut egui::Ui, lang: LauncherLang) -> bool {

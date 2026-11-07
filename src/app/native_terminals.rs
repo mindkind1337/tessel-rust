@@ -554,6 +554,7 @@ impl Tessel {
             conversation_id: None,
             launch_fingerprint: None,
             session_options: None,
+            worktree: None,
             pane_name: None,
             broadcast: true,
             id,
