@@ -166,6 +166,162 @@ impl Chat {
     pub fn process_id(&self) -> Option<u32> {
         self.transport.as_ref().map(|t| t.child_id())
     }
+
+    pub fn gpui_snapshot(&self) -> crate::chat::NativeChatViewSnapshot {
+        let approval = self
+            .approvals
+            .front()
+            .map(|a| crate::chat::NativeChatApprovalView {
+                title: a.tool.clone(),
+                details_json: serde_json::to_string_pretty(&a.input).unwrap_or_default(),
+                can_accept: true,
+            });
+        let (questions, questions_can_submit) = match &self.questions {
+            Some(q) => (q.views(), q.can_submit()),
+            None => (Vec::new(), false),
+        };
+        let thread_id = self
+            .saved_session
+            .clone()
+            .or_else(|| (!self.session.is_empty()).then(|| self.session.clone()));
+        crate::chat::NativeChatViewSnapshot {
+            provider: "claude",
+            cwd_display: self.cwd.display().to_string(),
+            thread_id,
+            resume_draft: self.resume.clone(),
+            connected: self.transport.is_some(),
+            ready: self.ready,
+            working: self.working(),
+            can_load_older: false,
+            status: self.status.clone(),
+            error: self.error.clone(),
+            model: self.options.model.clone(),
+            effort: self.options.effort.clone(),
+            composer: self.composer.clone(),
+            messages: self.transcript.iter().cloned().collect(),
+            approval,
+            questions,
+            questions_can_submit,
+        }
+    }
+
+    pub fn gpui_connect(&mut self) {
+        if self.transport.is_none()
+            && let Err(e) = self.connect()
+        {
+            self.error = e;
+        }
+    }
+
+    pub fn gpui_stop(&mut self) {
+        self.stop();
+    }
+
+    pub fn gpui_new_conversation(&mut self) {
+        if self.transport.is_none() {
+            self.saved_session = None;
+            self.resume.clear();
+            self.transcript.clear();
+        }
+    }
+
+    pub fn gpui_interrupt(&mut self) {
+        if self.active {
+            self.interrupting = true;
+            if let Some(questions) = self.questions.take() {
+                self.deny(&questions.id);
+            }
+            for approval in self.approvals.drain(..).collect::<Vec<_>>() {
+                self.deny(&approval.id);
+            }
+            if let Err(e) = self.send(json!({"type":"control_request","request_id":"tessel-interrupt","request":{"subtype":"interrupt"}})) {
+                self.error = e;
+                self.stop();
+            }
+        }
+    }
+
+    pub fn gpui_set_composer(&mut self, text: String) {
+        self.composer = text;
+    }
+
+    pub fn gpui_send_message(&mut self) {
+        if let Err(e) = self.begin() {
+            self.error = e;
+        }
+    }
+
+    pub fn gpui_set_model(&mut self, model: String) {
+        if self.transport.is_none() {
+            self.options.model = model;
+            self.commit_options();
+        }
+    }
+
+    pub fn gpui_set_effort(&mut self, effort: String) {
+        if self.transport.is_none() {
+            self.options.effort = effort;
+            self.commit_options();
+        }
+    }
+
+    pub fn gpui_set_resume(&mut self, resume: String) {
+        if self.transport.is_none() {
+            self.resume = resume;
+        }
+    }
+
+    pub fn gpui_respond_approval(&mut self, allow: bool) {
+        if let Some(front) = self.approvals.front().cloned() {
+            if self.transport.is_some() {
+                self.respond(&front.id, allow);
+            } else {
+                self.approvals.pop_front();
+            }
+        }
+    }
+
+    pub fn gpui_select_question_option(&mut self, q_idx: usize, opt_idx: usize) {
+        if let Some(q) = &mut self.questions {
+            q.select_option(q_idx, opt_idx);
+        }
+    }
+
+    pub fn gpui_set_question_text(&mut self, q_idx: usize, text: String) {
+        if let Some(q) = &mut self.questions {
+            q.set_text(q_idx, text);
+        }
+    }
+
+    pub fn gpui_submit_questions(&mut self, skip: bool) {
+        let Some(q) = &self.questions else {
+            return;
+        };
+        let payload = if skip {
+            Some(json!({"behavior":"deny","message":"The owner skipped these questions."}))
+        } else {
+            q.build_answer()
+        };
+        let Some(answer) = payload else {
+            return;
+        };
+        let id = q.id.clone();
+        self.questions = None;
+        if self.transport.is_some()
+            && let Err(e) = self.answer(&id, answer)
+        {
+            self.error = e;
+            self.stop();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn process_protocol_frame_for_test(&mut self, value: Value) {
+        if value["type"] == "control_request" {
+            self.active = true;
+        }
+        self.frame(value);
+    }
     fn push(&mut self, role: &str, text: &str) {
         self.transcript.push_back((role.into(), bounded(text)));
         while self.transcript.len() > 500

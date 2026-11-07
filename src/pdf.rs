@@ -258,12 +258,15 @@ fn decode(bytes: &[u8]) -> Result<Rendered, String> {
         pages,
     })
 }
+pub type PdfSummaryTuple = (usize, usize, f32, bool, Option<[usize; 2]>, String);
+
 pub struct PdfView {
     bytes: Arc<Vec<u8>>,
     page: usize,
     pages: usize,
     scale: f32,
     fit: bool,
+    last_dims: Option<[usize; 2]>,
     texture: Option<egui::TextureHandle>,
     pending: Option<Receiver<Result<Rendered, String>>>,
     cancel: Arc<AtomicBool>,
@@ -286,11 +289,67 @@ impl PdfView {
             pages: 0,
             scale: 1.5,
             fit: true,
+            last_dims: None,
             texture: None,
             pending: None,
             cancel: Arc::new(AtomicBool::new(false)),
             error: String::new(),
         })
+    }
+
+    pub fn gpui_poll_summary(&mut self) -> PdfSummaryTuple {
+        if let Some(rx) = &self.pending
+            && let Ok(result) = rx.try_recv()
+        {
+            self.pending = None;
+            match result {
+                Ok(page) => {
+                    self.pages = page.pages;
+                    self.last_dims = Some(page.image.size);
+                }
+                Err(e) => self.error = e,
+            }
+        }
+        if self.last_dims.is_none() && self.pending.is_none() && self.error.is_empty() {
+            self.request();
+        }
+        (
+            self.page,
+            self.pages,
+            self.scale,
+            self.pending.is_some(),
+            self.last_dims,
+            self.error.clone(),
+        )
+    }
+
+    pub fn step_page(&mut self, delta: isize) {
+        if self.pending.is_some() {
+            return;
+        }
+        let next = if delta < 0 {
+            self.page.saturating_sub(delta.unsigned_abs())
+        } else {
+            (self.page + delta as usize).min(self.pages.saturating_sub(1))
+        };
+        if next != self.page {
+            self.page = next;
+            self.last_dims = None;
+            self.request();
+        }
+    }
+
+    pub fn step_zoom(&mut self, delta: f32) {
+        if self.pending.is_some() {
+            return;
+        }
+        let next = (self.scale + delta).clamp(0.5, 3.0);
+        if (next - self.scale).abs() > 0.01 {
+            self.scale = next;
+            self.fit = false;
+            self.last_dims = None;
+            self.request();
+        }
     }
     #[cfg(feature = "visual-test")]
     pub fn prime(&mut self, ctx: &egui::Context) -> Result<(), String> {

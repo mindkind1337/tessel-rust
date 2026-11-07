@@ -434,7 +434,7 @@ struct ActiveAgentInstall {
 pub struct Tessel {
     #[cfg(windows)]
     window_frame: Option<crate::window_frame::WindowFrame>,
-    state: Workspace,
+    pub(crate) state: Workspace,
     store: Option<Store>,
     error: String,
     sessions: Vec<Session>,
@@ -545,7 +545,7 @@ pub struct Tessel {
     #[cfg(windows)]
     browser_tab_open: bool,
     #[cfg(windows)]
-    browser: crate::browser::Browser,
+    pub(crate) browser: crate::browser::Browser,
     #[cfg(windows)]
     agent_browsers: crate::agent_browser::AgentBrowsers,
     #[cfg(windows)]

@@ -296,6 +296,16 @@ pub fn build_layout_job(
     build_layout_job_with_mode(text, lang, theme, true, font, wrap_width, word_wrap)
 }
 
+/// Returns non-overlapping `(start_byte, end_byte, TokenKind)` syntax spans for `text`
+/// when `lang != SyntaxLang::Plain` and `text.len() <= SYNTAX_MAX_BYTES`.
+#[must_use]
+pub fn tokenize_spans(text: &str, lang: SyntaxLang) -> Vec<(usize, usize, TokenKind)> {
+    if text.is_empty() || lang == SyntaxLang::Plain || text.len() > SYNTAX_MAX_BYTES {
+        return Vec::new();
+    }
+    tokenize(text, lang)
+}
+
 #[must_use]
 pub fn build_layout_job_with_mode(
     text: &str,

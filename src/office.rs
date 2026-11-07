@@ -192,7 +192,76 @@ pub struct OfficeView {
     selected: usize,
     error: String,
 }
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub struct OfficeSummary {
+    pub section_titles: Vec<String>,
+    pub selected: usize,
+    pub paragraphs: Vec<(bool, String)>,
+    pub sheet: Option<crate::rich_previews::SheetTable>,
+    pub truncated: bool,
+    pub busy: bool,
+    pub error: String,
+}
+
 impl OfficeView {
+    pub fn gpui_poll_summary(&mut self) -> OfficeSummary {
+        if let Some(rx) = &self.pending
+            && let Ok(result) = rx.try_recv()
+        {
+            self.pending = None;
+            match result {
+                Ok(book) => self.book = Some(book),
+                Err(e) => self.error = e,
+            }
+        }
+        if self.book.is_none() && self.error.is_empty() && self.pending.is_none() {
+            let (tx, rx) = mpsc::channel();
+            self.pending = Some(rx);
+            let bytes = self.bytes.clone();
+            let extension = self.extension.clone();
+            let cancel = self.cancel.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(decode(&bytes, &extension, &cancel));
+            });
+        }
+        if let Some(book) = &self.book {
+            let idx = self.selected.min(book.sections.len().saturating_sub(1));
+            let page = &book.sections[idx];
+            let sheet = (!page.rows.is_empty()).then(|| crate::rich_previews::SheetTable {
+                rows: page.rows.clone(),
+                start_row: page.start_row as usize,
+                start_col: page.start_col as usize,
+                truncated_rows: usize::from(book.truncated),
+                truncated_cols: 0,
+                delimiter_label: "Workbook sheet",
+            });
+            OfficeSummary {
+                section_titles: book.sections.iter().map(|s| s.title.clone()).collect(),
+                selected: idx,
+                paragraphs: page
+                    .paragraphs
+                    .iter()
+                    .map(|p| (p.heading, p.text.clone()))
+                    .collect(),
+                sheet,
+                truncated: book.truncated,
+                busy: self.pending.is_some(),
+                error: self.error.clone(),
+            }
+        } else {
+            OfficeSummary {
+                busy: self.pending.is_some(),
+                error: self.error.clone(),
+                ..Default::default()
+            }
+        }
+    }
+
+    pub fn select_section(&mut self, idx: usize) {
+        self.selected = idx;
+    }
+
     pub fn open(path: &Path) -> Result<Self, String> {
         let mut bytes = Vec::new();
         File::open(path)

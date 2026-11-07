@@ -10,6 +10,24 @@ use crate::theme_palettes::ThemeId;
 use crate::workspace::{KeepAwakeSetting, RendererPreference, SideTab, Workspace};
 use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum GpuiFocusTarget {
+    #[default]
+    None,
+    Terminal(Option<u64>),
+    TerminalFind(Option<u64>),
+    ChatComposer(u64),
+    ChatQuestion {
+        pane_id: u64,
+        q_idx: usize,
+    },
+    EditorFind,
+    EditorReplace,
+    EditorGoto,
+    EditorBody,
+    BrowserUrl,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuiCenterMode {
     NoProjectsWelcome,
@@ -77,6 +95,8 @@ pub(crate) struct GpuiPaneTileSnapshot {
     pub kind_label: String,
     pub is_agent: bool,
     pub is_native_chat: bool,
+    pub can_switch_chat_mode: bool,
+    pub dormant: bool,
     pub active: bool,
     pub maximized: bool,
     pub broadcast: bool,
@@ -88,7 +108,22 @@ pub(crate) struct GpuiPaneTileSnapshot {
     pub cwd_display: String,
     pub rect_px: PxRect,
     pub preview_lines: Vec<String>,
+    pub terminal_render: Option<crate::terminal::TerminalRenderSnapshot>,
+    pub cursor_style: crate::workspace::TerminalCursorStyle,
+    pub native_chat: Option<crate::chat::NativeChatViewSnapshot>,
     pub error: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiFloatingTerminalSnapshot {
+    pub open: bool,
+    pub height_ratio: f32,
+    pub title: String,
+    pub starting: bool,
+    pub error: Option<String>,
+    pub terminal_render: Option<crate::terminal::TerminalRenderSnapshot>,
+    pub cursor_style: crate::workspace::TerminalCursorStyle,
 }
 
 #[allow(dead_code)]
@@ -118,13 +153,49 @@ pub(crate) struct GpuiStatusBarSnapshot {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiActiveDocumentSummary {
+    pub doc_index: usize,
     pub title: String,
     pub path_display: String,
+    pub extension: String,
+    pub lang: crate::syntax::SyntaxLang,
+    pub is_diff: bool,
     pub dirty: bool,
     pub preview_mode: bool,
+    pub can_toggle_preview: bool,
     pub media: bool,
+    pub word_wrap: bool,
+    pub find_open: bool,
+    pub replace_open: bool,
+    pub goto_open: bool,
+    pub find_query: String,
+    pub replace_text: String,
+    pub goto_line: String,
+    pub match_count: usize,
+    pub match_index: usize,
+    pub match_lines: Vec<usize>,
+    pub hunk_lines: Vec<usize>,
+    pub scroll_to_line: Option<usize>,
     pub line_count: usize,
+    pub text: String,
     pub preview_lines: Vec<String>,
+    pub force_large_markdown_render: bool,
+    pub sheet: Option<crate::rich_previews::SheetTable>,
+    pub json_preview: Option<crate::rich_previews::JsonDocumentPreview>,
+    pub readable_blocks: Vec<crate::preview::ReadableBlock>,
+    pub pdf_summary: Option<crate::pdf::PdfSummaryTuple>,
+    pub office_summary: Option<crate::office::OfficeSummary>,
+    pub image_dims: Option<[usize; 2]>,
+    pub error: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GpuiBrowserSnapshot {
+    pub started: bool,
+    pub address: String,
+    pub popup_url: Option<String>,
+    pub downloads_open: bool,
+    pub downloads: Vec<crate::browser::DownloadSummaryRow>,
     pub error: String,
 }
 
@@ -159,7 +230,9 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub view_tabs: Vec<GpuiViewTabItem>,
     pub tiles: Vec<GpuiPaneTileSnapshot>,
     pub dividers: Vec<GpuiDividerSnapshot>,
+    pub floating: GpuiFloatingTerminalSnapshot,
     pub active_document: Option<GpuiActiveDocumentSummary>,
+    pub browser: GpuiBrowserSnapshot,
     pub side_panel: GpuiSidePanelSummary,
     pub status_bar: GpuiStatusBarSnapshot,
 }
@@ -183,6 +256,9 @@ pub(crate) enum GpuiAction {
     LaunchClaudeChat,
     FocusSession(u64),
     CloseSession(u64),
+    WakeSession(u64),
+    RestartSession(u64),
+    SwitchSessionChatMode(u64),
     ToggleMaximizeSession(u64),
     ToggleSessionBroadcast(u64),
     ToggleBroadcastMode,
@@ -202,6 +278,113 @@ pub(crate) enum GpuiAction {
     SelectBrowserTab,
     CloseBrowserTab,
     ToggleFloatingTerminal,
+    RestartFloatingTerminal,
+    CloseFloatingTerminal,
+    SetFloatingHeightRatio(f32),
+    // Terminal actions (`None` targets the Floating Terminal)
+    TerminalScroll {
+        session_id: Option<u64>,
+        delta_lines: i64,
+    },
+    TerminalBackToLive(Option<u64>),
+    TerminalPaste {
+        session_id: Option<u64>,
+        text: String,
+    },
+    TerminalConfirmMultilinePaste {
+        session_id: Option<u64>,
+        confirm: bool,
+    },
+    TerminalOpenFind(Option<u64>),
+    TerminalCloseFind(Option<u64>),
+    TerminalSetFindQuery {
+        session_id: Option<u64>,
+        query: String,
+    },
+    TerminalStepFind {
+        session_id: Option<u64>,
+        dir: isize,
+    },
+    TerminalDismissDeviceLogin(Option<u64>),
+    TerminalOpenTesselUrl(String),
+    // Native Chat (Codex & Claude) actions
+    ChatConnect(u64),
+    ChatStop(u64),
+    ChatInterrupt(u64),
+    ChatNewConversation(u64),
+    ChatLoadOlder(u64),
+    ChatSetComposer {
+        pane_id: u64,
+        text: String,
+    },
+    ChatSend(u64),
+    ChatSetModel {
+        pane_id: u64,
+        model: String,
+    },
+    ChatSetEffort {
+        pane_id: u64,
+        effort: String,
+    },
+    ChatSetResume {
+        pane_id: u64,
+        resume: String,
+    },
+    ChatRespondApproval {
+        pane_id: u64,
+        allow: bool,
+    },
+    ChatSelectQuestionOption {
+        pane_id: u64,
+        q_idx: usize,
+        opt_idx: usize,
+    },
+    ChatSetQuestionText {
+        pane_id: u64,
+        q_idx: usize,
+        text: String,
+    },
+    ChatSubmitQuestions {
+        pane_id: u64,
+        skip: bool,
+    },
+    // Document / Diff / Rich Preview actions
+    OpenDocumentPath(PathBuf),
+    SaveActiveDocument,
+    ToggleActiveDocumentPreview,
+    ForceRenderLargeMarkdown,
+    ToggleEditorWordWrap,
+    ToggleEditorFind,
+    ToggleEditorReplace,
+    ToggleEditorGoto,
+    SetEditorFindQuery(String),
+    SetEditorReplaceText(String),
+    StepEditorFind(isize),
+    ReplaceEditorCurrent,
+    ReplaceEditorAll,
+    SetEditorGotoSpec(String),
+    ApplyEditorGoto,
+    EditActiveDocumentLine {
+        line_idx: usize,
+        new_line: String,
+    },
+    AppendActiveDocumentText(String),
+    BackspaceActiveDocument,
+    StepPdfPage(isize),
+    StepPdfZoom(f32),
+    SelectOfficeSection(usize),
+    FollowDocumentLink(String),
+    // Embedded Browser Tab actions
+    BrowserSetAddress(String),
+    BrowserNavigate,
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserAcceptPopup,
+    BrowserDismissPopup,
+    BrowserToggleDownloads,
+    BrowserCancelDownload(u64),
+    // Global modals & settings
     ToggleCommandPalette,
     OpenSettings,
     OpenSettingsPage(String),
@@ -524,6 +707,477 @@ impl Tessel {
         self.poll();
         self.floating.poll();
         self.sync_live_share();
+        #[cfg(windows)]
+        self.browser.poll();
+        self.flush_gpui_terminal_side_effects();
+    }
+
+    fn flush_gpui_terminal_side_effects(&mut self) {
+        let mut pending_url: Option<String> = None;
+        let mut broadcasts: Vec<(u64, Vec<crate::terminal::BroadcastInput>)> = Vec::new();
+        for sess in &mut self.sessions {
+            let agent_tag = match &sess.launch {
+                Launch::Agent(a) => Some(a.clone()),
+                _ => None,
+            };
+            if let Some(term) = &mut sess.terminal {
+                term.set_agent_kind(agent_tag.as_deref());
+                if let Some(url) = term.take_pending_tessel_url() {
+                    pending_url = Some(url);
+                }
+                let out = term.take_broadcast_inputs();
+                if !out.is_empty() {
+                    broadcasts.push((sess.id, out));
+                }
+            }
+        }
+        if let Some(term) = self.floating.process_mut()
+            && let Some(url) = term.take_pending_tessel_url()
+        {
+            pending_url = Some(url);
+        }
+        if self.state.broadcast && !broadcasts.is_empty() {
+            let active_proj = self.state.active_project;
+            for (src_id, items) in broadcasts {
+                let src_in_broadcast = self
+                    .sessions
+                    .iter()
+                    .any(|s| s.id == src_id && s.project == active_proj && s.broadcast);
+                if !src_in_broadcast {
+                    continue;
+                }
+                for sess in &mut self.sessions {
+                    if sess.id != src_id
+                        && sess.project == active_proj
+                        && sess.broadcast
+                        && let Some(term) = &mut sess.terminal
+                    {
+                        for item in &items {
+                            term.send_broadcast(item);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(url) = pending_url {
+            self.open_tessel_url_headless(url);
+        }
+    }
+
+    fn open_tessel_url_headless(&mut self, url: String) {
+        #[cfg(windows)]
+        {
+            self.browser_tab_open = true;
+            self.browser.open_url(&url);
+            self.view = View::Browser;
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = url;
+        }
+    }
+
+    /// Forwards a `GPUI` keystroke directly to the target session or floating terminal PTY.
+    /// Returns `Some(copied_text)` when `Ctrl+C` (with active selection) or `Ctrl+Shift+C` copies text.
+    pub(crate) fn send_gpui_terminal_key(
+        &mut self,
+        session_id: Option<u64>,
+        key: &str,
+        key_char: Option<&str>,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+    ) -> Option<String> {
+        let copied = match session_id {
+            Some(sid) => self
+                .sessions
+                .iter_mut()
+                .find(|s| s.id == sid)
+                .and_then(|s| s.terminal.as_mut())
+                .and_then(|t| t.gpui_send_key(key, key_char, ctrl, alt, shift, false)),
+            None => self
+                .floating
+                .process_mut()
+                .and_then(|t| t.gpui_send_key(key, key_char, ctrl, alt, shift, true)),
+        };
+        self.flush_gpui_terminal_side_effects();
+        copied
+    }
+
+    pub(crate) fn gpui_has_open_modal(&self) -> bool {
+        self.overlay.is_some()
+            || self.command_palette.open
+            || self.dialogs_toolbar_ui.add_project_open
+            || self.dialogs_toolbar_ui.github_open
+    }
+
+    pub(crate) fn gpui_is_document_view(&self) -> bool {
+        self.view == View::Files && !self.documents.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_claude_frame_for_test(&mut self, pane_id: u64, frame: serde_json::Value) {
+        self.ensure_native_chat_instances();
+        if let Some(chat) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+            chat.process_protocol_frame_for_test(frame);
+        }
+    }
+
+    pub(crate) fn gpui_default_focus_target(&self) -> GpuiFocusTarget {
+        if self.floating.ui.is_open() {
+            return GpuiFocusTarget::Terminal(None);
+        }
+        match self.view {
+            View::Work => {
+                if let Some(sid) = self.active_session
+                    && let Some(sess) = self.sessions.iter().find(|s| s.id == sid)
+                {
+                    if sess.launch.native_chat().is_some() {
+                        GpuiFocusTarget::ChatComposer(sid)
+                    } else {
+                        GpuiFocusTarget::Terminal(Some(sid))
+                    }
+                } else {
+                    GpuiFocusTarget::None
+                }
+            }
+            View::Files => GpuiFocusTarget::EditorBody,
+            View::Remote => GpuiFocusTarget::None,
+            #[cfg(windows)]
+            View::Browser => GpuiFocusTarget::BrowserUrl,
+        }
+    }
+
+    pub(crate) fn gpui_handle_text_target_key(
+        &mut self,
+        target: GpuiFocusTarget,
+        key: &str,
+        printable: Option<&str>,
+        shift: bool,
+        pasted: Option<String>,
+    ) -> bool {
+        self.ensure_native_chat_instances();
+        let lower = key.to_ascii_lowercase();
+        match target {
+            GpuiFocusTarget::None | GpuiFocusTarget::Terminal(_) => false,
+            GpuiFocusTarget::TerminalFind(session_id) => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::TerminalStepFind {
+                        session_id,
+                        dir: if shift { -1 } else { 1 },
+                    });
+                    return true;
+                }
+                let mut cur = match session_id {
+                    Some(sid) => self
+                        .sessions
+                        .iter()
+                        .find(|s| s.id == sid)
+                        .and_then(|s| s.terminal.as_ref())
+                        .map(|t| t.gpui_find_query_str().to_owned())
+                        .unwrap_or_default(),
+                    None => self
+                        .floating
+                        .process_mut()
+                        .map(|t| t.gpui_find_query_str().to_owned())
+                        .unwrap_or_default(),
+                };
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
+                        session_id,
+                        query: cur,
+                    });
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
+                        session_id,
+                        query: cur,
+                    });
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
+                        session_id,
+                        query: cur,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ChatComposer(pane_id) => {
+                let mut cur = self
+                    .chats
+                    .iter()
+                    .find(|c| c.pane == pane_id)
+                    .map(|c| c.gpui_snapshot().composer)
+                    .or_else(|| {
+                        self.claude_chats
+                            .iter()
+                            .find(|c| c.pane == pane_id)
+                            .map(|c| c.gpui_snapshot().composer)
+                    })
+                    .unwrap_or_default();
+                if lower == "enter" && !shift {
+                    self.apply_gpui_action(GpuiAction::ChatSend(pane_id));
+                    return true;
+                }
+                if lower == "enter" && shift {
+                    cur.push('\n');
+                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
+                    return true;
+                }
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ChatQuestion { pane_id, q_idx } => {
+                let mut cur = self
+                    .chats
+                    .iter()
+                    .find(|c| c.pane == pane_id)
+                    .and_then(|c| {
+                        c.gpui_snapshot()
+                            .questions
+                            .get(q_idx)
+                            .map(|q| q.text.clone())
+                    })
+                    .or_else(|| {
+                        self.claude_chats
+                            .iter()
+                            .find(|c| c.pane == pane_id)
+                            .and_then(|c| {
+                                c.gpui_snapshot()
+                                    .questions
+                                    .get(q_idx)
+                                    .map(|q| q.text.clone())
+                            })
+                    })
+                    .unwrap_or_default();
+                if lower == "enter" && !shift {
+                    self.apply_gpui_action(GpuiAction::ChatSubmitQuestions {
+                        pane_id,
+                        skip: false,
+                    });
+                    return true;
+                }
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
+                        pane_id,
+                        q_idx,
+                        text: cur,
+                    });
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
+                        pane_id,
+                        q_idx,
+                        text: cur,
+                    });
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
+                        pane_id,
+                        q_idx,
+                        text: cur,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::EditorFind => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::StepEditorFind(if shift { -1 } else { 1 }));
+                    return true;
+                }
+                let mut cur = self
+                    .documents
+                    .get(self.active_document)
+                    .map(|d| d.tools.find_query.clone())
+                    .unwrap_or_default();
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::EditorReplace => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::ReplaceEditorCurrent);
+                    return true;
+                }
+                let mut cur = self
+                    .documents
+                    .get(self.active_document)
+                    .map(|d| d.tools.replace_text.clone())
+                    .unwrap_or_default();
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::EditorGoto => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::ApplyEditorGoto);
+                    return true;
+                }
+                let mut cur = self
+                    .documents
+                    .get(self.active_document)
+                    .map(|d| d.tools.goto_line.clone())
+                    .unwrap_or_default();
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::EditorBody => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText("\n".into()));
+                    true
+                } else if lower == "tab" {
+                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText("    ".into()));
+                    true
+                } else if let Some(p) = pasted {
+                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText(p));
+                    true
+                } else if lower == "backspace" {
+                    self.apply_gpui_action(GpuiAction::BackspaceActiveDocument);
+                    true
+                } else if let Some(txt) = printable {
+                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText(txt.to_owned()));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::BrowserUrl => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::BrowserNavigate);
+                    return true;
+                }
+                #[cfg(windows)]
+                let mut cur = self.browser.address_str().to_owned();
+                #[cfg(not(windows))]
+                let mut cur = String::new();
+                if let Some(p) = pasted {
+                    cur.push_str(&p);
+                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
+                    true
+                } else if lower == "backspace" {
+                    let _ = cur.pop();
+                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
+                    true
+                } else if let Some(txt) = printable {
+                    cur.push_str(txt);
+                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn ensure_native_chat_instances(&mut self) {
+        type PendingChatInit = (u64, u64, PathBuf, Option<String>, Option<serde_json::Value>);
+        let mut need_codex: Vec<PendingChatInit> = Vec::new();
+        let mut need_claude: Vec<PendingChatInit> = Vec::new();
+        for sess in &self.sessions {
+            let Some(pid) = sess.project else {
+                continue;
+            };
+            match &sess.launch {
+                Launch::CodexChat if !self.chats.iter().any(|c| c.pane == sess.id) => {
+                    need_codex.push((
+                        sess.id,
+                        pid,
+                        sess.cwd.clone(),
+                        sess.conversation_id.clone(),
+                        sess.session_options.clone(),
+                    ));
+                }
+                Launch::ClaudeChat if !self.claude_chats.iter().any(|c| c.pane == sess.id) => {
+                    need_claude.push((
+                        sess.id,
+                        pid,
+                        sess.cwd.clone(),
+                        sess.conversation_id.clone(),
+                        sess.session_options.clone(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for (pane_id, pid, cwd, conv, opts) in need_codex {
+            let mut chat = crate::chat::Chat::new(pid, cwd);
+            chat.pane = pane_id;
+            if let Some(id) = conv {
+                chat.set_resume(id);
+            }
+            if let Some(val) = opts {
+                chat.options = crate::native_chat_options::Options::from_value(Some(&val));
+            }
+            self.chats.push(chat);
+        }
+        for (pane_id, pid, cwd, conv, opts) in need_claude {
+            let mut chat = crate::claude::Chat::new(pid, cwd, conv);
+            chat.pane = pane_id;
+            if let Some(val) = opts {
+                chat.options = crate::native_chat_options::Options::from_value(Some(&val));
+            }
+            self.claude_chats.push(chat);
+        }
     }
 
     pub(crate) fn gpui_snapshot(
@@ -535,6 +1189,8 @@ impl Tessel {
         use crate::status_metrics::should_keep_awake;
         use crate::view_tabs_browser_model::{OpenTabLabelInput, base_tab_label};
 
+        self.ensure_native_chat_instances();
+
         let room = [
             f64::from(grid_room_w.max(320.0)),
             f64::from(grid_room_h.max(180.0)),
@@ -542,6 +1198,9 @@ impl Tessel {
         self.grid_room = room;
         let french = self.state.language == crate::i18n::Language::French;
         let theme = self.state.theme.unwrap_or(ThemeId::Classic);
+        let term_palette = theme.spec().term;
+        let font_size = self.state.font_size;
+        let term_prefs = self.state.terminal_prefs;
 
         let project_session_ids: Vec<u64> = self
             .sessions
@@ -619,30 +1278,26 @@ impl Tessel {
             any_agent_working,
         ));
 
-        let mut tiles = Vec::new();
+        let mut tile_targets: Vec<(u64, bool, PxRect)> = Vec::new();
         let mut dividers = Vec::new();
         if let Some(max_sid) = maximized_id.filter(|id| project_session_ids.contains(id)) {
-            if let Some(sess) = self.sessions.iter().find(|s| s.id == max_sid) {
-                tiles.push(self.build_pane_tile_snapshot(
-                    sess,
-                    true,
-                    PxRect {
-                        left: 0.0,
-                        top: 0.0,
-                        width: room[0],
-                        height: room[1],
-                    },
-                ));
-            }
+            tile_targets.push((
+                max_sid,
+                true,
+                PxRect {
+                    left: 0.0,
+                    top: 0.0,
+                    width: room[0],
+                    height: room[1],
+                },
+            ));
         } else if let Some(layout) = self.state.terminal_layouts.get(&layout_key) {
             let geom = crate::pane_grid::grid_layout(layout.tree.as_ref());
             let div_px = f64::from(divider_px);
             for tile in &geom.tiles {
-                if let Ok(sid) = tile.leaf.id.parse::<u64>()
-                    && let Some(sess) = self.sessions.iter().find(|s| s.id == sid)
-                {
+                if let Ok(sid) = tile.leaf.id.parse::<u64>() {
                     let rect_px = tile.rect.to_px(room[0], room[1], div_px);
-                    tiles.push(self.build_pane_tile_snapshot(sess, false, rect_px));
+                    tile_targets.push((sid, false, rect_px));
                 }
             }
             for div in &geom.dividers {
@@ -662,6 +1317,67 @@ impl Tessel {
                 });
             }
         }
+
+        let mut tiles = Vec::with_capacity(tile_targets.len());
+        for (sid, maximized, rect_px) in tile_targets {
+            if let Some(idx) = self.sessions.iter().position(|s| s.id == sid) {
+                // Resize & snapshot terminal if present:
+                let term_render = if let Some(term) = &mut self.sessions[idx].terminal {
+                    let inner_w = (rect_px.width as f32 - 16.0).max(80.0);
+                    let inner_h = (rect_px.height as f32 - 42.0).max(40.0);
+                    term.gpui_resize_to_pixels(inner_w, inner_h, font_size, term_prefs.line_height);
+                    Some(term.gpui_snapshot(&term_palette))
+                } else {
+                    None
+                };
+                let sess = &self.sessions[idx];
+                tiles.push(self.build_pane_tile_snapshot(
+                    sess,
+                    maximized,
+                    rect_px,
+                    term_render,
+                    term_prefs.cursor_style,
+                ));
+            }
+        }
+
+        let floating = {
+            let open = self.floating.ui.is_open();
+            let height_ratio = (self.floating.ui.height as f32).clamp(0.20, 0.85);
+            let phase = self.floating.phase();
+            let starting = matches!(
+                phase,
+                crate::floating_terminal_runtime::Phase::Opening
+                    | crate::floating_terminal_runtime::Phase::Restarting
+                    | crate::floating_terminal_runtime::Phase::Closing
+            );
+            let error = self.floating.runtime_error().map(str::to_owned);
+            let title = self.floating.title_str().to_owned();
+            let terminal_render = if open {
+                let drawer_h = (grid_room_h * height_ratio - 38.0).max(48.0);
+                let drawer_w = (grid_room_w - 20.0).max(120.0);
+                self.floating.process_mut().map(|term| {
+                    term.gpui_resize_to_pixels(
+                        drawer_w,
+                        drawer_h,
+                        font_size,
+                        term_prefs.line_height,
+                    );
+                    term.gpui_snapshot(&term_palette)
+                })
+            } else {
+                None
+            };
+            GpuiFloatingTerminalSnapshot {
+                open,
+                height_ratio,
+                title,
+                starting,
+                error,
+                terminal_render,
+                cursor_style: term_prefs.cursor_style,
+            }
+        };
 
         let projects: Vec<GpuiProjectItem> = self
             .state
@@ -800,41 +1516,26 @@ impl Tessel {
             }
         };
 
-        let active_document = (self.view == View::Files)
-            .then(|| self.documents.get(self.active_document))
-            .flatten()
-            .map(|doc| {
-                let title = doc
-                    .diff_title
-                    .clone()
-                    .or_else(|| {
-                        doc.path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| tr("Editor").into());
-                let line_count = if doc.media {
-                    0
-                } else {
-                    doc.text.lines().count().max(1)
-                };
-                let preview_lines: Vec<String> = doc
-                    .text
-                    .lines()
-                    .take(48)
-                    .map(|l| l.replace('\t', "    "))
-                    .collect();
-                GpuiActiveDocumentSummary {
-                    title,
-                    path_display: doc.path.to_string_lossy().into_owned(),
-                    dirty: doc.dirty(),
-                    preview_mode: doc.preview_mode,
-                    media: doc.media,
-                    line_count,
-                    preview_lines,
-                    error: doc.error.clone(),
-                }
-            });
+        let active_doc_idx = self.active_document;
+        let active_document = if self.view == View::Files {
+            self.documents
+                .get_mut(active_doc_idx)
+                .map(|doc| Self::build_document_summary(active_doc_idx, doc))
+        } else {
+            None
+        };
+
+        #[cfg(windows)]
+        let browser = GpuiBrowserSnapshot {
+            started: self.browser.is_started(),
+            address: self.browser.address_str().to_owned(),
+            popup_url: self.browser.popup_url().map(str::to_owned),
+            downloads_open: self.browser.downloads_open(),
+            downloads: self.browser.download_summaries(),
+            error: self.browser.error_str().to_owned(),
+        };
+        #[cfg(not(windows))]
+        let browser = GpuiBrowserSnapshot::default();
 
         let preferred_shell_label = match self.state.launcher_prefs.preferred_shell.as_deref() {
             Some("cmd") if cfg!(windows) => "CMD".into(),
@@ -916,7 +1617,7 @@ impl Tessel {
             theme,
             dark: self.state.dark,
             french,
-            font_size: self.state.font_size,
+            font_size,
             renderer: self.state.renderer,
             right_fullscreen: self.right_fullscreen,
             right_tab: self.state.panels.right_tab,
@@ -927,7 +1628,7 @@ impl Tessel {
                 right_open: self.state.panels.right_open,
                 broadcast_enabled: self.state.broadcast,
                 broadcast_count,
-                floating_open: self.floating.ui.is_open(),
+                floating_open: floating.open,
                 share_active: self.overlay == Some(Overlay::Share)
                     || self.share.has_pending_ask()
                     || self.share.is_pill_popover_open(),
@@ -944,7 +1645,9 @@ impl Tessel {
             view_tabs,
             tiles,
             dividers,
+            floating,
             active_document,
+            browser,
             side_panel: GpuiSidePanelSummary {
                 tab: self.state.panels.right_tab,
                 changed_files_count,
@@ -970,17 +1673,174 @@ impl Tessel {
         }
     }
 
+    fn build_document_summary(
+        doc_index: usize,
+        doc: &mut crate::files::Document,
+    ) -> GpuiActiveDocumentSummary {
+        let title = doc
+            .diff_title
+            .clone()
+            .or_else(|| {
+                doc.path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| tr("Editor").into());
+        let extension = doc
+            .path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        let is_diff = doc.diff_title.is_some() && !doc.preview_mode;
+        let lang = crate::syntax::SyntaxLang::from_path(&doc.path);
+        let can_toggle_preview = doc.diff_title.is_none()
+            && doc.pdf.is_none()
+            && doc.office.is_none()
+            && doc.image.is_none()
+            && matches!(
+                extension.as_str(),
+                "md" | "markdown"
+                    | "html"
+                    | "htm"
+                    | "csv"
+                    | "tsv"
+                    | "json"
+                    | "jsonc"
+                    | "jsonl"
+                    | "ndjson"
+            );
+        let line_count = if doc.pdf.is_some() || doc.office.is_some() || doc.image.is_some() {
+            0
+        } else {
+            doc.text.lines().count().max(1)
+        };
+        let preview_lines: Vec<String> = doc
+            .text
+            .lines()
+            .take(500)
+            .map(|l| l.replace('\t', "    "))
+            .collect();
+
+        let matches = if doc.tools.find_open && !doc.tools.find_query.is_empty() {
+            crate::files::find_char_matches(&doc.text, &doc.tools.find_query)
+        } else {
+            Vec::new()
+        };
+        let match_count = matches.len();
+        let match_index = if match_count == 0 {
+            0
+        } else {
+            doc.tools.match_index.min(match_count - 1)
+        };
+        let match_lines: Vec<usize> = matches.iter().map(|m| m.2).collect();
+        let hunk_lines: Vec<usize> = if !doc.media
+            && let Some(orig) = doc.original_text()
+        {
+            crate::files::changed_line_hunks(orig, &doc.text)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let scroll_to_line = doc.tools.pending_scroll_line.take();
+
+        let sheet = if doc.preview_mode && matches!(extension.as_str(), "csv" | "tsv") {
+            if doc.sheet_cache.is_none() {
+                let explicit = (extension == "tsv").then_some(b'\t');
+                doc.sheet_cache = Some(crate::rich_previews::parse_delimited_sheet(
+                    &doc.text, explicit,
+                ));
+            }
+            doc.sheet_cache.clone()
+        } else {
+            None
+        };
+
+        let json_preview = if doc.preview_mode
+            && matches!(extension.as_str(), "json" | "jsonc" | "jsonl" | "ndjson")
+        {
+            crate::rich_previews::parse_json_or_jsonl(&doc.text, &extension).ok()
+        } else {
+            None
+        };
+
+        let readable_blocks = if doc.preview_mode && matches!(extension.as_str(), "html" | "htm") {
+            if doc.preview.is_none() {
+                doc.preview = Some(crate::preview::Preview::parse(&doc.text, false));
+            }
+            doc.preview
+                .as_ref()
+                .map(crate::preview::Preview::blocks)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let pdf_summary = doc.pdf.as_mut().map(crate::pdf::PdfView::gpui_poll_summary);
+        let office_summary = doc
+            .office
+            .as_mut()
+            .map(crate::office::OfficeView::gpui_poll_summary);
+        let image_dims = doc.image.as_ref().map(|img| img.size);
+
+        GpuiActiveDocumentSummary {
+            doc_index,
+            title,
+            path_display: doc.path.to_string_lossy().into_owned(),
+            extension,
+            lang,
+            is_diff,
+            dirty: doc.dirty(),
+            preview_mode: doc.preview_mode,
+            can_toggle_preview,
+            media: doc.media,
+            word_wrap: doc.tools.word_wrap,
+            find_open: doc.tools.find_open,
+            replace_open: doc.tools.replace_open,
+            goto_open: doc.tools.goto_open,
+            find_query: doc.tools.find_query.clone(),
+            replace_text: doc.tools.replace_text.clone(),
+            goto_line: doc.tools.goto_line.clone(),
+            match_count,
+            match_index,
+            match_lines,
+            hunk_lines,
+            scroll_to_line,
+            line_count,
+            text: doc.text.clone(),
+            preview_lines,
+            force_large_markdown_render: doc.force_large_markdown_render,
+            sheet,
+            json_preview,
+            readable_blocks,
+            pdf_summary,
+            office_summary,
+            image_dims,
+            error: doc.error.clone(),
+        }
+    }
+
     fn build_pane_tile_snapshot(
         &self,
         sess: &Session,
         maximized: bool,
         rect_px: PxRect,
+        terminal_render: Option<crate::terminal::TerminalRenderSnapshot>,
+        cursor_style: crate::workspace::TerminalCursorStyle,
     ) -> GpuiPaneTileSnapshot {
         let is_agent = matches!(
             sess.launch,
             Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
         );
         let is_native_chat = sess.launch.native_chat().is_some();
+        let can_switch_chat_mode = is_native_chat
+            || matches!(&sess.launch, Launch::Agent(a) if matches!(a.as_str(), "codex" | "claude"));
+        let dormant = !is_native_chat
+            && sess.terminal.is_none()
+            && sess.loading.is_none()
+            && sess.restarting.is_none();
         let kind_label = match &sess.launch {
             Launch::Shell => "Shell".into(),
             Launch::CodexChat => "Codex Chat".into(),
@@ -1035,6 +1895,19 @@ impl Tessel {
         } else {
             Vec::new()
         };
+        let native_chat = match &sess.launch {
+            Launch::CodexChat => self
+                .chats
+                .iter()
+                .find(|c| c.pane == sess.id)
+                .map(crate::chat::Chat::gpui_snapshot),
+            Launch::ClaudeChat => self
+                .claude_chats
+                .iter()
+                .find(|c| c.pane == sess.id)
+                .map(crate::claude::Chat::gpui_snapshot),
+            _ => None,
+        };
 
         GpuiPaneTileSnapshot {
             session_id: sess.id,
@@ -1042,6 +1915,8 @@ impl Tessel {
             kind_label,
             is_agent,
             is_native_chat,
+            can_switch_chat_mode,
+            dormant,
             active: self.active_session == Some(sess.id),
             maximized,
             broadcast: sess.broadcast,
@@ -1053,11 +1928,39 @@ impl Tessel {
             cwd_display: sess.cwd.to_string_lossy().into_owned(),
             rect_px,
             preview_lines,
+            terminal_render,
+            cursor_style,
+            native_chat,
             error: sess.error.clone(),
         }
     }
 
+    fn with_target_terminal(
+        &mut self,
+        session_id: Option<u64>,
+        f: impl FnOnce(&mut crate::terminal::Terminal),
+    ) {
+        match session_id {
+            Some(sid) => {
+                if let Some(term) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|s| s.id == sid)
+                    .and_then(|s| s.terminal.as_mut())
+                {
+                    f(term);
+                }
+            }
+            None => {
+                if let Some(term) = self.floating.process_mut() {
+                    f(term);
+                }
+            }
+        }
+    }
+
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
+        self.ensure_native_chat_instances();
         match action {
             GpuiAction::ToggleLeftSidebar => {
                 self.state.panels.left_open = !self.state.panels.left_open;
@@ -1130,7 +2033,9 @@ impl Tessel {
                     && let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned()
                 {
                     self.new_session_placed(Launch::CodexChat, None);
-                    if let Some(pane_id) = self.active_session {
+                    if let Some(pane_id) = self.active_session
+                        && !self.chats.iter().any(|c| c.pane == pane_id)
+                    {
                         let mut chat = crate::chat::Chat::new(pid, proj.path);
                         chat.pane = pane_id;
                         self.chats.push(chat);
@@ -1144,7 +2049,9 @@ impl Tessel {
                     && let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned()
                 {
                     self.new_session_placed(Launch::ClaudeChat, None);
-                    if let Some(pane_id) = self.active_session {
+                    if let Some(pane_id) = self.active_session
+                        && !self.claude_chats.iter().any(|c| c.pane == pane_id)
+                    {
                         let mut chat = crate::claude::Chat::new(pid, proj.path, None);
                         chat.pane = pane_id;
                         self.claude_chats.push(chat);
@@ -1161,6 +2068,59 @@ impl Tessel {
             }
             GpuiAction::CloseSession(id) => {
                 self.close_session(id);
+            }
+            GpuiAction::WakeSession(id) => {
+                let preferred_shell = self.state.launcher_prefs.preferred_shell.clone();
+                let prefs =
+                    self.sessions
+                        .iter()
+                        .find(|s| s.id == id)
+                        .and_then(|s| match &s.launch {
+                            Launch::Agent(agent) => {
+                                Some(crate::agent_preferences::for_pane_launch(
+                                    &self.state,
+                                    agent,
+                                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                                    s.session_options.as_ref(),
+                                ))
+                            }
+                            _ => None,
+                        });
+                if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id) {
+                    sess.start_with_shell(prefs, preferred_shell);
+                }
+                self.active_session = Some(id);
+            }
+            GpuiAction::RestartSession(id) => {
+                let preferred_shell = self.state.launcher_prefs.preferred_shell.clone();
+                let prefs =
+                    self.sessions
+                        .iter()
+                        .find(|s| s.id == id)
+                        .and_then(|s| match &s.launch {
+                            Launch::Agent(agent) => {
+                                Some(crate::agent_preferences::for_pane_launch(
+                                    &self.state,
+                                    agent,
+                                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                                    s.session_options.as_ref(),
+                                ))
+                            }
+                            _ => None,
+                        });
+                if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id) {
+                    if let Some(mut term) = sess.terminal.take() {
+                        thread::spawn(move || {
+                            let _ = term.stop_for_restart();
+                        });
+                    }
+                    sess.error.clear();
+                    sess.start_with_shell(prefs, preferred_shell);
+                }
+            }
+            GpuiAction::SwitchSessionChatMode(pane_id) => {
+                self.switch_session_chat_mode(pane_id);
+                self.ensure_native_chat_instances();
             }
             GpuiAction::ToggleMaximizeSession(id) => {
                 let key = crate::terminal_layout::project_key(self.state.active_project);
@@ -1252,6 +2212,7 @@ impl Tessel {
                 #[cfg(windows)]
                 {
                     self.browser_tab_open = false;
+                    self.browser.visible(false);
                     if self.view == View::Browser {
                         self.view = if self.documents.is_empty() {
                             View::Work
@@ -1263,6 +2224,439 @@ impl Tessel {
             }
             GpuiAction::ToggleFloatingTerminal => {
                 self.toggle_floating_headless();
+            }
+            GpuiAction::RestartFloatingTerminal => {
+                self.restart_floating_headless();
+            }
+            GpuiAction::CloseFloatingTerminal => {
+                self.close_floating_headless();
+            }
+            GpuiAction::SetFloatingHeightRatio(ratio) => {
+                self.set_floating_height_headless(ratio);
+            }
+            GpuiAction::TerminalScroll {
+                session_id,
+                delta_lines,
+            } => {
+                self.with_target_terminal(session_id, |t| t.gpui_scroll_lines(delta_lines));
+            }
+            GpuiAction::TerminalBackToLive(session_id) => {
+                self.with_target_terminal(session_id, crate::terminal::Terminal::gpui_back_to_live);
+            }
+            GpuiAction::TerminalPaste { session_id, text } => {
+                let confirm = self.state.terminal_prefs.confirm_multiline_paste;
+                self.with_target_terminal(session_id, |t| t.gpui_paste_with_prefs(&text, confirm));
+                self.flush_gpui_terminal_side_effects();
+            }
+            GpuiAction::TerminalConfirmMultilinePaste {
+                session_id,
+                confirm,
+            } => {
+                self.with_target_terminal(session_id, |t| t.gpui_confirm_multiline_paste(confirm));
+                self.flush_gpui_terminal_side_effects();
+            }
+            GpuiAction::TerminalOpenFind(session_id) => {
+                self.with_target_terminal(session_id, crate::terminal::Terminal::open_find);
+            }
+            GpuiAction::TerminalCloseFind(session_id) => {
+                self.with_target_terminal(session_id, crate::terminal::Terminal::gpui_close_find);
+            }
+            GpuiAction::TerminalSetFindQuery { session_id, query } => {
+                self.with_target_terminal(session_id, |t| t.gpui_find_set_query(query));
+            }
+            GpuiAction::TerminalStepFind { session_id, dir } => {
+                self.with_target_terminal(session_id, |t| t.gpui_find_step(dir));
+            }
+            GpuiAction::TerminalDismissDeviceLogin(session_id) => {
+                self.with_target_terminal(
+                    session_id,
+                    crate::terminal::Terminal::gpui_dismiss_device_login,
+                );
+            }
+            GpuiAction::TerminalOpenTesselUrl(url) => {
+                self.open_tessel_url_headless(url);
+            }
+            GpuiAction::ChatConnect(pane_id) => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_connect();
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_connect();
+                }
+            }
+            GpuiAction::ChatStop(pane_id) => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_stop();
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_stop();
+                }
+            }
+            GpuiAction::ChatInterrupt(pane_id) => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_interrupt();
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_interrupt();
+                }
+            }
+            GpuiAction::ChatNewConversation(pane_id) => {
+                if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_new_conversation();
+                }
+            }
+            GpuiAction::ChatLoadOlder(pane_id) => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_load_older();
+                }
+            }
+            GpuiAction::ChatSetComposer { pane_id, text } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_composer(text);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_composer(text);
+                }
+            }
+            GpuiAction::ChatSend(pane_id) => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_send_message();
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_send_message();
+                }
+            }
+            GpuiAction::ChatSetModel { pane_id, model } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_model(model);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_model(model);
+                }
+                self.save();
+            }
+            GpuiAction::ChatSetEffort { pane_id, effort } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_effort(effort);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_effort(effort);
+                }
+                self.save();
+            }
+            GpuiAction::ChatSetResume { pane_id, resume } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.set_resume(resume);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_resume(resume);
+                }
+            }
+            GpuiAction::ChatRespondApproval { pane_id, allow } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_respond_approval(allow);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_respond_approval(allow);
+                }
+            }
+            GpuiAction::ChatSelectQuestionOption {
+                pane_id,
+                q_idx,
+                opt_idx,
+            } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_select_question_option(q_idx, opt_idx);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_select_question_option(q_idx, opt_idx);
+                }
+            }
+            GpuiAction::ChatSetQuestionText {
+                pane_id,
+                q_idx,
+                text,
+            } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_question_text(q_idx, text);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_set_question_text(q_idx, text);
+                }
+            }
+            GpuiAction::ChatSubmitQuestions { pane_id, skip } => {
+                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_submit_questions(skip);
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                    c.gpui_submit_questions(skip);
+                }
+            }
+            GpuiAction::OpenDocumentPath(path) => {
+                if let Some(pid) = self.state.active_project
+                    && let Some(root) = self
+                        .state
+                        .projects
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.path.clone())
+                {
+                    match crate::files::Document::open(&root, &path) {
+                        Ok(doc) => {
+                            self.documents.push(doc);
+                            self.active_document = self.documents.len() - 1;
+                            self.view = View::Files;
+                        }
+                        Err(e) => self.error = e,
+                    }
+                }
+            }
+            GpuiAction::SaveActiveDocument => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    match doc.save() {
+                        Ok(()) => doc.error.clear(),
+                        Err(e) => doc.error = e,
+                    }
+                }
+            }
+            GpuiAction::ToggleActiveDocumentPreview => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.preview_mode = !doc.preview_mode;
+                }
+            }
+            GpuiAction::ForceRenderLargeMarkdown => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.force_large_markdown_render = true;
+                    doc.preview_mode = true;
+                }
+            }
+            GpuiAction::ToggleEditorWordWrap => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.word_wrap = !doc.tools.word_wrap;
+                }
+            }
+            GpuiAction::ToggleEditorFind => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.find_open = !doc.tools.find_open;
+                    if !doc.tools.find_open {
+                        doc.tools.replace_open = false;
+                    }
+                }
+            }
+            GpuiAction::ToggleEditorReplace => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                {
+                    doc.tools.replace_open = !doc.tools.replace_open;
+                    if doc.tools.replace_open {
+                        doc.tools.find_open = true;
+                    }
+                }
+            }
+            GpuiAction::ToggleEditorGoto => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.goto_open = !doc.tools.goto_open;
+                }
+            }
+            GpuiAction::SetEditorFindQuery(q) => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.find_query = q;
+                    doc.tools.match_index = 0;
+                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    if let Some(first) = hits.first() {
+                        doc.tools.pending_scroll_line = Some(first.2);
+                    }
+                }
+            }
+            GpuiAction::SetEditorReplaceText(r) => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.replace_text = r;
+                }
+            }
+            GpuiAction::StepEditorFind(dir) => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    if !hits.is_empty() {
+                        let len = hits.len();
+                        doc.tools.match_index = if dir >= 0 {
+                            (doc.tools.match_index + 1) % len
+                        } else {
+                            (doc.tools.match_index + len - 1) % len
+                        };
+                        doc.tools.pending_scroll_line = Some(hits[doc.tools.match_index].2);
+                    }
+                }
+            }
+            GpuiAction::ReplaceEditorCurrent => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                {
+                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    if !hits.is_empty() {
+                        let idx = doc.tools.match_index.min(hits.len() - 1);
+                        let (sc, ec, _) = hits[idx];
+                        let (sb, eb) = crate::files::char_range_to_byte_range(&doc.text, sc, ec);
+                        doc.text.replace_range(sb..eb, &doc.tools.replace_text);
+                        doc.unpinned_preview = false;
+                        doc.sheet_cache = None;
+                        doc.preview = None;
+                        doc.last_edited_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            GpuiAction::ReplaceEditorAll => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                    && !doc.tools.find_query.is_empty()
+                {
+                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    if !hits.is_empty() {
+                        let rep = doc.tools.replace_text.clone();
+                        for &(sc, ec, _) in hits.iter().rev() {
+                            let (sb, eb) =
+                                crate::files::char_range_to_byte_range(&doc.text, sc, ec);
+                            doc.text.replace_range(sb..eb, &rep);
+                        }
+                        doc.unpinned_preview = false;
+                        doc.sheet_cache = None;
+                        doc.preview = None;
+                        doc.last_edited_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            GpuiAction::SetEditorGotoSpec(spec) => {
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.goto_line = spec;
+                }
+            }
+            GpuiAction::ApplyEditorGoto => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && let Some((_, line)) =
+                        crate::files::goto_line_char_offset(&doc.text, &doc.tools.goto_line)
+                {
+                    doc.tools.pending_scroll_line = Some(line);
+                    doc.tools.goto_open = false;
+                }
+            }
+            GpuiAction::EditActiveDocumentLine { line_idx, new_line } => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                {
+                    let uses_crlf = doc.text.contains("\r\n");
+                    let sep = if uses_crlf { "\r\n" } else { "\n" };
+                    let mut lines: Vec<String> = doc
+                        .text
+                        .split('\n')
+                        .map(|s| s.trim_end_matches('\r').to_owned())
+                        .collect();
+                    if line_idx < lines.len() {
+                        lines[line_idx] = new_line;
+                        doc.text = lines.join(sep);
+                        doc.unpinned_preview = false;
+                        doc.sheet_cache = None;
+                        doc.preview = None;
+                        doc.last_edited_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            GpuiAction::AppendActiveDocumentText(chunk) => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                    && doc.text.len() + chunk.len() <= crate::files::MAX_TEXT
+                {
+                    doc.text.push_str(&chunk);
+                    doc.unpinned_preview = false;
+                    doc.sheet_cache = None;
+                    doc.preview = None;
+                    doc.last_edited_at = Some(std::time::Instant::now());
+                }
+            }
+            GpuiAction::BackspaceActiveDocument => {
+                if let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.media
+                {
+                    let _ = doc.text.pop();
+                    doc.unpinned_preview = false;
+                    doc.sheet_cache = None;
+                    doc.preview = None;
+                    doc.last_edited_at = Some(std::time::Instant::now());
+                }
+            }
+            GpuiAction::StepPdfPage(delta) => {
+                if let Some(pdf) = self
+                    .documents
+                    .get_mut(self.active_document)
+                    .and_then(|d| d.pdf.as_mut())
+                {
+                    pdf.step_page(delta);
+                }
+            }
+            GpuiAction::StepPdfZoom(delta) => {
+                if let Some(pdf) = self
+                    .documents
+                    .get_mut(self.active_document)
+                    .and_then(|d| d.pdf.as_mut())
+                {
+                    pdf.step_zoom(delta);
+                }
+            }
+            GpuiAction::SelectOfficeSection(idx) => {
+                if let Some(office) = self
+                    .documents
+                    .get_mut(self.active_document)
+                    .and_then(|d| d.office.as_mut())
+                {
+                    office.select_section(idx);
+                }
+            }
+            GpuiAction::FollowDocumentLink(href) => {
+                if let Some((root, source)) = self
+                    .documents
+                    .get(self.active_document)
+                    .map(|d| (d.root.clone(), d.path.clone()))
+                {
+                    match crate::preview::resolve(&root, &source, &href) {
+                        Ok(crate::preview::Link::File(target)) => {
+                            if let Ok(doc) = crate::files::Document::open(&root, &target) {
+                                self.documents.push(doc);
+                                self.active_document = self.documents.len() - 1;
+                                self.view = View::Files;
+                            }
+                        }
+                        Ok(crate::preview::Link::Web(url)) => {
+                            self.open_tessel_url_headless(url);
+                        }
+                        Err(e) => self.error = e,
+                    }
+                }
+            }
+            GpuiAction::BrowserSetAddress(addr) => {
+                #[cfg(windows)]
+                self.browser.set_address_str(addr);
+                #[cfg(not(windows))]
+                let _ = addr;
+            }
+            GpuiAction::BrowserNavigate => {
+                #[cfg(windows)]
+                self.browser.navigate_now();
+            }
+            GpuiAction::BrowserBack => {
+                #[cfg(windows)]
+                self.browser.go_back_now();
+            }
+            GpuiAction::BrowserForward => {
+                #[cfg(windows)]
+                self.browser.go_forward_now();
+            }
+            GpuiAction::BrowserReload => {
+                #[cfg(windows)]
+                self.browser.reload_now();
+            }
+            GpuiAction::BrowserAcceptPopup => {
+                #[cfg(windows)]
+                self.browser.accept_popup_now();
+            }
+            GpuiAction::BrowserDismissPopup => {
+                #[cfg(windows)]
+                self.browser.dismiss_popup_now();
+            }
+            GpuiAction::BrowserToggleDownloads => {
+                #[cfg(windows)]
+                self.browser.toggle_downloads_open();
+            }
+            GpuiAction::BrowserCancelDownload(id) => {
+                #[cfg(windows)]
+                self.browser.cancel_download_now(id);
+                #[cfg(not(windows))]
+                let _ = id;
             }
             GpuiAction::ToggleCommandPalette => {
                 self.command_palette.open = !self.command_palette.open;

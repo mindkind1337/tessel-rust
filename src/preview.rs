@@ -1,6 +1,8 @@
 //! Native readable document view: no browser, script execution or resource fetching.
 use eframe::egui;
 use std::path::{Path, PathBuf};
+pub type ReadableBlock = (bool, Vec<(String, Option<String>)>);
+
 #[derive(Default)]
 pub struct Block {
     heading: bool,
@@ -111,6 +113,12 @@ impl Preview {
             blocks.last_mut().unwrap().spans.push((text, link));
         }
         Self { blocks }
+    }
+    pub fn blocks(&self) -> Vec<ReadableBlock> {
+        self.blocks
+            .iter()
+            .map(|b| (b.heading, b.spans.clone()))
+            .collect()
     }
     pub fn plain(&self) -> String {
         self.blocks

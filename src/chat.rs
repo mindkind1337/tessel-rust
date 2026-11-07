@@ -13,6 +13,35 @@ use std::{
 };
 
 mod questions;
+pub use questions::QuestionView;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeChatApprovalView {
+    pub title: String,
+    pub details_json: String,
+    pub can_accept: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeChatViewSnapshot {
+    pub provider: &'static str,
+    pub cwd_display: String,
+    pub thread_id: Option<String>,
+    pub resume_draft: String,
+    pub connected: bool,
+    pub ready: bool,
+    pub working: bool,
+    pub can_load_older: bool,
+    pub status: String,
+    pub error: String,
+    pub model: String,
+    pub effort: String,
+    pub composer: String,
+    pub messages: Vec<(String, String)>,
+    pub approval: Option<NativeChatApprovalView>,
+    pub questions: Vec<QuestionView>,
+    pub questions_can_submit: bool,
+}
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPT: usize = 2 * 1024 * 1024;
@@ -970,6 +999,162 @@ impl Chat {
     }
     pub fn set_resume(&mut self, id: String) {
         self.resume = id;
+    }
+
+    pub fn gpui_snapshot(&self) -> NativeChatViewSnapshot {
+        let approval = self.approvals.front().map(|a| {
+            let item = a
+                .params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .and_then(|id| self.items.get(id));
+            let details = json!({"request": a.params, "item": item});
+            NativeChatApprovalView {
+                title: a.method.clone(),
+                details_json: serde_json::to_string_pretty(&details).unwrap_or_default(),
+                can_accept: self.approval_has_details(a),
+            }
+        });
+        let (questions, questions_can_submit) = match self.questions.front() {
+            Some(q) => (q.views(), q.can_submit()),
+            None => (Vec::new(), false),
+        };
+        let messages: Vec<(String, String)> = self
+            .history
+            .iter()
+            .chain(self.transcript.iter())
+            .cloned()
+            .collect();
+
+        NativeChatViewSnapshot {
+            provider: "codex",
+            cwd_display: self.cwd.display().to_string(),
+            thread_id: self.thread_id.clone(),
+            resume_draft: self.resume.clone(),
+            connected: self.rpc.is_some(),
+            ready: self.ready,
+            working: self.working(),
+            can_load_older: self.history_cursor.is_some()
+                && !self.pending.values().any(|(m, _)| m == "thread/items/list"),
+            status: self.status.clone(),
+            error: self.error.clone(),
+            model: self.options.model.clone(),
+            effort: self.options.effort.clone(),
+            composer: self.composer.clone(),
+            messages,
+            approval,
+            questions,
+            questions_can_submit,
+        }
+    }
+
+    pub fn gpui_connect(&mut self) {
+        if self.rpc.is_none() {
+            self.start();
+        }
+    }
+
+    pub fn gpui_stop(&mut self) {
+        self.stop();
+    }
+
+    pub fn gpui_interrupt(&mut self) {
+        if self.turn.is_some()
+            && let Err(e) = self.request(
+                "turn/interrupt",
+                json!({"threadId": self.thread_id, "turnId": self.turn}),
+            )
+        {
+            self.error = e;
+        }
+    }
+
+    pub fn gpui_load_older(&mut self) {
+        if self.history_cursor.is_some() {
+            self.history_page();
+        }
+    }
+
+    pub fn gpui_set_composer(&mut self, text: String) {
+        self.composer = text;
+    }
+
+    pub fn gpui_send_message(&mut self) {
+        self.send_message();
+    }
+
+    pub fn gpui_set_model(&mut self, model: String) {
+        self.options.model = model;
+        self.commit_options();
+    }
+
+    pub fn gpui_set_effort(&mut self, effort: String) {
+        self.options.effort = effort;
+        self.commit_options();
+    }
+
+    pub fn gpui_respond_approval(&mut self, allow: bool) {
+        let Some(approval) = self.approvals.front().cloned() else {
+            return;
+        };
+        if allow && !self.approval_has_details(&approval) {
+            return;
+        }
+        let decision = if allow { "accept" } else { "decline" };
+        if let Some(rpc) = &self.rpc {
+            match rpc.send(json!({"id": approval.id, "result": {"decision": decision}})) {
+                Ok(()) => {
+                    self.approvals.pop_front();
+                }
+                Err(e) => self.error = e,
+            }
+        } else {
+            // Offline / synthetic test fixture resolution:
+            self.approvals.pop_front();
+        }
+    }
+
+    pub fn gpui_select_question_option(&mut self, q_idx: usize, opt_idx: usize) {
+        if let Some(req) = self.questions.front_mut() {
+            req.select_option(q_idx, opt_idx);
+        }
+    }
+
+    pub fn gpui_set_question_text(&mut self, q_idx: usize, text: String) {
+        if let Some(req) = self.questions.front_mut() {
+            req.set_text(q_idx, text);
+        }
+    }
+
+    pub fn gpui_submit_questions(&mut self, skip: bool) {
+        let Some(req) = self.questions.front() else {
+            return;
+        };
+        let payload = if skip {
+            Some(json!({"answers": {}}))
+        } else {
+            req.build_answers()
+        };
+        let Some(answer) = payload else {
+            return;
+        };
+        let req_id = req.id.clone();
+        if let Some(rpc) = &self.rpc {
+            match rpc.send(json!({"id": req_id, "result": answer})) {
+                Ok(()) => {
+                    self.questions.pop_front();
+                }
+                Err(e) => self.error = e,
+            }
+        } else {
+            self.questions.pop_front();
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn process_protocol_frame_for_test(&mut self, value: Value) {
+        self.frame(value);
     }
     #[cfg(windows)]
     pub fn tool_scope(&self) -> Option<(String, String)> {

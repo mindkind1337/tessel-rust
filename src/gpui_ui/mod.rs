@@ -3,23 +3,31 @@
 //! Provides a 1:1 CSS Flexbox + DirectWrite subpixel typography + `resvg` vector icon frontend
 //! while keeping the `eframe`/`egui` Compatibility renderer intact with automatic runtime fallback.
 
+pub(crate) mod chat_view;
 pub(crate) mod chrome;
+pub mod editor_view;
 pub mod icons;
 pub(crate) mod shell;
+pub(crate) mod terminal_view;
 pub mod theme;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use crate::app::gpui_bridge::GpuiFocusTarget as FocusInputTarget;
+
 use crate::{
-    app::{Tessel, gpui_bridge::GpuiAction},
+    app::{
+        Tessel,
+        gpui_bridge::{GpuiAction, GpuiCenterMode},
+    },
     pane_grid::{FocusDir, SplitDir},
 };
 use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render, SharedString, Styled, Task,
-    TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
+    Render, SharedString, Styled, Task, TitlebarOptions, Window, WindowBounds, WindowDecorations,
+    WindowOptions, div, prelude::FluentBuilder as _, px, size,
 };
 use std::{
     path::PathBuf,
@@ -40,6 +48,9 @@ use theme::{
 pub(crate) enum DragTarget {
     LeftSidebar,
     RightPanel,
+    FloatingTerminal {
+        stage_height_px: f32,
+    },
     SplitDivider {
         split_id: String,
         dir: SplitDir,
@@ -52,6 +63,7 @@ pub(crate) enum DragTarget {
 pub(crate) struct TesselGpuiRoot {
     pub(crate) app: Tessel,
     pub(crate) focus_handle: FocusHandle,
+    pub(crate) focus_input: FocusInputTarget,
     pub(crate) left_width: f32,
     pub(crate) right_width: f32,
     pub(crate) active_drag: Option<DragTarget>,
@@ -107,6 +119,7 @@ impl TesselGpuiRoot {
         Self {
             app,
             focus_handle,
+            focus_input: FocusInputTarget::None,
             left_width: SIDEBAR_DEFAULT_WIDTH_PX,
             right_width: RIGHT_PANEL_DEFAULT_WIDTH_PX,
             active_drag: None,
@@ -138,8 +151,33 @@ impl TesselGpuiRoot {
             return;
         }
         if key == "escape" {
-            self.dispatch(GpuiAction::CloseOverlays, cx);
-            return;
+            if self.app.gpui_has_open_modal() {
+                self.dispatch(GpuiAction::CloseOverlays, cx);
+                return;
+            }
+            if let FocusInputTarget::TerminalFind(sid) = self.focus_input {
+                self.focus_input = FocusInputTarget::Terminal(sid);
+                self.dispatch(GpuiAction::TerminalCloseFind(sid), cx);
+                return;
+            }
+            if matches!(
+                self.focus_input,
+                FocusInputTarget::EditorFind
+                    | FocusInputTarget::EditorReplace
+                    | FocusInputTarget::EditorGoto
+            ) {
+                let was_goto = self.focus_input == FocusInputTarget::EditorGoto;
+                self.focus_input = FocusInputTarget::EditorBody;
+                self.dispatch(
+                    if was_goto {
+                        GpuiAction::ToggleEditorGoto
+                    } else {
+                        GpuiAction::ToggleEditorFind
+                    },
+                    cx,
+                );
+                return;
+            }
         }
 
         if ctrl && !alt {
@@ -161,6 +199,7 @@ impl TesselGpuiRoot {
                     return;
                 }
                 "`" => {
+                    self.focus_input = FocusInputTarget::None;
                     self.dispatch(GpuiAction::ToggleFloatingTerminal, cx);
                     return;
                 }
@@ -181,7 +220,27 @@ impl TesselGpuiRoot {
                     return;
                 }
                 "tab" => {
+                    self.focus_input = FocusInputTarget::None;
                     self.dispatch(GpuiAction::CycleWorkspace(if shift { -1 } else { 1 }), cx);
+                    return;
+                }
+                "s" if !shift && self.app.gpui_is_document_view() => {
+                    self.dispatch(GpuiAction::SaveActiveDocument, cx);
+                    return;
+                }
+                "f" if !shift && self.app.gpui_is_document_view() => {
+                    self.focus_input = FocusInputTarget::EditorFind;
+                    self.dispatch(GpuiAction::ToggleEditorFind, cx);
+                    return;
+                }
+                "h" if !shift && self.app.gpui_is_document_view() => {
+                    self.focus_input = FocusInputTarget::EditorReplace;
+                    self.dispatch(GpuiAction::ToggleEditorReplace, cx);
+                    return;
+                }
+                "g" if !shift && self.app.gpui_is_document_view() => {
+                    self.focus_input = FocusInputTarget::EditorGoto;
+                    self.dispatch(GpuiAction::ToggleEditorGoto, cx);
                     return;
                 }
                 _ => {}
@@ -190,12 +249,82 @@ impl TesselGpuiRoot {
 
         if alt && !ctrl && !shift {
             match key {
-                "left" => self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Left), cx),
-                "right" => self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Right), cx),
-                "up" => self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Up), cx),
-                "down" => self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Down), cx),
+                "left" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Left), cx);
+                    return;
+                }
+                "right" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Right), cx);
+                    return;
+                }
+                "up" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Up), cx);
+                    return;
+                }
+                "down" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Down), cx);
+                    return;
+                }
                 _ => {}
             }
+        }
+
+        if self.app.gpui_has_open_modal() {
+            return;
+        }
+
+        let target = if self.focus_input == FocusInputTarget::None {
+            self.app.gpui_default_focus_target()
+        } else {
+            self.focus_input
+        };
+
+        if let FocusInputTarget::Terminal(sid) = target {
+            if ctrl && shift && !alt && key == "f" {
+                self.focus_input = FocusInputTarget::TerminalFind(sid);
+                self.dispatch(GpuiAction::TerminalOpenFind(sid), cx);
+                return;
+            }
+            if ctrl && !alt && key == "v" {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.dispatch(
+                        GpuiAction::TerminalPaste {
+                            session_id: sid,
+                            text,
+                        },
+                        cx,
+                    );
+                }
+                return;
+            }
+            if let Some(copied) =
+                self.app
+                    .send_gpui_terminal_key(sid, key, ks.key_char.as_deref(), ctrl, alt, shift)
+            {
+                cx.write_to_clipboard(ClipboardItem::new_string(copied));
+            }
+            cx.notify();
+            return;
+        }
+
+        let pasted = if ctrl && !alt && key == "v" {
+            cx.read_from_clipboard().and_then(|item| item.text())
+        } else {
+            None
+        };
+        let printable = ks
+            .key_char
+            .as_deref()
+            .filter(|s| !s.is_empty() && (!ctrl || alt) && s.chars().all(|c| c >= ' '));
+        if self
+            .app
+            .gpui_handle_text_target_key(target, key, printable, shift, pasted)
+        {
+            cx.notify();
         }
     }
 
@@ -209,6 +338,7 @@ impl TesselGpuiRoot {
             return;
         };
         let viewport_w = f32::from(window.viewport_size().width);
+        let viewport_h = f32::from(window.viewport_size().height);
         match drag {
             DragTarget::LeftSidebar => {
                 let next =
@@ -225,6 +355,18 @@ impl TesselGpuiRoot {
                     self.right_width = next;
                     cx.notify();
                 }
+            }
+            DragTarget::FloatingTerminal { stage_height_px } => {
+                let bottom_bar = if self.app.state.status_bar.visible {
+                    STATUSBAR_HEIGHT_PX
+                } else {
+                    0.0
+                };
+                let from_bottom = (viewport_h - bottom_bar - f32::from(event.position.y)).max(80.0);
+                let ratio = (from_bottom / stage_height_px.max(120.0)).clamp(0.20, 0.85);
+                self.app
+                    .apply_gpui_action(GpuiAction::SetFloatingHeightRatio(ratio));
+                cx.notify();
             }
             DragTarget::SplitDivider {
                 split_id,
@@ -302,6 +444,14 @@ impl Render for TesselGpuiRoot {
 
         let grid_w = (viewport_w - left_px - right_px).max(160.0);
         let grid_h = (viewport_h - chrome_h).max(120.0);
+
+        #[cfg(windows)]
+        if prelim.center_mode == GpuiCenterMode::BrowserTab {
+            self.app.browser.auto_start_if_pending(window);
+        } else {
+            self.app.browser.visible(false);
+        }
+
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
@@ -337,6 +487,8 @@ impl Render for TesselGpuiRoot {
                 &tokens,
                 self.left_width,
                 self.right_width,
+                grid_h,
+                window,
                 cx,
             ))
             .when_some(

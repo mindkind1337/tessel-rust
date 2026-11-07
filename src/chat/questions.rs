@@ -27,7 +27,74 @@ pub struct Request {
     pub id: Value,
     questions: Vec<Question>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionView {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub multi_select: bool,
+    pub is_other: bool,
+    pub options: Vec<(String, String, bool)>,
+    pub text: String,
+}
+
 impl Request {
+    pub fn views(&self) -> Vec<QuestionView> {
+        self.questions
+            .iter()
+            .map(|q| QuestionView {
+                id: q.id.clone(),
+                header: q.header.clone(),
+                question: q.question.clone(),
+                multi_select: false,
+                is_other: q.is_other,
+                options: q
+                    .options
+                    .as_ref()
+                    .map(|opts| {
+                        opts.iter()
+                            .enumerate()
+                            .map(|(i, o)| {
+                                (
+                                    o.label.clone(),
+                                    o.description.clone(),
+                                    q.selected == Some(i),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                text: q.text.clone(),
+            })
+            .collect()
+    }
+
+    pub fn select_option(&mut self, q_idx: usize, opt_idx: usize) {
+        if let Some(q) = self.questions.get_mut(q_idx) {
+            q.selected = Some(opt_idx);
+        }
+    }
+
+    pub fn set_text(&mut self, q_idx: usize, text: String) {
+        if let Some(q) = self.questions.get_mut(q_idx) {
+            let trimmed: String = text.chars().take(4096).collect();
+            q.text = trimmed;
+            if let Some(opts) = &q.options
+                && q.is_other
+            {
+                q.selected = Some(opts.len());
+            }
+        }
+    }
+
+    pub fn can_submit(&self) -> bool {
+        self.answers().is_some()
+    }
+
+    pub fn build_answers(&self) -> Option<Value> {
+        self.answers()
+    }
+
     pub fn parse(id: Value, params: &Value) -> Result<Self, String> {
         let questions: Vec<Question> = serde_json::from_value(params["questions"].clone())
             .map_err(|_| "Invalid agent questions")?;

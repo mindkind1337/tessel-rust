@@ -29,6 +29,256 @@ pub enum BroadcastInput {
     CursorKey(u8),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalStyledSpan {
+    pub text: String,
+    pub fg: [u8; 3],
+    pub bg: Option<[u8; 3]>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalRenderSnapshot {
+    pub rows: u16,
+    pub cols: u16,
+    pub lines: Vec<Vec<TerminalStyledSpan>>,
+    pub cursor: Option<(u16, u16)>,
+    pub viewing_scrollback: bool,
+    pub scrollback_offset: usize,
+    pub status: String,
+    pub exited: bool,
+    pub find_open: bool,
+    pub find_query: String,
+    pub find_badge: String,
+    pub device_login: Option<crate::device_login::DeviceLoginPrompt>,
+    pub pending_multiline_lines: Option<usize>,
+    pub composition: String,
+}
+
+fn extract_viewport_styled_lines(
+    viewport: &host_viewport::Viewport<'_>,
+    rows: u16,
+    cols: u16,
+    palette: &crate::theme_palettes::TerminalPalette,
+    selection: Option<((u16, u16), (u16, u16))>,
+) -> Vec<Vec<TerminalStyledSpan>> {
+    let default_bg = color(vt100::Color::Default, false, palette);
+    let mut out = Vec::with_capacity(usize::from(rows));
+    for row in 0..rows {
+        let mut row_spans: Vec<TerminalStyledSpan> = Vec::new();
+        for col in 0..cols {
+            let Some(cell) = viewport.cell(row, col) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let fg_c = if cell.inverse() {
+                color(cell.bgcolor(), false, palette)
+            } else {
+                color(cell.fgcolor(), true, palette)
+            };
+            let bg_c = if cell.inverse() {
+                color(cell.fgcolor(), true, palette)
+            } else {
+                color(cell.bgcolor(), false, palette)
+            };
+            let fg = [fg_c.r(), fg_c.g(), fg_c.b()];
+            let bg = (bg_c != default_bg).then_some([bg_c.r(), bg_c.g(), bg_c.b()]);
+            let bold = cell.bold();
+            let italic = cell.italic();
+            let underline = cell.underline();
+            let selected = selection.is_some_and(|(start, end)| {
+                if row < start.0 || row > end.0 {
+                    false
+                } else {
+                    let left = if row == start.0 { start.1 } else { 0 };
+                    let right = if row == end.0 { end.1 } else { cols };
+                    col >= left && col < right
+                }
+            });
+            let raw = cell.contents();
+            let glyph = if raw.is_empty() { " " } else { raw.as_str() };
+            if let Some(last) = row_spans.last_mut()
+                && last.fg == fg
+                && last.bg == bg
+                && last.bold == bold
+                && last.italic == italic
+                && last.underline == underline
+                && last.selected == selected
+            {
+                last.text.push_str(glyph);
+            } else {
+                row_spans.push(TerminalStyledSpan {
+                    text: glyph.to_owned(),
+                    fg,
+                    bg,
+                    bold,
+                    italic,
+                    underline,
+                    selected,
+                });
+            }
+        }
+        // Trim trailing unstyled whitespace on plain rows while preserving explicit backgrounds/selections.
+        if let Some(last) = row_spans.last_mut()
+            && last.bg.is_none()
+            && !last.underline
+            && !last.selected
+        {
+            let trimmed = last.text.trim_end_matches(' ');
+            if trimmed.is_empty() {
+                row_spans.pop();
+            } else if trimmed.len() != last.text.len() {
+                last.text.truncate(trimmed.len());
+            }
+        }
+        out.push(row_spans);
+    }
+    out
+}
+
+/// Pure helper extracting styled cell runs from a [`vt100::Parser`] for `GPUI` rendering & tests.
+#[must_use]
+pub fn extract_vt_styled_lines(
+    parser: &vt100::Parser,
+    palette: &crate::theme_palettes::TerminalPalette,
+    selection: Option<((u16, u16), (u16, u16))>,
+) -> Vec<Vec<TerminalStyledSpan>> {
+    let (rows, cols) = parser.screen().size();
+    let vp = host_viewport::Viewport::new(None, parser.screen(), &Default::default());
+    extract_viewport_styled_lines(&vp, rows, cols, palette, selection)
+}
+
+/// Encodes a `GPUI` keystroke into terminal PTY bytes and optional [`BroadcastInput`].
+#[must_use]
+pub fn encode_gpui_terminal_key(
+    key: &str,
+    key_char: Option<&str>,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    application_cursor: bool,
+    agent_kind: Option<&str>,
+) -> Option<(Vec<u8>, Option<BroadcastInput>)> {
+    let lower = key.to_ascii_lowercase();
+    if lower == "enter"
+        && shift
+        && !ctrl
+        && !alt
+        && let Some(agent) = agent_kind
+    {
+        let bytes = if cfg!(windows) && matches!(agent, "claude" | "codex") {
+            b"\x1b\r".to_vec()
+        } else {
+            b"\n".to_vec()
+        };
+        return Some((bytes, None));
+    }
+
+    let egui_mods = egui::Modifiers {
+        alt,
+        ctrl,
+        shift,
+        mac_cmd: false,
+        command: ctrl,
+    };
+    let mapped_key = match lower.as_str() {
+        "a" => Some(egui::Key::A),
+        "b" => Some(egui::Key::B),
+        "c" => Some(egui::Key::C),
+        "d" => Some(egui::Key::D),
+        "e" => Some(egui::Key::E),
+        "f" => Some(egui::Key::F),
+        "g" => Some(egui::Key::G),
+        "h" => Some(egui::Key::H),
+        "i" => Some(egui::Key::I),
+        "j" => Some(egui::Key::J),
+        "k" => Some(egui::Key::K),
+        "l" => Some(egui::Key::L),
+        "m" => Some(egui::Key::M),
+        "n" => Some(egui::Key::N),
+        "o" => Some(egui::Key::O),
+        "p" => Some(egui::Key::P),
+        "q" => Some(egui::Key::Q),
+        "r" => Some(egui::Key::R),
+        "s" => Some(egui::Key::S),
+        "t" => Some(egui::Key::T),
+        "u" => Some(egui::Key::U),
+        "v" => Some(egui::Key::V),
+        "w" => Some(egui::Key::W),
+        "x" => Some(egui::Key::X),
+        "y" => Some(egui::Key::Y),
+        "z" => Some(egui::Key::Z),
+        " " | "space" => Some(egui::Key::Space),
+        "up" | "arrowup" => Some(egui::Key::ArrowUp),
+        "down" | "arrowdown" => Some(egui::Key::ArrowDown),
+        "left" | "arrowleft" => Some(egui::Key::ArrowLeft),
+        "right" | "arrowright" => Some(egui::Key::ArrowRight),
+        "home" => Some(egui::Key::Home),
+        "end" => Some(egui::Key::End),
+        "pageup" => Some(egui::Key::PageUp),
+        "pagedown" => Some(egui::Key::PageDown),
+        "insert" => Some(egui::Key::Insert),
+        "delete" => Some(egui::Key::Delete),
+        "enter" => Some(egui::Key::Enter),
+        "backspace" => Some(egui::Key::Backspace),
+        "tab" => Some(egui::Key::Tab),
+        "escape" => Some(egui::Key::Escape),
+        "f1" => Some(egui::Key::F1),
+        "f2" => Some(egui::Key::F2),
+        "f3" => Some(egui::Key::F3),
+        "f4" => Some(egui::Key::F4),
+        "f5" => Some(egui::Key::F5),
+        "f6" => Some(egui::Key::F6),
+        "f7" => Some(egui::Key::F7),
+        "f8" => Some(egui::Key::F8),
+        "f9" => Some(egui::Key::F9),
+        "f10" => Some(egui::Key::F10),
+        "f11" => Some(egui::Key::F11),
+        "f12" => Some(egui::Key::F12),
+        _ => None,
+    };
+
+    if let Some(ek) = mapped_key {
+        let mut bytes = key_bytes(ek, egui_mods);
+        if !bytes.is_empty() {
+            let mut bcast = None;
+            if bytes.len() == 3
+                && bytes[0] == 27
+                && bytes[1] == b'['
+                && matches!(bytes[2], b'A'..=b'D' | b'H' | b'F')
+            {
+                bcast = Some(BroadcastInput::CursorKey(bytes[2]));
+                if application_cursor {
+                    bytes[1] = b'O';
+                }
+            }
+            return Some((bytes, bcast));
+        }
+    }
+
+    if !ctrl {
+        let candidate = key_char.or_else(|| (key.chars().count() == 1).then_some(key));
+        if let Some(txt) = candidate
+            && !txt.is_empty()
+            && !txt.chars().any(char::is_control)
+        {
+            let mut bytes = Vec::with_capacity(txt.len() + usize::from(alt));
+            if alt {
+                bytes.push(27);
+            }
+            bytes.extend_from_slice(txt.as_bytes());
+            return Some((bytes, None));
+        }
+    }
+
+    None
+}
+
 pub struct Terminal {
     backend: backend::Backend,
     parser: vt100::Parser,
@@ -84,6 +334,248 @@ impl Terminal {
 
     pub fn take_pending_tessel_url(&mut self) -> Option<String> {
         self.pending_tessel_url.take()
+    }
+
+    pub fn gpui_resize_to_pixels(
+        &mut self,
+        width_px: f32,
+        height_px: f32,
+        font_size: f32,
+        line_height_scale: f32,
+    ) {
+        let cell_w = (font_size * 0.60).max(5.0);
+        let scale = if line_height_scale.is_finite() {
+            line_height_scale.clamp(1.0, 3.0)
+        } else {
+            1.25
+        };
+        let row_h = (font_size * 1.28 * scale).max(10.0);
+        let cols = ((width_px.max(80.0) / cell_w).floor() as u16).clamp(20, 300);
+        let rows = ((height_px.max(40.0) / row_h).floor() as u16).clamp(5, 150);
+        #[cfg(windows)]
+        let accepts_resize = match &self.backend {
+            backend::Backend::Native(native) => self.native_panel.accepts_resize(&native.phase()),
+            backend::Backend::Local(_) => true,
+        };
+        #[cfg(not(windows))]
+        let accepts_resize = true;
+        if accepts_resize
+            && self.size != (rows, cols)
+            && matches!(self.backend.resize(rows, cols), Ok(true))
+        {
+            self.selection = None;
+            self.parser.set_size(rows, cols);
+            self.model_dirty = true;
+            self.size = (rows, cols);
+        }
+    }
+
+    pub fn gpui_snapshot(
+        &mut self,
+        palette: &crate::theme_palettes::TerminalPalette,
+    ) -> TerminalRenderSnapshot {
+        if matches!(self.backend, backend::Backend::Local(_)) {
+            let rev = self.output_revision;
+            let cols = self.size.1;
+            let parser_ref = &self.parser;
+            let _ = self
+                .device_login
+                .tick_headless(rev, cols, || parser_ref.screen().contents());
+        }
+        let find_badge = if self.find_open && !self.find_query.is_empty() {
+            let total = self.search_matches(&self.find_query.clone()).len();
+            if total == 0 {
+                "0/0".into()
+            } else {
+                format!("{}/{total}", self.find_index.min(total - 1) + 1)
+            }
+        } else {
+            String::new()
+        };
+        let (rows, cols) = self.size;
+        let selection = self
+            .selection
+            .filter(|s| s.start != s.end)
+            .map(|s| s.ordered());
+        let vp = self.viewport();
+        let lines = extract_viewport_styled_lines(&vp, rows, cols, palette, selection);
+        let screen = self.parser.screen();
+        let viewing_scrollback = self.viewing_scrollback();
+        let cursor = (!self.exited && !screen.hide_cursor() && !viewing_scrollback)
+            .then(|| screen.cursor_position());
+        #[cfg(windows)]
+        let scrollback_offset = match &self.backend {
+            backend::Backend::Native(native) => native.scroll.total_scrollback(&self.parser),
+            backend::Backend::Local(_) => screen.scrollback(),
+        };
+        #[cfg(not(windows))]
+        let scrollback_offset = screen.scrollback();
+
+        TerminalRenderSnapshot {
+            rows,
+            cols,
+            lines,
+            cursor,
+            viewing_scrollback,
+            scrollback_offset,
+            status: self.status.clone(),
+            exited: self.exited,
+            find_open: self.find_open,
+            find_query: self.find_query.clone(),
+            find_badge,
+            device_login: self.device_login.active_prompt().cloned(),
+            pending_multiline_lines: self
+                .pending_multiline_paste
+                .as_ref()
+                .map(|t| t.lines().count().max(2)),
+            composition: self.composition.clone(),
+        }
+    }
+
+    /// Processes a `GPUI` keystroke; returns `Some(text)` when selection text should be placed on clipboard.
+    pub fn gpui_send_key(
+        &mut self,
+        key: &str,
+        key_char: Option<&str>,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        is_floating: bool,
+    ) -> Option<String> {
+        let lower = key.to_ascii_lowercase();
+        if ctrl && shift && !alt {
+            match lower.as_str() {
+                "f" => {
+                    self.open_find();
+                    return None;
+                }
+                "v" => {
+                    if self.accepts_broadcast_input() {
+                        self.paste_from_clipboard();
+                    }
+                    return None;
+                }
+                "c" => {
+                    return self.take_selection();
+                }
+                _ => {}
+            }
+        }
+        if lower == "c" && ctrl && !shift && !alt && self.has_selection() {
+            return self.take_selection();
+        }
+        if shift && !ctrl && !alt && matches!(lower.as_str(), "pageup" | "pagedown") {
+            let rows = i64::from(self.size.0);
+            self.scroll_by(if lower == "pageup" { rows } else { -rows });
+            return None;
+        }
+        if self.find_open && lower == "escape" && !ctrl && !alt && !shift {
+            self.find_open = false;
+            return None;
+        }
+        if !self.accepts_broadcast_input() {
+            if self.viewing_archive() {
+                self.status = tr("History: return to live output to type.").into();
+            }
+            return None;
+        }
+        let is_alt_arrow =
+            alt && !ctrl && !shift && matches!(lower.as_str(), "left" | "right" | "up" | "down");
+        if !is_floating && is_alt_arrow {
+            return None;
+        }
+
+        let app_cursor = self.parser.screen().application_cursor();
+        let agent_kind = self.agent_kind.clone();
+        if let Some((bytes, bcast)) = encode_gpui_terminal_key(
+            key,
+            key_char,
+            ctrl,
+            alt,
+            shift,
+            app_cursor,
+            agent_kind.as_deref(),
+        ) {
+            self.back_to_live();
+            let candidate = bcast.unwrap_or_else(|| BroadcastInput::Raw(bytes.clone()));
+            let skip = match &candidate {
+                BroadcastInput::Raw(raw) => {
+                    raw.is_empty() || crate::layout_broadcast_ui::is_terminal_reply(raw)
+                }
+                BroadcastInput::Paste(t) => {
+                    t.is_empty() || crate::layout_broadcast_ui::is_terminal_reply(t.as_bytes())
+                }
+                BroadcastInput::CursorKey(_) => false,
+            };
+            if !skip {
+                self.broadcast_outbox.push(candidate);
+            }
+            if let Err(err) = self.send(bytes) {
+                self.status = err;
+            }
+        }
+        None
+    }
+
+    pub fn gpui_scroll_lines(&mut self, delta_lines: i64) {
+        self.scroll_by(delta_lines);
+    }
+
+    pub fn gpui_back_to_live(&mut self) {
+        self.back_to_live();
+    }
+
+    pub fn gpui_set_selection_cells(&mut self, start: (u16, u16), end: (u16, u16)) {
+        self.selection = Some(Selection { start, end });
+    }
+
+    pub fn gpui_clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    pub fn gpui_find_query_str(&self) -> &str {
+        &self.find_query
+    }
+
+    pub fn gpui_find_set_query(&mut self, query: String) {
+        self.find_query = query;
+        self.find_index = 0;
+        let _ = self.jump_to_find_match(0);
+    }
+
+    pub fn gpui_find_step(&mut self, dir: isize) {
+        let _ = self.jump_to_find_match(dir);
+    }
+
+    pub fn gpui_close_find(&mut self) {
+        self.find_open = false;
+    }
+
+    pub fn gpui_paste_with_prefs(&mut self, text: &str, confirm_multiline: bool) {
+        if text.len() > 65536 {
+            self.status = "Paste limit: 64 KiB".into();
+        } else if confirm_multiline && text.trim_end_matches(['\r', '\n']).contains('\n') {
+            self.pending_multiline_paste = Some(text.to_owned());
+        } else {
+            self.paste_text(text);
+        }
+    }
+
+    pub fn gpui_confirm_multiline_paste(&mut self, confirm: bool) {
+        if let Some(text) = self.pending_multiline_paste.take()
+            && confirm
+        {
+            self.paste_text(&text);
+        }
+    }
+
+    pub fn gpui_dismiss_device_login(&mut self) {
+        self.device_login.dismiss_current();
+    }
+
+    pub fn gpui_open_tessel_url(&mut self, url: String) {
+        self.pending_tessel_url = Some(url);
+        self.device_login.dismiss_current();
     }
 
     pub fn set_agent_kind(&mut self, agent: Option<&str>) {

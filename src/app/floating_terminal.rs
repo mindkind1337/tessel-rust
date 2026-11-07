@@ -152,6 +152,18 @@ impl State {
             terminal.poll();
         }
     }
+    pub fn process_mut(&mut self) -> Option<&mut Terminal> {
+        self.runtime.process()
+    }
+    pub fn phase(&self) -> Phase {
+        self.runtime.phase()
+    }
+    pub fn title_str(&self) -> &str {
+        &self.title
+    }
+    pub fn runtime_error(&self) -> Option<&str> {
+        self.runtime.error()
+    }
 }
 
 fn refused_text(error: Refused) -> String {
@@ -359,6 +371,32 @@ impl Tessel {
                 self.start_floating(false);
             }
         }
+        self.save();
+    }
+    pub(super) fn restart_floating_headless(&mut self) {
+        match self.floating.runtime.phase() {
+            Phase::Closed => self.start_floating(false),
+            Phase::Ready => self.start_floating(true),
+            _ => {}
+        }
+    }
+    pub(super) fn close_floating_headless(&mut self) {
+        if self.floating.runtime.phase() == Phase::Closed {
+            self.floating.ui.close();
+        } else {
+            match self.floating.runtime.close() {
+                Ok(()) => self.floating.ui.close(),
+                Err(error) => {
+                    self.floating.ui.show();
+                    self.error = refused_text(error);
+                }
+            }
+        }
+        self.save();
+    }
+    pub(super) fn set_floating_height_headless(&mut self, height: f32) {
+        self.floating.ui.set_height(f64::from(height));
+        self.state.floating.height = self.floating.ui.height;
         self.save();
     }
     pub(super) fn show_floating(

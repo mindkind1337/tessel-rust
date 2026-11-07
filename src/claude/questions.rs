@@ -30,6 +30,62 @@ pub(super) struct Questions {
     questions: Vec<Question>,
 }
 impl Questions {
+    pub fn views(&self) -> Vec<crate::chat::QuestionView> {
+        self.questions
+            .iter()
+            .enumerate()
+            .map(|(idx, q)| crate::chat::QuestionView {
+                id: format!("claude-q-{idx}"),
+                header: q.header.clone(),
+                question: q.question.clone(),
+                multi_select: q.multi_select,
+                is_other: true,
+                options: q
+                    .options
+                    .iter()
+                    .map(|o| (o.label.clone(), o.description.clone(), o.selected))
+                    .collect(),
+                text: q.other.clone(),
+            })
+            .collect()
+    }
+
+    pub fn select_option(&mut self, q_idx: usize, opt_idx: usize) {
+        let Some(q) = self.questions.get_mut(q_idx) else {
+            return;
+        };
+        if q.multi_select {
+            if let Some(opt) = q.options.get_mut(opt_idx) {
+                opt.selected = !opt.selected;
+            }
+        } else {
+            for (i, opt) in q.options.iter_mut().enumerate() {
+                opt.selected = i == opt_idx;
+            }
+            q.other.clear();
+        }
+    }
+
+    pub fn set_text(&mut self, q_idx: usize, text: String) {
+        let Some(q) = self.questions.get_mut(q_idx) else {
+            return;
+        };
+        q.other = text.chars().take(4096).collect();
+        if !q.multi_select && !q.other.trim().is_empty() {
+            for opt in &mut q.options {
+                opt.selected = false;
+            }
+        }
+    }
+
+    pub fn can_submit(&self) -> bool {
+        self.answer().is_some()
+    }
+
+    pub fn build_answer(&self) -> Option<Value> {
+        self.answer()
+    }
+
     pub fn parse(id: &str, input: &Value) -> Option<Self> {
         let questions: Vec<Question> = serde_json::from_value(input["questions"].clone()).ok()?;
         if questions.is_empty() || questions.len() > 4 || input.to_string().len() > 65536 {

@@ -231,13 +231,15 @@ pub struct DeviceLoginDetector {
 }
 
 impl DeviceLoginDetector {
-    pub fn tick(
+    /// UI-agnostic debounce and OAuth prompt evaluation shared by both `GPUI` and `egui`.
+    ///
+    /// Returns `Some(remaining)` while waiting for [`DEVICE_LOGIN_DEBOUNCE`] to elapse.
+    pub fn tick_headless(
         &mut self,
-        ctx: &egui::Context,
         output_revision: u64,
         cols: u16,
         read_screen: impl FnOnce() -> String,
-    ) {
+    ) -> Option<Duration> {
         if output_revision != self.last_revision {
             self.last_revision = output_revision;
             self.pending_since = Some(Instant::now());
@@ -245,8 +247,7 @@ impl DeviceLoginDetector {
         if let Some(since) = self.pending_since {
             let elapsed = since.elapsed();
             if elapsed < DEVICE_LOGIN_DEBOUNCE {
-                ctx.request_repaint_after(DEVICE_LOGIN_DEBOUNCE - elapsed);
-                return;
+                return Some(DEVICE_LOGIN_DEBOUNCE - elapsed);
             }
             self.pending_since = None;
             let screen = read_screen();
@@ -260,6 +261,19 @@ impl DeviceLoginDetector {
                     self.active_prompt = None;
                 }
             }
+        }
+        None
+    }
+
+    pub fn tick(
+        &mut self,
+        ctx: &egui::Context,
+        output_revision: u64,
+        cols: u16,
+        read_screen: impl FnOnce() -> String,
+    ) {
+        if let Some(rem) = self.tick_headless(output_revision, cols, read_screen) {
+            ctx.request_repaint_after(rem);
         }
     }
 

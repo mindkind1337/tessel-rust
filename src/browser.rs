@@ -24,6 +24,8 @@ enum Event {
     Navigation(String),
 }
 
+pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<String>);
+
 pub struct Browser {
     view: Option<WebView>,
     // Drop view before its environment.
@@ -83,6 +85,147 @@ impl Browser {
             .as_ref()
             .map(|_| self.address.as_str())
             .filter(|u| !u.trim().is_empty())
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.view.is_some()
+    }
+
+    pub fn address_str(&self) -> &str {
+        &self.address
+    }
+
+    pub fn set_address_str(&mut self, address: String) {
+        self.address = address;
+    }
+
+    pub fn navigate_now(&mut self) {
+        self.navigate();
+    }
+
+    pub fn go_back_now(&self) {
+        if let Some(view) = &self.view {
+            let _ = view.go_back();
+        }
+    }
+
+    pub fn go_forward_now(&self) {
+        if let Some(view) = &self.view {
+            let _ = view.go_forward();
+        }
+    }
+
+    pub fn reload_now(&self) {
+        if let Some(view) = &self.view {
+            let _ = view.reload();
+        }
+    }
+
+    pub fn popup_url(&self) -> Option<&str> {
+        self.popup.as_deref()
+    }
+
+    pub fn accept_popup_now(&mut self) {
+        if let Some(url) = self.popup.take() {
+            self.address = url;
+            self.navigate();
+        }
+    }
+
+    pub fn dismiss_popup_now(&mut self) {
+        self.popup = None;
+    }
+
+    pub fn error_str(&self) -> &str {
+        &self.error
+    }
+
+    pub fn downloads_open(&self) -> bool {
+        self.downloads_open
+    }
+
+    pub fn toggle_downloads_open(&mut self) {
+        self.downloads_open = !self.downloads_open;
+    }
+
+    pub fn download_summaries(&self) -> Vec<DownloadSummaryRow> {
+        self.downloads
+            .iter()
+            .map(|d| {
+                (
+                    d.id,
+                    d.status.clone(),
+                    d.received_bytes,
+                    d.total_bytes,
+                    d.path.display().to_string(),
+                    d.error.clone(),
+                )
+            })
+            .collect()
+    }
+
+    pub fn cancel_download_now(&mut self, id: u64) {
+        if let Err(e) = self.download_tracker.cancel(id) {
+            self.error = e;
+        }
+    }
+
+    pub fn start_for_parent<W: wry::raw_window_handle::HasWindowHandle>(&mut self, parent: &W) {
+        if self.view.is_none() {
+            self.auto_start_pending = false;
+            if let Err(e) = self.create(parent) {
+                self.error = e;
+            }
+        }
+    }
+
+    pub fn auto_start_if_pending<W: wry::raw_window_handle::HasWindowHandle>(
+        &mut self,
+        parent: &W,
+    ) {
+        if self.view.is_none() && self.auto_start_pending {
+            self.auto_start_pending = false;
+            if let Err(e) = self.create(parent) {
+                self.error = e;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_gpui_bounds(
+        &mut self,
+        x_logical: f32,
+        y_logical: f32,
+        w_logical: f32,
+        h_logical: f32,
+        scale: f32,
+        can_show: bool,
+        overlay_logical: Option<(f32, f32, f32, f32)>,
+        reclaim_parent_focus: bool,
+    ) -> bool {
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(x_logical, y_logical),
+            egui::vec2(w_logical.max(1.0), h_logical.max(1.0)),
+        );
+        self.viewport = Some((rect, scale));
+        if let Some(view) = &self.view {
+            let _ = view.set_bounds(wry::Rect {
+                position: wry::dpi::PhysicalPosition::new(
+                    (rect.min.x * scale) as i32,
+                    (rect.min.y * scale) as i32,
+                )
+                .into(),
+                size: wry::dpi::PhysicalSize::new(
+                    (rect.width() * scale).max(1.0) as u32,
+                    (rect.height() * scale).max(1.0) as u32,
+                )
+                .into(),
+            });
+        }
+        let overlay = overlay_logical.map(|(ox, oy, ow, oh)| {
+            egui::Rect::from_min_size(egui::pos2(ox, oy), egui::vec2(ow, oh))
+        });
+        self.sync_presentation(can_show, overlay, reclaim_parent_focus)
     }
 }
 
@@ -272,16 +415,19 @@ impl Browser {
         let _ = view.set_visible(true);
         webview_took_focus
     }
-    fn create(&mut self, frame: &eframe::Frame) -> Result<(), String> {
+    fn create<W: wry::raw_window_handle::HasWindowHandle>(
+        &mut self,
+        parent: &W,
+    ) -> Result<(), String> {
         let dirs = directories::ProjectDirs::from("com", "Tessel", "TesselRust")
             .ok_or("No app data directory")?;
-        self.create_with_profile(frame, dirs.data_local_dir().join("browser-owner"))?;
+        self.create_with_profile(parent, dirs.data_local_dir().join("browser-owner"))?;
         self.navigate();
         Ok(())
     }
-    fn create_with_profile(
+    fn create_with_profile<W: wry::raw_window_handle::HasWindowHandle>(
         &mut self,
-        frame: &eframe::Frame,
+        parent: &W,
         profile: PathBuf,
     ) -> Result<(), String> {
         self.context = Some(WebContext::new(Some(profile)));
@@ -312,7 +458,7 @@ impl Browser {
             }
             wry::NewWindowResponse::Deny
         })
-        .build_as_child(frame)
+        .build_as_child(parent)
         .map_err(|e| e.to_string())?;
         self.download_tracker.attach(
             &view,

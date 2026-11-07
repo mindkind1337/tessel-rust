@@ -2,12 +2,12 @@
 //! matching `C:\Tessel\src\renderer\src\App.vue` & `style.css`.
 
 use super::{
-    DragTarget, TesselGpuiRoot,
+    DragTarget, TesselGpuiRoot, chat_view, editor_view,
     icons::GpuiIcon,
+    terminal_view,
     theme::{
         GpuiThemeTokens, PANE_CHIP_HIDE_ACCOUNT_BELOW_PX, PANE_CHIP_HIDE_MODEL_BELOW_PX,
-        PANE_NAV_HEIGHT_PX, SIDEBAR_RAIL_WIDTH_PX, VIEW_TABS_HEIGHT_PX, mono_font_family,
-        rgba_with_alpha,
+        PANE_NAV_HEIGHT_PX, SIDEBAR_RAIL_WIDTH_PX, VIEW_TABS_HEIGHT_PX, rgba_with_alpha,
     },
 };
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
 };
 use gpui::{
     Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 
 pub(crate) fn render_workspace_body(
@@ -29,6 +29,8 @@ pub(crate) fn render_workspace_body(
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
     right_width_px: f32,
+    stage_height_px: f32,
+    window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let hide_center = snapshot.right_fullscreen && snapshot.toolbar.right_open;
@@ -47,7 +49,13 @@ pub(crate) fn render_workspace_body(
             render_left_sidebar_rail(snapshot, tokens, cx).into_any_element()
         })
         .when(!hide_center, |el| {
-            el.child(render_center_column(snapshot, tokens, cx))
+            el.child(render_center_column(
+                snapshot,
+                tokens,
+                stage_height_px,
+                window,
+                cx,
+            ))
         })
         .when(snapshot.toolbar.right_open, |el| {
             el.child(render_right_panel(snapshot, tokens, right_width_px, cx))
@@ -450,6 +458,8 @@ fn render_project_card(
 fn render_center_column(
     snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
+    stage_height_px: f32,
+    window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     div()
@@ -482,14 +492,26 @@ fn render_center_column(
                         render_work_grid(snapshot, tokens, cx).into_any_element()
                     }
                     GpuiCenterMode::DocumentEditor => {
-                        render_document_stage(snapshot, tokens, cx).into_any_element()
+                        editor_view::render_document_editor_stage(snapshot, tokens, cx)
+                            .into_any_element()
                     }
                     GpuiCenterMode::BrowserTab => {
-                        render_browser_placeholder(snapshot, tokens, cx).into_any_element()
+                        editor_view::render_browser_stage(snapshot, tokens, window, cx)
+                            .into_any_element()
                     }
                     GpuiCenterMode::RemoteSftp => {
                         render_remote_sftp_stage(snapshot, tokens, cx).into_any_element()
                     }
+                })
+                .when(snapshot.floating.open, |el| {
+                    el.child(terminal_view::render_floating_terminal_drawer(
+                        &snapshot.floating,
+                        stage_height_px,
+                        snapshot.font_size,
+                        snapshot.french,
+                        tokens,
+                        cx,
+                    ))
                 })
                 .when_some(snapshot.overlay_title.as_ref(), |el, title| {
                     el.child(render_overlay_modal(title, snapshot, tokens, cx))
@@ -914,7 +936,13 @@ fn render_work_grid(
     let mut stage = div().id("gpui-pane-grid").relative().size_full();
 
     for tile in &snapshot.tiles {
-        stage = stage.child(render_pane_tile(tile, snapshot.font_size, tokens, cx));
+        stage = stage.child(render_pane_tile(
+            tile,
+            snapshot.font_size,
+            snapshot.french,
+            tokens,
+            cx,
+        ));
     }
     for (div_idx, divider) in snapshot.dividers.iter().enumerate() {
         stage = stage.child(render_split_divider(div_idx, divider, tokens, cx));
@@ -925,6 +953,7 @@ fn render_work_grid(
 fn render_pane_tile(
     tile: &GpuiPaneTileSnapshot,
     font_size: f32,
+    french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
@@ -941,53 +970,13 @@ fn render_pane_tile(
     let show_model_chip = width_px >= PANE_CHIP_HIDE_MODEL_BELOW_PX;
     let show_account_chip = width_px >= PANE_CHIP_HIDE_ACCOUNT_BELOW_PX;
 
-    let mut body = div()
-        .id(("pane-body", sid))
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .p(px(8.0))
-        .overflow_y_scroll()
-        .font_family(mono_font_family())
-        .text_size(px(font_size))
-        .line_height(px((font_size * 1.38).round()))
-        .bg(tokens.term)
-        .text_color(tokens.text);
-
-    if !tile.error.is_empty() {
-        body = body.child(
-            div()
-                .mb(px(6.0))
-                .px(px(8.0))
-                .py(px(4.0))
-                .rounded(px(4.0))
-                .bg(rgba_with_alpha(tokens.danger, 0.16))
-                .border_1()
-                .border_color(tokens.danger)
-                .text_color(tokens.text_strong)
-                .child(SharedString::from(tile.error.clone())),
-        );
-    }
-
-    if tile.preview_lines.is_empty() {
-        let placeholder = if tile.loading {
-            "Starting session..."
-        } else if tile.is_native_chat {
-            "Ready — send a prompt to start the conversation."
-        } else {
-            "Terminal session ready."
-        };
-        body = body.child(div().text_color(tokens.text_dim).child(placeholder));
+    let body = if let Some(chat) = &tile.native_chat {
+        chat_view::render_native_chat_pane_body(sid, chat, font_size, french, tokens, cx)
+            .into_any_element()
     } else {
-        for line in &tile.preview_lines {
-            body = body.child(
-                div()
-                    .w_full()
-                    .whitespace_nowrap()
-                    .child(SharedString::from(line.clone())),
-            );
-        }
-    }
+        terminal_view::render_terminal_pane_body(tile, font_size, french, tokens, cx)
+            .into_any_element()
+    };
 
     div()
         .id(("pane-tile", sid))
@@ -1109,6 +1098,26 @@ fn render_pane_tile(
                         .flex()
                         .items_center()
                         .gap(px(2.0))
+                        .when(tile.can_switch_chat_mode, |el| {
+                            let mode_lbl = if tile.is_native_chat { "CLI" } else { "Chat" };
+                            el.child(
+                                div()
+                                    .id(("pane-switch-mode", sid))
+                                    .px(px(5.0))
+                                    .py(px(1.5))
+                                    .mr(px(2.0))
+                                    .rounded(px(4.0))
+                                    .bg(tokens.surface_3)
+                                    .text_size(px(9.5))
+                                    .text_color(tokens.text)
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(tokens.accent))
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(GpuiAction::SwitchSessionChatMode(sid), cx);
+                                    }))
+                                    .child(mode_lbl),
+                            )
+                        })
                         .child(pane_header_icon_btn(
                             ("pane-broadcast", sid),
                             GpuiIcon::Radio,
@@ -1233,104 +1242,6 @@ fn render_split_divider(
         SplitDir::Col => el.cursor_row_resize(),
     };
     el
-}
-
-fn render_document_stage(
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    _cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let Some(doc) = &snapshot.active_document else {
-        return div().size_full().into_any_element();
-    };
-
-    let mut code = div()
-        .id("gpui-doc-stage-code")
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .p(px(12.0))
-        .overflow_y_scroll()
-        .font_family(mono_font_family())
-        .text_size(px(snapshot.font_size))
-        .line_height(px((snapshot.font_size * 1.42).round()))
-        .bg(tokens.term);
-
-    for (line_no, line) in doc.preview_lines.iter().enumerate() {
-        code = code.child(
-            div()
-                .flex()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .w(px(40.0))
-                        .text_right()
-                        .text_color(tokens.text_dim)
-                        .child(SharedString::from((line_no + 1).to_string())),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(tokens.text)
-                        .whitespace_nowrap()
-                        .child(SharedString::from(line.clone())),
-                ),
-        );
-    }
-
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .h(px(28.0))
-                .px(px(12.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .bg(tokens.surface)
-                .border_b_1()
-                .border_color(tokens.border)
-                .text_size(px(11.5))
-                .text_color(tokens.text_dim)
-                .child(SharedString::from(doc.path_display.clone()))
-                .child(SharedString::from(format!("{} lines", doc.line_count))),
-        )
-        .child(code)
-        .into_any_element()
-}
-
-fn render_browser_placeholder(
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let label = if snapshot.french {
-        "Navigateur intégré — retour aux terminaux"
-    } else {
-        "Embedded Browser Tab — return to Terminal Grid"
-    };
-    div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .id("browser-return-work")
-                .px(px(14.0))
-                .py(px(8.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.surface)
-                .border_1()
-                .border_color(tokens.border)
-                .cursor_pointer()
-                .on_click(cx.listener(|root, _, _, cx| {
-                    root.dispatch(GpuiAction::SelectWorkTab, cx);
-                }))
-                .child(label),
-        )
 }
 
 fn render_remote_sftp_stage(

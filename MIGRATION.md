@@ -747,3 +747,21 @@ all 7 `GpuiThemeTokens` palettes, sRGB `color_mix_srgb`, DirectWrite font stacks
 `WindowControlArea` caption drag/min/max/close hit-testing, `24px` broadcast/error
 strips, `24px` status bar, and the resizable 4-zone workspace shell (`Left Sidebar |
 Center ViewTabs + PaneGrid | Right 7-tab SidePanel`).
+
+Phase B GPUI DirectWrite PTY terminals, Native Codex/Claude chats, Code/Diff/Rich-Preview
+editors & Windows WebView2 HWND stage (`Lot b175` — `device_login.rs` + `syntax.rs` +
+`browser.rs` + `pdf.rs` + `office.rs` + `preview.rs` + `terminal.rs` + `chat.rs` +
+`chat/questions.rs` + `claude.rs` + `claude/questions.rs` + `app/floating_terminal.rs` +
+`app/gpui_bridge.rs` + `gpui_ui/{mod,shell,terminal_view,chat_view,editor_view,tests}.rs` +
+`tests/ui_gpui_panes_editors.rs`):
+Implements DirectWrite `vt100` styled cell-run extraction (`extract_vt_styled_lines`),
+PTY keystroke encoding (`encode_gpui_terminal_key`), `gpui_ui/terminal_view.rs` (Block/Bar/
+Underline cursor, scrollback indicator, inline `Ctrl+Shift+F` find, `400 ms`-debounced
+OAuth `device_login` banner, multi-line paste confirmation, dormant `Wake`, and resizable
+`Ctrl+\`` Floating Terminal drawer), `gpui_ui/chat_view.rs` (1:1 Native Codex & Claude
+chats with effort pills, inline `Allow once`/`Deny` tool approvals, structured agent
+question cards, and in-place `CLI` ↔ `Chat` mode switch), and `gpui_ui/editor_view.rs`
+(syntax-highlighted code & unified diff editor, modified-hunk bars, Find/Replace/Go-to-line,
+`Ctrl+S` atomic save, size-gated Markdown + `gpui::canvas` vector Mermaid `flowchart`/
+`sequenceDiagram`, sticky-header `SheetView`, JSON/JSONC/JSONL tree, HTML/PDF/Office/Image
+previews, and Windows `HasWindowHandle`-generic WebView2 `Browser` child HWND sync).
