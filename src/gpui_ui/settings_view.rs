@@ -1213,6 +1213,14 @@ fn render_agents_page(
         },
         tokens,
     ));
+    col = col.child(toggle_row_owned(
+        "gpui-st-agent-folder-trust".to_owned(),
+        crate::agents_panel::agent_folder_trust_label(french).to_owned(),
+        s.agent_folder_trust,
+        tokens,
+        GpuiAction::ToggleAgentFolderTrust,
+        cx,
+    ));
 
     for detail in &s.builtin_agent_details {
         let aid = detail.id.clone();
@@ -3025,6 +3033,26 @@ fn render_ssh_page(
                             false,
                             tokens,
                             GpuiAction::LaunchSshHost(idx),
+                            cx,
+                        ))
+                        .child(setting_btn(
+                            format!("gpui-ssh-tmux-{idx}"),
+                            "tmux".to_owned(),
+                            host.persistent_sessions_enabled(),
+                            tokens,
+                            GpuiAction::ToggleSshHostPersistentSessions(idx),
+                            cx,
+                        ))
+                        .child(setting_btn(
+                            format!("gpui-ssh-daemon-{idx}"),
+                            if french {
+                                "Démon".to_owned()
+                            } else {
+                                "Daemon".to_owned()
+                            },
+                            host.host_daemon,
+                            tokens,
+                            GpuiAction::ToggleSshHostDaemon(idx),
                             cx,
                         ))
                         .child(setting_btn(

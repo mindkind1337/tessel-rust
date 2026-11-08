@@ -19,6 +19,8 @@ pub struct Input<'a> {
     pub has_project: bool,
     pub french: bool,
     pub search: &'a str,
+    /// `Workspace::agent_folder_trust`: Tessel accepts Claude's folder-trust prompt for projects.
+    pub agent_folder_trust: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub enum Action {
     RefreshModels(String),
     Detect,
     SetEnabled(String, bool),
+    SetAgentFolderTrust(bool),
     SetModelDefaults(String, crate::agent_model_defaults::Defaults),
     Terminal(String),
     NativeChat(String),
@@ -49,6 +52,25 @@ pub struct AgentsPanel {
 
 #[allow(unused_imports)]
 pub use crate::agent_env::{format_invalid_env_callout, invalid_env_unused_note};
+
+/// Settings > Agents switch: trust project folders for Claude Code automatically.
+#[must_use]
+pub const fn agent_folder_trust_label(french: bool) -> &'static str {
+    if french {
+        "Faire confiance aux dossiers des projets pour Claude"
+    } else {
+        "Trust project folders for Claude"
+    }
+}
+
+#[must_use]
+pub const fn agent_folder_trust_hint(french: bool) -> &'static str {
+    if french {
+        "Claude ne redemande plus « faire confiance au dossier » sur vos projets (locaux et SSH). Jamais pour /, le dossier personnel, un lien symbolique ni une disposition importée."
+    } else {
+        "Claude stops asking to trust the folder on your projects (local and SSH). Never for /, your home folder, a symlink or an imported layout."
+    }
+}
 
 impl AgentsPanel {
     #[cfg(feature = "visual-test")]
@@ -123,6 +145,15 @@ impl AgentsPanel {
             "Les agents proposés par Tessel, leur démarrage et leurs autorisations.",
         ));
         ui.add_space(14.0);
+        let mut trust = input.agent_folder_trust;
+        if ui
+            .checkbox(&mut trust, agent_folder_trust_label(input.french))
+            .on_hover_text(agent_folder_trust_hint(input.french))
+            .changed()
+        {
+            action = Some(Action::SetAgentFolderTrust(trust));
+        }
+        ui.add_space(10.0);
         let installed = input.rows.iter().filter(|row| row.available).count();
         ui.horizontal_wrapped(|ui| {
             ui.label(
@@ -814,6 +845,7 @@ mod tests {
                                 has_project: true,
                                 french: false,
                                 search: "",
+                                agent_folder_trust: true,
                             },
                         );
                     });
@@ -912,6 +944,7 @@ mod tests {
                                 has_project: project,
                                 french: false,
                                 search: "",
+                                agent_folder_trust: true,
                             },
                         );
                         right = ui.min_rect().right();

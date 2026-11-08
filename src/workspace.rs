@@ -524,10 +524,26 @@ pub struct Project {
     pub path: PathBuf,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Host {
     pub alias: String,
     pub folder: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_sessions: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_daemon: bool,
+}
+
+impl Host {
+    /// Persistent `tmux` sessions are enabled by default unless explicitly set to `Some(false)`.
+    #[must_use]
+    pub const fn persistent_sessions_enabled(&self) -> bool {
+        !matches!(self.persistent_sessions, Some(false))
+    }
+}
+
+const fn default_agent_folder_trust() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -615,6 +631,8 @@ pub struct Workspace {
     pub agent_model_defaults:
         std::collections::BTreeMap<String, crate::agent_model_defaults::Defaults>,
     pub agent_prefs: std::collections::BTreeMap<String, crate::agent_preferences::Preferences>,
+    #[serde(default = "default_agent_folder_trust")]
+    pub agent_folder_trust: bool,
     pub tasks: Vec<Task>,
     pub sessions: Vec<SavedSession>,
     pub next_pane: u64,
@@ -673,6 +691,7 @@ impl Default for Workspace {
             projects: vec![],
             hosts: vec![],
             agent_prefs: Default::default(),
+            agent_folder_trust: true,
             agent_model_defaults: Default::default(),
             tasks: vec![],
             sessions: vec![],

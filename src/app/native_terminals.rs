@@ -486,6 +486,7 @@ impl Tessel {
             .unwrap_or_else(|| Host {
                 alias: alias.to_owned(),
                 folder: String::new(),
+                ..Default::default()
             });
         let identity =
             existing.as_ref().map(

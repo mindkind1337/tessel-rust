@@ -101,6 +101,18 @@ impl Manager {
     pub fn aliases(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
     }
+    /// Starts `tessel-host` in the background only when the user explicitly enabled `host_daemon`
+    /// on `host` (`Host::host_daemon == true`).
+    pub fn start_background_if_enabled(
+        &mut self,
+        host: &crate::workspace::Host,
+    ) -> Result<bool, Failure> {
+        if !crate::host_remote_cache::should_use_host_daemon(host.host_daemon, false) {
+            return Ok(false);
+        }
+        self.start(&host.alias)?;
+        Ok(true)
+    }
     /// Explicit user action only: may install the bundled daemon on this host.
     pub fn start(&mut self, alias: &str) -> Result<(), Failure> {
         crate::workspace::validate_host(alias).map_err(|_| Failure::InvalidHost)?;

@@ -92,6 +92,7 @@ fn legacy_kimi(path: &str) -> bool {
             && parts[count - 4].eq_ignore_ascii_case("local-packages"))
 }
 
+#[cfg(test)]
 pub fn posix_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -258,11 +259,14 @@ pub fn command_with_shell(
                 "--",
                 &host.alias,
             ]);
-            if !host.folder.is_empty() {
-                c.arg(format!(
-                    "cd -- {} && exec \"${{SHELL:-/bin/sh}}\" -l",
-                    posix_quote(&host.folder)
-                ));
+            if let Some(remote_script) = crate::ssh_tmux::build_ssh_launch_remote_script(
+                &host.alias,
+                &host.folder,
+                host.persistent_sessions_enabled(),
+                None,
+                true,
+            )? {
+                c.arg(remote_script);
             }
             c
         }

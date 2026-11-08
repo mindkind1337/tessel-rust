@@ -1376,3 +1376,24 @@ fn focus_scoped_keyboard_nav_external_focus_isolation_and_narrow_300px_bounds() 
         );
     }
 }
+
+#[test]
+fn edit_form_auto_expands_advanced_for_tmux_off_or_daemon_on() {
+    let mut panel = SshHostsPanel::new();
+    panel.open_edit(0, SshHostSpec::new("plain", "/srv"));
+    assert!(panel.is_form_open());
+    assert!(!panel.is_advanced_open());
+
+    let mut tmux_off = SshHostSpec::new("no-tmux", "/srv");
+    tmux_off.persistent_sessions = Some(false);
+    panel.open_edit(0, tmux_off);
+    assert!(panel.is_advanced_open());
+
+    let mut daemon = SshHostSpec::new("daemon", "/srv");
+    daemon.host_daemon = true;
+    panel.open_edit(0, daemon);
+    assert!(panel.is_advanced_open());
+
+    panel.open_add();
+    assert!(!panel.is_advanced_open());
+}

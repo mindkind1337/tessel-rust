@@ -563,13 +563,15 @@ mod tests {
         assert!(
             ssh_args(&Host {
                 alias: "-oProxyCommand=bad".into(),
-                folder: "".into()
+                folder: "".into(),
+                ..Default::default()
             })
             .is_err()
         );
         let args = ssh_args(&Host {
             alias: "dev".into(),
             folder: "/work".into(),
+            ..Default::default()
         })
         .unwrap();
         assert!(args.contains(&"StrictHostKeyChecking=yes".into()));

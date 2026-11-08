@@ -80,6 +80,10 @@ pub fn import(path: &Path) -> Result<Workspace> {
         .clear();
     backup.workspace.orchestration_prefs.team_wake_unconfirmed = false;
     backup.workspace.orchestration_prefs.confirm_workers = true;
+    backup.workspace.agent_folder_trust = false;
+    for host in &mut backup.workspace.hosts {
+        host.host_daemon = false;
+    }
     for prefs in backup.workspace.agent_prefs.values_mut() {
         prefs.reset();
     }

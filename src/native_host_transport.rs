@@ -94,6 +94,9 @@ pub fn connector(
     alias: &str,
     command: &str,
 ) -> Result<Box<dyn tessel_host_client::Connector>, TransportFailed> {
+    if !crate::host_remote_cache::validate_direct_exec_connect_command(command) {
+        return Err(TransportFailed);
+    }
     Ok(Box::new(Connector {
         args: verified_args(alias, command)?,
     }))

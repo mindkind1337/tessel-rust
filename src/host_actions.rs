@@ -52,11 +52,9 @@ pub fn save(
         }
         None
     };
-    if hosts
-        .iter()
-        .enumerate()
-        .any(|(i, host)| Some(i) != index && host == &replacement)
-    {
+    if hosts.iter().enumerate().any(|(i, host)| {
+        Some(i) != index && host.alias == replacement.alias && host.folder == replacement.folder
+    }) {
         return Err("This SSH host and folder already exist.".into());
     }
     if let Some(index) = index {
@@ -91,6 +89,7 @@ pub fn import_aliases(hosts: &mut Vec<Host>, aliases: &[String]) -> Result<usize
             Host {
                 alias: alias.clone(),
                 folder: String::new(),
+                ..Default::default()
             },
         )?;
         added += 1;
@@ -106,6 +105,7 @@ mod tests {
         Host {
             alias: alias.into(),
             folder: folder.into(),
+            ..Default::default()
         }
     }
 

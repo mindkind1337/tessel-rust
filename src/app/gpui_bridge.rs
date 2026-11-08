@@ -446,6 +446,7 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub new_ssh_folder: String,
     pub builtin_agents: Vec<BuiltinAgentSettingRow>,
     pub builtin_agent_details: Vec<GpuiBuiltinAgentDetail>,
+    pub agent_folder_trust: bool,
     pub expanded_agent_id: Option<String>,
     pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
     pub new_custom_agent_name: String,
@@ -835,6 +836,9 @@ pub(crate) enum GpuiAction {
     AddSshHostFromDraft,
     RemoveSshHost(usize),
     LaunchSshHost(usize),
+    ToggleSshHostPersistentSessions(usize),
+    ToggleSshHostDaemon(usize),
+    ToggleAgentFolderTrust,
     SetCustomAgentDraft {
         name: String,
         cmd: String,
@@ -3505,6 +3509,7 @@ impl Tessel {
             new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
             builtin_agents,
             builtin_agent_details,
+            agent_folder_trust: self.state.agent_folder_trust,
             expanded_agent_id: self.gpui_extra.expanded_agent_id.clone(),
             custom_agents: self.state.custom_agents.clone(),
             new_custom_agent_name: self.gpui_extra.new_custom_agent_name.clone(),
@@ -4945,6 +4950,7 @@ impl Tessel {
                         } else {
                             folder
                         },
+                        ..Default::default()
                     });
                     self.gpui_extra.new_ssh_alias.clear();
                     self.gpui_extra.new_ssh_folder.clear();
@@ -4962,6 +4968,26 @@ impl Tessel {
                     self.overlay = None;
                     self.new_session_placed(Launch::Ssh(host), None);
                 }
+            }
+            GpuiAction::ToggleSshHostPersistentSessions(idx) => {
+                if let Some(host) = self.state.hosts.get_mut(idx) {
+                    host.persistent_sessions = if host.persistent_sessions_enabled() {
+                        Some(false)
+                    } else {
+                        None
+                    };
+                    self.save();
+                }
+            }
+            GpuiAction::ToggleSshHostDaemon(idx) => {
+                if let Some(host) = self.state.hosts.get_mut(idx) {
+                    host.host_daemon = !host.host_daemon;
+                    self.save();
+                }
+            }
+            GpuiAction::ToggleAgentFolderTrust => {
+                self.state.agent_folder_trust = !self.state.agent_folder_trust;
+                self.save();
             }
             GpuiAction::SetCustomAgentDraft { name, cmd } => {
                 self.gpui_extra.new_custom_agent_name = name;

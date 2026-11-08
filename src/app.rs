@@ -914,6 +914,7 @@ impl Tessel {
                 app.state.hosts = vec![Host {
                     alias: "fixture-host".into(),
                     folder: "/demo".into(),
+                    ..Default::default()
                 }];
                 app.native_host_panel = crate::native_host_panel::Panel::fixture();
             }
@@ -2231,6 +2232,27 @@ impl Tessel {
         if self.sessions.len() >= 100 {
             self.error = "Session limit: 100".into();
             return;
+        }
+        // Claude folder trust (`claudeTrust.js`): accept the trust prompt for this project's
+        // folder before Claude starts. Off-thread file I/O; every refusal is silent.
+        if self.state.agent_folder_trust
+            && matches!(&launch, Launch::Agent(id) if id == "claude")
+            && let Some(folder) = worktree.as_ref().map(|w| w.path.clone()).or_else(|| {
+                project_id.and_then(|pid| {
+                    self.state
+                        .projects
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.path.clone())
+                })
+            })
+            && let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_owned())
+        {
+            thread::spawn(move || {
+                let _ = crate::remote_agent_tools::apply_local_claude_folder_trust(
+                    &home, &folder, true, false,
+                );
+            });
         }
         let cwd = worktree
             .as_ref()
@@ -7552,6 +7574,8 @@ impl Tessel {
                 host: SshHostSpec {
                     alias: host.alias.clone(),
                     folder: host.folder.clone(),
+                    persistent_sessions: host.persistent_sessions,
+                    host_daemon: host.host_daemon,
                 },
                 // A running SSH process alone does not prove authenticated connectivity.
                 status: None,
@@ -7603,6 +7627,8 @@ impl Tessel {
         let to_host = |host: SshHostSpec| Host {
             alias: host.alias,
             folder: host.folder,
+            persistent_sessions: host.persistent_sessions,
+            host_daemon: host.host_daemon,
         };
         match action {
             Some(SshHostsAction::ImportConfig) if self.host_import.is_none() => {
@@ -7748,12 +7774,17 @@ impl Tessel {
                 has_project: self.state.active_project.is_some(),
                 french: self.state.language == crate::i18n::Language::French,
                 search: self.settings_nav.query(),
+                agent_folder_trust: self.state.agent_folder_trust,
             },
         );
         if !self.save_agent_draft() {
             return;
         }
         match action {
+            Some(Action::SetAgentFolderTrust(on)) => {
+                self.state.agent_folder_trust = on;
+                self.save();
+            }
             Some(Action::RefreshModels(id)) => {
                 let command = crate::agent_preferences::get(&self.state, &id)
                     .map(|p| p.command.clone())
@@ -11272,6 +11303,7 @@ impl Tessel {
                 self.new_session(Launch::Ssh(workspace::Host {
                     alias: host_alias,
                     folder: remote_dir,
+                    ..Default::default()
                 }));
             }
             DialogsToolbarAction::CloseAddProjectModal => {
@@ -13481,6 +13513,7 @@ $lock.Dispose()
                 Launch::Ssh(Host {
                     alias: "fixture".into(),
                     folder: String::new(),
+                    ..Default::default()
                 }),
                 Some(workspace::SavedHostTerminal::default()),
             ),

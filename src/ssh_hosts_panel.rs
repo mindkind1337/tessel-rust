@@ -46,6 +46,10 @@ const PRIMARY_BTN_DARK_TEXT: Color32 = Color32::from_rgb(0x0b, 0x15, 0x30);
 pub struct SshHostSpec {
     pub alias: String,
     pub folder: String,
+    /// `None` = persistent `tmux` sessions on (default); `Some(false)` = explicitly off.
+    pub persistent_sessions: Option<bool>,
+    /// Opt-in `tessel-host` daemon for fast `Files` / `Changes` (default off).
+    pub host_daemon: bool,
 }
 
 impl SshHostSpec {
@@ -55,6 +59,8 @@ impl SshHostSpec {
         Self {
             alias: alias.into(),
             folder: folder.into(),
+            persistent_sessions: None,
+            host_daemon: false,
         }
     }
 }
@@ -392,7 +398,7 @@ pub fn validate_ssh_host_draft(
         return Err(SshHostValidationError::DuplicateTarget);
     }
 
-    Ok(SshHostSpec { alias, folder })
+    Ok(SshHostSpec::new(alias, folder))
 }
 
 #[derive(Clone, Debug)]
@@ -400,6 +406,9 @@ struct FormState {
     original: Option<(usize, SshHostSpec)>,
     alias: String,
     folder: String,
+    persistent_sessions: bool,
+    host_daemon: bool,
+    advanced_open: bool,
     error: String,
     focus_alias_on_open: bool,
 }
@@ -453,22 +462,37 @@ impl SshHostsPanel {
             original: None,
             alias: String::new(),
             folder: String::new(),
+            persistent_sessions: true,
+            host_daemon: false,
+            advanced_open: false,
             error: String::new(),
             focus_alias_on_open: true,
         });
     }
 
     /// Opens the Edit SSH host form pre-populated with `host` at `index`.
+    ///
+    /// `Advanced` auto-expands when the host has persistent sessions off or `host_daemon` on.
     pub fn open_edit(&mut self, index: usize, host: SshHostSpec) {
         self.pending_remove = None;
         self.selected_index = index;
+        let persistent = host.persistent_sessions != Some(false);
         self.form = Some(FormState {
             alias: host.alias.clone(),
             folder: host.folder.clone(),
+            persistent_sessions: persistent,
+            host_daemon: host.host_daemon,
+            advanced_open: !persistent || host.host_daemon,
             original: Some((index, host)),
             error: String::new(),
             focus_alias_on_open: true,
         });
+    }
+
+    /// Returns `true` while the Add/Edit form's `Advanced` section is expanded.
+    #[must_use]
+    pub fn is_advanced_open(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.advanced_open)
     }
 
     /// Closes both the Add/Edit form and the Remove confirmation dialog without emitting an action.
@@ -489,6 +513,9 @@ impl SshHostsPanel {
                 original: None,
                 alias: String::new(),
                 folder: String::new(),
+                persistent_sessions: true,
+                host_daemon: false,
+                advanced_open: false,
                 error: text,
                 focus_alias_on_open: true,
             });
@@ -1221,6 +1248,52 @@ impl SshHostsPanel {
                                 ui.add_space(4.0_f32);
                                 render_field_hint(ui, inner_w, folder_field_hint(input.french));
 
+                                // `Advanced` (`RemoteHostForm.vue`): two compact independent
+                                // switches — persistent tmux sessions and the tessel-host daemon.
+                                ui.add_space(12.0_f32);
+                                let adv_label = if input.french { "Avancé" } else { "Advanced" };
+                                let adv_header = format!(
+                                    "{} {adv_label}",
+                                    if form.advanced_open { "▾" } else { "▸" }
+                                );
+                                if ui
+                                    .add_enabled(
+                                        !interaction_blocked,
+                                        egui::Button::new(adv_header).frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    form.advanced_open = !form.advanced_open;
+                                }
+                                if form.advanced_open {
+                                    ui.add_space(6.0_f32);
+                                    ui.add_enabled(
+                                        !interaction_blocked,
+                                        egui::Checkbox::new(
+                                            &mut form.persistent_sessions,
+                                            advanced_tmux_label(input.french),
+                                        ),
+                                    );
+                                    render_field_hint(
+                                        ui,
+                                        inner_w,
+                                        advanced_tmux_hint(input.french),
+                                    );
+                                    ui.add_space(6.0_f32);
+                                    ui.add_enabled(
+                                        !interaction_blocked,
+                                        egui::Checkbox::new(
+                                            &mut form.host_daemon,
+                                            advanced_daemon_label(input.french),
+                                        ),
+                                    );
+                                    render_field_hint(
+                                        ui,
+                                        inner_w,
+                                        advanced_daemon_hint(input.french),
+                                    );
+                                }
+
                                 // Clear stale inline error immediately when draft changes.
                                 if form.alias != prev_alias || form.folder != prev_folder {
                                     form.error.clear();
@@ -1390,7 +1463,13 @@ impl SshHostsPanel {
             }
 
             match validate_ssh_host_draft(&form.alias, &form.folder, &existing, editing_index) {
-                Ok(replacement) => {
+                Ok(mut replacement) => {
+                    replacement.persistent_sessions = if form.persistent_sessions {
+                        None
+                    } else {
+                        Some(false)
+                    };
+                    replacement.host_daemon = form.host_daemon;
                     // Keep `self.form` open until the caller persists the mutation and calls
                     // `cancel_dialogs()`, so backend disk/limit errors passed to `set_form_error`
                     // preserve the user's draft and remain visible inline.
@@ -3212,4 +3291,42 @@ const fn remove_desc_label(french: bool) -> &'static str {
 
 const fn remove_confirm_label(french: bool) -> &'static str {
     if french { "Supprimer" } else { "Remove" }
+}
+
+/// `Advanced` switch label: persistent SSH terminals through `tmux`.
+#[must_use]
+pub const fn advanced_tmux_label(french: bool) -> &'static str {
+    if french {
+        "Terminaux persistants (tmux)"
+    } else {
+        "Persistent terminals (tmux)"
+    }
+}
+
+#[must_use]
+pub const fn advanced_tmux_hint(french: bool) -> &'static str {
+    if french {
+        "Les commandes continuent si SSH se coupe ; Tessel se rattache à la reconnexion."
+    } else {
+        "Commands keep running if SSH drops; Tessel reattaches on reconnect."
+    }
+}
+
+/// `Advanced` switch label: opt-in `tessel-host` daemon for fast Files/Changes.
+#[must_use]
+pub const fn advanced_daemon_label(french: bool) -> &'static str {
+    if french {
+        "Démon Tessel (Fichiers et Modifications rapides)"
+    } else {
+        "Tessel daemon (fast Files and Changes)"
+    }
+}
+
+#[must_use]
+pub const fn advanced_daemon_hint(french: bool) -> &'static str {
+    if french {
+        "Installe tessel-host dans ~/.tessel-server sur cet hôte. Désactivé : SFTP et git, comme avant."
+    } else {
+        "Installs tessel-host in ~/.tessel-server on this host. Off: SFTP and git, as before."
+    }
 }

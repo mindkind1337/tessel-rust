@@ -79,6 +79,7 @@ impl RemotePanel {
             host: Some(Host {
                 alias: "fixture-host".into(),
                 folder: "/demo".into(),
+                ..Default::default()
             }),
             root: "/demo".into(),
             path: "/demo".into(),
