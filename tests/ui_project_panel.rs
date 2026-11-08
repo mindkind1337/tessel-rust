@@ -186,13 +186,11 @@ fn top_search_and_add_project_buttons_emit_actions_and_localize_en_fr_without_du
         (action, out.shapes)
     };
 
-    // English pass: verify labels, shortcut keycaps, truthful statuses, and zero dummy buttons.
+    // English pass: verify labels, truthful statuses, and zero dummy buttons. The expanded
+    // sidebar has no Search button of its own (the toolbar's command box finds everything).
     let (act_en, shapes_en) = run_sidebar(&mut panel, false, Vec::new());
     assert_eq!(act_en, None);
-    assert!(has_painted_text(&shapes_en, "Search"));
-    assert!(has_painted_text(&shapes_en, "Ctrl"));
-    assert!(has_painted_text(&shapes_en, "Shift"));
-    assert!(has_painted_text(&shapes_en, "P"));
+    assert!(!has_painted_text(&shapes_en, "Search"));
     assert!(has_painted_text(&shapes_en, "Projects"));
     assert!(has_painted_text(&shapes_en, "tessel-rust"));
     assert!(has_painted_text(&shapes_en, "C:/Tessel-rust"));
@@ -217,11 +215,6 @@ fn top_search_and_add_project_buttons_emit_actions_and_localize_en_fr_without_du
         );
     }
 
-    // Click Search button.
-    let search_rect = find_painted_text_rect(&shapes_en, "Search").expect("Search label rect");
-    let (act_search, _) = run_sidebar(&mut panel, false, click_events(search_rect.center()));
-    assert_eq!(act_search, Some(ProjectAction::Search));
-
     // Click Add project (FolderPlus) button aligned on the right of the "Projects" header row.
     let projects_hdr_rect =
         find_painted_text_rect(&shapes_en, "Projects").expect("Projects header rect");
@@ -229,13 +222,10 @@ fn top_search_and_add_project_buttons_emit_actions_and_localize_en_fr_without_du
     let (act_open, _) = run_sidebar(&mut panel, false, click_events(add_btn_pos));
     assert_eq!(act_open, Some(ProjectAction::OpenFolder));
 
-    // French pass: verify exact localized strings & keycaps (`Maj`).
+    // French pass: verify exact localized strings.
     let (act_fr, shapes_fr) = run_sidebar(&mut panel, true, Vec::new());
     assert_eq!(act_fr, None);
-    assert!(has_painted_text(&shapes_fr, "Rechercher"));
-    assert!(has_painted_text(&shapes_fr, "Ctrl"));
-    assert!(has_painted_text(&shapes_fr, "Maj"));
-    assert!(has_painted_text(&shapes_fr, "P"));
+    assert!(!has_painted_text(&shapes_fr, "Rechercher"));
     assert!(has_painted_text(&shapes_fr, "Projets"));
     assert!(has_painted_text(&shapes_fr, "En veille"));
     assert!(has_painted_text(&shapes_fr, "Sessions sans projet"));
@@ -820,23 +810,13 @@ fn tab_and_shift_tab_cycle_cleanly_across_header_list_and_outside_widgets_includ
     };
 
     // Start focused on `outside_id`, then Tab into ProjectPanel:
-    // outside -> Search -> Add project -> List (1 stop for all cards/rows!) -> outside.
+    // outside -> Add project -> List (1 stop for all cards/rows!) -> outside.
     let _ = run_frame(&mut panel, &projects, &global_sessions, Vec::new());
     ctx.memory_mut(|m| m.request_focus(outside_id));
     let _ = run_frame(&mut panel, &projects, &global_sessions, Vec::new());
     assert_eq!(ctx.memory(|m| m.focused()), Some(outside_id));
 
-    // Tab 1 -> Search button
-    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
-    let act_search = run_frame(
-        &mut panel,
-        &projects,
-        &global_sessions,
-        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
-    );
-    assert_eq!(act_search, Some(ProjectAction::Search));
-
-    // Tab 2 -> Add project (`+`) button
+    // Tab 1 -> Add project (`+`) button
     let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
     let act_open = run_frame(
         &mut panel,
@@ -866,7 +846,7 @@ fn tab_and_shift_tab_cycle_cleanly_across_header_list_and_outside_widgets_includ
     let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(false));
     assert_eq!(ctx.memory(|m| m.focused()), Some(outside_id));
 
-    // Shift+Tab reverses cleanly: outside -> List -> Add project -> Search
+    // Shift+Tab reverses cleanly: outside -> List -> Add project
     let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(true));
     let act_rev_list = run_frame(
         &mut panel,
@@ -891,17 +871,9 @@ fn tab_and_shift_tab_cycle_cleanly_across_header_list_and_outside_widgets_includ
     );
     assert_eq!(act_rev_open, Some(ProjectAction::OpenFolder));
 
-    let _ = run_frame(&mut panel, &projects, &global_sessions, tab_press(true));
-    let act_rev_search = run_frame(
-        &mut panel,
-        &projects,
-        &global_sessions,
-        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
-    );
-    assert_eq!(act_rev_search, Some(ProjectAction::Search));
-
-    // In empty state (`projects = []`, `global_sessions = []`), Tab goes Search -> Add project -> outside_id!
-    let _ = run_frame(&mut panel, &[], &[], tab_press(false));
+    // In empty state (`projects = []`, `global_sessions = []`), focus stays on Add project and
+    // the next Tab leaves the panel (no empty list stop).
+    let _ = run_frame(&mut panel, &[], &[], Vec::new());
     let act_empty_open = run_frame(
         &mut panel,
         &[],
@@ -995,7 +967,6 @@ fn focused_row_deletion_held_enter_repeat_popup_guard_and_accesskit_labels_work_
     let (_, _, labels0, shapes0) =
         run_frame(&mut panel, &projects, &global_sessions, false, Vec::new());
     for expected in [
-        "Search (Ctrl+Shift+P)",
         "Add project",
         "Projects — tessel-rust / PowerShell 7",
         "tessel-rust",
@@ -1009,6 +980,8 @@ fn focused_row_deletion_held_enter_repeat_popup_guard_and_accesskit_labels_work_
             "expected AccessKit label `{expected}` in {labels0:?}"
         );
     }
+    // The expanded sidebar's own Search button is gone (b9061124).
+    assert!(!labels0.iter().any(|l| l.starts_with("Search")));
 
     // Verify mouse click on `Native Codex` row still works and updates virtual focus!
     let codex_rect = find_painted_text_rect(&shapes0, "Native Codex").expect("Native Codex rect");

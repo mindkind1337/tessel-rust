@@ -25,7 +25,7 @@ use std::{
 
 pub const DIALOG_MAX_WIDTH: f32 = 720.0_f32;
 pub const ASK_MODAL_MAX_WIDTH: f32 = 560.0_f32;
-pub const PILL_HEIGHT: f32 = 24.0_f32;
+pub const PILL_HEIGHT: f32 = crate::toolbar_fit::LIVE_SHARE_PILL_HEIGHT;
 pub const PILL_POPOVER_WIDTH: f32 = 360.0_f32;
 pub const ASK_ARM_DELAY: Duration = Duration::from_millis(900);
 
@@ -286,6 +286,40 @@ impl SharePanel {
         self.pill_popover_open
     }
 
+    /// What the compact toolbar pill shows (`None` = no pill: not hosting, not in a session).
+    #[must_use]
+    pub fn pill_state(&self) -> Option<crate::toolbar_fit::LiveSharePillState> {
+        use crate::toolbar_fit::LiveSharePillState;
+        if let Some(host) = &self.host {
+            let snap = host.snapshot();
+            let joined = snap
+                .guests
+                .iter()
+                .filter(|g| g.state == GuestConnectionState::Joined)
+                .count();
+            return Some(LiveSharePillState::Host {
+                joined,
+                waiting: snap.asks.len(),
+            });
+        }
+        let gs = self.guest_session.as_ref()?.snapshot();
+        match gs.phase {
+            GuestPhase::Connecting => Some(LiveSharePillState::Guest {
+                host: String::new(),
+                reconnecting: true,
+            }),
+            GuestPhase::WaitingForHost { host_name, .. } => Some(LiveSharePillState::Guest {
+                host: host_name,
+                reconnecting: true,
+            }),
+            GuestPhase::Joined { host_name, .. } => Some(LiveSharePillState::Guest {
+                host: host_name,
+                reconnecting: false,
+            }),
+            GuestPhase::Ended { .. } => None,
+        }
+    }
+
     pub fn close_pill_popover(&mut self) {
         self.pill_popover_open = false;
         self.pill_popover_just_opened = false;
@@ -475,61 +509,51 @@ impl SharePanel {
             return ui_action;
         }
 
-        // Active pill (`.lsp-pill`, height 24px)
-        let (pill_text, waiting_count, is_hosting_pill, show_follow_btn) =
-            if let Some(snap) = &host_snap {
-                let joined_n = snap
-                    .guests
-                    .iter()
-                    .filter(|g| g.state == GuestConnectionState::Joined)
-                    .count();
-                let waiting_n = snap.asks.len();
-                let txt = if french {
-                    format!("En direct · {joined_n}")
-                } else {
-                    format!("Live · {joined_n}")
-                };
-                (txt, waiting_n, true, false)
-            } else if let Some(gs) = &guest_snap {
-                match &gs.phase {
-                    GuestPhase::Joined { host_name, .. } => {
-                        let txt = if french {
-                            format!("En direct avec {host_name}")
-                        } else {
-                            format!("Live with {host_name}")
-                        };
-                        (txt, 0, false, !self.follow_host)
-                    }
-                    GuestPhase::WaitingForHost { .. } | GuestPhase::Connecting => {
-                        let txt = if french {
-                            "En attente de l'hôte…".to_owned()
-                        } else {
-                            "Waiting for host…".to_owned()
-                        };
-                        (txt, 0, false, false)
-                    }
-                    GuestPhase::Ended { .. } => ("Live Share".to_owned(), 0, false, false),
-                }
-            } else {
-                ("Live Share".to_owned(), 0, false, false)
-            };
+        // Compact pill (`LiveSharePill.vue`, 20 px): the dot and the number of people (a guest:
+        // the host's name); its words are in the tooltip and the popover.
+        let Some(pill_state) = self.pill_state() else {
+            return ui_action;
+        };
+        let pill_text = crate::toolbar_fit::live_share_pill_label(&pill_state, french);
+        let pill_tip = crate::toolbar_fit::live_share_pill_tooltip(&pill_state, french);
+        let waiting_count = match pill_state {
+            crate::toolbar_fit::LiveSharePillState::Host { waiting, .. } => waiting,
+            _ => 0,
+        };
+        let is_hosting_pill = host_snap.is_some();
+        let show_follow_btn = matches!(
+            guest_snap.as_ref().map(|g| &g.phase),
+            Some(GuestPhase::Joined { .. })
+        ) && !self.follow_host;
 
         let danger_red = Color32::from_rgb(0xef, 0x44, 0x44);
         let amber = Color32::from_rgb(0xf5, 0x9e, 0x0b);
         let accent = ui.visuals().selection.stroke.color;
-        let dot_color = if is_hosting_pill { danger_red } else { accent };
+        let dot_color = if is_hosting_pill {
+            if crate::toolbar_fit::live_share_pill_dot_live(&pill_state) {
+                danger_red
+            } else {
+                ui.visuals().weak_text_color()
+            }
+        } else {
+            accent
+        };
 
-        let font = FontId::proportional(11.5_f32);
+        let font = FontId::proportional(11.0_f32);
         let text_galley =
             ui.painter()
                 .layout_no_wrap(pill_text.clone(), font.clone(), ui.visuals().text_color());
-        let badge_extra = if waiting_count > 0 { 22.0_f32 } else { 0.0_f32 };
-        let pill_w = (22.0_f32 + text_galley.size().x + badge_extra + 10.0_f32).ceil();
+        let badge_extra = if waiting_count > 0 { 20.0_f32 } else { 0.0_f32 };
+        // padding 0 7px 0 6px, dot 7px, gap 5px, max-width 160px
+        let pill_w = (6.0_f32 + 7.0 + 5.0 + text_galley.size().x + badge_extra + 7.0)
+            .ceil()
+            .min(160.0);
         let (pill_rect, pill_resp) =
             ui.allocate_exact_size(Vec2::new(pill_w, PILL_HEIGHT), Sense::click());
         pill_resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &pill_text)
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &pill_tip)
         });
+        let pill_resp = pill_resp.on_hover_text(&pill_tip);
 
         let bg = if self.pill_popover_open || pill_resp.hovered() {
             dot_color.gamma_multiply(0.18_f32)
@@ -538,19 +562,19 @@ impl SharePanel {
         };
         ui.painter().rect(
             pill_rect,
-            CornerRadius::same(12),
+            CornerRadius::same(10),
             bg,
             Stroke::new(1.0_f32, dot_color.gamma_multiply(0.55_f32)),
             StrokeKind::Inside,
         );
         ui.painter().circle_filled(
-            Pos2::new(pill_rect.min.x + 11.0_f32, pill_rect.center().y),
+            Pos2::new(pill_rect.min.x + 9.5_f32, pill_rect.center().y),
             3.5_f32,
             dot_color,
         );
         ui.painter().galley(
             Pos2::new(
-                pill_rect.min.x + 19.0_f32,
+                pill_rect.min.x + 18.0_f32,
                 pill_rect.center().y - text_galley.size().y * 0.5_f32,
             ),
             text_galley,
@@ -559,8 +583,8 @@ impl SharePanel {
 
         if waiting_count > 0 {
             let badge_rect = Rect::from_center_size(
-                Pos2::new(pill_rect.max.x - 13.0_f32, pill_rect.center().y),
-                Vec2::new(16.0_f32, 15.0_f32),
+                Pos2::new(pill_rect.max.x - 12.0_f32, pill_rect.center().y),
+                Vec2::new(15.0_f32, 14.0_f32),
             );
             ui.painter()
                 .rect_filled(badge_rect, CornerRadius::same(7), amber);
@@ -3136,6 +3160,9 @@ pub(crate) struct ShareGpuiSnapshot {
     pub selected_projects: Vec<u64>,
     pub pill_popover_open: bool,
     pub pill_label: Option<String>,
+    pub pill_tooltip: Option<String>,
+    pub pill_badge: Option<String>,
+    pub pill_dot_live: bool,
     pub waiting_asks_count: usize,
     pub join_code: String,
     pub guest_name: String,
@@ -3184,21 +3211,23 @@ impl SharePanel {
         let mut guests = Vec::new();
         let mut pending_ask = None;
         let mut waiting_asks_count = 0usize;
-        let mut pill_label = None;
+        let pill_state = self.pill_state();
+        let pill_label = pill_state
+            .as_ref()
+            .map(|s| crate::toolbar_fit::live_share_pill_label(s, french));
+        let pill_tooltip = pill_state
+            .as_ref()
+            .map(|s| crate::toolbar_fit::live_share_pill_tooltip(s, french));
+        let pill_badge = pill_state
+            .as_ref()
+            .and_then(crate::toolbar_fit::live_share_pill_badge);
+        let pill_dot_live = pill_state
+            .as_ref()
+            .is_some_and(crate::toolbar_fit::live_share_pill_dot_live);
 
         if let Some(snap) = &host_snap {
             let now_ms = now_epoch_ms();
-            let joined_n = snap
-                .guests
-                .iter()
-                .filter(|g| g.state == GuestConnectionState::Joined)
-                .count();
             waiting_asks_count = snap.asks.len();
-            pill_label = Some(if french {
-                format!("En direct · {joined_n}")
-            } else {
-                format!("Live · {joined_n}")
-            });
             for inv in &snap.invites {
                 let token_url = inv.code.clone();
                 invites.push(ShareGpuiInviteRow {
@@ -3261,9 +3290,6 @@ impl SharePanel {
                     } else {
                         "Connecting…".to_owned()
                     };
-                    if pill_label.is_none() {
-                        pill_label = Some(s.clone());
-                    }
                     guest_status = Some(s);
                 }
                 GuestPhase::WaitingForHost { sas_code, .. } => {
@@ -3273,13 +3299,6 @@ impl SharePanel {
                     } else {
                         format!("Waiting for host · SAS code: {sas_code}")
                     };
-                    if pill_label.is_none() {
-                        pill_label = Some(if french {
-                            "En attente…".into()
-                        } else {
-                            "Waiting for host…".into()
-                        });
-                    }
                     guest_status = Some(s);
                 }
                 GuestPhase::Joined { host_name, .. } => {
@@ -3289,9 +3308,6 @@ impl SharePanel {
                     } else {
                         format!("Live with {host_name}")
                     };
-                    if pill_label.is_none() {
-                        pill_label = Some(s.clone());
-                    }
                     guest_status = Some(s);
                 }
                 GuestPhase::Ended { .. } => {
@@ -3309,6 +3325,9 @@ impl SharePanel {
             selected_projects: self.selected_projects.clone(),
             pill_popover_open: self.pill_popover_open,
             pill_label,
+            pill_tooltip,
+            pill_badge,
+            pill_dot_live,
             waiting_asks_count,
             join_code: self.join_code.clone(),
             guest_name: self.guest_name.clone(),

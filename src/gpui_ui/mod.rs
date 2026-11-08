@@ -650,7 +650,13 @@ impl Render for TesselGpuiRoot {
                     cx.notify();
                 }
             }))
-            .child(chrome::render_toolbar(&snapshot, &tokens, is_maximized, cx))
+            .child(chrome::render_toolbar(
+                &snapshot,
+                &tokens,
+                is_maximized,
+                viewport_w,
+                cx,
+            ))
             .when_some(
                 chrome::render_broadcast_banner(&snapshot, &tokens, cx),
                 |el, banner| el.child(banner),

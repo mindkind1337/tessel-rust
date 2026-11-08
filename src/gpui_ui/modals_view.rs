@@ -54,6 +54,9 @@ pub(crate) fn render_active_modals_and_popovers(
     if m.usage_popover_open {
         layers.push(render_usage_popover(m, french, tokens, cx));
     }
+    if snapshot.toolbar.more_menu_open {
+        layers.push(render_toolbar_more_menu(snapshot, tokens, cx));
+    }
     if m.notifications_popover_open {
         layers.push(render_notifications_popover(m, french, tokens, cx));
     }
@@ -2743,6 +2746,97 @@ fn modal_backdrop(
             this.dispatch_action(close_action.clone(), cx);
         }))
         .child(card)
+        .into_any_element()
+}
+
+/// Toolbar `⋯` menu (`App.vue` `.toolbar-menu.align-right`): the hidden secondary buttons'
+/// actions, with their shortcuts and a check on what is on.
+fn render_toolbar_more_menu(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let tb = &snapshot.toolbar;
+    let entries = crate::toolbar_fit::more_menu_entries(crate::toolbar_fit::MoreMenuState {
+        french: snapshot.french,
+        broadcast: tb.broadcast_enabled,
+        floating_open: tb.floating_open,
+        left_open: tb.left_open,
+        right_open: tb.right_open,
+        can_arrange_panes: tb.can_arrange_panes,
+    });
+    let mut col = div().flex().flex_col().gap(px(1.0));
+    for (idx, entry) in entries.into_iter().enumerate() {
+        let Some(action) = entry.action else {
+            col = col.child(div().my(px(3.0)).h(px(1.0)).bg(tokens.border));
+            continue;
+        };
+        let color = if entry.danger {
+            tokens.danger
+        } else {
+            tokens.text
+        };
+        col = col.child(
+            div()
+                .id(("gpui-toolbar-more-item", idx))
+                .h(px(28.0))
+                .px(px(9.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.0))
+                .text_size(px(12.0))
+                .text_color(color)
+                .cursor_pointer()
+                .hover(|s| s.bg(tokens.surface_2))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch_action(GpuiAction::ToolbarMore(action), cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(SharedString::from(entry.label))
+                        .when(entry.checked, |el| {
+                            el.child(div().text_color(tokens.accent).child(" ✓"))
+                        }),
+                )
+                .when_some(entry.shortcut, |el, sc| {
+                    el.child(
+                        div()
+                            .text_size(px(10.5))
+                            .font_family(mono_font_family())
+                            .text_color(tokens.text_dim)
+                            .child(sc),
+                    )
+                }),
+        );
+    }
+    div()
+        .id("gpui-toolbar-more-backdrop")
+        .absolute()
+        .left(px(0.0))
+        .top(px(0.0))
+        .size_full()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.dispatch_action(GpuiAction::ToggleToolbarMore, cx);
+        }))
+        .child(
+            div()
+                .id("gpui-toolbar-more-menu")
+                .absolute()
+                .right(px(3.0 * super::theme::CAPTION_BTN_WIDTH_PX + 40.0))
+                .top(px(super::theme::TOOLBAR_HEIGHT_PX))
+                .w(px(290.0))
+                .p(px(5.0))
+                .rounded(px(tokens.radius_px + 2.0))
+                .bg(tokens.panel)
+                .border_1()
+                .border_color(tokens.border_strong)
+                .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+                .child(col),
+        )
         .into_any_element()
 }
 

@@ -799,3 +799,35 @@ universal `eframe`/`egui` OpenGL Compatibility renderer) and Phase B (native 1:1
 hardware-accelerated primary renderer with `--renderer gpui` / `--renderer compat`,
 `TESSEL_RENDERER`, `Settings > Appearance` selector, and automatic runtime fallback) are
 complete on `main`.
+
+## Phase C: Tessel parity through 2026-11-08 (Lots b178–b182)
+
+Source baseline advanced to `C:\Tessel` `cc1ec459` (2026-11-08).
+
+- `b178` / `b179`: the 2026-11-03..07 fixes, MCP remote sign-in, account admin portal, dev-copy
+  fast-forward updater, built-in Browser sized OAuth sign-in popups, and the Conversations
+  `promptBefore` backwards transcript scan.
+- `b180`: SSH terminals wrapped in per-pane `tmux` sessions on a private `tessel` socket
+  (system `tmux` first, then `~/.tessel-server/bin/tmux`, plain login shell without either;
+  jump host / proxy command not wrapped), per-host **Persistent terminals (tmux)** and
+  **Tessel daemon** switches in both renderers, the exact `tessel-host … connect --stdio`
+  command check, and Claude folder trust before a local Claude terminal starts. Ported and
+  tested but not yet connected to live sessions: the daemon-backed `Files` / `Changes`
+  caches, the SSH remote agent tools bridge, the SSH-side Claude trust script, and the static
+  `tmux` installer.
+- `b181`: the Tessel daemon is on by default for every SSH host (user request, 2026-11-08);
+  the per-host switch turns it off.
+- `b182`: Darwin's toolbar and sidebar fixes (`b9061124`, `d5f3231e`, `cc1ec459`): the
+  toolbar's tightness comes from its measured room (`toolbar_fit_level`, exact
+  `toolbarFit.js` formula); level 1 gathers the secondary buttons under one `⋯` menu with
+  the same actions, shortcuts and checks; level 2 also drops the brand version and shrinks
+  the command box to its icon. The Live Share pill is the compact 20 px status (count or
+  host name, words in the tooltip). The expanded sidebar's Search button is gone; the
+  command palette finds secondary Git worktrees and the open browser tab. Both renderers.
+
+Phase C full-suite acceptance audit: `cargo fmt --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, and
+`cargo test --all-targets -- --test-threads=2` pass cleanly with **64 test suites and 1,119
+passing tests** (`401` binary unit tests with `4` synthetic child/reference fixtures ignored,
+plus `718` integration tests across `63` integration suites, including `ui_delta_b178`,
+`ui_delta_b179`, `ui_delta_b180` and `ui_delta_darwin_toolbar`).

@@ -25,6 +25,8 @@ mod sidebar_model;
 #[allow(dead_code)]
 #[path = "../src/theme_palettes.rs"]
 mod theme_palettes;
+#[path = "../src/toolbar_fit.rs"]
+mod toolbar_fit;
 
 use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, Rect, Shape, Vec2};
 use project_panel::{ProjectEntry, ProjectPanel, ProjectPanelInput};
@@ -402,12 +404,14 @@ fn live_share_pill_popover_presence_and_sidebar_badge_render_cleanly() {
 
     let _ = run_frame(&mut panel, &mut sidebar, vec![]);
     let out = run_frame(&mut panel, &mut sidebar, vec![]);
-    assert!(has_text_containing(&out.shapes, "Live · 0"));
+    // Compact 20 px pill: the number of people only; the words are in the tooltip.
+    assert!(find_text_center(&out.shapes, "0").is_some());
+    assert!(!has_text_containing(&out.shapes, "Live · 0"));
     assert!(has_text_containing(&out.shapes, "⌨ CM"));
     assert!(has_text_containing(&out.shapes, "Live · CM"));
 
     // Click toolbar pill -> opens 360px quick-manage popover!
-    let pill_pos = find_text_center(&out.shapes, "Live · 0").unwrap();
+    let pill_pos = find_text_center(&out.shapes, "0").unwrap();
     let _ = run_frame(&mut panel, &mut sidebar, click_events(pill_pos));
     let out_pop = run_frame(&mut panel, &mut sidebar, vec![]);
     assert!(panel.is_pill_popover_open());

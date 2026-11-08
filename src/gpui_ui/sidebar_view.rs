@@ -143,7 +143,8 @@ pub(crate) fn render_left_sidebar_expanded(
 ) -> AnyElement {
     let french = snapshot.french;
     let prefs = snapshot.sidebar.prefs;
-    let search_label = if french { "Rechercher" } else { "Search" };
+    // The expanded sidebar has no Search button of its own: the toolbar's command box
+    // (Ctrl+Shift+P) finds worktrees and browser tabs too (b9061124).
     let workspaces_label = if french {
         "ESPACES DE TRAVAIL"
     } else {
@@ -376,44 +377,6 @@ pub(crate) fn render_left_sidebar_expanded(
                                                         .render(12.5, tokens.text_dim),
                                                 ),
                                         ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("gpui-sidebar-search-btn")
-                                .w_full()
-                                .h(px(27.0))
-                                .px(px(8.0))
-                                .rounded(px(tokens.radius_px))
-                                .bg(tokens.surface)
-                                .border_1()
-                                .border_color(tokens.border)
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .hover(|s| s.bg(tokens.surface_2))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch_action(GpuiAction::OpenFinder, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.0))
-                                        .child(GpuiIcon::Search.render(12.5, tokens.text_dim))
-                                        .child(
-                                            div()
-                                                .text_size(px(11.5))
-                                                .text_color(tokens.text_dim)
-                                                .child(search_label),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_family(mono_font_family())
-                                        .text_color(tokens.text_dim)
-                                        .child("Ctrl+Shift+J"),
                                 ),
                         ),
                 )

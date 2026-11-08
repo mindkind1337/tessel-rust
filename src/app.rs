@@ -484,6 +484,10 @@ pub struct Tessel {
     command_palette: crate::palette::CommandPaletteState,
     command_palette_focused: bool,
     toolbar_menu_open: bool,
+    /// Measured right toolbar group with everything shown and its secondary buttons' width
+    /// (`toolbarFit.js`), kept from the frames where they were visible.
+    toolbar_right_full: f32,
+    toolbar_secondary_w: f32,
     pane_context_menu: Option<(u64, egui::Pos2)>,
     pane_context_menu_just_opened: bool,
     finder: crate::finder_panel::Finder,
@@ -693,6 +697,8 @@ impl Tessel {
             command_palette: Default::default(),
             command_palette_focused: false,
             toolbar_menu_open: false,
+            toolbar_right_full: 380.0,
+            toolbar_secondary_w: 160.0,
             pane_context_menu: None,
             pane_context_menu_just_opened: false,
             finder: Default::default(),
@@ -3352,6 +3358,41 @@ impl Tessel {
             )
             .with_hint(document.path.display().to_string())
         }));
+        // Secondary Git worktrees (b9061124): the sidebar's own Search button is gone, the
+        // command box finds them.
+        let worktree_group = tr("Worktrees");
+        for project in &self.state.projects {
+            let Some(summary) = self.worktree_state.summary(project.id) else {
+                continue;
+            };
+            for wt in summary.worktrees.iter().filter(|w| !w.is_primary) {
+                let title = if wt.branch.trim().is_empty() {
+                    std::path::Path::new(&wt.path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| wt.path.clone())
+                } else {
+                    wt.branch.clone()
+                };
+                commands.push(
+                    PaletteCommand::new(
+                        format!("worktree:{}:{}", project.id, wt.path),
+                        worktree_group,
+                        title,
+                    )
+                    .with_hint(format!("{} · {}", project.name, wt.path)),
+                );
+            }
+        }
+        // Browser tabs.
+        #[cfg(windows)]
+        if self.browser_tab_open {
+            let url = self.browser.active_url().unwrap_or_default().to_owned();
+            commands.push(
+                PaletteCommand::new("view:browser", tr("Browser tabs"), tr("Browser"))
+                    .with_hint(url),
+            );
+        }
 
         commands
     }
@@ -3589,10 +3630,70 @@ impl Tessel {
                 {
                     self.active_document = index;
                     self.view = View::Files;
+                } else if let Some((pid, path)) = id
+                    .strip_prefix("worktree:")
+                    .and_then(|rest| rest.split_once(':'))
+                    .and_then(|(pid, path)| pid.parse::<u64>().ok().map(|pid| (pid, path)))
+                {
+                    self.open_worktree_from_palette(pid, path);
+                } else if id == "view:browser" {
+                    #[cfg(windows)]
+                    {
+                        self.browser_tab_open = true;
+                        self.view = View::Browser;
+                    }
                 }
             }
         }
     }
+    /// Command palette `worktree:<project>:<path>`: focus a pane already running in that
+    /// worktree, else open a terminal there.
+    fn open_worktree_from_palette(&mut self, project: u64, path: &str) {
+        if !self.state.projects.iter().any(|p| p.id == project) {
+            return;
+        }
+        if self.state.active_project != Some(project) {
+            self.state.active_project = Some(project);
+            self.refresh_project();
+        }
+        self.view = View::Work;
+        if let Some(id) = self
+            .sessions
+            .iter()
+            .find(|s| {
+                s.project == Some(project)
+                    && s.worktree.as_ref().is_some_and(|w| {
+                        crate::sidebar_model::same_path(&w.path.to_string_lossy(), path)
+                    })
+            })
+            .map(|s| s.id)
+        {
+            self.active_session = Some(id);
+            self.save();
+            return;
+        }
+        let branch = self
+            .worktree_state
+            .summary(project)
+            .and_then(|s| {
+                s.worktrees
+                    .iter()
+                    .find(|w| crate::sidebar_model::same_path(&w.path, path))
+                    .map(|w| w.branch.clone())
+            })
+            .unwrap_or_default();
+        self.new_session_in_worktree(
+            Some(project),
+            Launch::Shell,
+            None,
+            false,
+            Some(workspace::SavedWorktree {
+                path: PathBuf::from(path),
+                branch,
+            }),
+        );
+    }
+
     pub(crate) fn open_finder(&mut self) {
         if let Some(project) = self.state.active() {
             if let Err(error) = self.finder.open(&project.path) {
@@ -11949,16 +12050,40 @@ impl eframe::App for Tessel {
                 if self.window_frame.is_some() {
                     toolbar_room.max.x -= crate::window_frame::CONTROL_WIDTH + 2.0;
                 }
-                let regions = chrome::regions(toolbar_room);
+                // `toolbarFit.js`: how tight the toolbar is comes from the room it measures
+                // (the right group with everything shown, kept from the last frames).
+                let fit_level = crate::toolbar_fit::toolbar_fit_level(
+                    toolbar_room.width(),
+                    160.0,
+                    self.toolbar_right_full,
+                    self.toolbar_secondary_w,
+                    crate::toolbar_fit::TOOLBAR_MORE_WIDTH,
+                    0.0,
+                    crate::toolbar_fit::TOOLBAR_CENTRE_MIN,
+                );
+                let fit_full = fit_level == 0;
+                let visible_right = if fit_full {
+                    self.toolbar_right_full
+                } else {
+                    self.toolbar_right_full - self.toolbar_secondary_w
+                        + crate::toolbar_fit::TOOLBAR_MORE_WIDTH
+                        + 4.0
+                };
+                let regions = chrome::regions_fit(toolbar_room, visible_right + 4.0, fit_level);
                 #[cfg(windows)]
                 if let Some(frame) = &self.window_frame {
                     frame.show(ui, [regions.search, regions.actions]);
                 }
-                chrome::brand_with_build(ui, regions.brand, &self.dev_update.live_build_label());
+                chrome::brand_with_build_fit(
+                    ui,
+                    regions.brand,
+                    &self.dev_update.live_build_label(),
+                    fit_level < 2,
+                );
                 if self.native_modal_open() || self.pending_exit {
                     ui.disable();
                 }
-                if regions.search.width() >= 40.0
+                if regions.search.width() >= crate::toolbar_fit::TOOLBAR_COMMAND_ICON_WIDTH
                     && chrome::command_button(ui, regions.search).clicked()
                 {
                     self.command_palette.toggle();
@@ -11970,6 +12095,7 @@ impl eframe::App for Tessel {
                 );
                 let ui = &mut actions;
                 ui.spacing_mut().item_spacing.x = 2.0;
+                let mut secondary_w = 0.0_f32;
                 if chrome::icon_button(ui, Icon::Plus, tr("Open terminal"), false, false).clicked()
                 {
                     self.new_session(Launch::Shell);
@@ -11995,75 +12121,85 @@ impl eframe::App for Tessel {
                 ui.separator();
                 let toolbar_french = self.state.language == crate::i18n::Language::French;
                 let share_projects = self.live_share_project_list();
-                if let Some(crate::share_panel::ShareUiAction::OpenDialog(tab)) =
-                    self.share.show_toolbar_control(
-                        ui,
-                        &share_projects,
-                        self.state.active_project,
-                        toolbar_french,
-                    )
+                let share_pill = self.share.pill_state().is_some();
+                let share_x0 = ui.cursor().min.x;
+                if (fit_full || share_pill)
+                    && let Some(crate::share_panel::ShareUiAction::OpenDialog(tab)) =
+                        self.share.show_toolbar_control(
+                            ui,
+                            &share_projects,
+                            self.state.active_project,
+                            toolbar_french,
+                        )
                 {
                     self.share.tab = tab;
                     self.overlay = Some(Overlay::Share);
                 }
+                if !share_pill {
+                    secondary_w += ui.cursor().min.x - share_x0;
+                }
                 self.toolbar_menu_open |= self.share.is_pill_popover_open();
                 let toolbar_spec = crate::theme::active(ui.ctx()).spec();
-                if crate::layout_broadcast_ui::paint_broadcast_toolbar_button(
-                    ui,
-                    &toolbar_spec.ui,
-                    toolbar_spec.radius_px,
-                    toolbar_french,
-                    self.state.broadcast,
-                )
-                .clicked()
-                {
-                    self.state.broadcast = !self.state.broadcast;
-                    self.save();
-                }
-                let layout_popup_id = egui::Id::new("toolbar-layout-menu");
-                let layout_menu_open = egui::Popup::is_id_open(ui.ctx(), layout_popup_id);
-                let layout = crate::layout_broadcast_ui::paint_layout_toolbar_button(
-                    ui,
-                    &toolbar_spec.ui,
-                    toolbar_spec.radius_px,
-                    toolbar_french,
-                    layout_menu_open,
-                );
-                let pane_count = self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.project == self.state.active_project)
-                    .count();
-                let layout_input = crate::layout_broadcast_ui::LayoutMenuInput {
-                    french: toolbar_french,
-                    has_active_pane: self.active_project_work_pane().is_some(),
-                    pane_count,
-                    can_apply_grid: pane_count > 0 || self.sessions.len() < 100,
-                };
-                let mut layout_action = None;
-                let popup = egui::Popup::menu(&layout)
-                    .id(layout_popup_id)
-                    .align(egui::RectAlign::BOTTOM_END)
-                    .gap(6.0)
-                    .frame(
-                        crate::layout_broadcast_ui::layout_menu_frame(&toolbar_spec.ui)
-                            .shadow(ui.visuals().popup_shadow),
-                    );
-                let shown = popup.show(|ui| {
-                    if let Some(action) = crate::layout_broadcast_ui::show_layout_menu_contents(
+                let secondary_x0 = ui.cursor().min.x;
+                if fit_full {
+                    if crate::layout_broadcast_ui::paint_broadcast_toolbar_button(
                         ui,
                         &toolbar_spec.ui,
-                        layout_input,
-                    ) {
-                        layout_action = Some(action);
-                        ui.close();
+                        toolbar_spec.radius_px,
+                        toolbar_french,
+                        self.state.broadcast,
+                    )
+                    .clicked()
+                    {
+                        self.state.broadcast = !self.state.broadcast;
+                        self.save();
                     }
-                });
-                self.toolbar_menu_open |= shown.is_some();
-                if let Some(action) = layout_action {
-                    self.apply_layout_action(action);
+                    let layout_popup_id = egui::Id::new("toolbar-layout-menu");
+                    let layout_menu_open = egui::Popup::is_id_open(ui.ctx(), layout_popup_id);
+                    let layout = crate::layout_broadcast_ui::paint_layout_toolbar_button(
+                        ui,
+                        &toolbar_spec.ui,
+                        toolbar_spec.radius_px,
+                        toolbar_french,
+                        layout_menu_open,
+                    );
+                    let pane_count = self
+                        .sessions
+                        .iter()
+                        .filter(|s| s.project == self.state.active_project)
+                        .count();
+                    let layout_input = crate::layout_broadcast_ui::LayoutMenuInput {
+                        french: toolbar_french,
+                        has_active_pane: self.active_project_work_pane().is_some(),
+                        pane_count,
+                        can_apply_grid: pane_count > 0 || self.sessions.len() < 100,
+                    };
+                    let mut layout_action = None;
+                    let popup = egui::Popup::menu(&layout)
+                        .id(layout_popup_id)
+                        .align(egui::RectAlign::BOTTOM_END)
+                        .gap(6.0)
+                        .frame(
+                            crate::layout_broadcast_ui::layout_menu_frame(&toolbar_spec.ui)
+                                .shadow(ui.visuals().popup_shadow),
+                        );
+                    let shown = popup.show(|ui| {
+                        if let Some(action) = crate::layout_broadcast_ui::show_layout_menu_contents(
+                            ui,
+                            &toolbar_spec.ui,
+                            layout_input,
+                        ) {
+                            layout_action = Some(action);
+                            ui.close();
+                        }
+                    });
+                    self.toolbar_menu_open |= shown.is_some();
+                    if let Some(action) = layout_action {
+                        self.apply_layout_action(action);
+                    }
+                    self.floating_toolbar(ui);
                 }
-                self.floating_toolbar(ui);
+                secondary_w += ui.cursor().min.x - secondary_x0;
                 // Sync waiting-for-user notifications (non-focus-stealing)
                 let waiting_panes: Vec<(u64, String)> = self
                     .chats
@@ -12196,28 +12332,115 @@ impl eframe::App for Tessel {
                     }
                 }
 
-                let left_icon = if self.state.panels.left_open {
-                    Icon::PanelLeftOpen
-                } else {
-                    Icon::PanelLeftClosed
-                };
-                if chrome::icon_button(ui, left_icon, tr("Toggle left sidebar"), false, false)
-                    .clicked()
-                {
-                    self.state.panels.left_open = !self.state.panels.left_open;
+                let toggles_x0 = ui.cursor().min.x;
+                if fit_full {
+                    let left_icon = if self.state.panels.left_open {
+                        Icon::PanelLeftOpen
+                    } else {
+                        Icon::PanelLeftClosed
+                    };
+                    if chrome::icon_button(ui, left_icon, tr("Toggle left sidebar"), false, false)
+                        .clicked()
+                    {
+                        self.state.panels.left_open = !self.state.panels.left_open;
+                    }
+                    let right_icon = if self.state.panels.right_open {
+                        Icon::PanelRightOpen
+                    } else {
+                        Icon::PanelRightClosed
+                    };
+                    if chrome::icon_button(ui, right_icon, tr("Toggle right sidebar"), false, false)
+                        .clicked()
+                    {
+                        self.state.panels.right_open = !self.state.panels.right_open;
+                    }
                 }
-                let right_icon = if self.state.panels.right_open {
-                    Icon::PanelRightOpen
-                } else {
-                    Icon::PanelRightClosed
-                };
-                if chrome::icon_button(ui, right_icon, tr("Toggle right sidebar"), false, false)
-                    .clicked()
-                {
-                    self.state.panels.right_open = !self.state.panels.right_open;
+                secondary_w += ui.cursor().min.x - toggles_x0;
+                // `⋯`: the secondary buttons' actions when the toolbar is tight.
+                let more_x0 = ui.cursor().min.x;
+                if !fit_full {
+                    let more_id = egui::Id::new("toolbar-more-menu");
+                    let more_open = egui::Popup::is_id_open(ui.ctx(), more_id);
+                    let more_btn = chrome::icon_button(
+                        ui,
+                        Icon::PaneMore,
+                        crate::toolbar_fit::more_button_title(toolbar_french),
+                        more_open,
+                        false,
+                    );
+                    let entries =
+                        crate::toolbar_fit::more_menu_entries(crate::toolbar_fit::MoreMenuState {
+                            french: toolbar_french,
+                            broadcast: self.state.broadcast,
+                            floating_open: self.floating.ui.is_open(),
+                            left_open: self.state.panels.left_open,
+                            right_open: self.state.panels.right_open,
+                            can_arrange_panes: self
+                                .sessions
+                                .iter()
+                                .filter(|s| s.project == self.state.active_project)
+                                .count()
+                                >= 2,
+                        });
+                    let mut picked = None;
+                    let shown_more = egui::Popup::menu(&more_btn)
+                        .id(more_id)
+                        .align(egui::RectAlign::BOTTOM_END)
+                        .gap(6.0)
+                        .show(|ui| {
+                            ui.set_min_width(260.0);
+                            for entry in &entries {
+                                let Some(action) = entry.action else {
+                                    ui.separator();
+                                    continue;
+                                };
+                                let mut text = egui::RichText::new(format!(
+                                    "{}{}",
+                                    entry.label,
+                                    if entry.checked { " ✓" } else { "" }
+                                ));
+                                if entry.danger {
+                                    text = text.color(ui.visuals().error_fg_color);
+                                }
+                                let mut button = egui::Button::new(text).frame(false);
+                                if let Some(sc) = entry.shortcut {
+                                    button = button.shortcut_text(sc);
+                                }
+                                if ui.add(button).clicked() {
+                                    picked = Some(action);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    self.toolbar_menu_open |= shown_more.is_some();
+                    if let Some(action) = picked {
+                        self.apply_toolbar_more_action(action);
+                    }
                 }
+                let more_w = ui.cursor().min.x - more_x0;
                 if chrome::icon_button(ui, Icon::Settings, tr("Settings"), false, false).clicked() {
                     self.overlay = Some(Overlay::Settings);
+                }
+                // Remember the room with everything shown (`toolbarFit.js` measures the groups
+                // with the tight classes off; here the hidden buttons keep their last width).
+                let used = ui.min_rect().width();
+                if fit_full {
+                    self.toolbar_right_full = used;
+                    self.toolbar_secondary_w = secondary_w;
+                } else {
+                    self.toolbar_right_full = used - more_w + self.toolbar_secondary_w;
+                }
+                let next_level = crate::toolbar_fit::toolbar_fit_level(
+                    toolbar_room.width(),
+                    160.0,
+                    self.toolbar_right_full,
+                    self.toolbar_secondary_w,
+                    crate::toolbar_fit::TOOLBAR_MORE_WIDTH,
+                    0.0,
+                    crate::toolbar_fit::TOOLBAR_CENTRE_MIN,
+                );
+                if next_level != fit_level {
+                    ui.ctx().request_repaint();
                 }
             });
         if self.state.broadcast {

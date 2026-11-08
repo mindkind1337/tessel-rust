@@ -148,6 +148,7 @@ mod terminal_model;
 pub mod tessel_sync;
 mod theme;
 pub mod theme_palettes;
+pub mod toolbar_fit;
 #[cfg(windows)]
 mod vault;
 #[cfg(windows)]

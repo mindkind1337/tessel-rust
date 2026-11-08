@@ -100,15 +100,34 @@ pub fn side_tab_with_badge(
     response.on_hover_text(label)
 }
 
+#[cfg(test)]
 pub fn regions(room: Rect) -> ToolbarRegions {
     let actions_width = 380.0_f32.min(room.width() * 0.62);
-    let brand_width = 160.0_f32.min((room.width() - actions_width).max(0.0));
+    regions_fit(room, actions_width, 0)
+}
+
+/// Toolbar regions for a measured right group (`actions_width`) and a fit level
+/// (`toolbar_fit::toolbar_fit_level`): level 2 narrows the brand to its name and the command box
+/// to its icon.
+pub fn regions_fit(room: Rect, actions_width: f32, level: u8) -> ToolbarRegions {
+    let brand_full = if level >= 2 { 80.0_f32 } else { 160.0_f32 };
+    let actions_width = actions_width.min((room.width() - 40.0).max(0.0)).max(0.0);
+    let brand_width = brand_full.min((room.width() - actions_width).max(0.0));
     let brand = Rect::from_min_size(room.min, Vec2::new(brand_width, room.height()));
     let actions = Rect::from_min_max(egui::pos2(room.max.x - actions_width, room.min.y), room.max);
     let available = (actions.min.x - brand.max.x - 32.0).max(0.0);
+    let width = if level >= 2 {
+        if available >= crate::toolbar_fit::TOOLBAR_COMMAND_ICON_WIDTH {
+            crate::toolbar_fit::TOOLBAR_COMMAND_ICON_WIDTH
+        } else {
+            0.0
+        }
+    } else {
+        available.min(440.0)
+    };
     let search = Rect::from_center_size(
         egui::pos2((brand.max.x + actions.min.x) * 0.5, room.center().y),
-        Vec2::new(available.min(440.0), 26.0),
+        Vec2::new(width, 26.0),
     );
     ToolbarRegions {
         brand,
@@ -123,6 +142,11 @@ pub fn brand(ui: &egui::Ui, rect: Rect) {
 }
 
 pub fn brand_with_build(ui: &egui::Ui, rect: Rect, build_label: &str) {
+    brand_with_build_fit(ui, rect, build_label, true);
+}
+
+/// The brand; `show_version == false` (fit level 2) keeps the logo and the name only.
+pub fn brand_with_build_fit(ui: &egui::Ui, rect: Rect, build_label: &str, show_version: bool) {
     let logo = Rect::from_center_size(
         egui::pos2(rect.min.x + 8.0, rect.center().y),
         Vec2::splat(16.0),
@@ -141,13 +165,15 @@ pub fn brand_with_build(ui: &egui::Ui, rect: Rect, build_label: &str) {
         .next()
         .unwrap_or("")
         .trim_start_matches('b');
-    painter.text(
-        egui::pos2(rect.min.x + 66.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        format!("{}.{}", env!("CARGO_PKG_VERSION"), count),
-        FontId::proportional(11.5),
-        ui.visuals().weak_text_color(),
-    );
+    if show_version {
+        painter.text(
+            egui::pos2(rect.min.x + 66.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            format!("{}.{}", env!("CARGO_PKG_VERSION"), count),
+            FontId::proportional(11.5),
+            ui.visuals().weak_text_color(),
+        );
+    }
     ui.interact(rect, ui.id().with("brand"), Sense::hover())
         .on_hover_text(build_label);
 }
@@ -180,6 +206,16 @@ pub fn command_button(ui: &mut egui::Ui, rect: Rect) -> Response {
     } else {
         ui.visuals().weak_text_color()
     };
+    // Fit level 2: the box is its icon only (30 px).
+    if rect.width() < crate::toolbar_fit::TOOLBAR_CENTRE_MIN {
+        icons::paint(
+            &painter,
+            Rect::from_center_size(rect.center(), Vec2::splat(13.0)),
+            Icon::Search,
+            color,
+        );
+        return response.on_hover_text(tr("Search panes, run a command"));
+    }
     icons::paint(
         &painter,
         Rect::from_center_size(

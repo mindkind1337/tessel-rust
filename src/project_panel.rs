@@ -24,7 +24,6 @@ use eframe::egui::{
 };
 
 use crate::icons::{self, Icon};
-use crate::shortcuts::chords_of;
 use crate::sidebar_model::{
     AgentDotState, SidebarLang, WorktreeCardStatus, agent_state_label, summary_state_word,
 };
@@ -185,7 +184,6 @@ impl NavItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusOwner {
-    Search,
     OpenFolder,
     List,
 }
@@ -1307,9 +1305,7 @@ impl ProjectPanel {
         has_list_items: bool,
     ) -> Option<FocusOwner> {
         let fid = focused?;
-        if fid == panel_id.with("search") {
-            Some(FocusOwner::Search)
-        } else if fid == panel_id.with("open-folder") {
+        if fid == panel_id.with("open-folder") {
             Some(FocusOwner::OpenFolder)
         } else if has_list_items && fid == panel_id.with("list") {
             Some(FocusOwner::List)
@@ -1380,7 +1376,6 @@ impl ProjectPanel {
 
         if pressed_activate.is_some() {
             match owner {
-                FocusOwner::Search => action = Some(ProjectAction::Search),
                 FocusOwner::OpenFolder => action = Some(ProjectAction::OpenFolder),
                 FocusOwner::List => {
                     if self.focused_nav.is_none()
@@ -1526,9 +1521,9 @@ impl ProjectPanel {
                 ui.ctx().memory_mut(|m| m.request_focus(list_root_id));
                 Some(FocusOwner::List)
             } else {
-                let search_id = panel_id.with("search");
-                ui.ctx().memory_mut(|m| m.request_focus(search_id));
-                Some(FocusOwner::Search)
+                let open_id = panel_id.with("open-folder");
+                ui.ctx().memory_mut(|m| m.request_focus(open_id));
+                Some(FocusOwner::OpenFolder)
             }
         } else {
             let classified = Self::classify_focus(focused_now, panel_id, has_list_items);
@@ -1551,9 +1546,8 @@ impl ProjectPanel {
 
         ui.spacing_mut().item_spacing.y = 4.0_f32;
 
-        if let Some(search_act) = self.render_search_button(ui, panel_id, input.french) {
-            action = Some(search_act);
-        }
+        // The expanded sidebar has no Search button (b9061124): the toolbar's command box
+        // (Ctrl+Shift+P) finds worktrees and browser tabs too. The collapsed rail keeps its own.
         if let Some(header_act) =
             self.render_projects_header(ui, panel_id, input.active_project, input.french)
         {
@@ -1714,128 +1708,6 @@ impl ProjectPanel {
         self.last_nav_items = post_nav_items;
 
         action
-    }
-
-    fn render_search_button(
-        &mut self,
-        ui: &mut egui::Ui,
-        panel_id: Id,
-        french: bool,
-    ) -> Option<ProjectAction> {
-        let search_id = panel_id.with("search");
-        let label = if french { "Rechercher" } else { "Search" };
-        let shortcut_keys = chords_of("Ctrl+Shift+P", french);
-        let chord = shortcut_keys.first().map_or(&[][..], Vec::as_slice);
-        let chord_str = chord.join("+");
-        let a11y_label = format!("{label} ({chord_str})");
-
-        let full_w = ui.available_width().max(80.0_f32);
-        let (_, outer_rect) = ui.allocate_space(Vec2::new(full_w, 32.0_f32));
-        let btn_rect = outer_rect.shrink2(Vec2::new(2.0_f32, 1.0_f32));
-        let resp = ui.interact(btn_rect, search_id, Sense::click());
-        resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &a11y_label)
-        });
-
-        let has_focus = ui.ctx().memory(|m| m.has_focus(search_id));
-        let painter = ui.painter().with_clip_rect(btn_rect);
-        let fg = ui.visuals().strong_text_color();
-        let bg = if resp.hovered() || has_focus {
-            fg.gamma_multiply(0.085_f32)
-        } else {
-            fg.gamma_multiply(0.05_f32)
-        };
-        let stroke = if has_focus {
-            Stroke::new(1.0_f32, ui.visuals().selection.stroke.color)
-        } else {
-            Stroke::new(
-                1.0_f32,
-                ui.visuals()
-                    .widgets
-                    .noninteractive
-                    .bg_stroke
-                    .color
-                    .gamma_multiply(0.55_f32),
-            )
-        };
-        painter.rect(btn_rect, 6.0_f32, bg, stroke, StrokeKind::Inside);
-
-        let icon_color = if resp.hovered() || has_focus {
-            ui.visuals().text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let icon_rect = Rect::from_center_size(
-            Pos2::new(btn_rect.min.x + 15.0_f32, btn_rect.center().y),
-            Vec2::splat(14.0_f32),
-        );
-        icons::paint(&painter, icon_rect, Icon::Search, icon_color);
-
-        let mut text_right = btn_rect.max.x - 8.0_f32;
-        if btn_rect.width() >= 188.0_f32 && !chord.is_empty() {
-            let kbd_font = FontId::monospace(9.5_f32);
-            let kbd_fg = if resp.hovered() || has_focus {
-                ui.visuals().text_color()
-            } else {
-                ui.visuals().weak_text_color()
-            };
-            let kbd_bg = fg.gamma_multiply(0.075_f32);
-            let kbd_stroke = Stroke::new(
-                1.0_f32,
-                ui.visuals()
-                    .widgets
-                    .noninteractive
-                    .bg_stroke
-                    .color
-                    .gamma_multiply(0.75_f32),
-            );
-            let mut cursor_x = btn_rect.max.x - 6.0_f32;
-            for &cap in chord.iter().rev() {
-                let galley = painter.layout_no_wrap(cap.to_owned(), kbd_font.clone(), kbd_fg);
-                let cap_w = (galley.size().x + 8.0_f32).max(16.0_f32);
-                let cap_rect = Rect::from_center_size(
-                    Pos2::new(cursor_x - cap_w * 0.5_f32, btn_rect.center().y),
-                    Vec2::new(cap_w, 16.0_f32),
-                );
-                painter.rect(cap_rect, 4.0_f32, kbd_bg, kbd_stroke, StrokeKind::Inside);
-                painter.galley(
-                    Pos2::new(
-                        cap_rect.center().x - galley.size().x * 0.5_f32,
-                        cap_rect.center().y - galley.size().y * 0.5_f32,
-                    ),
-                    galley,
-                    kbd_fg,
-                );
-                cursor_x = cap_rect.min.x - 2.0_f32;
-            }
-            text_right = cursor_x - 4.0_f32;
-        }
-
-        let label_rect = Rect::from_min_max(
-            Pos2::new(icon_rect.max.x + 8.0_f32, btn_rect.min.y),
-            Pos2::new(text_right.max(icon_rect.max.x + 12.0_f32), btn_rect.max.y),
-        );
-        let label_color = if resp.hovered() || has_focus {
-            ui.visuals().strong_text_color()
-        } else {
-            ui.visuals().text_color().gamma_multiply(0.82_f32)
-        };
-        paint_single_line_ellipsis(
-            &painter,
-            label_rect,
-            label,
-            FontId::proportional(12.5_f32),
-            label_color,
-        );
-
-        let clicked = resp.clicked();
-        resp.on_hover_text(a11y_label);
-        if clicked {
-            ui.ctx().memory_mut(|m| m.request_focus(search_id));
-            Some(ProjectAction::Search)
-        } else {
-            None
-        }
     }
 
     fn render_projects_header(

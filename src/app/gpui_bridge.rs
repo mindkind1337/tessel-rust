@@ -24,6 +24,7 @@ pub(crate) type ReviewBranchOption = (String, Option<PathBuf>);
 pub(crate) struct GpuiExtraUiState {
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
+    pub toolbar_more_open: bool,
     pub notifications_popover_open: bool,
     pub status_popover: Option<crate::status_strip::StatusBarItemId>,
     pub launch_menu_open: bool,
@@ -56,6 +57,7 @@ impl Default for GpuiExtraUiState {
         Self {
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
+            toolbar_more_open: false,
             notifications_popover_open: false,
             status_popover: None,
             launch_menu_open: false,
@@ -154,6 +156,11 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub floating_open: bool,
     pub share_active: bool,
     pub share_pill_label: Option<String>,
+    pub share_pill_tooltip: Option<String>,
+    pub share_pill_badge: Option<String>,
+    pub share_pill_dot_live: bool,
+    pub more_menu_open: bool,
+    pub can_arrange_panes: bool,
     pub waiting_agents_count: usize,
     pub first_waiting_pane: Option<u64>,
     pub unread_notifications: usize,
@@ -899,6 +906,8 @@ pub(crate) enum GpuiAction {
     OpenHelp,
     SetHelpQuery(String),
     OpenLiveShare,
+    ToggleToolbarMore,
+    ToolbarMore(crate::toolbar_fit::MoreMenuAction),
     Share(crate::share_panel::ShareGpuiAction),
     OpenGitHubDialog,
     DialogsToolbar(crate::dialogs_toolbar_ui::DialogsToolbarAction),
@@ -1119,6 +1128,8 @@ impl Tessel {
             command_palette: Default::default(),
             command_palette_focused: false,
             toolbar_menu_open: false,
+            toolbar_right_full: 380.0,
+            toolbar_secondary_w: 160.0,
             pane_context_menu: None,
             pane_context_menu_just_opened: false,
             finder: Default::default(),
@@ -1387,6 +1398,36 @@ impl Tessel {
         self.gpui_extra.copied_clipboard.take()
     }
 
+    /// The toolbar's `⋯` menu (`App.vue` `.tb-more`), shared by both renderers.
+    pub(crate) fn apply_toolbar_more_action(&mut self, action: crate::toolbar_fit::MoreMenuAction) {
+        use crate::layout_broadcast_ui::LayoutMenuAction as L;
+        use crate::toolbar_fit::MoreMenuAction as M;
+        match action {
+            M::LiveShare => self.overlay = Some(Overlay::Share),
+            M::GitHub => self.open_github_modal(self.state.active_project),
+            M::Broadcast => {
+                self.state.broadcast = !self.state.broadcast;
+                self.save();
+            }
+            M::FloatingTerminal => self.toggle_floating_headless(),
+            M::SplitRight => self.apply_layout_action(L::SplitRight),
+            M::SplitDown => self.apply_layout_action(L::SplitDown),
+            M::ArrangeGrid => self.apply_layout_action(L::ArrangeGrid),
+            M::CloseActivePane => self.apply_layout_action(L::CloseActive),
+            M::ToggleLeftSidebar => {
+                self.state.panels.left_open = !self.state.panels.left_open;
+                self.save();
+            }
+            M::ToggleRightSidebar => {
+                self.state.panels.right_open = !self.state.panels.right_open;
+                if !self.state.panels.right_open {
+                    self.right_fullscreen = false;
+                }
+                self.save();
+            }
+        }
+    }
+
     pub(crate) fn gpui_is_palette_open(&self) -> bool {
         self.command_palette.open
     }
@@ -1412,6 +1453,7 @@ impl Tessel {
             || self.command_palette.open
             || self.finder.is_open()
             || self.gpui_extra.launch_menu_open
+            || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
             || self.side_panels_ui.any_modal_open()
             || self.worktree_cleanup.is_some()
@@ -2776,6 +2818,16 @@ impl Tessel {
                     || share_snap.hosting
                     || share_snap.guest_active,
                 share_pill_label: share_snap.pill_label,
+                share_pill_tooltip: share_snap.pill_tooltip,
+                share_pill_badge: share_snap.pill_badge,
+                share_pill_dot_live: share_snap.pill_dot_live,
+                more_menu_open: self.gpui_extra.toolbar_more_open,
+                can_arrange_panes: self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project == self.state.active_project)
+                    .count()
+                    >= 2,
                 waiting_agents_count: total_waiting_agents,
                 first_waiting_pane,
                 unread_notifications: self.notifications.unread_count(),
@@ -5323,6 +5375,7 @@ impl Tessel {
                 self.finder.close();
                 self.gpui_extra.launch_menu_open = false;
                 self.gpui_extra.usage_popover_open = false;
+                self.gpui_extra.toolbar_more_open = false;
                 self.gpui_extra.notifications_popover_open = false;
                 self.gpui_extra.status_popover = None;
                 self.overlay = None;
@@ -5482,6 +5535,17 @@ impl Tessel {
                 } else {
                     self.gpui_extra.status_popover = Some(item);
                 }
+            }
+            GpuiAction::ToggleToolbarMore => {
+                self.gpui_extra.toolbar_more_open = !self.gpui_extra.toolbar_more_open;
+                if self.gpui_extra.toolbar_more_open {
+                    self.gpui_extra.usage_popover_open = false;
+                    self.gpui_extra.notifications_popover_open = false;
+                }
+            }
+            GpuiAction::ToolbarMore(item) => {
+                self.gpui_extra.toolbar_more_open = false;
+                self.apply_toolbar_more_action(item);
             }
             GpuiAction::RefreshPortsNow => {
                 self.status_telemetry.refresh_ports_now();
