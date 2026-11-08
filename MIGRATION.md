@@ -787,3 +787,15 @@ Windows DPAPI `Passwords` vault, `Tessel Account` + E2EE sync, `Appearance` `GPU
 popovers, `StatusBar` `Resources` `gpui::canvas` sparkline / `Ports` / `SSH` popovers, and
 generic `prompt_modal` / `confirm_modal`), expanding `GpuiIcon` to 45 validated `resvg`
 vector icons.
+
+Phase A + Phase B dual-renderer full-suite acceptance audit (`Lot b177`):
+`cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and
+`cargo test --all-targets -- --test-threads=2` pass cleanly with **60 test suites and 1,074
+passing tests (`0` failures, `0` warnings)** (`401` binary unit tests passing with `4`
+synthetic child/reference fixtures explicitly ignored, plus `673` integration tests across
+`59` integration suites including `ui_gpui_shell` [9], `ui_gpui_panes_editors` [13], and
+`ui_gpui_panels_settings_modals` [3]). Both Phase A (100% shared Rust feature models +
+universal `eframe`/`egui` OpenGL Compatibility renderer) and Phase B (native 1:1 `GPUI`
+hardware-accelerated primary renderer with `--renderer gpui` / `--renderer compat`,
+`TESSEL_RENDERER`, `Settings > Appearance` selector, and automatic runtime fallback) are
+complete on `main`.
