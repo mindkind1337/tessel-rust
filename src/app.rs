@@ -552,6 +552,12 @@ pub struct Tessel {
     notified_waiting_panes: std::collections::HashSet<u64>,
     task_history_store: crate::side_panels_model::TaskHistoryStore,
     activity_store: crate::side_panels_model::ActivityStore,
+    claude_prompt_caches:
+        std::collections::HashMap<String, crate::prompt_before::PromptBeforeCache>,
+    claude_conv_cache: Option<(
+        std::time::Instant,
+        Vec<crate::side_panels_model::ActivityMessage>,
+    )>,
     past_sessions_cache: Vec<crate::side_panels_model::SessionHistoryEntry>,
     scm_commits_cache: Vec<crate::side_panels_model::CommitHistoryRow>,
     scm_commits_project: Option<u64>,
@@ -774,6 +780,8 @@ impl Tessel {
             notified_waiting_panes: Default::default(),
             task_history_store,
             activity_store,
+            claude_prompt_caches: Default::default(),
+            claude_conv_cache: None,
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
             scm_commits_project: None,
@@ -2587,6 +2595,7 @@ impl Tessel {
         #[cfg(windows)]
         if close_browser {
             self.browser_tab_open = false;
+            self.browser.close_popups();
             if self.view == View::Browser {
                 self.view = if self.documents.is_empty() {
                     View::Work
@@ -10633,12 +10642,103 @@ impl Tessel {
         }
     }
 
+    pub(crate) fn merged_conversation_messages(
+        &mut self,
+    ) -> Vec<crate::side_panels_model::ActivityMessage> {
+        let mut combined = self.activity_store.messages.clone();
+        let now_inst = std::time::Instant::now();
+        let cached_transcript_msgs = match &self.claude_conv_cache {
+            Some((at, msgs))
+                if now_inst.saturating_duration_since(*at) < std::time::Duration::from_secs(2) =>
+            {
+                Some(msgs.clone())
+            }
+            _ => None,
+        };
+
+        let transcript_msgs = if let Some(cached) = cached_transcript_msgs {
+            cached
+        } else {
+            let mut scanned = Vec::new();
+            let home_opt = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+            let inherited_cfg = std::env::var("CLAUDE_CONFIG_DIR").ok();
+            let now_ms = crate::side_panels_model::now_unix_ms();
+            if let Some(home) = home_opt.as_deref() {
+                for s in &self.sessions {
+                    let Launch::Agent(agent_id) = &s.launch else {
+                        continue;
+                    };
+                    if !crate::claude_terminal::supported(agent_id) {
+                        continue;
+                    }
+                    let Some(conv_id) = s.conversation_id.as_deref() else {
+                        continue;
+                    };
+                    let prefs = self
+                        .state
+                        .agent_prefs
+                        .get(agent_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let root = crate::claude_terminal::root(
+                        agent_id,
+                        &prefs,
+                        &s.cwd,
+                        home,
+                        inherited_cfg.as_deref(),
+                    );
+                    let Ok(Some(path)) = crate::claude_terminal::transcript_path(&root, conv_id)
+                    else {
+                        continue;
+                    };
+                    let cache = self
+                        .claude_prompt_caches
+                        .entry(conv_id.to_owned())
+                        .or_default();
+                    if let Ok(turns) = crate::prompt_before::read_claude_window_messages(
+                        &path,
+                        crate::side_panels_model::MAX_TRANSCRIPT_SCAN_BYTES,
+                        cache,
+                        now_ms,
+                    ) {
+                        let title = s.label().to_owned();
+                        for (idx, turn) in turns.into_iter().enumerate() {
+                            let recipient = if turn.sender == "You" {
+                                title.clone()
+                            } else {
+                                "You".to_owned()
+                            };
+                            scanned.push(crate::side_panels_model::ActivityMessage {
+                                id: 1_000_000_u64
+                                    .saturating_add(s.id.saturating_mul(10_000))
+                                    .saturating_add(idx as u64),
+                                thread_key: format!("claude:{conv_id}"),
+                                thread_title: title.clone(),
+                                pane_id: Some(s.id),
+                                sender: turn.sender,
+                                recipient,
+                                body: crate::side_panels_model::mask_transcript_secrets(&turn.body),
+                                timestamp_ms: turn.timestamp_ms,
+                            });
+                        }
+                    }
+                }
+            }
+            self.claude_conv_cache = Some((now_inst, scanned.clone()));
+            scanned
+        };
+
+        combined.extend(transcript_msgs);
+        combined
+    }
+
     fn conversations_view(&mut self, ui: &mut egui::Ui) {
         let french = self.state.language == crate::i18n::Language::French;
+        let messages = self.merged_conversation_messages();
         if let Some(act) = crate::side_panels_ui::show_conversations_panel(
             ui,
             &mut self.side_panels_ui,
-            &self.activity_store.messages,
+            &messages,
             french,
         ) {
             self.handle_side_panels_action(ui.ctx(), act);

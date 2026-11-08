@@ -111,6 +111,8 @@ impl Browser {
         Ok(browser)
     }
     pub fn control(&mut self, args: &Value) -> Result<ControlReply, String> {
+        self.agent_controlled
+            .store(true, std::sync::atomic::Ordering::Release);
         self.poll();
         let root = self
             .agent_root

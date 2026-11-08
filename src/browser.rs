@@ -27,6 +27,8 @@ enum Event {
 pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<String>);
 
 pub struct Browser {
+    // Drop child OAuth popups first, then main view, then shared WebContext environment.
+    popups: crate::browser_popup::win32::PopupManager,
     view: Option<WebView>,
     // Drop view before its environment.
     context: Option<WebContext>,
@@ -42,6 +44,7 @@ pub struct Browser {
     downloads_open: bool,
     agent_root: Option<PathBuf>,
     agent_profile: Option<tempfile::TempDir>,
+    agent_controlled: Arc<std::sync::atomic::AtomicBool>,
     planned_download: Arc<Mutex<Option<(PathBuf, std::time::Instant)>>>,
     clip: crate::browser_clip::NativeClip,
     viewport: Option<(egui::Rect, f32)>,
@@ -56,6 +59,7 @@ impl Default for Browser {
             .and_then(|d| d.download_dir().map(|p| p.join("Tessel Rust")))
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
         Self {
+            popups: Default::default(),
             view: None,
             context: None,
             address: "https://example.com".into(),
@@ -70,6 +74,7 @@ impl Default for Browser {
             downloads_open: false,
             agent_root: None,
             agent_profile: None,
+            agent_controlled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             planned_download: Default::default(),
             clip: Default::default(),
             viewport: None,
@@ -80,6 +85,9 @@ impl Default for Browser {
 }
 
 impl Browser {
+    pub fn close_popups(&mut self) {
+        self.popups.close_all();
+    }
     pub fn active_url(&self) -> Option<&str> {
         self.view
             .as_ref()
@@ -430,6 +438,11 @@ impl Browser {
         parent: &W,
         profile: PathBuf,
     ) -> Result<(), String> {
+        self.popups.close_all();
+        let parent_hwnd_raw = match parent.window_handle().map(|h| h.as_raw()) {
+            Ok(wry::raw_window_handle::RawWindowHandle::Win32(raw)) => raw.hwnd.get(),
+            _ => 0,
+        };
         self.context = Some(WebContext::new(Some(profile)));
         let start = self.sender.clone();
         let popup = self.sender.clone();
@@ -437,6 +450,12 @@ impl Browser {
         let destination = self.destination.clone();
         let agent_root = self.agent_root.clone();
         let agent = agent_root.is_some();
+        let agent_controlled = self.agent_controlled.clone();
+        let popups_mgr = self.popups.clone();
+        let gesture_tracker = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::browser_popup::PopupGestureTracker::new(),
+        ));
+        let gesture_for_handler = gesture_tracker.clone();
         let planned = self.planned_download.clone();
         let view = WebViewBuilder::new_with_web_context(
             self.context.as_mut().ok_or("Missing browser environment")?,
@@ -452,7 +471,34 @@ impl Browser {
             }
             permit
         })
-        .with_new_window_req_handler(move |address, _| {
+        .with_new_window_req_handler(move |address, features| {
+            let now_ms = crate::side_panels_model::now_unix_ms();
+            let has_size = features.size.is_some();
+            let is_controlled = agent_controlled.load(std::sync::atomic::Ordering::Acquire);
+            let gesture_ok = gesture_for_handler.borrow_mut().consume_if_fresh(now_ms);
+            if crate::browser_popup::should_open_oauth_popup(
+                &address,
+                gesture_ok,
+                has_size,
+                is_controlled,
+                agent,
+            ) {
+                let owner_hwnd =
+                    windows::Win32::Foundation::HWND(parent_hwnd_raw as *mut core::ffi::c_void);
+                let explicit_size = features.size.map(|s| (s.width, s.height));
+                return match popups_mgr.open_oauth_popup(
+                    owner_hwnd,
+                    &address,
+                    explicit_size,
+                    features.opener,
+                ) {
+                    Ok(webview) => wry::NewWindowResponse::Create { webview },
+                    Err(e) => {
+                        let _ = popup.send(Event::Error(e));
+                        wry::NewWindowResponse::Deny
+                    }
+                };
+            }
             if allowed(&address) {
                 let _ = popup.send(Event::Popup(address));
             }
@@ -460,6 +506,27 @@ impl Browser {
         })
         .build_as_child(parent)
         .map_err(|e| e.to_string())?;
+        // Observe WebView2's native `IsUserInitiated` flag synchronously before `wry`'s deferred
+        // `dispatch_handler` invokes `with_new_window_req_handler` on the next message-loop tick.
+        unsafe {
+            use wry::WebViewExtWindows as _;
+            let _ = view.webview().add_NewWindowRequested(
+                &webview2_com::NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+                    if let Some(args) = args {
+                        let mut user_initiated = windows::core::BOOL::from(false);
+                        if args.IsUserInitiated(&mut user_initiated).is_ok()
+                            && user_initiated.as_bool()
+                        {
+                            gesture_tracker
+                                .borrow_mut()
+                                .record_gesture(crate::side_panels_model::now_unix_ms());
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut 0,
+            );
+        }
         self.download_tracker.attach(
             &view,
             move |suggested| {
@@ -530,6 +597,7 @@ impl Browser {
         }
     }
     pub fn poll(&mut self) {
+        self.popups.prune_closed();
         self.downloads = self.download_tracker.poll();
         while let Ok(event) = self.receiver.try_recv() {
             match event {

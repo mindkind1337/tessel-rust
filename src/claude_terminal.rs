@@ -44,13 +44,13 @@ pub fn root(
     })
 }
 
-pub fn exists(root: &Path, id: &str) -> Result<bool, String> {
+pub fn transcript_path(root: &Path, id: &str) -> Result<Option<PathBuf>, String> {
     if !crate::claude::valid_uuid(id) {
         return Err("Invalid terminal conversation identifier.".into());
     }
     let entries = match std::fs::read_dir(root.join("projects")) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Cannot inspect the agent's conversation folder.".into()),
     };
     for (count, entry) in entries.enumerate() {
@@ -65,14 +65,21 @@ pub fn exists(root: &Path, id: &str) -> Result<bool, String> {
         {
             continue;
         }
-        match std::fs::metadata(entry.path().join(format!("{id}.jsonl"))) {
-            Ok(meta) if meta.is_file() => return Ok(true),
+        let candidate = entry.path().join(format!("{id}.jsonl"));
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+                return Ok(Some(candidate));
+            }
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(_) => return Err("Cannot verify the saved agent conversation.".into()),
         }
     }
-    Ok(false)
+    Ok(None)
+}
+
+pub fn exists(root: &Path, id: &str) -> Result<bool, String> {
+    transcript_path(root, id).map(|p| p.is_some())
 }
 
 pub fn with_session(prefs: &Preferences, id: &str, exists: bool) -> Result<Preferences, String> {

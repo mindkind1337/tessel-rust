@@ -1201,6 +1201,8 @@ impl Tessel {
             notified_waiting_panes: Default::default(),
             task_history_store,
             activity_store,
+            claude_prompt_caches: Default::default(),
+            claude_conv_cache: None,
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
             scm_commits_project: None,
@@ -3263,8 +3265,9 @@ impl Tessel {
             self.side_panels_ui.sessions_include_transcripts,
         );
 
+        let conv_messages = self.merged_conversation_messages();
         let threads = build_conversation_threads(
-            &self.activity_store.messages,
+            &conv_messages,
             self.side_panels_ui.conv_window,
             self.side_panels_ui.conv_media,
             &self.side_panels_ui.conv_query,
@@ -4145,6 +4148,7 @@ impl Tessel {
                 #[cfg(windows)]
                 {
                     self.browser_tab_open = false;
+                    self.browser.close_popups();
                     self.browser.visible(false);
                     if self.view == View::Browser {
                         self.view = if self.documents.is_empty() {
