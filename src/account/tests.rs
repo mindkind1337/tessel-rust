@@ -7,6 +7,7 @@ fn fixture_session() -> Session {
             id: "fixture".into(),
             email: "test@example.invalid".into(),
             name: Some("Fixture".into()),
+            admin: false,
         },
     }
 }
@@ -45,7 +46,8 @@ fn private_storage_and_callback_are_encrypted_scoped_single_use() {
             .update_user(User {
                 id: "another-account".into(),
                 email: "other@example.invalid".into(),
-                name: None
+                name: None,
+                admin: false,
             })
             .is_err()
     );
@@ -54,6 +56,7 @@ fn private_storage_and_callback_are_encrypted_scoped_single_use() {
             id: "fixture".into(),
             email: "updated@example.invalid".into(),
             name: None,
+            admin: false,
         })
         .unwrap();
     let bytes = fs::read(dir.path().join("session.dat")).unwrap();

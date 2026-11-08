@@ -1214,24 +1214,172 @@ fn render_agents_page(
         tokens,
     ));
 
-    for (id, name, installed, enabled) in &s.builtin_agents {
-        let aid = id.clone();
+    for detail in &s.builtin_agent_details {
+        let aid = detail.id.clone();
+        let exp_id = detail.id.clone();
+        let is_expanded = s.expanded_agent_id.as_deref() == Some(detail.id.as_str());
         let label = format!(
-            "{name} ({})",
-            if *installed {
-                "installed"
+            "{} ({})",
+            detail.name,
+            if detail.installed {
+                if french { "installé" } else { "installed" }
+            } else if french {
+                "non détecté"
             } else {
                 "not detected"
             }
         );
-        col = col.child(toggle_row_owned(
-            format!("gpui-st-agent-{id}"),
-            label,
-            *enabled,
-            tokens,
-            GpuiAction::ToggleBuiltinAgentEnabled(aid),
-            cx,
-        ));
+        let mut card = div()
+            .p(px(8.0))
+            .rounded(px(tokens.radius_px))
+            .bg(tokens.surface)
+            .border_1()
+            .border_color(if detail.env_error.is_some() {
+                tokens.danger
+            } else {
+                tokens.border
+            })
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .child(div().flex_1().child(toggle_row_owned(
+                        format!("gpui-st-agent-{}", detail.id),
+                        label,
+                        detail.enabled,
+                        tokens,
+                        GpuiAction::ToggleBuiltinAgentEnabled(aid),
+                        cx,
+                    )))
+                    .child(setting_btn(
+                        format!("gpui-st-agent-exp-{}", detail.id),
+                        if is_expanded {
+                            if french {
+                                "Replier".into()
+                            } else {
+                                "Fold".into()
+                            }
+                        } else if french {
+                            "Configurer".into()
+                        } else {
+                            "Configure".into()
+                        },
+                        is_expanded,
+                        tokens,
+                        GpuiAction::ToggleExpandBuiltinAgent(exp_id),
+                        cx,
+                    )),
+            );
+
+        if let Some(err) = &detail.env_error {
+            let callout = crate::agents_panel::format_invalid_env_callout(err, french);
+            card = card.child(
+                div()
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(super::theme::rgba_with_alpha(tokens.danger, 0.14))
+                    .text_size(px(11.0))
+                    .text_color(tokens.danger)
+                    .child(SharedString::from(callout)),
+            );
+        }
+
+        if is_expanded {
+            let ref_id = detail.id.clone();
+            let rst_id = detail.id.clone();
+            let mut details_col = div()
+                .pt(px(4.0))
+                .border_t_1()
+                .border_color(tokens.border)
+                .flex()
+                .flex_col()
+                .gap(px(6.0));
+            if let Some(caption) = &detail.listed_models_caption {
+                details_col = details_col.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(tokens.text_dim)
+                        .child(SharedString::from(caption.clone())),
+                );
+            }
+            details_col = details_col
+                .child(render_focus_input_box(
+                    "gpui-st-ba-cmd",
+                    FocusInputTarget::BuiltinAgentCommand,
+                    focus_input == FocusInputTarget::BuiltinAgentCommand,
+                    &detail.command,
+                    if french {
+                        "Commande personnalisée…"
+                    } else {
+                        "Custom command override…"
+                    },
+                    tokens,
+                    cx,
+                ))
+                .child(render_focus_input_box(
+                    "gpui-st-ba-args",
+                    FocusInputTarget::BuiltinAgentArgs,
+                    focus_input == FocusInputTarget::BuiltinAgentArgs,
+                    &detail.args,
+                    "Arguments…",
+                    tokens,
+                    cx,
+                ))
+                .child(render_focus_input_box(
+                    "gpui-st-ba-env",
+                    FocusInputTarget::BuiltinAgentEnv,
+                    focus_input == FocusInputTarget::BuiltinAgentEnv,
+                    &detail.env,
+                    if french {
+                        "Variables, un NOM=valeur par ligne…"
+                    } else {
+                        "Variables, one NAME=value per line…"
+                    },
+                    tokens,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .when(detail.can_refresh_models, |el| {
+                            el.child(setting_btn(
+                                format!("gpui-st-ba-refresh-{}", detail.id),
+                                if french {
+                                    "Actualiser les modèles".into()
+                                } else {
+                                    "Refresh models".into()
+                                },
+                                false,
+                                tokens,
+                                GpuiAction::RefreshBuiltinAgentModels(ref_id),
+                                cx,
+                            ))
+                        })
+                        .child(setting_btn(
+                            format!("gpui-st-ba-reset-{}", detail.id),
+                            if french {
+                                "Réinitialiser".into()
+                            } else {
+                                "Reset".into()
+                            },
+                            false,
+                            tokens,
+                            GpuiAction::ResetBuiltinAgentPrefs(rst_id),
+                            cx,
+                        )),
+                );
+            card = card.child(details_col);
+        }
+
+        col = col.child(card);
     }
 
     col = col
@@ -1396,7 +1544,59 @@ fn render_accounts_page(
                 )),
         );
 
-    for (prov, roster) in [("claude", &s.claude_accounts), ("codex", &s.codex_accounts)] {
+    for (prov, roster, sys_email) in [
+        (
+            "claude",
+            &s.claude_accounts,
+            s.claude_system_email.as_deref(),
+        ),
+        ("codex", &s.codex_accounts, s.codex_system_email.as_deref()),
+    ] {
+        if !crate::settings_extra_model::system_account_covered(sys_email, roster) {
+            let sys_sel = roster.selected_id.is_none();
+            let sys_title = match sys_email.map(str::trim).filter(|e| !e.is_empty()) {
+                Some(addr) if french => format!("[{prov}] Par défaut système ({addr})"),
+                Some(addr) => format!("[{prov}] System default ({addr})"),
+                None if french => format!("[{prov}] Par défaut système"),
+                None => format!("[{prov}] System default"),
+            };
+            col = col.child(
+                div()
+                    .p(px(7.0))
+                    .rounded(px(tokens.radius_px))
+                    .bg(tokens.surface)
+                    .border_1()
+                    .border_color(if sys_sel {
+                        tokens.accent
+                    } else {
+                        tokens.border
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(tokens.text_strong)
+                            .child(SharedString::from(sys_title)),
+                    )
+                    .child(setting_btn(
+                        format!("gpui-acct-sys-{prov}"),
+                        if french {
+                            "Par défaut".into()
+                        } else {
+                            "Use".into()
+                        },
+                        sys_sel,
+                        tokens,
+                        GpuiAction::SettingsExtra(SettingsExtraAction::SelectManagedAccount {
+                            provider: prov.to_owned(),
+                            account_id: None,
+                        }),
+                        cx,
+                    )),
+            );
+        }
         for acct in &roster.accounts {
             let is_sel = roster.selected_id.as_deref() == Some(acct.id.as_str());
             let p1 = prov.to_owned();
@@ -1405,6 +1605,11 @@ fn render_accounts_page(
             let id1 = acct.id.clone();
             let id2 = acct.id.clone();
             let id3 = acct.id.clone();
+            let row_label = if acct.email.trim().is_empty() {
+                format!("[{prov}] {}", acct.label)
+            } else {
+                format!("[{prov}] {} ({})", acct.label, acct.email.trim())
+            };
             col = col.child(
                 div()
                     .p(px(7.0))
@@ -1419,7 +1624,7 @@ fn render_accounts_page(
                         div()
                             .text_size(px(11.5))
                             .text_color(tokens.text_strong)
-                            .child(SharedString::from(format!("[{prov}] {}", acct.label))),
+                            .child(SharedString::from(row_label)),
                     )
                     .child(
                         div()
@@ -1427,13 +1632,23 @@ fn render_accounts_page(
                             .gap(px(4.0))
                             .child(setting_btn(
                                 format!("gpui-acct-sel-{prov}-{}", acct.id),
-                                "Use".to_owned(),
+                                if is_sel {
+                                    if french {
+                                        "Actif".into()
+                                    } else {
+                                        "Selected".into()
+                                    }
+                                } else if french {
+                                    "Utiliser".into()
+                                } else {
+                                    "Use".into()
+                                },
                                 is_sel,
                                 tokens,
                                 GpuiAction::SettingsExtra(
                                     SettingsExtraAction::SelectManagedAccount {
                                         provider: p1,
-                                        account_id: Some(id1),
+                                        account_id: if is_sel { None } else { Some(id1) },
                                     },
                                 ),
                                 cx,
@@ -1675,6 +1890,16 @@ fn render_mcp_page(
             )),
     );
 
+    if !s.mcp_test_status.is_empty() {
+        col = col.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(tokens.text_dim)
+                .child(SharedString::from(s.mcp_test_status.clone())),
+        );
+    }
+
+    let mut shown_bulk_for = std::collections::HashSet::new();
     for (idx, srv) in s.installed_mcp.iter().enumerate() {
         let rm_cfg = srv.config_path.clone();
         let rm_agent = srv.agent_id.clone();
@@ -1682,6 +1907,44 @@ fn render_mcp_page(
         let tst_name = srv.name.clone();
         let tst_tr = srv.transport;
         let tst_ep = srv.endpoint_summary.clone();
+        let is_remote = srv.transport == crate::settings_extra_model::McpTransport::Http;
+        let remote_count = if is_remote {
+            s.installed_mcp
+                .iter()
+                .filter(|m| {
+                    m.transport == crate::settings_extra_model::McpTransport::Http
+                        && m.name == srv.name
+                })
+                .count()
+        } else {
+            0
+        };
+        let show_bulk_here = remote_count > 1 && shown_bulk_for.insert(srv.name.clone());
+        let signs_in_from_agent = s.mcp_probe_outcomes.get(&srv.name)
+            == Some(&crate::settings_extra_model::McpProbeOutcome::SignsInFromAgent);
+        let card_key = format!("{}:{}", srv.agent_id, srv.name);
+        let bulk_key = format!("all:{}", srv.name);
+        let inline_msg = s
+            .mcp_card_messages
+            .get(&card_key)
+            .cloned()
+            .map(|m| (card_key.clone(), m))
+            .or_else(|| {
+                show_bulk_here
+                    .then(|| {
+                        s.mcp_card_messages
+                            .get(&bulk_key)
+                            .cloned()
+                            .map(|m| (bulk_key.clone(), m))
+                    })
+                    .flatten()
+            });
+
+        let sign_name = srv.name.clone();
+        let sign_agent = srv.agent_id.clone();
+        let sign_label = srv.agent_label.clone();
+        let bulk_name = srv.name.clone();
+
         col = col.child(
             div()
                 .p(px(7.0))
@@ -1690,63 +1953,164 @@ fn render_mcp_page(
                 .border_1()
                 .border_color(tokens.border)
                 .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(6.0))
+                .flex_col()
+                .gap(px(5.0))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
                         .flex()
-                        .flex_col()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(6.0))
                         .child(
                             div()
-                                .text_size(px(11.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(tokens.text_strong)
-                                .child(SharedString::from(format!(
-                                    "{} · {}",
-                                    srv.name, srv.agent_label
-                                ))),
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(tokens.text_strong)
+                                                .child(SharedString::from(format!(
+                                                    "{} · {}",
+                                                    srv.name, srv.agent_label
+                                                ))),
+                                        )
+                                        .when(signs_in_from_agent, |el| {
+                                            el.child(
+                                                div()
+                                                    .px(px(6.0))
+                                                    .py(px(1.5))
+                                                    .rounded(px(4.0))
+                                                    .bg(super::theme::rgba_with_alpha(
+                                                        tokens.warn,
+                                                        0.18,
+                                                    ))
+                                                    .text_size(px(10.0))
+                                                    .text_color(tokens.warn)
+                                                    .child(
+                                                        crate::settings_extra_model::McpProbeOutcome::signs_in_badge(
+                                                            french,
+                                                        ),
+                                                    ),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .font_family(mono_font_family())
+                                        .text_size(px(10.0))
+                                        .text_color(tokens.text_dim)
+                                        .truncate()
+                                        .child(SharedString::from(srv.endpoint_summary.clone())),
+                                ),
                         )
                         .child(
                             div()
-                                .font_family(mono_font_family())
-                                .text_size(px(10.0))
-                                .text_color(tokens.text_dim)
-                                .truncate()
-                                .child(SharedString::from(srv.endpoint_summary.clone())),
+                                .flex()
+                                .gap(px(4.0))
+                                .when(show_bulk_here, |el| {
+                                    el.child(setting_btn(
+                                        format!("gpui-mcp-signin-all-{idx}"),
+                                        if french {
+                                            "Tout connecter".into()
+                                        } else {
+                                            "Sign in all".into()
+                                        },
+                                        true,
+                                        tokens,
+                                        GpuiAction::SettingsExtra(
+                                            SettingsExtraAction::SignInAllMcpServer {
+                                                name: bulk_name,
+                                            },
+                                        ),
+                                        cx,
+                                    ))
+                                })
+                                .when(is_remote, |el| {
+                                    el.child(setting_btn(
+                                        format!("gpui-mcp-signin-{idx}"),
+                                        if french {
+                                            "Se connecter".into()
+                                        } else {
+                                            "Sign in".into()
+                                        },
+                                        false,
+                                        tokens,
+                                        GpuiAction::SettingsExtra(
+                                            SettingsExtraAction::SignInMcpAgent {
+                                                name: sign_name,
+                                                agent_id: sign_agent,
+                                                agent_label: sign_label,
+                                            },
+                                        ),
+                                        cx,
+                                    ))
+                                })
+                                .child(setting_btn(
+                                    format!("gpui-mcp-test-{idx}"),
+                                    if french { "Tester" } else { "Test" }.to_owned(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::SettingsExtra(SettingsExtraAction::TestMcpServer {
+                                        name: tst_name,
+                                        transport: tst_tr,
+                                        endpoint: tst_ep,
+                                    }),
+                                    cx,
+                                ))
+                                .when(srv.agent_id != "codex", |el| {
+                                    el.child(setting_btn(
+                                        format!("gpui-mcp-rm-{idx}"),
+                                        if french { "Retirer" } else { "Remove" }.to_owned(),
+                                        false,
+                                        tokens,
+                                        GpuiAction::SettingsExtra(
+                                            SettingsExtraAction::RemoveInstalledMcp {
+                                                config_path: rm_cfg,
+                                                agent_id: rm_agent,
+                                                name: rm_name,
+                                            },
+                                        ),
+                                        cx,
+                                    ))
+                                }),
                         ),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(4.0))
-                        .child(setting_btn(
-                            format!("gpui-mcp-test-{idx}"),
-                            "Test".to_owned(),
-                            false,
-                            tokens,
-                            GpuiAction::SettingsExtra(SettingsExtraAction::TestMcpServer {
-                                name: tst_name,
-                                transport: tst_tr,
-                                endpoint: tst_ep,
-                            }),
-                            cx,
-                        ))
-                        .child(setting_btn(
-                            format!("gpui-mcp-rm-{idx}"),
-                            "Remove".to_owned(),
-                            false,
-                            tokens,
-                            GpuiAction::SettingsExtra(SettingsExtraAction::RemoveInstalledMcp {
-                                config_path: rm_cfg,
-                                agent_id: rm_agent,
-                                name: rm_name,
-                            }),
-                            cx,
-                        )),
-                ),
+                .when_some(inline_msg, |el, (mkey, mtxt)| {
+                    el.child(
+                        div()
+                            .px(px(8.0))
+                            .py(px(5.0))
+                            .rounded(px(tokens.radius_px - 1.0))
+                            .bg(tokens.surface_2)
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(11.0))
+                                    .text_color(tokens.text_strong)
+                                    .child(SharedString::from(mtxt)),
+                            )
+                            .child(setting_btn(
+                                format!("gpui-mcp-dismiss-{idx}"),
+                                "×".to_owned(),
+                                false,
+                                tokens,
+                                GpuiAction::DismissMcpCardMessage(mkey),
+                                cx,
+                            )),
+                    )
+                }),
         );
     }
 
@@ -2715,14 +3079,46 @@ fn render_tessel_account_page(
                                     acc.user_name, acc.user_email
                                 ))),
                         )
-                        .child(setting_btn(
-                            "gpui-acc-signout",
-                            "Sign out".to_owned(),
-                            false,
-                            tokens,
-                            GpuiAction::AccountSignOut,
-                            cx,
-                        )),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(setting_btn(
+                                    "gpui-acc-refresh",
+                                    if french {
+                                        "Actualiser le compte".into()
+                                    } else {
+                                        "Refresh account".into()
+                                    },
+                                    false,
+                                    tokens,
+                                    GpuiAction::AccountRefresh,
+                                    cx,
+                                ))
+                                .when(acc.user_admin, |el| {
+                                    el.child(setting_btn(
+                                        "gpui-acc-admin",
+                                        "Administration".to_owned(),
+                                        false,
+                                        tokens,
+                                        GpuiAction::AccountOpenAdminPortal,
+                                        cx,
+                                    ))
+                                })
+                                .child(setting_btn(
+                                    "gpui-acc-signout",
+                                    if french {
+                                        "Se déconnecter".into()
+                                    } else {
+                                        "Sign out".into()
+                                    },
+                                    false,
+                                    tokens,
+                                    GpuiAction::AccountSignOut,
+                                    cx,
+                                )),
+                        ),
                 )
                 .child(setting_btn(
                     "gpui-acc-suggest",

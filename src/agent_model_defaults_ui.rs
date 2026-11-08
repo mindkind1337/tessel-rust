@@ -39,6 +39,36 @@ pub struct Capabilities {
     pub running_pane_restart_badge: bool,
 }
 
+#[allow(dead_code)]
+#[must_use]
+pub fn format_models_listed(
+    count: usize,
+    agent_name: &str,
+    date_label: &str,
+    french: bool,
+) -> String {
+    if french {
+        format!(
+            "{} {} par {} le {}.",
+            count,
+            if count <= 1 {
+                "modèle listé"
+            } else {
+                "modèles listés"
+            },
+            agent_name,
+            date_label
+        )
+    } else {
+        format!(
+            "{} {} listed by {} on {}.",
+            count,
+            if count == 1 { "model" } else { "models" },
+            agent_name,
+            date_label
+        )
+    }
+}
 /// Summary metadata for a cached/probed CLI model list (`modelsListed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListedMeta<'a> {
@@ -1717,27 +1747,7 @@ fn build_status_text(p: StatusParams<'_>) -> String {
         ProbeState::Error(err) => probe_error_text(err, p.agent_name, p.french),
         ProbeState::Idle => {
             if let Some(meta) = p.listed_meta {
-                if p.french {
-                    format!(
-                        "{} {} par {} le {}.",
-                        meta.count,
-                        if meta.count <= 1 {
-                            "modèle listé"
-                        } else {
-                            "modèles listés"
-                        },
-                        p.agent_name,
-                        meta.date_label
-                    )
-                } else {
-                    format!(
-                        "{} {} listed by {} on {}.",
-                        meta.count,
-                        if meta.count == 1 { "model" } else { "models" },
-                        p.agent_name,
-                        meta.date_label
-                    )
-                }
+                format_models_listed(meta.count, p.agent_name, meta.date_label, p.french)
             } else if p.catalog_probed && p.capabilities.can_refresh_models {
                 if p.models_empty {
                     if p.french {

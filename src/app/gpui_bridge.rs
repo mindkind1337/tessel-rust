@@ -47,6 +47,7 @@ pub(crate) struct GpuiExtraUiState {
     pub new_auto_name: String,
     pub new_auto_prompt: String,
     pub new_auto_every_mins: u32,
+    pub expanded_agent_id: Option<String>,
     pub copied_clipboard: Option<String>,
 }
 
@@ -78,6 +79,7 @@ impl Default for GpuiExtraUiState {
             new_auto_name: String::new(),
             new_auto_prompt: String::new(),
             new_auto_every_mins: 60,
+            expanded_agent_id: None,
             copied_clipboard: None,
         }
     }
@@ -128,6 +130,9 @@ pub(crate) enum GpuiFocusTarget {
     SshFolder,
     AutomationName,
     AutomationPrompt,
+    BuiltinAgentCommand,
+    BuiltinAgentArgs,
+    BuiltinAgentEnv,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +163,8 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub installed_agents: Vec<(String, String)>,
     pub command_palette_open: bool,
     pub error_banner: Option<String>,
+    pub build_label: String,
+    pub dev_update_pill: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -400,6 +407,21 @@ pub(crate) struct GpuiSidePanelsSnapshot {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
+pub(crate) struct GpuiBuiltinAgentDetail {
+    pub id: String,
+    pub name: String,
+    pub installed: bool,
+    pub enabled: bool,
+    pub command: String,
+    pub args: String,
+    pub env: String,
+    pub env_error: Option<String>,
+    pub listed_models_caption: Option<String>,
+    pub can_refresh_models: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub(crate) struct GpuiSettingsSnapshot {
     pub active_page_id: String,
     pub search_query: String,
@@ -423,11 +445,15 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
     pub builtin_agents: Vec<BuiltinAgentSettingRow>,
+    pub builtin_agent_details: Vec<GpuiBuiltinAgentDetail>,
+    pub expanded_agent_id: Option<String>,
     pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
     pub claude_accounts: crate::settings_extra_model::ManagedAccountsRoster,
     pub codex_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    pub claude_system_email: Option<String>,
+    pub codex_system_email: Option<String>,
     pub new_account_label: String,
     pub provider_secrets: Vec<ProviderSecretRow>,
     pub secret_key_idx: usize,
@@ -436,6 +462,9 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub skills: Vec<crate::settings_extra_model::SkillEntry>,
     pub skills_git_url: String,
     pub installed_mcp: Vec<crate::settings_extra_model::InstalledMcpServer>,
+    pub mcp_probe_outcomes: BTreeMap<String, crate::settings_extra_model::McpProbeOutcome>,
+    pub mcp_card_messages: BTreeMap<String, String>,
+    pub mcp_test_status: String,
     pub context_prefs: crate::settings_extra_model::ContextPreferences,
     pub context_scan: crate::settings_extra_model::ContextScanReport,
     pub orchestration_prefs: crate::settings_extra_model::OrchestrationPreferences,
@@ -536,6 +565,10 @@ pub(crate) struct GpuiModalsSnapshot {
     pub telemetry_ports: Vec<crate::status_metrics::DetectedPort>,
     pub prompt_modal: Option<GpuiPromptModalSnapshot>,
     pub confirm_modal: Option<GpuiConfirmModalSnapshot>,
+    pub dev_update_open: bool,
+    pub dev_update_state: Option<crate::dev_update::DevUpdateState>,
+    pub dev_update_busy: bool,
+    pub dev_update_notice: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -824,8 +857,18 @@ pub(crate) enum GpuiAction {
     VaultFillEntry(String),
     AccountOpenStore,
     AccountSignInBrowser,
+    AccountRefresh,
+    AccountOpenAdminPortal,
     AccountSignOut,
     AccountSuggestPhrase,
+    ToggleExpandBuiltinAgent(String),
+    RefreshBuiltinAgentModels(String),
+    ResetBuiltinAgentPrefs(String),
+    DismissMcpCardMessage(String),
+    ToggleDevUpdateDialog,
+    RefreshDevUpdate,
+    ApplyDevUpdate,
+    CopyGitPullCommand,
     // Modals, Popovers & Navigation
     ToggleCommandPalette,
     PaletteSetQuery(String),
@@ -1033,6 +1076,20 @@ impl Tessel {
             settings_extra: crate::settings_extra_panel::SettingsExtraState::new(),
             claude_managed_accounts,
             codex_managed_accounts,
+            claude_system_email: if probe_environment {
+                directories::BaseDirs::new().and_then(|b| {
+                    crate::settings_extra_model::probe_system_provider_email(b.home_dir(), "claude")
+                })
+            } else {
+                None
+            },
+            codex_system_email: if probe_environment {
+                directories::BaseDirs::new().and_then(|b| {
+                    crate::settings_extra_model::probe_system_provider_email(b.home_dir(), "codex")
+                })
+            } else {
+                None
+            },
             provider_secret_flags,
             cli_sign_ins: if probe_environment {
                 directories::BaseDirs::new()
@@ -1047,6 +1104,11 @@ impl Tessel {
             devtools_statuses: Vec::new(),
             devtools_rx: None,
             mcp_test_rx: None,
+            retire_old_google: Default::default(),
+            dev_update: crate::dev_update::DevUpdatePoller::new(probe_environment),
+            dev_update_dialog_open: false,
+            dev_update_notice: None,
+            pending_shell_commands: Vec::new(),
             automations_store,
             last_automation_minute: None,
             appearance_panel: Default::default(),
@@ -1364,6 +1426,7 @@ impl Tessel {
             || self.pending_delete_worktree.is_some()
             || self.pending_agent_install.is_some()
             || self.file_action.is_some()
+            || self.dev_update_dialog_open
     }
 
     pub(crate) fn gpui_is_document_view(&self) -> bool {
@@ -2041,6 +2104,52 @@ impl Tessel {
                     false
                 }
             }
+            GpuiFocusTarget::BuiltinAgentCommand => {
+                let Some(aid) = self.gpui_extra.expanded_agent_id.clone() else {
+                    return false;
+                };
+                let mut prefs = crate::agent_preferences::get(&self.state, &aid)
+                    .cloned()
+                    .unwrap_or_default();
+                if apply_singleline_edit(&mut prefs.command, &lower, printable, pasted) {
+                    self.save_builtin_agent_prefs(&aid, prefs);
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::BuiltinAgentArgs => {
+                let Some(aid) = self.gpui_extra.expanded_agent_id.clone() else {
+                    return false;
+                };
+                let mut prefs = crate::agent_preferences::get(&self.state, &aid)
+                    .cloned()
+                    .unwrap_or_default();
+                if apply_singleline_edit(&mut prefs.args, &lower, printable, pasted) {
+                    self.save_builtin_agent_prefs(&aid, prefs);
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::BuiltinAgentEnv => {
+                let Some(aid) = self.gpui_extra.expanded_agent_id.clone() else {
+                    return false;
+                };
+                let mut prefs = crate::agent_preferences::get(&self.state, &aid)
+                    .cloned()
+                    .unwrap_or_default();
+                if lower == "enter" {
+                    prefs.env.push('\n');
+                    self.save_builtin_agent_prefs(&aid, prefs);
+                    true
+                } else if apply_singleline_edit(&mut prefs.env, &lower, printable, pasted) {
+                    self.save_builtin_agent_prefs(&aid, prefs);
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -2670,6 +2779,11 @@ impl Tessel {
                 installed_agents,
                 command_palette_open: self.command_palette.open,
                 error_banner: (!self.error.is_empty()).then(|| self.error.clone()),
+                build_label: self.dev_update.live_build_label(),
+                dev_update_pill: self
+                    .dev_update
+                    .state()
+                    .and_then(crate::dev_update::DevUpdateState::pill_label),
             },
             sidebar,
             projects,
@@ -2704,7 +2818,11 @@ impl Tessel {
                 ssh_host_count: self.state.hosts.len(),
                 listening_ports_count,
                 app_rss_mb,
-                version_build: format!("v{} {}", env!("CARGO_PKG_VERSION"), env!("TESSEL_BUILD")),
+                version_build: format!(
+                    "v{} {}",
+                    env!("CARGO_PKG_VERSION"),
+                    self.dev_update.live_build_label()
+                ),
             },
         }
     }
@@ -3285,23 +3403,53 @@ impl Tessel {
             crate::dialogs_toolbar_model::now_ms(),
         );
 
-        let builtin_agents: Vec<BuiltinAgentSettingRow> = crate::agent_catalog::ALL
-            .iter()
-            .map(|entry| {
-                let installed = self
-                    .agents
-                    .entries()
-                    .iter()
-                    .any(|(id, inst)| id == entry.id && *inst);
-                let enabled = crate::agent_preferences::enabled(&self.state, entry.id);
-                (
-                    entry.id.to_owned(),
-                    entry.name.to_owned(),
-                    installed,
-                    enabled,
-                )
-            })
-            .collect();
+        let mut builtin_agents: Vec<BuiltinAgentSettingRow> = Vec::new();
+        let mut builtin_agent_details: Vec<GpuiBuiltinAgentDetail> = Vec::new();
+        for entry in crate::agent_catalog::ALL {
+            let installed = self
+                .agents
+                .entries()
+                .iter()
+                .any(|(id, inst)| id == entry.id && *inst);
+            let enabled = crate::agent_preferences::enabled(&self.state, entry.id);
+            let prefs = crate::agent_preferences::get(&self.state, entry.id)
+                .cloned()
+                .unwrap_or_default();
+            let env_error = crate::agent_env::parse(&prefs.env).err();
+            let listed_models_caption = self.model_discovery.as_ref().and_then(|d| {
+                let models = d.models(entry.id)?;
+                let meta = d.lists().get(entry.id);
+                let date = meta
+                    .and_then(|e| crate::regional_date::local(e.fetched_at, french))
+                    .unwrap_or_else(|| "—".into());
+                Some(crate::agent_model_defaults_ui::format_models_listed(
+                    models.len(),
+                    entry.name,
+                    &date,
+                    french,
+                ))
+            });
+            let can_refresh_models =
+                crate::agent_model_catalog::find(entry.id).is_some_and(|c| c.probed);
+            builtin_agents.push((
+                entry.id.to_owned(),
+                entry.name.to_owned(),
+                installed,
+                enabled,
+            ));
+            builtin_agent_details.push(GpuiBuiltinAgentDetail {
+                id: entry.id.to_owned(),
+                name: entry.name.to_owned(),
+                installed,
+                enabled,
+                command: prefs.command,
+                args: prefs.args,
+                env: prefs.env,
+                env_error,
+                listed_models_caption,
+                can_refresh_models,
+            });
+        }
 
         let provider_secrets: Vec<ProviderSecretRow> =
             crate::settings_extra_model::PROVIDER_SECRET_KEYS
@@ -3353,11 +3501,15 @@ impl Tessel {
             new_ssh_alias: self.gpui_extra.new_ssh_alias.clone(),
             new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
             builtin_agents,
+            builtin_agent_details,
+            expanded_agent_id: self.gpui_extra.expanded_agent_id.clone(),
             custom_agents: self.state.custom_agents.clone(),
             new_custom_agent_name: self.gpui_extra.new_custom_agent_name.clone(),
             new_custom_agent_cmd: self.gpui_extra.new_custom_agent_cmd.clone(),
             claude_accounts: self.claude_managed_accounts.clone(),
             codex_accounts: self.codex_managed_accounts.clone(),
+            claude_system_email: self.claude_system_email.clone(),
+            codex_system_email: self.codex_system_email.clone(),
             new_account_label: self.gpui_extra.new_account_label.clone(),
             provider_secrets,
             secret_key_idx: self.gpui_extra.secret_key_idx,
@@ -3366,6 +3518,9 @@ impl Tessel {
             skills: self.scanned_skills.clone(),
             skills_git_url: self.gpui_extra.skills_git_url.clone(),
             installed_mcp: self.installed_mcp_servers.clone(),
+            mcp_probe_outcomes: self.settings_extra.mcp_probe_outcomes.clone(),
+            mcp_card_messages: self.settings_extra.mcp_card_messages.clone(),
+            mcp_test_status: self.settings_extra.mcp_test_status.clone(),
             context_prefs: self.state.context_prefs,
             context_scan: self.context_scan.clone(),
             orchestration_prefs: self.state.orchestration_prefs.clone(),
@@ -3706,6 +3861,10 @@ impl Tessel {
             telemetry_ports: telemetry.ports.clone(),
             prompt_modal,
             confirm_modal,
+            dev_update_open: self.dev_update_dialog_open,
+            dev_update_state: self.dev_update.state().cloned(),
+            dev_update_busy: self.dev_update.is_busy(),
+            dev_update_notice: self.dev_update_notice.clone(),
         }
     }
 
@@ -4941,6 +5100,14 @@ impl Tessel {
                 #[cfg(windows)]
                 self.account.gpui_begin_browser_sign_in();
             }
+            GpuiAction::AccountRefresh => {
+                #[cfg(windows)]
+                self.account.gpui_refresh();
+            }
+            GpuiAction::AccountOpenAdminPortal => {
+                #[cfg(windows)]
+                let _ = webbrowser::open(crate::account::ADMIN_PORTAL_URL);
+            }
             GpuiAction::AccountSignOut => {
                 #[cfg(windows)]
                 self.account.gpui_sign_out();
@@ -4948,6 +5115,54 @@ impl Tessel {
             GpuiAction::AccountSuggestPhrase => {
                 #[cfg(windows)]
                 self.account.gpui_suggest_sync_phrase();
+            }
+            GpuiAction::ToggleExpandBuiltinAgent(id) => {
+                if self.gpui_extra.expanded_agent_id.as_deref() == Some(id.as_str()) {
+                    self.gpui_extra.expanded_agent_id = None;
+                } else {
+                    self.gpui_extra.expanded_agent_id = Some(id);
+                }
+            }
+            GpuiAction::RefreshBuiltinAgentModels(id) => {
+                let command = crate::agent_preferences::get(&self.state, &id)
+                    .map(|p| p.command.clone())
+                    .unwrap_or_default();
+                if let Some(discovery) = &mut self.model_discovery {
+                    discovery.refresh(&id, &command, || {});
+                }
+            }
+            GpuiAction::ResetBuiltinAgentPrefs(id) => {
+                let mut prefs = crate::agent_preferences::get(&self.state, &id)
+                    .cloned()
+                    .unwrap_or_default();
+                prefs.reset();
+                self.save_builtin_agent_prefs(&id, prefs);
+            }
+            GpuiAction::DismissMcpCardMessage(key) => {
+                self.settings_extra.mcp_card_messages.remove(&key);
+            }
+            GpuiAction::ToggleDevUpdateDialog => {
+                self.dev_update_dialog_open = !self.dev_update_dialog_open;
+                if self.dev_update_dialog_open {
+                    self.dev_update_notice = None;
+                }
+            }
+            GpuiAction::RefreshDevUpdate => {
+                self.dev_update_notice = None;
+                self.dev_update.refresh_now(true);
+            }
+            GpuiAction::ApplyDevUpdate => {
+                self.dev_update_notice = None;
+                self.dev_update.apply_now();
+            }
+            GpuiAction::CopyGitPullCommand => {
+                self.gpui_extra.copied_clipboard = Some("git pull --ff-only".into());
+                self.dev_update_notice =
+                    Some(if self.state.language == crate::i18n::Language::French {
+                        "Commande « git pull --ff-only » copiée.".into()
+                    } else {
+                        "Copied \"git pull --ff-only\".".into()
+                    });
             }
             GpuiAction::ToggleCommandPalette => {
                 self.command_palette.open = !self.command_palette.open;

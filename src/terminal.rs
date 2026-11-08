@@ -50,6 +50,7 @@ pub struct TerminalRenderSnapshot {
     pub scrollback_offset: usize,
     pub status: String,
     pub exited: bool,
+    pub exit_code: Option<i32>,
     pub find_open: bool,
     pub find_query: String,
     pub find_badge: String,
@@ -57,6 +58,8 @@ pub struct TerminalRenderSnapshot {
     pub pending_multiline_lines: Option<usize>,
     pub composition: String,
 }
+
+pub use crate::terminal_exit::{exit_overlay_actions_wrap_together, terminal_exit_banner_copy};
 
 fn extract_viewport_styled_lines(
     viewport: &host_viewport::Viewport<'_>,
@@ -295,6 +298,7 @@ pub struct Terminal {
     scrollback_limit: usize,
     status: String,
     exited: bool,
+    exit_code: Option<i32>,
     query_tail: Vec<u8>,
     selection: Option<Selection>,
     composition: String,
@@ -420,6 +424,7 @@ impl Terminal {
             scrollback_offset,
             status: self.status.clone(),
             exited: self.exited,
+            exit_code: self.exit_code,
             find_open: self.find_open,
             find_query: self.find_query.clone(),
             find_badge,
@@ -1246,6 +1251,7 @@ impl Terminal {
             scrollback_limit: scrollback,
             status: String::new(),
             exited: false,
+            exit_code: None,
             query_tail: Vec::new(),
             selection: None,
             composition: String::new(),
@@ -1325,8 +1331,15 @@ impl Terminal {
         }
         if let Some(exit) = self.backend.exit_status() {
             self.exited = true;
+            self.exit_code = Some(exit.exit_code() as i32);
             self.status = format!("Shell exited: {exit}");
         }
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {

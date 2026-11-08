@@ -457,6 +457,8 @@ pub struct Tessel {
     settings_extra: crate::settings_extra_panel::SettingsExtraState,
     claude_managed_accounts: crate::settings_extra_model::ManagedAccountsRoster,
     codex_managed_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    claude_system_email: Option<String>,
+    codex_system_email: Option<String>,
     provider_secret_flags: std::collections::BTreeMap<String, bool>,
     cli_sign_ins: crate::settings_extra_model::CliSignInProbe,
     scanned_skills: Vec<crate::settings_extra_model::SkillEntry>,
@@ -464,7 +466,18 @@ pub struct Tessel {
     context_scan: crate::settings_extra_model::ContextScanReport,
     devtools_statuses: Vec<crate::settings_extra_model::DevToolStatus>,
     devtools_rx: Option<Receiver<Vec<crate::settings_extra_model::DevToolStatus>>>,
-    mcp_test_rx: Option<Receiver<Result<String, String>>>,
+    mcp_test_rx: Option<
+        Receiver<(
+            String,
+            Result<crate::settings_extra_model::McpProbeOutcome, String>,
+        )>,
+    >,
+    retire_old_google: crate::settings_extra_model::RetireOldGoogleTracker,
+    dev_update: crate::dev_update::DevUpdatePoller,
+    dev_update_dialog_open: bool,
+    dev_update_notice: Option<String>,
+    #[allow(dead_code)]
+    pending_shell_commands: Vec<(u64, String, Option<std::time::Instant>)>,
     automations_store: crate::automations::AutomationsFile,
     last_automation_minute: Option<i64>,
     appearance_panel: crate::appearance_panel::AppearancePanel,
@@ -647,6 +660,12 @@ impl Tessel {
             settings_extra: crate::settings_extra_panel::SettingsExtraState::new(),
             claude_managed_accounts,
             codex_managed_accounts,
+            claude_system_email: directories::BaseDirs::new().and_then(|b| {
+                crate::settings_extra_model::probe_system_provider_email(b.home_dir(), "claude")
+            }),
+            codex_system_email: directories::BaseDirs::new().and_then(|b| {
+                crate::settings_extra_model::probe_system_provider_email(b.home_dir(), "codex")
+            }),
             provider_secret_flags,
             cli_sign_ins: directories::BaseDirs::new()
                 .map(|b| crate::settings_extra_model::probe_cli_sign_ins(b.home_dir()))
@@ -657,6 +676,11 @@ impl Tessel {
             devtools_statuses: Vec::new(),
             devtools_rx: None,
             mcp_test_rx: None,
+            retire_old_google: Default::default(),
+            dev_update: crate::dev_update::DevUpdatePoller::new(true),
+            dev_update_dialog_open: false,
+            dev_update_notice: None,
+            pending_shell_commands: Vec::new(),
             automations_store,
             last_automation_minute: None,
             appearance_panel: Default::default(),
@@ -1637,11 +1661,22 @@ impl Tessel {
         }
         if let Some(rx) = &self.mcp_test_rx {
             match rx.try_recv() {
-                Ok(Ok(msg)) => {
-                    self.settings_extra.mcp_test_status = msg;
+                Ok((srv_name, Ok(outcome))) => {
+                    let french = self.state.language == crate::i18n::Language::French;
+                    self.settings_extra.mcp_test_status = match &outcome {
+                        crate::settings_extra_model::McpProbeOutcome::Connected(msg) => msg.clone(),
+                        crate::settings_extra_model::McpProbeOutcome::SignsInFromAgent => format!(
+                            "{srv_name}: {}",
+                            crate::settings_extra_model::McpProbeOutcome::signs_in_badge(french)
+                        ),
+                    };
+                    self.settings_extra
+                        .mcp_probe_outcomes
+                        .insert(srv_name, outcome);
                     self.mcp_test_rx = None;
                 }
-                Ok(Err(err)) => {
+                Ok((srv_name, Err(err))) => {
+                    self.settings_extra.mcp_probe_outcomes.remove(&srv_name);
                     self.settings_extra.mcp_test_status = err;
                     self.mcp_test_rx = None;
                 }
@@ -1650,6 +1685,45 @@ impl Tessel {
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
+        }
+        if let Some(applied) = self.dev_update.poll() {
+            let french = self.state.language == crate::i18n::Language::French;
+            self.dev_update_notice = Some(match applied {
+                crate::dev_update::ApplyDevUpdateResult::Updated(st) => {
+                    if french {
+                        format!(
+                            "Code source mis à jour vers b{} ({}). Recompilez / relancez Tessel.",
+                            st.local_build, st.local_commit
+                        )
+                    } else {
+                        format!(
+                            "Source updated to b{} ({}). Rebuild / restart Tessel to run it.",
+                            st.local_build, st.local_commit
+                        )
+                    }
+                }
+                crate::dev_update::ApplyDevUpdateResult::UpToDate(st) => {
+                    if french {
+                        format!("Déjà à jour sur b{} ({}).", st.local_build, st.local_commit)
+                    } else {
+                        format!(
+                            "Already up to date at b{} ({}).",
+                            st.local_build, st.local_commit
+                        )
+                    }
+                }
+                crate::dev_update::ApplyDevUpdateResult::Dirty { overlap } => {
+                    crate::dev_update::format_overlap_message(&overlap, french)
+                }
+                crate::dev_update::ApplyDevUpdateResult::Ahead { count } => {
+                    if french {
+                        format!("Cette branche a {count} commit(s) locaux d'avance.")
+                    } else {
+                        format!("This branch is {count} local commit(s) ahead.")
+                    }
+                }
+                crate::dev_update::ApplyDevUpdateResult::Error(err) => err,
+            });
         }
         self.poll_automations();
         self.agents.poll();
@@ -2104,6 +2178,19 @@ impl Tessel {
         if need_redetect {
             self.detect_agents();
         }
+    }
+    pub(crate) fn save_builtin_agent_prefs(
+        &mut self,
+        id: &str,
+        prefs: crate::agent_preferences::Preferences,
+    ) {
+        self.agents_notice = self
+            .store
+            .as_ref()
+            .ok_or_else(|| "Settings store unavailable".to_owned())
+            .and_then(|store| crate::agent_preferences::save(&mut self.state, store, id, prefs))
+            .err();
+        self.refresh_launch_status();
     }
     fn new_session_placed(
         &mut self,
@@ -5210,7 +5297,7 @@ impl Tessel {
                                         }
                                         PaneMenuAction::Restart
                                         | PaneMenuAction::RestartApplySettings => {
-                                            session.restart(pane_prefs);
+                                            session.restart(pane_prefs.clone());
                                         }
                                         PaneMenuAction::CopySessionId => {
                                             if let Some(id) = &conversation_id {
@@ -5422,6 +5509,80 @@ impl Tessel {
                                 {
                                     broadcast_batches.push((id, batch));
                                 }
+                                let exited_code = terminal.exited().then(|| terminal.exit_code()).flatten();
+                                let is_exited = terminal.exited();
+                                if is_exited {
+                                    let (msg, restart_lbl, close_lbl) =
+                                        crate::terminal::terminal_exit_banner_copy(
+                                            false,
+                                            exited_code,
+                                            french,
+                                        );
+                                    let mut do_restart = false;
+                                    let mut do_close = false;
+                                    let wrap_actions =
+                                        crate::terminal::exit_overlay_actions_wrap_together(
+                                            ui.available_width() - 28.0,
+                                            170.0,
+                                            170.0,
+                                            10.0,
+                                        );
+                                    ui.add_space(6.0);
+                                    ui.vertical_centered(|ui| {
+                                        egui::Frame::new()
+                                            .fill(spec.ui.surface_2)
+                                            .stroke(egui::Stroke::new(1.0_f32, spec.ui.border))
+                                            .corner_radius(egui::CornerRadius::same(8))
+                                            .inner_margin(egui::Margin::symmetric(12, 8))
+                                            .show(ui, |ui| {
+                                                if wrap_actions {
+                                                    ui.vertical(|ui| {
+                                                        ui.label(&msg);
+                                                        ui.horizontal(|ui| {
+                                                            if ui.button(restart_lbl).clicked() {
+                                                                do_restart = true;
+                                                            }
+                                                            if ui.button(close_lbl).clicked() {
+                                                                do_close = true;
+                                                            }
+                                                        });
+                                                    });
+                                                } else {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(&msg);
+                                                        ui.add_space(8.0);
+                                                        ui.horizontal(|ui| {
+                                                            if ui.button(restart_lbl).clicked() {
+                                                                do_restart = true;
+                                                            }
+                                                            if ui.button(close_lbl).clicked() {
+                                                                do_close = true;
+                                                            }
+                                                        });
+                                                    });
+                                                }
+                                            });
+                                    });
+                                    if do_restart {
+                                        let prefs = match &session.launch {
+                                            Launch::Agent(agent) => {
+                                                Some(crate::agent_preferences::for_pane_launch(
+                                                    &self.state,
+                                                    agent,
+                                                    self.model_discovery
+                                                        .as_ref()
+                                                        .and_then(|d| d.models(agent)),
+                                                    session.session_options.as_ref(),
+                                                ))
+                                            }
+                                            _ => None,
+                                        };
+                                        session.restart(prefs);
+                                    }
+                                    if do_close {
+                                        close = Some(id);
+                                    }
+                                }
                             } else if session.restarting.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Stopping terminal processes…"));
@@ -5431,28 +5592,120 @@ impl Tessel {
                             } else if session.loading.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Starting…"));
+                            } else if !session.error.is_empty() {
+                                let (msg, retry_lbl, close_lbl) =
+                                    crate::terminal::terminal_exit_banner_copy(true, None, french);
+                                let mut wake = false;
+                                let mut fresh = false;
+                                let mut do_close = false;
+                                let wrap_actions =
+                                    crate::terminal::exit_overlay_actions_wrap_together(
+                                        ui.available_width() - 28.0,
+                                        170.0,
+                                        170.0,
+                                        10.0,
+                                    );
+                                ui.add_space(6.0);
+                                ui.vertical_centered(|ui| {
+                                    egui::Frame::new()
+                                        .fill(spec.ui.surface_2)
+                                        .stroke(egui::Stroke::new(1.0_f32, spec.ui.border))
+                                        .corner_radius(egui::CornerRadius::same(8))
+                                        .inner_margin(egui::Margin::symmetric(12, 8))
+                                        .show(ui, |ui| {
+                                            if wrap_actions {
+                                                ui.vertical(|ui| {
+                                                    ui.label(&msg);
+                                                    ui.horizontal(|ui| {
+                                                        if ui.button(retry_lbl).clicked() {
+                                                            wake = true;
+                                                        }
+                                                        if session.codex_seed.is_some()
+                                                            && ui
+                                                                .button(tr(
+                                                                    "Start a new conversation",
+                                                                ))
+                                                                .clicked()
+                                                        {
+                                                            fresh = true;
+                                                        }
+                                                        if ui.button(close_lbl).clicked() {
+                                                            do_close = true;
+                                                        }
+                                                    });
+                                                });
+                                            } else {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(&msg);
+                                                    ui.add_space(8.0);
+                                                    ui.horizontal(|ui| {
+                                                        if ui.button(retry_lbl).clicked() {
+                                                            wake = true;
+                                                        }
+                                                        if session.codex_seed.is_some()
+                                                            && ui
+                                                                .button(tr(
+                                                                    "Start a new conversation",
+                                                                ))
+                                                                .clicked()
+                                                        {
+                                                            fresh = true;
+                                                        }
+                                                        if ui.button(close_lbl).clicked() {
+                                                            do_close = true;
+                                                        }
+                                                    });
+                                                });
+                                            }
+                                        });
+                                });
+                                if fresh {
+                                    session.codex_seed = None;
+                                }
+                                if do_close {
+                                    close = Some(id);
+                                } else if wake || fresh {
+                                    session.error.clear();
+                                    #[cfg(windows)]
+                                    if session.native_host.is_some() {
+                                        native_wake = Some(session.id);
+                                    }
+                                    let prefs = match &session.launch {
+                                        Launch::Agent(id) => {
+                                            Some(crate::agent_preferences::for_pane_launch(
+                                                &self.state,
+                                                id,
+                                                self.model_discovery
+                                                    .as_ref()
+                                                    .and_then(|d| d.models(id)),
+                                                session.session_options.as_ref(),
+                                            ))
+                                        }
+                                        _ => None,
+                                    };
+                                    session.start(prefs);
+                                }
                             } else {
                                 let wake = ui.button(tr("Wake / reconnect")).clicked();
-                                let fresh = session.codex_seed.is_some() && !session.error.is_empty()
-                                    && ui.button(tr("Start a new conversation")).clicked();
-                                if fresh { session.codex_seed = None; }
-                                if wake || fresh {
-                                #[cfg(windows)]
-                                if session.native_host.is_some() { native_wake = Some(session.id); }
-                                let prefs = match &session.launch {
-                                    Launch::Agent(id) => {
-                                        Some(crate::agent_preferences::for_pane_launch(
-                                            &self.state,
-                                            id,
-                                            self.model_discovery
-                                                .as_ref()
-                                                .and_then(|d| d.models(id)),
-                                            session.session_options.as_ref(),
-                                        ))
+                                if wake {
+                                    #[cfg(windows)]
+                                    if session.native_host.is_some() {
+                                        native_wake = Some(session.id);
                                     }
-                                    _ => None,
-                                };
-                                session.start(prefs);
+                                    let prefs = match &session.launch {
+                                        Launch::Agent(id) => {
+                                            Some(crate::agent_preferences::for_pane_launch(
+                                                &self.state,
+                                                id,
+                                                self.model_discovery
+                                                    .as_ref()
+                                                    .and_then(|d| d.models(id)),
+                                                session.session_options.as_ref(),
+                                            ))
+                                        }
+                                        _ => None,
+                                    };
+                                    session.start(prefs);
                                 }
                             }
                         });
@@ -8155,9 +8408,24 @@ impl Tessel {
     fn on_enter_settings_section(&mut self, section: SettingsSection) {
         match section {
             SettingsSection::Accounts => {
-                self.cli_sign_ins = directories::BaseDirs::new()
-                    .map(|b| crate::settings_extra_model::probe_cli_sign_ins(b.home_dir()))
-                    .unwrap_or_default();
+                if let Some(base) = directories::BaseDirs::new() {
+                    self.cli_sign_ins =
+                        crate::settings_extra_model::probe_cli_sign_ins(base.home_dir());
+                    self.claude_system_email =
+                        crate::settings_extra_model::probe_system_provider_email(
+                            base.home_dir(),
+                            "claude",
+                        );
+                    self.codex_system_email =
+                        crate::settings_extra_model::probe_system_provider_email(
+                            base.home_dir(),
+                            "codex",
+                        );
+                } else {
+                    self.cli_sign_ins = Default::default();
+                    self.claude_system_email = None;
+                    self.codex_system_email = None;
+                }
                 if let Some(store) = &self.store {
                     self.claude_managed_accounts =
                         crate::settings_extra_model::load_managed_accounts(
@@ -8211,10 +8479,25 @@ impl Tessel {
             return;
         };
         let proj = self.state.active().map(|p| p.path.clone());
-        self.installed_mcp_servers = crate::settings_extra_model::scan_installed_mcp_servers(
+        let mut servers = crate::settings_extra_model::scan_installed_mcp_servers(
             base.home_dir(),
             proj.as_deref(),
         );
+        #[cfg(windows)]
+        let google_connected = self.account.is_signed_in();
+        #[cfg(not(windows))]
+        let google_connected = false;
+        if let Some(store) = &self.store
+            && self
+                .retire_old_google
+                .sync(store.directory(), google_connected, &servers)
+        {
+            servers = crate::settings_extra_model::scan_installed_mcp_servers(
+                base.home_dir(),
+                proj.as_deref(),
+            );
+        }
+        self.installed_mcp_servers = servers;
     }
 
     fn refresh_context_scan(&mut self) {
@@ -8256,6 +8539,8 @@ impl Tessel {
             let input = crate::settings_extra_panel::AccountsViewInput {
                 claude_roster: &self.claude_managed_accounts,
                 codex_roster: &self.codex_managed_accounts,
+                claude_system_email: self.claude_system_email.as_deref(),
+                codex_system_email: self.codex_system_email.as_deref(),
                 secret_saved_flags: &self.provider_secret_flags,
                 cli_sign_ins: &self.cli_sign_ins,
                 ssh_host_aliases: &ssh_aliases,
@@ -8849,23 +9134,75 @@ impl Tessel {
                                 let parts: Vec<String> =
                                     endpoint.split_whitespace().map(str::to_owned).collect();
                                 if let Some((cmd, rest)) = parts.split_first() {
-                                    crate::settings_extra_model::probe_mcp_stdio(cmd, rest)
+                                    crate::settings_extra_model::probe_mcp_stdio(cmd, rest).map(
+                                        crate::settings_extra_model::McpProbeOutcome::Connected,
+                                    )
                                 } else {
                                     Err("Empty command.".into())
                                 }
                             }
                             crate::settings_extra_model::McpTransport::Http => {
-                                match url::Url::parse(&endpoint) {
-                                    Ok(u) if matches!(u.scheme(), "http" | "https") => {
-                                        Ok(format!("{name}: valid HTTP MCP endpoint ({u})"))
-                                    }
-                                    _ => Err("Invalid HTTP MCP URL.".into()),
-                                }
+                                crate::settings_extra_model::probe_mcp_http(&name, &endpoint)
                             }
                         };
-                        let _ = tx.send(res);
+                        let _ = tx.send((name, res));
                     });
                     self.mcp_test_rx = Some(rx);
+                }
+            }
+            Act::SignInMcpAgent {
+                name,
+                agent_id,
+                agent_label,
+            } => {
+                let french = self.state.language == crate::i18n::Language::French;
+                let agents = vec![(agent_id, agent_label)];
+                match crate::settings_extra_model::plan_mcp_sign_in(&agents, &name, french) {
+                    Ok(plan) => {
+                        if let Some(msg) = plan.card_message.clone() {
+                            self.settings_extra
+                                .mcp_card_messages
+                                .insert(name.clone(), msg);
+                        } else {
+                            self.settings_extra.mcp_card_messages.remove(&name);
+                        }
+                        if let Some(cmd) = plan.chained_command(cfg!(windows)) {
+                            self.run_shell_setup_command(plan.pane_title, cmd, None);
+                        }
+                    }
+                    Err(err) => {
+                        self.settings_extra.mcp_card_messages.insert(name, err);
+                    }
+                }
+            }
+            Act::SignInAllMcpServer { name } => {
+                let french = self.state.language == crate::i18n::Language::French;
+                let mut seen = std::collections::BTreeSet::new();
+                let mut agents = Vec::new();
+                for srv in &self.installed_mcp_servers {
+                    if srv.name == name
+                        && srv.transport == crate::settings_extra_model::McpTransport::Http
+                        && seen.insert(srv.agent_id.clone())
+                    {
+                        agents.push((srv.agent_id.clone(), srv.agent_label.clone()));
+                    }
+                }
+                match crate::settings_extra_model::plan_mcp_sign_in(&agents, &name, french) {
+                    Ok(plan) => {
+                        if let Some(msg) = plan.card_message.clone() {
+                            self.settings_extra
+                                .mcp_card_messages
+                                .insert(name.clone(), msg);
+                        } else {
+                            self.settings_extra.mcp_card_messages.remove(&name);
+                        }
+                        if let Some(cmd) = plan.chained_command(cfg!(windows)) {
+                            self.run_shell_setup_command(plan.pane_title, cmd, None);
+                        }
+                    }
+                    Err(err) => {
+                        self.settings_extra.mcp_card_messages.insert(name, err);
+                    }
                 }
             }
             Act::OpenTesselAccountSettings => {
@@ -11485,7 +11822,7 @@ impl eframe::App for Tessel {
                 if let Some(frame) = &self.window_frame {
                     frame.show(ui, [regions.search, regions.actions]);
                 }
-                chrome::brand(ui, regions.brand);
+                chrome::brand_with_build(ui, regions.brand, &self.dev_update.live_build_label());
                 if self.native_modal_open() || self.pending_exit {
                     ui.disable();
                 }
@@ -11697,6 +12034,34 @@ impl eframe::App for Tessel {
                 self.toolbar_menu_open |= shown_notif.is_some();
                 if let Some(act) = toolbar_dlg_act {
                     self.handle_dialogs_toolbar_action(ctx, act);
+                }
+
+                if let Some(pill_label) = self
+                    .dev_update
+                    .state()
+                    .and_then(crate::dev_update::DevUpdateState::pill_label)
+                {
+                    let warn_c = toolbar_spec.ui.warn;
+                    let btn = egui::Button::new(
+                        egui::RichText::new(&pill_label)
+                            .size(11.5)
+                            .strong()
+                            .color(warn_c),
+                    )
+                    .fill(warn_c.gamma_multiply(0.14_f32))
+                    .stroke(egui::Stroke::new(1.0_f32, warn_c.gamma_multiply(0.45_f32)))
+                    .corner_radius(egui::CornerRadius::same(10));
+                    let tip = if toolbar_french {
+                        "Nouveau code source disponible sur Git"
+                    } else {
+                        "Newer Git source commits available"
+                    };
+                    if ui.add(btn).on_hover_text(tip).clicked() {
+                        self.dev_update_dialog_open = !self.dev_update_dialog_open;
+                        if self.dev_update_dialog_open {
+                            self.dev_update_notice = None;
+                        }
+                    }
                 }
 
                 let left_icon = if self.state.panels.left_open {
@@ -11970,12 +12335,164 @@ impl eframe::App for Tessel {
         } else {
             false
         };
+        if self.dev_update_dialog_open {
+            let french = self.state.language == crate::i18n::Language::French;
+            let mut open = self.dev_update_dialog_open;
+            let mut do_refresh = false;
+            let mut do_apply = false;
+            let mut do_copy_pull = false;
+            let title = if french {
+                "Mise à jour du code (Git)"
+            } else {
+                "Developer update (Git)"
+            };
+            egui::Window::new(title)
+                .id(egui::Id::new("compat-dev-update-dialog"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .default_width(480.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    if let Some(st) = self.dev_update.state() {
+                        ui.label(if french {
+                            format!(
+                                "Version locale : b{} ({}) · Distante : b{} ({} commit(s) en retard)",
+                                st.local_build, st.local_commit, st.remote_build, st.behind
+                            )
+                        } else {
+                            format!(
+                                "Local build: b{} ({}) · Upstream: b{} ({} commit(s) behind)",
+                                st.local_build, st.local_commit, st.remote_build, st.behind
+                            )
+                        });
+                        if !st.incoming_log.is_empty() {
+                            ui.add_space(6.0);
+                            ui.strong(if french {
+                                "Commits entrants"
+                            } else {
+                                "Incoming commits"
+                            });
+                            egui::ScrollArea::vertical()
+                                .id_salt("compat-dev-update-log")
+                                .max_height(130.0)
+                                .show(ui, |ui| {
+                                    for line in &st.incoming_log {
+                                        ui.monospace(line);
+                                    }
+                                });
+                        }
+                        if !st.incoming_files.is_empty() {
+                            ui.add_space(6.0);
+                            ui.small(if french {
+                                format!("{} fichier(s) modifié(s) en amont", st.incoming_files.len())
+                            } else {
+                                format!("{} file(s) changed upstream", st.incoming_files.len())
+                            });
+                        }
+                        if let Some(blocked) = &st.blocked {
+                            ui.add_space(6.0);
+                            match blocked {
+                                crate::dev_update::DevUpdateBlocked::Dirty { overlap } => {
+                                    ui.colored_label(
+                                        ui.visuals().warn_fg_color,
+                                        crate::dev_update::format_overlap_message(overlap, french),
+                                    );
+                                }
+                                crate::dev_update::DevUpdateBlocked::Ahead { count } => {
+                                    ui.colored_label(
+                                        ui.visuals().warn_fg_color,
+                                        if french {
+                                            format!(
+                                                "Cette branche a {count} commit(s) locaux d'avance."
+                                            )
+                                        } else {
+                                            format!(
+                                                "This branch is {count} local commit(s) ahead."
+                                            )
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        ui.weak(if french {
+                            "Dépôt Git non détecté."
+                        } else {
+                            "Git checkout not detected."
+                        });
+                    }
+                    if let Some(notice) = &self.dev_update_notice {
+                        ui.add_space(6.0);
+                        ui.label(notice);
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let busy = self.dev_update.is_busy();
+                        let can_ff = self
+                            .dev_update
+                            .state()
+                            .is_some_and(|s| s.behind > 0 && s.blocked.is_none())
+                            && !busy;
+                        if ui
+                            .add_enabled(
+                                can_ff,
+                                egui::Button::new(if french {
+                                    "Mettre à jour (fast-forward)"
+                                } else {
+                                    "Update checkout (fast-forward)"
+                                }),
+                            )
+                            .clicked()
+                        {
+                            do_apply = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(if french { "Vérifier" } else { "Check now" }),
+                            )
+                            .clicked()
+                        {
+                            do_refresh = true;
+                        }
+                        if ui
+                            .button(if french {
+                                "Copier git pull"
+                            } else {
+                                "Copy git pull"
+                            })
+                            .clicked()
+                        {
+                            do_copy_pull = true;
+                        }
+                    });
+                });
+            self.dev_update_dialog_open = open;
+            if do_refresh {
+                self.dev_update_notice = None;
+                self.dev_update.refresh_now(true);
+            }
+            if do_apply {
+                self.dev_update_notice = None;
+                self.dev_update.apply_now();
+            }
+            if do_copy_pull {
+                ctx.copy_text("git pull --ff-only".into());
+                self.dev_update_notice = Some(if french {
+                    "Commande « git pull --ff-only » copiée.".into()
+                } else {
+                    "Copied \"git pull --ff-only\".".into()
+                });
+            }
+        }
         #[cfg(windows)]
         {
             self.dispatch_native_actions(ctx);
             self.show_native_picker(ctx);
             self.show_native_drain(ctx);
             let browser_unblocked = self.view == View::Browser
+                && !self.dev_update_dialog_open
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
                 && !self.dialogs_toolbar_ui.any_modal_open()

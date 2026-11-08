@@ -73,7 +73,22 @@ pub(crate) fn render_toolbar(
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(tokens.text_strong)
                                 .child("Tessel"),
-                        ),
+                        )
+                        .child({
+                            let count = tb
+                                .build_label
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("")
+                                .trim_start_matches('b');
+                            div().text_size(px(11.0)).text_color(tokens.text_dim).child(
+                                SharedString::from(format!(
+                                    "{}.{}",
+                                    env!("CARGO_PKG_VERSION"),
+                                    count
+                                )),
+                            )
+                        }),
                 )
                 .child(toolbar_icon_btn(
                     "btn-toggle-left-sidebar",
@@ -284,6 +299,30 @@ pub(crate) fn render_toolbar(
                 .items_center()
                 .h_full()
                 .gap(px(4.0))
+                .when_some(tb.dev_update_pill.clone(), |el, pill_txt| {
+                    el.child(
+                        div()
+                            .id("btn-dev-update-pill")
+                            .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                            .px(px(8.0))
+                            .rounded(px(tokens.radius_px))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .bg(rgba_with_alpha(tokens.warn, 0.20))
+                            .border_1()
+                            .border_color(tokens.warn)
+                            .text_size(px(11.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(tokens.warn)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgba_with_alpha(tokens.warn, 0.30)))
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(GpuiAction::ToggleDevUpdateDialog, cx);
+                            }))
+                            .child(SharedString::from(pill_txt)),
+                    )
+                })
                 .child(
                     div()
                         .id("btn-broadcast-toggle")

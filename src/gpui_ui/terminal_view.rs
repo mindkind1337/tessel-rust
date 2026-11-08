@@ -111,7 +111,8 @@ pub(crate) fn render_terminal_pane_body(
     }
 
     let Some(render_snap) = &tile.terminal_render else {
-        let msg = if !tile.error.is_empty() {
+        let has_startup_err = !tile.error.is_empty();
+        let msg = if has_startup_err {
             tile.error.clone()
         } else if tile.loading {
             if french {
@@ -127,16 +128,27 @@ pub(crate) fn render_terminal_pane_body(
             .flex_1()
             .min_h_0()
             .w_full()
-            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .justify_between()
             .bg(tokens.term)
-            .font_family(mono_font_family())
-            .text_size(px(font_size))
-            .text_color(if tile.error.is_empty() {
-                tokens.text_dim
-            } else {
-                tokens.danger
+            .child(
+                div()
+                    .p(px(12.0))
+                    .font_family(mono_font_family())
+                    .text_size(px(font_size))
+                    .text_color(if tile.error.is_empty() {
+                        tokens.text_dim
+                    } else {
+                        tokens.danger
+                    })
+                    .child(SharedString::from(msg)),
+            )
+            .when(has_startup_err, |el| {
+                el.child(render_exit_overlay_pill(
+                    sid, true, None, french, tokens, cx,
+                ))
             })
-            .child(SharedString::from(msg))
             .into_any_element();
     };
 
@@ -203,7 +215,7 @@ fn render_vt_surface(
             }
         }));
 
-    if !extra_error.is_empty() || !snap.status.is_empty() {
+    if !extra_error.is_empty() || (!snap.exited && !snap.status.is_empty()) {
         let banner_txt = if !extra_error.is_empty() {
             extra_error.to_owned()
         } else {
@@ -221,25 +233,7 @@ fn render_vt_surface(
                 .justify_between()
                 .text_size(px(11.0))
                 .text_color(tokens.text_strong)
-                .child(SharedString::from(banner_txt))
-                .when(snap.exited && session_id.is_some(), |el| {
-                    let sid = session_id.unwrap_or(0);
-                    el.child(
-                        div()
-                            .id(("btn-restart-exited", salt))
-                            .px(px(7.0))
-                            .py(px(2.0))
-                            .rounded(px(4.0))
-                            .bg(tokens.surface_2)
-                            .border_1()
-                            .border_color(tokens.border)
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |root, _, _, cx| {
-                                root.dispatch(GpuiAction::RestartSession(sid), cx);
-                            }))
-                            .child(if french { "Relancer" } else { "Restart" }),
-                    )
-                }),
+                .child(SharedString::from(banner_txt)),
         );
     }
 
@@ -613,7 +607,106 @@ fn render_vt_surface(
         ));
     }
 
-    wrapper.child(grid)
+    let mut out = wrapper.child(grid);
+    if snap.exited
+        && let Some(sid) = session_id
+    {
+        out = out.child(render_exit_overlay_pill(
+            sid,
+            false,
+            snap.exit_code,
+            french,
+            tokens,
+            cx,
+        ));
+    }
+    out
+}
+
+fn render_exit_overlay_pill(
+    sid: u64,
+    failed_to_start: bool,
+    exit_code: Option<i32>,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let (msg, primary_lbl, close_lbl) =
+        crate::terminal::terminal_exit_banner_copy(failed_to_start, exit_code, french);
+    div()
+        .id(("exit-overlay-wrap", sid))
+        .w_full()
+        .px(px(12.0))
+        .pb(px(10.0))
+        .pt(px(4.0))
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .id(("exit-overlay-pill", sid))
+                .max_w(px(560.0))
+                .w_full()
+                .px(px(14.0))
+                .py(px(8.0))
+                .rounded(px(10.0))
+                .bg(tokens.surface_2)
+                .border_1()
+                .border_color(tokens.border_strong)
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(120.0))
+                        .text_size(px(12.0))
+                        .text_color(tokens.text_strong)
+                        .child(SharedString::from(msg)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .flex_shrink_0()
+                        .ml_auto()
+                        .child(
+                            div()
+                                .id(("btn-restart-exited", sid))
+                                .px(px(10.0))
+                                .py(px(4.0))
+                                .rounded(px(tokens.radius_px))
+                                .bg(tokens.accent)
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(gpui::rgb(0xFF_FF_FF))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |root, _, _, cx| {
+                                    root.dispatch(GpuiAction::RestartSession(sid), cx);
+                                }))
+                                .child(primary_lbl),
+                        )
+                        .child(
+                            div()
+                                .id(("btn-close-exited", sid))
+                                .px(px(10.0))
+                                .py(px(4.0))
+                                .rounded(px(tokens.radius_px))
+                                .bg(tokens.surface)
+                                .border_1()
+                                .border_color(tokens.border)
+                                .text_size(px(11.5))
+                                .text_color(tokens.text_strong)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens.surface_3))
+                                .on_click(cx.listener(move |root, _, _, cx| {
+                                    root.dispatch(GpuiAction::CloseSession(sid), cx);
+                                }))
+                                .child(close_lbl),
+                        ),
+                ),
+        )
 }
 
 fn render_terminal_row(

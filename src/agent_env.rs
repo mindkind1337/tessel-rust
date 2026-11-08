@@ -73,6 +73,22 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, String>, String> {
     Ok(env)
 }
 
+#[allow(dead_code)]
+#[must_use]
+pub fn invalid_env_unused_note(french: bool) -> &'static str {
+    if french {
+        "Non utilisées tant que ce n'est pas corrigé."
+    } else {
+        "Not used until fixed."
+    }
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub fn format_invalid_env_callout(err: &str, french: bool) -> String {
+    format!("{err} {}", invalid_env_unused_note(french))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

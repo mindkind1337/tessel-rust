@@ -128,6 +128,8 @@ fn renders_all_ten_remaining_settings_pages_and_custom_agents_in_en_and_fr() {
             let input = AccountsViewInput {
                 claude_roster: &claude_roster,
                 codex_roster: &codex_roster,
+                claude_system_email: None,
+                codex_system_email: None,
                 secret_saved_flags: &secret_flags,
                 cli_sign_ins: &cli_sign_ins,
                 ssh_host_aliases: &ssh_aliases,

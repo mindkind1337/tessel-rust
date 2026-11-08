@@ -30,11 +30,33 @@ fn random() -> Result<String, String> {
 fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
-#[derive(Serialize, Deserialize)]
+pub const ADMIN_PORTAL_URL: &str = "https://admin.tesselcode.com";
+
+#[allow(dead_code)]
+#[must_use]
+pub fn admin_button_tooltip(french: bool) -> &'static str {
+    if french {
+        "Comptes, connexions et services branchés de tous ceux qui utilisent Tessel, sur admin.tesselcode.com. S'ouvre dans votre navigateur, qui demande sa propre connexion Google."
+    } else {
+        "Accounts, sign-ins and connections of everyone using Tessel, on admin.tesselcode.com. Opens in your browser, where it asks for its own Google sign-in."
+    }
+}
+
+fn deserialize_strict_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = Option::<serde_json::Value>::deserialize(deserializer).unwrap_or(None);
+    Ok(matches!(val, Some(serde_json::Value::Bool(true))))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
     pub email: String,
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_strict_bool")]
+    pub admin: bool,
 }
 impl User {
     fn valid(&self) -> bool {
@@ -415,4 +437,5 @@ pub fn register_protocol() -> Result<(), String> {
         .map_err(|_| "Cannot register account callback".into())
 }
 #[cfg(test)]
+#[path = "account/tests.rs"]
 mod tests;

@@ -111,6 +111,9 @@ pub(crate) fn render_active_modals_and_popovers(
     if let Some(cm) = &m.confirm_modal {
         layers.push(render_confirm_modal(cm, french, tokens, cx));
     }
+    if m.dev_update_open {
+        layers.push(render_dev_update_modal(m, french, tokens, cx));
+    }
 
     layers
 }
@@ -2854,4 +2857,180 @@ fn modal_btn(
         }))
         .child(SharedString::from(label))
         .into_any_element()
+}
+
+fn render_dev_update_modal(
+    m: &GpuiModalsSnapshot,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let title = if french {
+        "Mise à jour Git disponible"
+    } else {
+        "Git checkout update"
+    };
+    let mut body = div().flex().flex_col().gap(px(8.0));
+
+    if let Some(st) = &m.dev_update_state {
+        let summary = if french {
+            format!(
+                "Actuel : b{} ({})  →  Distant : b{} ({} commit(s) entrant(s))",
+                st.local_build, st.local_commit, st.remote_build, st.behind
+            )
+        } else {
+            format!(
+                "Current: b{} ({})  →  Upstream: b{} ({} incoming commit(s))",
+                st.local_build, st.local_commit, st.remote_build, st.behind
+            )
+        };
+        body = body.child(
+            div()
+                .text_size(px(11.5))
+                .text_color(tokens.text_strong)
+                .child(SharedString::from(summary)),
+        );
+
+        if !st.incoming_log.is_empty() {
+            let mut log_box = div()
+                .p(px(8.0))
+                .rounded(px(tokens.radius_px))
+                .bg(tokens.surface_2)
+                .border_1()
+                .border_color(tokens.border)
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .font_family(mono_font_family())
+                .text_size(px(10.5))
+                .text_color(tokens.text);
+            for line in &st.incoming_log {
+                log_box = log_box.child(SharedString::from(line.clone()));
+            }
+            body = body.child(log_box);
+        }
+
+        match &st.blocked {
+            Some(crate::dev_update::DevUpdateBlocked::Dirty { overlap }) => {
+                let msg = crate::dev_update::format_overlap_message(overlap, french);
+                body = body.child(
+                    div()
+                        .p(px(8.0))
+                        .rounded(px(tokens.radius_px))
+                        .bg(rgba_with_alpha(tokens.warn, 0.16))
+                        .border_1()
+                        .border_color(tokens.warn)
+                        .text_size(px(11.0))
+                        .text_color(tokens.text_strong)
+                        .child(SharedString::from(msg)),
+                );
+            }
+            Some(crate::dev_update::DevUpdateBlocked::Ahead { count }) => {
+                let msg = if french {
+                    format!(
+                        "Votre branche a {count} commit(s) local/locaux d'avance. Lancez git pull --rebase ou fusionnez manuellement."
+                    )
+                } else {
+                    format!(
+                        "Your branch is {count} commit(s) ahead of upstream. Rebase or merge manually."
+                    )
+                };
+                body = body.child(
+                    div()
+                        .p(px(8.0))
+                        .rounded(px(tokens.radius_px))
+                        .bg(rgba_with_alpha(tokens.warn, 0.16))
+                        .border_1()
+                        .border_color(tokens.warn)
+                        .text_size(px(11.0))
+                        .text_color(tokens.text_strong)
+                        .child(SharedString::from(msg)),
+                );
+            }
+            None => {}
+        }
+    }
+
+    if let Some(notice) = &m.dev_update_notice {
+        body = body.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(tokens.text_dim)
+                .child(SharedString::from(notice.clone())),
+        );
+    }
+
+    let can_ff = m
+        .dev_update_state
+        .as_ref()
+        .is_some_and(|st| st.behind > 0 && st.blocked.is_none())
+        && !m.dev_update_busy;
+
+    let mut actions = div().flex().items_center().justify_end().gap(px(6.0));
+    actions = actions.child(modal_btn(
+        "gpui-dev-upd-copy",
+        if french {
+            "Copier git pull".into()
+        } else {
+            "Copy git pull".into()
+        },
+        false,
+        tokens,
+        GpuiAction::CopyGitPullCommand,
+        cx,
+    ));
+    actions = actions.child(modal_btn(
+        "gpui-dev-upd-check",
+        if french {
+            "Revérifier".into()
+        } else {
+            "Check again".into()
+        },
+        false,
+        tokens,
+        GpuiAction::RefreshDevUpdate,
+        cx,
+    ));
+    if can_ff {
+        actions = actions.child(modal_btn(
+            "gpui-dev-upd-ff",
+            if french {
+                "Avance rapide (fast-forward)".into()
+            } else {
+                "Fast-forward now".into()
+            },
+            true,
+            tokens,
+            GpuiAction::ApplyDevUpdate,
+            cx,
+        ));
+    }
+
+    modal_backdrop(
+        "gpui-dev-update-backdrop",
+        tokens,
+        GpuiAction::ToggleDevUpdateDialog,
+        div()
+            .id("gpui-dev-update-card")
+            .w(px(520.0))
+            .p(px(14.0))
+            .rounded(px(tokens.radius_px + 2.0))
+            .bg(tokens.panel)
+            .border_1()
+            .border_color(tokens.border_strong)
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+            .child(modal_header(
+                title,
+                tokens,
+                GpuiAction::ToggleDevUpdateDialog,
+                cx,
+            ))
+            .child(body)
+            .child(actions)
+            .into_any_element(),
+        cx,
+    )
 }

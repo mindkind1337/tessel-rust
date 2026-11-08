@@ -463,16 +463,131 @@ pub fn managed_account_profile_dir(
     }
 }
 
+fn extract_email_from_jwt_segment(jwt: &str) -> Option<String> {
+    use base64::Engine as _;
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload_b64))
+        .ok()?;
+    let val: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    val.get("email")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| s.contains('@') && !s.is_empty())
+        .map(str::to_owned)
+}
+
+fn extract_provider_email_from_json(val: &serde_json::Value) -> Option<String> {
+    let direct_candidates = [
+        val.get("email"),
+        val.get("emailAddress"),
+        val.get("oauthAccount").and_then(|o| o.get("emailAddress")),
+        val.get("oauthAccount").and_then(|o| o.get("email")),
+        val.get("claudeAiOauth").and_then(|o| o.get("email")),
+        val.get("user").and_then(|o| o.get("email")),
+        val.get("account").and_then(|o| o.get("email")),
+    ];
+    for cand in direct_candidates.into_iter().flatten() {
+        if let Some(s) = cand.as_str().map(str::trim)
+            && s.contains('@')
+            && !s.is_empty()
+        {
+            return Some(s.to_owned());
+        }
+    }
+    if let Some(jwt) = val
+        .get("tokens")
+        .and_then(|t| t.get("id_token"))
+        .and_then(serde_json::Value::as_str)
+        && let Some(email) = extract_email_from_jwt_segment(jwt)
+    {
+        return Some(email);
+    }
+    None
+}
+
+fn probe_email_in_files(paths: &[PathBuf]) -> Option<String> {
+    for path in paths {
+        let Some(raw) = read_bounded_utf8(path, 256 * 1024) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if let Some(email) = extract_provider_email_from_json(&val) {
+            return Some(email);
+        }
+    }
+    None
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub fn probe_system_provider_email(home_dir: &Path, provider: &str) -> Option<String> {
+    match provider {
+        "claude" => probe_email_in_files(&[
+            home_dir.join(".claude.json"),
+            home_dir.join(".claude").join(".credentials.json"),
+        ]),
+        "codex" => probe_email_in_files(&[home_dir.join(".codex").join("auth.json")]),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub fn probe_profile_provider_email(profile_dir: &Path, provider: &str) -> Option<String> {
+    match provider {
+        "claude" => probe_email_in_files(&[
+            profile_dir.join(".claude.json"),
+            profile_dir.join(".credentials.json"),
+        ]),
+        "codex" => probe_email_in_files(&[profile_dir.join("auth.json")]),
+        _ => None,
+    }
+}
+
+/// Returns `true` when the system-default provider account has a known non-empty email and the
+/// currently selected managed account in `roster` carries that exact email (case-insensitive).
+#[allow(dead_code)]
+#[must_use]
+pub fn system_account_covered(system_email: Option<&str>, roster: &ManagedAccountsRoster) -> bool {
+    let Some(sys) = system_email.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let Some(sel_id) = roster.selected_id.as_deref() else {
+        return false;
+    };
+    roster
+        .accounts
+        .iter()
+        .find(|a| a.id == sel_id)
+        .is_some_and(|a| {
+            let acct_email = a.email.trim();
+            !acct_email.is_empty() && acct_email.eq_ignore_ascii_case(sys)
+        })
+}
+
 #[must_use]
 pub fn load_managed_accounts(data_dir: &Path, provider: &str) -> ManagedAccountsRoster {
     let Some(root) = managed_accounts_root(data_dir, provider) else {
         return ManagedAccountsRoster::default();
     };
     let path = root.join("accounts.json");
-    fs::read(&path)
+    let mut roster = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ManagedAccountsRoster>(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for acct in &mut roster.accounts {
+        if acct.email.trim().is_empty()
+            && let Some(profile_dir) = managed_account_profile_dir(data_dir, provider, &acct.id)
+            && let Some(email) = probe_profile_provider_email(&profile_dir, provider)
+        {
+            acct.email = email;
+        }
+    }
+    roster
 }
 
 pub fn save_managed_accounts(
@@ -1766,6 +1881,339 @@ pub fn probe_mcp_stdio(command: &str, args: &[String]) -> Result<String, String>
         Err("Server exited without a JSON-RPC response.".into())
     } else {
         Ok(format!("Server responded ({} bytes)", reply.trim().len()))
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpProbeOutcome {
+    Connected(String),
+    SignsInFromAgent,
+}
+
+impl McpProbeOutcome {
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn signs_in_badge(french: bool) -> &'static str {
+        if french {
+            "Connexion par l'agent"
+        } else {
+            "Signs in from the agent"
+        }
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn signs_in_tooltip(french: bool) -> &'static str {
+        if french {
+            "Le serveur demande une connexion. Le test de Tessel n'a pas de jeton : il ne peut pas savoir si l'agent s'est déjà connecté, chaque agent garde le sien."
+        } else {
+            "The server asks for a sign-in. Tessel's test carries no token, so it cannot tell whether the agent has already signed in: each agent keeps its own."
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn classify_mcp_http_status(name: &str, status: u16) -> Result<McpProbeOutcome, String> {
+    match status {
+        401 | 403 => Ok(McpProbeOutcome::SignsInFromAgent),
+        200..=299 => Ok(McpProbeOutcome::Connected(format!(
+            "{name}: connected (HTTP {status})"
+        ))),
+        _ => Err(format!("{name}: HTTP {status}")),
+    }
+}
+
+/// Bounded HTTP/SSE MCP endpoint probe. Treats HTTP `401` and `403` as [`McpProbeOutcome::SignsInFromAgent`].
+#[allow(dead_code)]
+pub fn probe_mcp_http(name: &str, endpoint: &str) -> Result<McpProbeOutcome, String> {
+    let parsed = url::Url::parse(endpoint).map_err(|_| "Invalid HTTP MCP URL.".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Invalid HTTP MCP URL.".into());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"tessel-rust","version":"0.1.0"}}}"#;
+    let resp = client
+        .post(parsed.clone())
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(init_req)
+        .send()
+        .map_err(|e| format!("{name}: {e}"))?;
+    let code = resp.status().as_u16();
+    if code == 405 {
+        let get_resp = client
+            .get(parsed)
+            .header("Accept", "text/event-stream, application/json")
+            .send()
+            .map_err(|e| format!("{name}: {e}"))?;
+        return classify_mcp_http_status(name, get_resp.status().as_u16());
+    }
+    classify_mcp_http_status(name, code)
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpSignInStep {
+    TerminalCommand(String),
+    CardMessage(String),
+}
+
+#[allow(dead_code)]
+pub fn mcp_agent_sign_in_step(
+    agent_id: &str,
+    agent_label: &str,
+    server_name: &str,
+    french: bool,
+) -> Result<McpSignInStep, String> {
+    if !is_valid_mcp_server_name(server_name) {
+        return Err(if french {
+            "Nom de serveur MCP invalide ([A-Za-z0-9_-], max 64).".into()
+        } else {
+            "Invalid MCP server name ([A-Za-z0-9_-], max 64).".into()
+        });
+    }
+    match agent_id {
+        "codex" => Ok(McpSignInStep::TerminalCommand(format!(
+            "codex mcp login {server_name}"
+        ))),
+        "opencode" => Ok(McpSignInStep::TerminalCommand(format!(
+            "opencode mcp auth {server_name}"
+        ))),
+        "claude" | "claude-project" => Ok(McpSignInStep::CardMessage(if french {
+            format!(
+                "Dans un panneau Claude Code, tapez /mcp, choisissez « {server_name} » puis Authenticate. Votre navigateur s'ouvre pour vous connecter."
+            )
+        } else {
+            format!(
+                "In a Claude Code pane, type /mcp, pick \"{server_name}\" and choose Authenticate. Your browser opens to sign in."
+            )
+        })),
+        "gemini" | "qwen" => {
+            let disp = match agent_id {
+                "gemini" => "Gemini CLI",
+                "qwen" => "Qwen Code",
+                _ => agent_label,
+            };
+            Ok(McpSignInStep::CardMessage(if french {
+                format!(
+                    "Dans un panneau {disp}, tapez /mcp auth {server_name}. Votre navigateur s'ouvre pour vous connecter."
+                )
+            } else {
+                format!(
+                    "In a {disp} pane, type /mcp auth {server_name}. Your browser opens to sign in."
+                )
+            }))
+        }
+        _ => {
+            let disp = if agent_label.trim().is_empty() {
+                agent_id
+            } else {
+                agent_label
+            };
+            Ok(McpSignInStep::CardMessage(if french {
+                format!(
+                    "Connectez-vous à « {server_name} » depuis un panneau {disp} (avec sa propre commande MCP), ou définissez la clé d'API du serveur."
+                )
+            } else {
+                format!(
+                    "Sign in to \"{server_name}\" from a {disp} pane (its own MCP command), or set the server's API key."
+                )
+            }))
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpSignInPlan {
+    pub pane_title: String,
+    pub commands: Vec<String>,
+    pub card_message: Option<String>,
+}
+
+impl McpSignInPlan {
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn chained_command(&self, powershell_style: bool) -> Option<String> {
+        if self.commands.is_empty() {
+            None
+        } else {
+            Some(
+                self.commands
+                    .join(if powershell_style { "; " } else { " && " }),
+            )
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn plan_mcp_sign_in(
+    agents: &[(String, String)],
+    server_name: &str,
+    french: bool,
+) -> Result<McpSignInPlan, String> {
+    if !is_valid_mcp_server_name(server_name) {
+        return Err(if french {
+            "Nom de serveur MCP invalide ([A-Za-z0-9_-], max 64).".into()
+        } else {
+            "Invalid MCP server name ([A-Za-z0-9_-], max 64).".into()
+        });
+    }
+    let mut commands = Vec::new();
+    let mut messages = Vec::new();
+    for (agent_id, agent_label) in agents {
+        match mcp_agent_sign_in_step(agent_id, agent_label, server_name, french)? {
+            McpSignInStep::TerminalCommand(cmd) => {
+                if !commands.contains(&cmd) {
+                    commands.push(cmd);
+                }
+            }
+            McpSignInStep::CardMessage(msg) => {
+                if !messages.contains(&msg) {
+                    messages.push(msg);
+                }
+            }
+        }
+    }
+    Ok(McpSignInPlan {
+        pane_title: if french {
+            format!("Connexion : {server_name}")
+        } else {
+            format!("Sign in: {server_name}")
+        },
+        commands,
+        card_message: (!messages.is_empty()).then(|| messages.join("\n")),
+    })
+}
+
+/// Retires the legacy `google-workspace` MCP server from agents holding `tessel_apps`
+/// once the Tessel Google connector is active (`<data_dir>/tessel-apps/old-google-retired.json`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub struct RetireOldGoogleTracker {
+    prev_connected: Option<bool>,
+    done: std::collections::BTreeSet<String>,
+    refused: std::collections::BTreeSet<String>,
+    loaded_from_disk: bool,
+}
+
+impl RetireOldGoogleTracker {
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn state_file_path(data_dir: &Path) -> PathBuf {
+        data_dir.join("tessel-apps").join("old-google-retired.json")
+    }
+
+    fn load_done_from_disk(&mut self, data_dir: &Path) {
+        let path = Self::state_file_path(data_dir);
+        if let Some(raw) = read_bounded_utf8(&path, 64 * 1024)
+            && let Ok(list) = serde_json::from_str::<Vec<String>>(&raw)
+        {
+            self.done = list.into_iter().collect();
+        }
+        self.loaded_from_disk = true;
+    }
+
+    fn save_done_to_disk(&self, data_dir: &Path) {
+        let path = Self::state_file_path(data_dir);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let vec: Vec<&String> = self.done.iter().collect();
+        if let Ok(bytes) = serde_json::to_vec_pretty(&vec) {
+            let tmp = path.with_extension("json.tmp");
+            if fs::write(&tmp, &bytes).is_ok() {
+                let _ = fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    /// Runs the retirement pass using `remove_fn` (returning `true` if at least one MCP config changed).
+    #[allow(dead_code)]
+    pub fn sync_with_remover<F>(
+        &mut self,
+        data_dir: &Path,
+        google_connected: bool,
+        installed: &[InstalledMcpServer],
+        mut remove_fn: F,
+    ) -> bool
+    where
+        F: FnMut(&Path, &str, &str) -> Result<(), String>,
+    {
+        if !google_connected {
+            self.prev_connected = Some(false);
+            return false;
+        }
+        let just_connected = self.prev_connected == Some(false);
+        self.prev_connected = Some(true);
+        if just_connected {
+            self.refused.clear();
+            self.done.clear();
+        } else if !self.loaded_from_disk {
+            self.load_done_from_disk(data_dir);
+        }
+
+        // Only consider agents that hold `tessel_apps` (e.g. Cursor never holds `tessel_apps`,
+        // so Cursor keeps `google-workspace`).
+        let mut tessel_apps_holders: Vec<(String, PathBuf)> = Vec::new();
+        for srv in installed.iter().filter(|s| s.name == "tessel_apps") {
+            if !tessel_apps_holders
+                .iter()
+                .any(|(id, p)| id == &srv.agent_id && p == &srv.config_path)
+            {
+                tessel_apps_holders.push((srv.agent_id.clone(), srv.config_path.clone()));
+            }
+        }
+
+        let mut removed_any = false;
+        let mut disk_dirty = false;
+        for (agent_id, cfg_path) in tessel_apps_holders {
+            if self.done.contains(&agent_id) || self.refused.contains(&agent_id) {
+                continue;
+            }
+            let has_old_google = installed.iter().any(|s| {
+                s.agent_id == agent_id && s.config_path == cfg_path && s.name == "google-workspace"
+            });
+            if has_old_google {
+                match remove_fn(&cfg_path, &agent_id, "google-workspace") {
+                    Ok(()) => {
+                        self.done.insert(agent_id);
+                        removed_any = true;
+                        disk_dirty = true;
+                    }
+                    Err(_) => {
+                        self.refused.insert(agent_id);
+                    }
+                }
+            } else {
+                self.done.insert(agent_id);
+                disk_dirty = true;
+            }
+        }
+        if disk_dirty {
+            self.save_done_to_disk(data_dir);
+        }
+        removed_any
+    }
+
+    #[allow(dead_code)]
+    pub fn sync(
+        &mut self,
+        data_dir: &Path,
+        google_connected: bool,
+        installed: &[InstalledMcpServer],
+    ) -> bool {
+        self.sync_with_remover(
+            data_dir,
+            google_connected,
+            installed,
+            remove_json_mcp_server,
+        )
     }
 }
 

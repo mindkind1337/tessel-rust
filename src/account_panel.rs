@@ -83,14 +83,15 @@ impl AccountPanel {
     #[allow(dead_code)]
     pub(crate) fn gpui_snapshot(&self) -> AccountGpuiSnapshot {
         let store_open = self.store.is_some();
-        let (signed_in, user_name, user_email) =
+        let (signed_in, user_name, user_email, user_admin) =
             match self.store.as_ref().and_then(|s| s.session.as_ref()) {
                 Some(sess) => (
                     true,
                     sess.user.name.clone().unwrap_or_default(),
                     sess.user.email.clone(),
+                    sess.user.admin,
                 ),
-                None => (false, String::new(), String::new()),
+                None => (false, String::new(), String::new(), false),
             };
         AccountGpuiSnapshot {
             store_open,
@@ -99,6 +100,7 @@ impl AccountPanel {
             busy: self.pending.is_some(),
             user_name,
             user_email,
+            user_admin,
             sync_phrase_len: self.sync_phrase.len(),
             sync_seq: self.sync_meta.as_ref().map(|m| m.seq),
             sync_versions_count: self.sync_versions.len(),
@@ -141,6 +143,20 @@ impl AccountPanel {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn gpui_refresh(&mut self) {
+        self.gpui_open_store();
+        let Some(token) = self
+            .store
+            .as_ref()
+            .and_then(|s| s.session.as_ref())
+            .map(crate::account::Session::bearer)
+        else {
+            return;
+        };
+        self.run(move || Api::production()?.refresh(&token).map(Reply::Refreshed));
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn gpui_sign_out(&mut self) {
         if let Some(store) = &mut self.store {
             match store.clear() {
@@ -175,6 +191,7 @@ pub(crate) struct AccountGpuiSnapshot {
     pub busy: bool,
     pub user_name: String,
     pub user_email: String,
+    pub user_admin: bool,
     pub sync_phrase_len: usize,
     pub sync_seq: Option<u64>,
     pub sync_versions_count: usize,
@@ -342,10 +359,11 @@ impl AccountPanel {
                 self.status = "Sign-in cancelled".into();
             }
         } else if self.store.as_ref().is_some_and(|s| s.session.is_some()) {
-            let (user_id, user_name, user_email, token, account_dir): (
+            let (user_id, user_name, user_email, user_admin, token, account_dir): (
                 String,
                 String,
                 String,
+                bool,
                 _,
                 PathBuf,
             ) = {
@@ -355,6 +373,7 @@ impl AccountPanel {
                     session.user.id.clone(),
                     session.user.name.clone().unwrap_or_default(),
                     session.user.email.clone(),
+                    session.user.admin,
                     session.bearer(),
                     store.directory().to_path_buf(),
                 )
@@ -371,6 +390,19 @@ impl AccountPanel {
                             .refresh(&refresh_tok)
                             .map(Reply::Refreshed)
                     });
+                }
+                if user_admin
+                    && ui
+                        .button("Administration")
+                        .on_hover_text(crate::account::admin_button_tooltip(french))
+                        .clicked()
+                    && webbrowser::open(crate::account::ADMIN_PORTAL_URL).is_err()
+                {
+                    self.status = if french {
+                        "Impossible d'ouvrir le navigateur.".into()
+                    } else {
+                        "Could not open the browser.".into()
+                    };
                 }
                 if ui.button(tr("Sign out")).clicked() {
                     match self.store.as_mut().expect("opened").clear() {

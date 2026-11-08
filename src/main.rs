@@ -51,6 +51,7 @@ mod codex_terminal;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
+pub mod dev_update;
 pub mod device_login;
 pub mod dialogs_toolbar_model;
 pub mod dialogs_toolbar_ui;
@@ -135,6 +136,7 @@ pub mod tasks_board_panel;
 pub mod teams_relay;
 pub mod teams_ui;
 pub mod terminal;
+pub mod terminal_exit;
 mod terminal_layout;
 mod terminal_model;
 #[cfg(windows)]

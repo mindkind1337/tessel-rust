@@ -47,6 +47,9 @@ pub struct AgentsPanel {
     pending_save: Option<(String, crate::agent_preferences::Preferences)>,
 }
 
+#[allow(unused_imports)]
+pub use crate::agent_env::{format_invalid_env_callout, invalid_env_unused_note};
+
 impl AgentsPanel {
     #[cfg(feature = "visual-test")]
     pub fn model_picker_fixture(agent: &str) -> Self {
@@ -215,6 +218,18 @@ impl AgentsPanel {
                                 controls.chevron.id,
                             ]);
                         }
+                        if self.open.as_deref() != Some(preset.id) {
+                            let env_src = self
+                                .drafts
+                                .get(preset.id)
+                                .map_or(row.prefs.env.as_str(), |d| d.env.as_str());
+                            if let Err(error) = crate::agent_env::parse(env_src) {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.colored_label(ui.visuals().error_fg_color, error);
+                                    ui.label(invalid_env_unused_note(input.french));
+                                });
+                            }
+                        }
                         if self.open.as_deref() == Some(preset.id) {
                             egui::Frame::NONE
                                 .fill(ui.visuals().faint_bg_color)
@@ -289,10 +304,7 @@ impl AgentsPanel {
                                     }
                                     if let Err(error) = crate::agent_env::parse(&draft.env) {
                                         ui.colored_label(ui.visuals().error_fg_color, error);
-                                        ui.label(tr(
-                                            "Not used until fixed.",
-                                            "Non utilisées tant que l’erreur n’est pas corrigée.",
-                                        ));
+                                        ui.label(invalid_env_unused_note(input.french));
                                     }
                                     ui.weak(tr(
                                         "Applies to panes you start from now on",

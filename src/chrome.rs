@@ -117,7 +117,12 @@ pub fn regions(room: Rect) -> ToolbarRegions {
     }
 }
 
+#[allow(dead_code)]
 pub fn brand(ui: &egui::Ui, rect: Rect) {
+    brand_with_build(ui, rect, env!("TESSEL_BUILD"));
+}
+
+pub fn brand_with_build(ui: &egui::Ui, rect: Rect, build_label: &str) {
     let logo = Rect::from_center_size(
         egui::pos2(rect.min.x + 8.0, rect.center().y),
         Vec2::splat(16.0),
@@ -131,7 +136,7 @@ pub fn brand(ui: &egui::Ui, rect: Rect) {
         FontId::proportional(12.5),
         ui.visuals().text_color(),
     );
-    let count = env!("TESSEL_BUILD")
+    let count = build_label
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -144,7 +149,7 @@ pub fn brand(ui: &egui::Ui, rect: Rect) {
         ui.visuals().weak_text_color(),
     );
     ui.interact(rect, ui.id().with("brand"), Sense::hover())
-        .on_hover_text(env!("TESSEL_BUILD"));
+        .on_hover_text(build_label);
 }
 
 pub fn command_button(ui: &mut egui::Ui, rect: Rect) -> Response {

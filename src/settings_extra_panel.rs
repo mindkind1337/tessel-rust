@@ -85,6 +85,14 @@ pub enum SettingsExtraAction {
         transport: McpTransport,
         endpoint: String,
     },
+    SignInMcpAgent {
+        name: String,
+        agent_id: String,
+        agent_label: String,
+    },
+    SignInAllMcpServer {
+        name: String,
+    },
     // Connections
     OpenTesselAccountSettings,
     QuickAddProductivityMcp(&'static str),
@@ -189,6 +197,8 @@ pub struct SettingsExtraState {
     pub custom_mcp_env: String,
     pub mcp_error: String,
     pub mcp_test_status: String,
+    pub mcp_probe_outcomes: BTreeMap<String, crate::settings_extra_model::McpProbeOutcome>,
+    pub mcp_card_messages: BTreeMap<String, String>,
     pub automation_draft: Option<AutomationDraft>,
     pub pending_confirm_automation: Option<String>,
     pub automations_status: String,
@@ -269,6 +279,8 @@ fn settings_card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) 
 pub struct AccountsViewInput<'a> {
     pub claude_roster: &'a ManagedAccountsRoster,
     pub codex_roster: &'a ManagedAccountsRoster,
+    pub claude_system_email: Option<&'a str>,
+    pub codex_system_email: Option<&'a str>,
     pub secret_saved_flags: &'a BTreeMap<String, bool>,
     pub cli_sign_ins: &'a CliSignInProbe,
     pub ssh_host_aliases: &'a [String],
@@ -302,6 +314,7 @@ impl SettingsExtraState {
                 "claude",
                 "CLAUDE_CONFIG_DIR",
                 input.claude_roster,
+                input.claude_system_email,
                 &mut self.new_claude_label,
                 fr,
                 &mut action,
@@ -324,6 +337,7 @@ impl SettingsExtraState {
                 "codex",
                 "CODEX_HOME",
                 input.codex_roster,
+                input.codex_system_email,
                 &mut self.new_codex_label,
                 fr,
                 &mut action,
@@ -863,7 +877,21 @@ impl SettingsExtraState {
                         });
                     });
                 } else {
+                    let mut shown_bulk_for = std::collections::HashSet::new();
                     for srv in installed {
+                        let remote_count = if srv.transport == McpTransport::Http {
+                            installed
+                                .iter()
+                                .filter(|s| s.transport == McpTransport::Http && s.name == srv.name)
+                                .count()
+                        } else {
+                            0
+                        };
+                        let show_bulk_here =
+                            remote_count > 1 && shown_bulk_for.insert(srv.name.clone());
+                        let card_key = format!("{}:{}", srv.agent_id, srv.name);
+                        let bulk_key = format!("all:{}", srv.name);
+
                         settings_card(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.strong(&srv.name);
@@ -875,6 +903,26 @@ impl SettingsExtraState {
                                         McpTransport::Http => "http",
                                     }
                                 ));
+                                if self.mcp_probe_outcomes.get(&srv.name)
+                                    == Some(
+                                        &crate::settings_extra_model::McpProbeOutcome::SignsInFromAgent,
+                                    )
+                                {
+                                    ui.label(
+                                        RichText::new(
+                                            crate::settings_extra_model::McpProbeOutcome::signs_in_badge(
+                                                french,
+                                            ),
+                                        )
+                                        .small()
+                                        .color(ui.visuals().warn_fg_color),
+                                    )
+                                    .on_hover_text(
+                                        crate::settings_extra_model::McpProbeOutcome::signs_in_tooltip(
+                                            french,
+                                        ),
+                                    );
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -883,6 +931,7 @@ impl SettingsExtraState {
                                                 .button(if french { "Retirer" } else { "Remove" })
                                                 .clicked()
                                         {
+                                            self.mcp_card_messages.remove(&card_key);
                                             action =
                                                 Some(SettingsExtraAction::RemoveInstalledMcp {
                                                     config_path: srv.config_path.clone(),
@@ -894,10 +943,43 @@ impl SettingsExtraState {
                                             .button(if french { "Tester" } else { "Test" })
                                             .clicked()
                                         {
+                                            self.mcp_card_messages.remove(&card_key);
                                             action = Some(SettingsExtraAction::TestMcpServer {
                                                 name: srv.name.clone(),
                                                 transport: srv.transport,
                                                 endpoint: srv.endpoint_summary.clone(),
+                                            });
+                                        }
+                                        if srv.transport == McpTransport::Http
+                                            && ui
+                                                .button(if french {
+                                                    "Se connecter"
+                                                } else {
+                                                    "Sign in"
+                                                })
+                                                .clicked()
+                                        {
+                                            self.mcp_card_messages.remove(&card_key);
+                                            self.mcp_card_messages.remove(&bulk_key);
+                                            action = Some(SettingsExtraAction::SignInMcpAgent {
+                                                name: srv.name.clone(),
+                                                agent_id: srv.agent_id.clone(),
+                                                agent_label: srv.agent_label.clone(),
+                                            });
+                                        }
+                                        if show_bulk_here
+                                            && ui
+                                                .button(if french {
+                                                    "Tout connecter"
+                                                } else {
+                                                    "Sign in all"
+                                                })
+                                                .clicked()
+                                        {
+                                            self.mcp_card_messages.remove(&card_key);
+                                            self.mcp_card_messages.remove(&bulk_key);
+                                            action = Some(SettingsExtraAction::SignInAllMcpServer {
+                                                name: srv.name.clone(),
                                             });
                                         }
                                     },
@@ -906,6 +988,38 @@ impl SettingsExtraState {
                             ui.small(RichText::new(&srv.endpoint_summary).monospace());
                             if !srv.env_keys.is_empty() {
                                 ui.small(format!("env: {} (masked)", srv.env_keys.join(", ")));
+                            }
+                            for msg_key in [
+                                card_key.as_str(),
+                                if show_bulk_here {
+                                    bulk_key.as_str()
+                                } else {
+                                    ""
+                                },
+                            ] {
+                                if msg_key.is_empty() {
+                                    continue;
+                                }
+                                if let Some(msg) = self.mcp_card_messages.get(msg_key).cloned() {
+                                    let mut dismiss = false;
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.small(&msg);
+                                        if ui
+                                            .small_button("×")
+                                            .on_hover_text(if french {
+                                                "Fermer"
+                                            } else {
+                                                "Dismiss"
+                                            })
+                                            .clicked()
+                                        {
+                                            dismiss = true;
+                                        }
+                                    });
+                                    if dismiss {
+                                        self.mcp_card_messages.remove(msg_key);
+                                    }
+                                }
                             }
                         });
                         ui.add_space(6.0);
@@ -2328,11 +2442,13 @@ impl SettingsExtraState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_managed_roster_card(
     ui: &mut egui::Ui,
     provider: &str,
     env_var_name: &str,
     roster: &ManagedAccountsRoster,
+    system_email: Option<&str>,
     new_label_draft: &mut String,
     french: bool,
     action: &mut Option<SettingsExtraAction>,
@@ -2346,31 +2462,37 @@ fn render_managed_roster_card(
         }
     ));
     ui.add_space(4.0);
-    let sys_selected = roster.selected_id.is_none();
-    if ui
-        .radio(
-            sys_selected,
-            if french {
-                "Par défaut système"
-            } else {
-                "System default"
-            },
-        )
-        .clicked()
-        && !sys_selected
-    {
-        *action = Some(SettingsExtraAction::SelectManagedAccount {
-            provider: provider.to_owned(),
-            account_id: None,
-        });
+    if !crate::settings_extra_model::system_account_covered(system_email, roster) {
+        let sys_selected = roster.selected_id.is_none();
+        let sys_label = match system_email.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(addr) if french => format!("Par défaut système ({addr})"),
+            Some(addr) => format!("System default ({addr})"),
+            None if french => "Par défaut système".to_owned(),
+            None => "System default".to_owned(),
+        };
+        if ui.radio(sys_selected, sys_label).clicked() && !sys_selected {
+            *action = Some(SettingsExtraAction::SelectManagedAccount {
+                provider: provider.to_owned(),
+                account_id: None,
+            });
+        }
     }
     for acct in &roster.accounts {
         let selected = roster.selected_id.as_deref() == Some(acct.id.as_str());
+        let display_label = if acct.email.trim().is_empty() {
+            acct.label.clone()
+        } else {
+            format!("{} ({})", acct.label, acct.email.trim())
+        };
         ui.horizontal(|ui| {
-            if ui.radio(selected, &acct.label).clicked() && !selected {
+            if ui.radio(selected, &display_label).clicked() {
                 *action = Some(SettingsExtraAction::SelectManagedAccount {
                     provider: provider.to_owned(),
-                    account_id: Some(acct.id.clone()),
+                    account_id: if selected {
+                        None
+                    } else {
+                        Some(acct.id.clone())
+                    },
                 });
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
