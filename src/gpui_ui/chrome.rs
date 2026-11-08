@@ -9,7 +9,11 @@ use super::{
         TOOLBAR_BTN_HEIGHT_PX, TOOLBAR_HEIGHT_PX, TOOLBAR_ICON_BTN_WIDTH_PX, rgba_with_alpha,
     },
 };
-use crate::app::gpui_bridge::{GpuiAction, GpuiWorkspaceSnapshot};
+use crate::{
+    app::gpui_bridge::{GpuiAction, GpuiWorkspaceSnapshot},
+    share_panel::ShareGpuiAction,
+    status_strip::StatusBarItemId,
+};
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, WindowControlArea, div,
@@ -104,6 +108,35 @@ pub(crate) fn render_toolbar(
                                 .child(GpuiIcon::Plus.render(12.0, tokens.text_strong))
                                 .child(GpuiIcon::Terminal.render(13.0, tokens.accent))
                                 .child(div().text_color(tokens.text_strong).child(shell_title)),
+                        )
+                        .child(
+                            div()
+                                .id("btn-launch-menu-chevron")
+                                .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                                .px(px(5.0))
+                                .rounded(px(tokens.radius_px))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(if snapshot.modals.launch_menu_open {
+                                    tokens.accent_soft_bg
+                                } else {
+                                    tokens.surface_2
+                                })
+                                .border_1()
+                                .border_color(if snapshot.modals.launch_menu_open {
+                                    tokens.accent
+                                } else {
+                                    tokens.border
+                                })
+                                .cursor_pointer()
+                                .hover(|s| {
+                                    s.bg(tokens.surface_3).border_color(tokens.border_strong)
+                                })
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.dispatch(GpuiAction::ToggleLaunchMenu, cx);
+                                }))
+                                .child(GpuiIcon::ChevronDown.render(12.0, tokens.text)),
                         )
                         .child(
                             div()
@@ -339,8 +372,18 @@ pub(crate) fn render_toolbar(
                         })
                         .cursor_pointer()
                         .hover(|s| s.bg(tokens.surface_2))
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::OpenLiveShare, cx);
+                        .on_click(cx.listener({
+                            let share_active = tb.share_active;
+                            move |root, _, _, cx| {
+                                if share_active {
+                                    root.dispatch(
+                                        GpuiAction::Share(ShareGpuiAction::TogglePillPopover),
+                                        cx,
+                                    );
+                                } else {
+                                    root.dispatch(GpuiAction::OpenLiveShare, cx);
+                                }
+                            }
                         }))
                         .child(GpuiIcon::Share2.render(
                             13.0,
@@ -350,58 +393,124 @@ pub(crate) fn render_toolbar(
                                 tokens.text_dim
                             },
                         ))
-                        .child(div().text_color(tokens.text).child(share_label)),
+                        .child(div().text_color(tokens.text).child(
+                            if let Some(pill) = &tb.share_pill_label {
+                                SharedString::from(pill.clone())
+                            } else {
+                                SharedString::new_static(share_label)
+                            },
+                        )),
                 )
                 .when(tb.has_active_project, |el| {
                     el.child(toolbar_icon_btn(
                         "btn-github-dialog",
                         GpuiIcon::Github,
-                        false,
+                        snapshot.modals.github_open,
                         tokens,
                         GpuiAction::OpenGitHubDialog,
                         cx,
                     ))
                 })
                 .when(tb.waiting_agents_count > 0, |el| {
-                    let count_str = SharedString::from(tb.waiting_agents_count.to_string());
+                    let first_waiting = tb.first_waiting_pane;
+                    let req_label = if french {
+                        format!("Demande agent ({})", tb.waiting_agents_count)
+                    } else {
+                        format!("Agent request ({})", tb.waiting_agents_count)
+                    };
                     el.child(
                         div()
                             .id("pill-waiting-agents")
                             .h(px(TOOLBAR_BTN_HEIGHT_PX))
-                            .px(px(7.0))
+                            .px(px(8.0))
                             .rounded(px(tokens.radius_px))
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
+                            .gap(px(5.0))
                             .bg(rgba_with_alpha(tokens.warn, 0.18))
                             .border_1()
                             .border_color(tokens.warn)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgba_with_alpha(tokens.warn, 0.28)))
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                if let Some(pid) = first_waiting {
+                                    root.dispatch(GpuiAction::FocusSession(pid), cx);
+                                }
+                            }))
                             .child(GpuiIcon::Activity.render(12.5, tokens.warn))
-                            .child(div().text_color(tokens.warn).child(count_str)),
-                    )
-                })
-                .when(tb.unread_notifications > 0, |el| {
-                    let notif_str = SharedString::from(tb.unread_notifications.to_string());
-                    el.child(
-                        div()
-                            .id("pill-notifications")
-                            .h(px(TOOLBAR_BTN_HEIGHT_PX))
-                            .px(px(7.0))
-                            .rounded(px(tokens.radius_px))
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .bg(tokens.accent_soft_bg)
-                            .border_1()
-                            .border_color(tokens.accent)
-                            .child(GpuiIcon::Bell.render(12.5, tokens.accent))
-                            .child(div().text_color(tokens.text_strong).child(notif_str)),
+                            .child(
+                                div()
+                                    .text_color(tokens.warn)
+                                    .child(SharedString::from(req_label)),
+                            ),
                     )
                 })
                 .child(toolbar_icon_btn(
+                    "btn-usage-popover",
+                    GpuiIcon::Gauge,
+                    snapshot.modals.usage_popover_open,
+                    tokens,
+                    GpuiAction::ToggleUsagePopover,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .id("pill-notifications")
+                        .relative()
+                        .h(px(TOOLBAR_BTN_HEIGHT_PX))
+                        .min_w(px(TOOLBAR_ICON_BTN_WIDTH_PX))
+                        .px(px(if tb.unread_notifications > 0 {
+                            7.0
+                        } else {
+                            0.0
+                        }))
+                        .rounded(px(tokens.radius_px))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(4.0))
+                        .bg(
+                            if snapshot.modals.notifications_popover_open
+                                || tb.unread_notifications > 0
+                            {
+                                tokens.accent_soft_bg
+                            } else {
+                                gpui::rgba(0x0000_0000)
+                            },
+                        )
+                        .when(
+                            snapshot.modals.notifications_popover_open
+                                || tb.unread_notifications > 0,
+                            |el| el.border_1().border_color(tokens.accent),
+                        )
+                        .cursor_pointer()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.dispatch(GpuiAction::ToggleNotificationsPopover, cx);
+                        }))
+                        .child(GpuiIcon::Bell.render(
+                            14.0,
+                            if snapshot.modals.notifications_popover_open
+                                || tb.unread_notifications > 0
+                            {
+                                tokens.accent
+                            } else {
+                                tokens.text_dim
+                            },
+                        ))
+                        .when(tb.unread_notifications > 0, |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(tokens.text_strong)
+                                    .child(SharedString::from(tb.unread_notifications.to_string())),
+                            )
+                        }),
+                )
+                .child(toolbar_icon_btn(
                     "btn-help",
                     GpuiIcon::HelpCircle,
-                    false,
+                    snapshot.modals.help_open,
                     tokens,
                     GpuiAction::OpenHelp,
                     cx,
@@ -409,7 +518,7 @@ pub(crate) fn render_toolbar(
                 .child(toolbar_icon_btn(
                     "btn-settings",
                     GpuiIcon::Settings,
-                    false,
+                    snapshot.settings.is_some(),
                     tokens,
                     GpuiAction::OpenSettings,
                     cx,
@@ -759,22 +868,90 @@ pub(crate) fn render_status_bar(
                             .child(GpuiIcon::Terminal.render(11.5, tokens.text_dim))
                             .child(SharedString::from(sessions_label)),
                     )
-                    .when(sb.ssh_host_count > 0, |el| {
-                        el.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .child(GpuiIcon::Server.render(11.5, tokens.text_dim))
-                                .child(SharedString::from(format!("SSH: {}", sb.ssh_host_count))),
-                        )
-                    }),
+                    .child(
+                        div()
+                            .id("status-ssh-pill")
+                            .px(px(5.0))
+                            .py(px(1.0))
+                            .rounded(px(4.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .bg(
+                                if snapshot.modals.status_popover == Some(StatusBarItemId::Ssh) {
+                                    tokens.accent_soft_bg
+                                } else {
+                                    gpui::rgba(0x0000_0000)
+                                },
+                            )
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens.surface_2))
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::ToggleStatusPopover(StatusBarItemId::Ssh),
+                                    cx,
+                                );
+                            }))
+                            .child(GpuiIcon::Server.render(11.5, tokens.text_dim))
+                            .child(SharedString::from(format!("SSH ({})", sb.ssh_host_count))),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.0))
+                    .child(
+                        div()
+                            .id("status-ports-pill")
+                            .px(px(5.0))
+                            .py(px(1.0))
+                            .rounded(px(4.0))
+                            .bg(
+                                if snapshot.modals.status_popover == Some(StatusBarItemId::Ports) {
+                                    tokens.accent_soft_bg
+                                } else {
+                                    gpui::rgba(0x0000_0000)
+                                },
+                            )
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens.surface_2))
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::ToggleStatusPopover(StatusBarItemId::Ports),
+                                    cx,
+                                );
+                            }))
+                            .child(SharedString::from(format!(
+                                "Ports: {}",
+                                sb.listening_ports_count
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .id("status-resources-pill")
+                            .px(px(5.0))
+                            .py(px(1.0))
+                            .rounded(px(4.0))
+                            .bg(
+                                if snapshot.modals.status_popover
+                                    == Some(StatusBarItemId::Resources)
+                                {
+                                    tokens.accent_soft_bg
+                                } else {
+                                    gpui::rgba(0x0000_0000)
+                                },
+                            )
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens.surface_2))
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::ToggleStatusPopover(StatusBarItemId::Resources),
+                                    cx,
+                                );
+                            }))
+                            .child(SharedString::from(format!("{} MB", sb.app_rss_mb))),
+                    )
                     .child(
                         div()
                             .id("status-renderer-pill")

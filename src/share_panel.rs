@@ -3094,3 +3094,391 @@ fn share_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> egui::Response {
     );
     resp.on_hover_text(tooltip)
 }
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ShareGpuiInviteRow {
+    pub id: String,
+    pub label: String,
+    pub token_url: String,
+    pub uses: u32,
+    pub max_uses: u32,
+    pub status: InviteStatus,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ShareGpuiGuestRow {
+    pub id: String,
+    pub name: String,
+    pub initials: String,
+    pub joined: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ShareGpuiAskModal {
+    pub ask_key: String,
+    pub guest_name: String,
+    pub sas_code: String,
+    pub code_checked: bool,
+    pub trust_next_time: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ShareGpuiSnapshot {
+    pub tab: DialogTab,
+    pub host_sub_tab: HostSubTab,
+    pub hosting: bool,
+    pub host_name: String,
+    pub bind_address: String,
+    pub selected_projects: Vec<u64>,
+    pub pill_popover_open: bool,
+    pub pill_label: Option<String>,
+    pub waiting_asks_count: usize,
+    pub join_code: String,
+    pub guest_name: String,
+    pub guest_status: Option<String>,
+    pub guest_active: bool,
+    pub follow_host: bool,
+    pub require_knock: bool,
+    pub invites: Vec<ShareGpuiInviteRow>,
+    pub guests: Vec<ShareGpuiGuestRow>,
+    pub pending_ask: Option<ShareGpuiAskModal>,
+    pub error: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) enum ShareGpuiAction {
+    SetTab(DialogTab),
+    SetHostSubTab(HostSubTab),
+    ToggleProject(u64),
+    SetHostName(String),
+    SetBindAddress(String),
+    ToggleRequireKnock,
+    StartHosting,
+    StopHosting,
+    CreateInvite,
+    RevokeInvite(String),
+    KickGuest(String),
+    SetJoinCode(String),
+    SetGuestName(String),
+    JoinSession,
+    DisconnectGuest,
+    ToggleFollowHost,
+    TogglePillPopover,
+    ClosePillPopover,
+    ToggleAskCodeChecked,
+    ToggleAskTrustNext,
+    AnswerAsk { ask_key: String, allow: bool },
+}
+
+#[allow(dead_code)]
+impl SharePanel {
+    pub(crate) fn gpui_snapshot(&self, french: bool) -> ShareGpuiSnapshot {
+        let host_snap = self.host.as_ref().map(Host::snapshot);
+        let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
+        let mut invites = Vec::new();
+        let mut guests = Vec::new();
+        let mut pending_ask = None;
+        let mut waiting_asks_count = 0usize;
+        let mut pill_label = None;
+
+        if let Some(snap) = &host_snap {
+            let now_ms = now_epoch_ms();
+            let joined_n = snap
+                .guests
+                .iter()
+                .filter(|g| g.state == GuestConnectionState::Joined)
+                .count();
+            waiting_asks_count = snap.asks.len();
+            pill_label = Some(if french {
+                format!("En direct · {joined_n}")
+            } else {
+                format!("Live · {joined_n}")
+            });
+            for inv in &snap.invites {
+                let token_url = inv.code.clone();
+                invites.push(ShareGpuiInviteRow {
+                    id: inv.id.clone(),
+                    label: if inv.label.trim().is_empty() {
+                        if french {
+                            "Invitation".into()
+                        } else {
+                            "Invite link".into()
+                        }
+                    } else {
+                        inv.label.clone()
+                    },
+                    token_url,
+                    uses: inv.uses,
+                    max_uses: inv.max_uses,
+                    status: inv.status(now_ms),
+                });
+            }
+            for g in &snap.guests {
+                guests.push(ShareGpuiGuestRow {
+                    id: g.id.clone(),
+                    name: g.name.clone(),
+                    initials: initials(&g.name),
+                    joined: g.state == GuestConnectionState::Joined,
+                });
+            }
+            if let Some(first_ask) = snap.asks.first() {
+                let code_checked = self.ask_draft.as_ref().is_some_and(|d| d.code_checked);
+                let trust_next_time = self.ask_draft.as_ref().is_some_and(|d| d.trust_next_time);
+                let (ask_key, guest_name, sas_code) = match first_ask {
+                    LiveShareAsk::Join {
+                        key, name, code, ..
+                    } => (key.clone(), name.clone(), code.clone()),
+                    LiveShareAsk::Open { key, name, .. } => {
+                        (key.clone(), name.clone(), String::new())
+                    }
+                    LiveShareAsk::Close { key, name, .. } => {
+                        (key.clone(), name.clone(), String::new())
+                    }
+                };
+                pending_ask = Some(ShareGpuiAskModal {
+                    ask_key,
+                    guest_name,
+                    sas_code,
+                    code_checked,
+                    trust_next_time,
+                });
+            }
+        }
+
+        let mut guest_status = None;
+        let mut guest_active = false;
+        if let Some(gs) = &guest_snap {
+            match &gs.phase {
+                GuestPhase::Connecting => {
+                    guest_active = true;
+                    let s = if french {
+                        "Connexion…".to_owned()
+                    } else {
+                        "Connecting…".to_owned()
+                    };
+                    if pill_label.is_none() {
+                        pill_label = Some(s.clone());
+                    }
+                    guest_status = Some(s);
+                }
+                GuestPhase::WaitingForHost { sas_code, .. } => {
+                    guest_active = true;
+                    let s = if french {
+                        format!("En attente de l'hôte · Code SAS : {sas_code}")
+                    } else {
+                        format!("Waiting for host · SAS code: {sas_code}")
+                    };
+                    if pill_label.is_none() {
+                        pill_label = Some(if french {
+                            "En attente…".into()
+                        } else {
+                            "Waiting for host…".into()
+                        });
+                    }
+                    guest_status = Some(s);
+                }
+                GuestPhase::Joined { host_name, .. } => {
+                    guest_active = true;
+                    let s = if french {
+                        format!("En direct avec {host_name}")
+                    } else {
+                        format!("Live with {host_name}")
+                    };
+                    if pill_label.is_none() {
+                        pill_label = Some(s.clone());
+                    }
+                    guest_status = Some(s);
+                }
+                GuestPhase::Ended { .. } => {
+                    guest_status = ended_banner(&gs.phase, french).map(|b| b.text);
+                }
+            }
+        }
+
+        ShareGpuiSnapshot {
+            tab: self.tab,
+            host_sub_tab: self.host_sub_tab,
+            hosting: self.hosting(),
+            host_name: self.host_name.clone(),
+            bind_address: self.bind_address.clone(),
+            selected_projects: self.selected_projects.clone(),
+            pill_popover_open: self.pill_popover_open,
+            pill_label,
+            waiting_asks_count,
+            join_code: self.join_code.clone(),
+            guest_name: self.guest_name.clone(),
+            guest_status,
+            guest_active,
+            follow_host: self.follow_host,
+            require_knock: self.settings.hide_ignored,
+            invites,
+            guests,
+            pending_ask,
+            error: self.error.clone(),
+        }
+    }
+
+    pub(crate) fn apply_gpui_share_action(
+        &mut self,
+        action: ShareGpuiAction,
+        all_projects: &[SharedProject],
+    ) {
+        match action {
+            ShareGpuiAction::SetTab(t) => self.tab = t,
+            ShareGpuiAction::SetHostSubTab(st) => self.host_sub_tab = st,
+            ShareGpuiAction::ToggleProject(pid) => {
+                if self.selected_projects.contains(&pid) {
+                    if self.selected_projects.len() > 1 {
+                        self.selected_projects.retain(|&id| id != pid);
+                    }
+                } else {
+                    self.selected_projects.push(pid);
+                }
+            }
+            ShareGpuiAction::SetHostName(n) => self.host_name = n,
+            ShareGpuiAction::SetBindAddress(b) => self.bind_address = b,
+            ShareGpuiAction::ToggleRequireKnock => {
+                self.settings.hide_ignored = !self.settings.hide_ignored;
+                if let Some(host) = &self.host {
+                    host.set_hide_ignored(self.settings.hide_ignored);
+                }
+            }
+            ShareGpuiAction::StartHosting => {
+                if self.selected_projects.is_empty() {
+                    self.selected_projects = all_projects.iter().map(|p| p.id).collect();
+                }
+                self.start_hosting_with(all_projects);
+            }
+            ShareGpuiAction::StopHosting => self.stop_hosting(),
+            ShareGpuiAction::CreateInvite => {
+                if let Some(host) = &self.host {
+                    let ids: Vec<u64> = if self.selected_projects.is_empty() {
+                        all_projects.iter().map(|p| p.id).collect()
+                    } else {
+                        self.selected_projects.clone()
+                    };
+                    let spec = self.pre_share_invite.to_spec(&ids);
+                    if let Err(e) = host.create_invite(spec) {
+                        self.error = e;
+                    }
+                }
+            }
+            ShareGpuiAction::RevokeInvite(inv_id) => {
+                if let Some(host) = &self.host
+                    && let Err(e) = host.revoke_invite(&inv_id, false)
+                {
+                    self.error = e;
+                }
+            }
+            ShareGpuiAction::KickGuest(gid) => {
+                if let Some(host) = &self.host {
+                    host.remove_guest(&gid, false);
+                }
+            }
+            ShareGpuiAction::SetJoinCode(code) => self.join_code = code,
+            ShareGpuiAction::SetGuestName(name) => self.guest_name = name,
+            ShareGpuiAction::JoinSession => match Invitation::decode(self.join_code.trim()) {
+                Ok(inv) => {
+                    let gs = GuestSession::connect(
+                        inv,
+                        self.guest_name.clone(),
+                        self.guest_identity_hex.clone(),
+                    );
+                    self.guest_session = Some(gs);
+                    self.join_code.clear();
+                    self.error.clear();
+                }
+                Err(e) => self.error = e,
+            },
+            ShareGpuiAction::DisconnectGuest => {
+                self.guest_session = None;
+            }
+            ShareGpuiAction::ToggleFollowHost => {
+                self.follow_host = !self.follow_host;
+            }
+            ShareGpuiAction::TogglePillPopover => {
+                self.pill_popover_open = !self.pill_popover_open;
+            }
+            ShareGpuiAction::ClosePillPopover => {
+                self.close_pill_popover();
+            }
+            ShareGpuiAction::ToggleAskCodeChecked => {
+                let draft = self.ask_draft.get_or_insert_with(|| AskDraftState {
+                    key: String::new(),
+                    projects_sig: Vec::new(),
+                    opened_instant: Instant::now()
+                        .checked_sub(ASK_ARM_DELAY)
+                        .unwrap_or_else(Instant::now),
+                    opened_egui_time: 0.0,
+                    code_checked: false,
+                    trust_next_time: false,
+                    always_open: false,
+                    trust_nudge: false,
+                    selected_projects: self.selected_projects.clone(),
+                    rights: ShareRights::view_only(),
+                });
+                draft.code_checked = !draft.code_checked;
+            }
+            ShareGpuiAction::ToggleAskTrustNext => {
+                let draft = self.ask_draft.get_or_insert_with(|| AskDraftState {
+                    key: String::new(),
+                    projects_sig: Vec::new(),
+                    opened_instant: Instant::now()
+                        .checked_sub(ASK_ARM_DELAY)
+                        .unwrap_or_else(Instant::now),
+                    opened_egui_time: 0.0,
+                    code_checked: false,
+                    trust_next_time: false,
+                    always_open: false,
+                    trust_nudge: false,
+                    selected_projects: self.selected_projects.clone(),
+                    rights: ShareRights::view_only(),
+                });
+                draft.trust_next_time = !draft.trust_next_time;
+            }
+            ShareGpuiAction::AnswerAsk { ask_key, allow } => {
+                if let Some(host) = &self.host {
+                    let trust = self
+                        .ask_draft
+                        .as_ref()
+                        .is_some_and(|d| d.code_checked && d.trust_next_time);
+                    let projects = if self.selected_projects.is_empty() {
+                        all_projects.iter().map(|p| p.id).collect()
+                    } else {
+                        self.selected_projects.clone()
+                    };
+                    let snap = host.snapshot();
+                    let answer = match snap.asks.iter().find(|a| match a {
+                        LiveShareAsk::Join { key, .. }
+                        | LiveShareAsk::Open { key, .. }
+                        | LiveShareAsk::Close { key, .. } => key == &ask_key,
+                    }) {
+                        Some(LiveShareAsk::Open { .. }) => AskAnswer::Open {
+                            key: ask_key,
+                            allow,
+                            always: false,
+                        },
+                        Some(LiveShareAsk::Close { .. }) => AskAnswer::Close {
+                            key: ask_key,
+                            allow,
+                        },
+                        Some(LiveShareAsk::Join { .. }) | None => AskAnswer::Join {
+                            key: ask_key,
+                            allow,
+                            projects: if allow { projects } else { Vec::new() },
+                            rights: ShareRights::view_only(),
+                            trust: allow && trust,
+                        },
+                    };
+                    host.answer_ask(answer);
+                    self.ask_draft = None;
+                }
+            }
+        }
+    }
+}

@@ -542,6 +542,7 @@ pub struct Tessel {
     past_sessions_cache: Vec<crate::side_panels_model::SessionHistoryEntry>,
     scm_commits_cache: Vec<crate::side_panels_model::CommitHistoryRow>,
     scm_commits_project: Option<u64>,
+    pub(crate) gpui_extra: crate::app::gpui_bridge::GpuiExtraUiState,
     #[cfg(windows)]
     browser_tab_open: bool,
     #[cfg(windows)]
@@ -752,6 +753,7 @@ impl Tessel {
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
             scm_commits_project: None,
+            gpui_extra: Default::default(),
             #[cfg(windows)]
             browser_tab_open: false,
             #[cfg(windows)]
@@ -2698,11 +2700,62 @@ impl Tessel {
         }
     }
 
+    pub(crate) fn current_settings_page_id(&self) -> &'static str {
+        match self.settings_section {
+            SettingsSection::Agents => "agents",
+            SettingsSection::Accounts => "accounts",
+            SettingsSection::Skills => "skills",
+            SettingsSection::Mcp => "mcp",
+            SettingsSection::Connections => "connections",
+            SettingsSection::Context => "context",
+            SettingsSection::Orchestration => "orchestration",
+            #[cfg(windows)]
+            SettingsSection::Account => "tessel-account",
+            SettingsSection::General => "general",
+            SettingsSection::Appearance => "appearance",
+            SettingsSection::Terminal => "terminal",
+            SettingsSection::Editor => "editor",
+            SettingsSection::Browser => "browser",
+            SettingsSection::Alerts => "alerts",
+            SettingsSection::Voice => "voice",
+            #[cfg(windows)]
+            SettingsSection::Passwords => "passwords",
+            SettingsSection::Git => "git",
+            SettingsSection::Devtools => "devtools",
+            SettingsSection::Automations => "automations",
+            SettingsSection::QuickCommands => "quick-commands",
+            SettingsSection::Hosts => "ssh",
+            SettingsSection::Stats => "stats",
+            SettingsSection::Updates => "updates",
+        }
+    }
+
     fn show_command_palette(&mut self, ctx: &egui::Context) {
         if !self.command_palette.open {
             self.command_palette_focused = false;
             return;
         }
+        let current_theme = crate::theme::active(ctx);
+        let commands = self.build_palette_commands(current_theme);
+        let selected = crate::command_palette_panel::show(
+            ctx,
+            &mut self.command_palette,
+            &mut self.command_palette_focused,
+            &commands,
+        );
+        if let Some(id) = selected {
+            self.command_palette.close();
+            self.execute_palette_command(ctx, &id);
+        }
+        if !self.command_palette.open {
+            self.command_palette_focused = false;
+        }
+    }
+
+    pub(crate) fn build_palette_commands(
+        &self,
+        current_theme: crate::theme_palettes::ThemeId,
+    ) -> Vec<crate::palette::PaletteCommand> {
         use crate::palette::PaletteCommand;
         let french = self.state.language == crate::i18n::Language::French;
         let mut commands: Vec<PaletteCommand> = Vec::new();
@@ -3068,7 +3121,6 @@ impl Tessel {
 
         // 6. Theme
         let theme_group = tr("Theme");
-        let current_theme = crate::theme::active(ctx);
         for theme_id in &crate::theme_palettes::THEMES {
             let cmd = PaletteCommand::new(
                 format!("theme:{}", theme_id.as_str()),
@@ -3183,263 +3235,247 @@ impl Tessel {
             .with_hint(document.path.display().to_string())
         }));
 
-        let selected = crate::command_palette_panel::show(
-            ctx,
-            &mut self.command_palette,
-            &mut self.command_palette_focused,
-            &commands,
-        );
-        if let Some(id) = selected {
-            self.command_palette.close();
-            match id.as_str() {
-                "new:default" => {
-                    let launch = self.default_new_launch();
-                    self.new_session(launch);
+        commands
+    }
+
+    pub(crate) fn execute_palette_command(&mut self, ctx: &egui::Context, id: &str) {
+        let active_pane_id = self.active_project_work_pane();
+        let layout_key = crate::terminal_layout::project_key(self.state.active_project);
+        match id {
+            "new:default" => {
+                let launch = self.default_new_launch();
+                self.new_session(launch);
+            }
+            "terminal" => self.new_session(Launch::Shell),
+            "floating" => self.toggle_floating(ctx),
+            "launcher" => self.open_launcher(),
+            "chat" => self.new_session(Launch::CodexChat),
+            "claude-chat" => self.new_session(Launch::ClaudeChat),
+            "project:new" => self.open_add_project_modal(),
+            "project:add" => self.open_add_project_modal(),
+            "github" => self.open_github_modal(self.state.active_project),
+            "notifications:clear" => self.notifications.clear(),
+            "worktree:new" => {
+                if let Some(pid) = self.state.active_project {
+                    self.start_new_worktree_pane(
+                        pid,
+                        "worktree",
+                        crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
+                    );
                 }
-                "terminal" => self.new_session(Launch::Shell),
-                "floating" => self.toggle_floating(ctx),
-                "launcher" => self.open_launcher(),
-                "chat" => self.new_session(Launch::CodexChat),
-                "claude-chat" => self.new_session(Launch::ClaudeChat),
-                "project:new" => self.open_add_project_modal(),
-                "project:add" => self.open_add_project_modal(),
-                "github" => self.open_github_modal(self.state.active_project),
-                "notifications:clear" => self.notifications.clear(),
-                "worktree:new" => {
-                    if let Some(pid) = self.state.active_project {
-                        self.start_new_worktree_pane(
-                            pid,
-                            "worktree",
-                            crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
-                        );
-                    }
+            }
+            "worktree:cleanup" => {
+                if let Some(pid) = self.state.active_project {
+                    self.open_worktree_cleanup(pid);
                 }
-                "worktree:cleanup" => {
-                    if let Some(pid) = self.state.active_project {
-                        self.open_worktree_cleanup(pid);
-                    }
-                }
-                "project:prev" => self.cycle_workspace(-1),
-                "project:next" => self.cycle_workspace(1),
-                "finder" => self.open_finder(),
-                "dashboard" => self.state.panels.toggle_right(RightTab::Dashboard),
-                "files" => self.state.panels.toggle_right(RightTab::Files),
-                "changes" => self.state.panels.toggle_right(RightTab::Changes),
-                "tasks" => self.state.panels.toggle_right(RightTab::Tasks),
-                "task_history" => self.state.panels.toggle_right(RightTab::TaskHistory),
-                "history" => {
-                    self.refresh_past_sessions();
-                    self.state.panels.toggle_right(RightTab::History);
-                }
-                "sessions:modal" => {
-                    self.refresh_past_sessions();
-                    self.side_panels_ui.sessions_modal_open = true;
-                }
-                "conversations" => self.state.panels.toggle_right(RightTab::Conversations),
-                "notes" => self.open_notes_modal(),
-                "review" => self.open_review_modal(),
-                "task:new" => {
-                    self.state.panels.right_open = true;
-                    self.state.panels.right_tab = RightTab::Tasks;
-                    self.tasks_board.focus_input(ctx);
-                }
-                "settings" => self.overlay = Some(Overlay::Settings),
-                "help" => self.open_help(),
-                "remote" => self.view = View::Remote,
-                "share" => {
-                    self.share.tab = crate::share_panel::DialogTab::Share;
-                    self.overlay = Some(Overlay::Share);
-                }
-                "share:join" => {
-                    self.share.tab = crate::share_panel::DialogTab::Join;
-                    self.overlay = Some(Overlay::Share);
-                }
-                "broadcast" => {
-                    self.state.broadcast = !self.state.broadcast;
+            }
+            "project:prev" => self.cycle_workspace(-1),
+            "project:next" => self.cycle_workspace(1),
+            "finder" => self.open_finder(),
+            "dashboard" => self.state.panels.toggle_right(RightTab::Dashboard),
+            "files" => self.state.panels.toggle_right(RightTab::Files),
+            "changes" => self.state.panels.toggle_right(RightTab::Changes),
+            "tasks" => self.state.panels.toggle_right(RightTab::Tasks),
+            "task_history" => self.state.panels.toggle_right(RightTab::TaskHistory),
+            "history" => {
+                self.refresh_past_sessions();
+                self.state.panels.toggle_right(RightTab::History);
+            }
+            "sessions:modal" => {
+                self.refresh_past_sessions();
+                self.side_panels_ui.sessions_modal_open = true;
+            }
+            "conversations" => self.state.panels.toggle_right(RightTab::Conversations),
+            "notes" => self.open_notes_modal(),
+            "review" => self.open_review_modal(),
+            "task:new" => {
+                self.state.panels.right_open = true;
+                self.state.panels.right_tab = RightTab::Tasks;
+                self.tasks_board.focus_input(ctx);
+            }
+            "settings" => self.overlay = Some(Overlay::Settings),
+            "help" => self.open_help(),
+            "remote" => self.view = View::Remote,
+            "share" => {
+                self.share.tab = crate::share_panel::DialogTab::Share;
+                self.overlay = Some(Overlay::Share);
+            }
+            "share:join" => {
+                self.share.tab = crate::share_panel::DialogTab::Join;
+                self.overlay = Some(Overlay::Share);
+            }
+            "broadcast" => {
+                self.state.broadcast = !self.state.broadcast;
+                self.save();
+            }
+            "zoom:in" => self.zoom_font(1),
+            "zoom:out" => self.zoom_font(-1),
+            "zoom:reset" => self.zoom_font(0),
+            "layout:maximize" => {
+                if let Some(active_id) = active_pane_id {
+                    let layout = self.state.terminal_layouts.entry(layout_key).or_default();
+                    layout.maximized = if layout.maximized == Some(active_id) {
+                        None
+                    } else {
+                        Some(active_id)
+                    };
+                    self.grid_dirty = true;
                     self.save();
                 }
-                "zoom:in" => self.zoom_font(1),
-                "zoom:out" => self.zoom_font(-1),
-                "zoom:reset" => self.zoom_font(0),
-                "layout:maximize" => {
-                    if let Some(active_id) = active_pane_id {
-                        let layout = self.state.terminal_layouts.entry(layout_key).or_default();
-                        layout.maximized = if layout.maximized == Some(active_id) {
-                            None
-                        } else {
-                            Some(active_id)
-                        };
-                        self.grid_dirty = true;
-                        self.save();
-                    }
+            }
+            "layout:restart-active" => {
+                if let Some(active_id) = active_pane_id
+                    && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
+                {
+                    let prefs = match &session.launch {
+                        Launch::Agent(agent) => Some(crate::agent_preferences::for_pane_launch(
+                            &self.state,
+                            agent,
+                            self.model_discovery.as_ref().and_then(|d| d.models(agent)),
+                            session.session_options.as_ref(),
+                        )),
+                        _ => None,
+                    };
+                    session.restart(prefs);
                 }
-                "layout:restart-active" => {
-                    if let Some(active_id) = active_pane_id
-                        && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
-                    {
-                        let prefs = match &session.launch {
-                            Launch::Agent(agent) => {
-                                Some(crate::agent_preferences::for_pane_launch(
-                                    &self.state,
-                                    agent,
-                                    self.model_discovery.as_ref().and_then(|d| d.models(agent)),
-                                    session.session_options.as_ref(),
-                                ))
-                            }
-                            _ => None,
-                        };
-                        session.restart(prefs);
-                    }
+            }
+            "layout:reset-terminal" => {
+                if let Some(active_id) = active_pane_id
+                    && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
+                    && let Some(terminal) = &mut session.terminal
+                {
+                    terminal.reset_modes();
                 }
-                "layout:reset-terminal" => {
-                    if let Some(active_id) = active_pane_id
-                        && let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id)
-                        && let Some(terminal) = &mut session.terminal
-                    {
-                        terminal.reset_modes();
-                    }
+            }
+            "layout:toggle-left" => {
+                self.state.panels.left_open = !self.state.panels.left_open;
+            }
+            "layout:toggle-right" => {
+                self.state.panels.right_open = !self.state.panels.right_open;
+            }
+            "layout:toggle-status-bar" => {
+                self.state.status_bar.visible = !self.state.status_bar.visible;
+                self.save();
+            }
+            "layout:split-right" => {
+                self.apply_layout_action(crate::layout_broadcast_ui::LayoutMenuAction::SplitRight);
+            }
+            "layout:split-down" => {
+                self.apply_layout_action(crate::layout_broadcast_ui::LayoutMenuAction::SplitDown);
+            }
+            "layout:arrange" => {
+                self.apply_layout_action(crate::layout_broadcast_ui::LayoutMenuAction::ArrangeGrid);
+            }
+            "layout:close-active" => {
+                self.apply_layout_action(crate::layout_broadcast_ui::LayoutMenuAction::CloseActive);
+            }
+            id_str if id_str.starts_with("layout:preset:") => {
+                if let Some(preset) = crate::pane_grid::GridPreset::ALL.into_iter().find(|p| {
+                    format!(
+                        "layout:preset:{}",
+                        crate::layout_broadcast_ui::preset_display_label(*p)
+                    ) == id_str
+                }) {
+                    self.apply_grid_preset(preset);
                 }
-                "layout:toggle-left" => {
-                    self.state.panels.left_open = !self.state.panels.left_open;
+            }
+            id_str if id_str.starts_with("new:agent:") => {
+                if let Some(agent_id) = id_str.strip_prefix("new:agent:")
+                    && crate::agent_preferences::enabled(&self.state, agent_id)
+                    && (agent_id.starts_with("custom-")
+                        || self
+                            .agents
+                            .entries()
+                            .iter()
+                            .any(|(known, installed)| *installed && known == agent_id))
+                {
+                    self.new_session(Launch::Agent(agent_id.into()));
                 }
-                "layout:toggle-right" => {
-                    self.state.panels.right_open = !self.state.panels.right_open;
+            }
+            id_str if id_str.starts_with("settings:") => {
+                if let Some(page_id) = id_str.strip_prefix("settings:") {
+                    self.open_settings_by_page_id(page_id);
                 }
-                "layout:toggle-status-bar" => {
-                    self.state.status_bar.visible = !self.state.status_bar.visible;
+            }
+            id_str if id_str.starts_with("quickcmd:") => {
+                if let Some(cmd_id) = id_str
+                    .strip_prefix("quickcmd:")
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    self.run_quick_command_by_id(ctx, cmd_id);
+                }
+            }
+            id_str if id_str.starts_with("theme:") => {
+                if let Some(theme_id) = id_str
+                    .strip_prefix("theme:")
+                    .and_then(crate::theme_palettes::ThemeId::from_id)
+                {
+                    self.state.theme = Some(theme_id);
+                    crate::theme::apply(ctx, self.state.dark, Some(theme_id));
                     self.save();
                 }
-                "layout:split-right" => {
-                    self.apply_layout_action(
-                        crate::layout_broadcast_ui::LayoutMenuAction::SplitRight,
-                    );
-                }
-                "layout:split-down" => {
-                    self.apply_layout_action(
-                        crate::layout_broadcast_ui::LayoutMenuAction::SplitDown,
-                    );
-                }
-                "layout:arrange" => {
-                    self.apply_layout_action(
-                        crate::layout_broadcast_ui::LayoutMenuAction::ArrangeGrid,
-                    );
-                }
-                "layout:close-active" => {
-                    self.apply_layout_action(
-                        crate::layout_broadcast_ui::LayoutMenuAction::CloseActive,
-                    );
-                }
-                id_str if id_str.starts_with("layout:preset:") => {
-                    if let Some(preset) = crate::pane_grid::GridPreset::ALL.into_iter().find(|p| {
-                        format!(
-                            "layout:preset:{}",
-                            crate::layout_broadcast_ui::preset_display_label(*p)
-                        ) == id_str
-                    }) {
-                        self.apply_grid_preset(preset);
-                    }
-                }
-                id_str if id_str.starts_with("new:agent:") => {
-                    if let Some(agent_id) = id_str.strip_prefix("new:agent:")
-                        && crate::agent_preferences::enabled(&self.state, agent_id)
-                        && (agent_id.starts_with("custom-")
-                            || self
-                                .agents
-                                .entries()
-                                .iter()
-                                .any(|(known, installed)| *installed && known == agent_id))
-                    {
-                        self.new_session(Launch::Agent(agent_id.into()));
-                    }
-                }
-                id_str if id_str.starts_with("settings:") => {
-                    if let Some(page_id) = id_str.strip_prefix("settings:") {
-                        self.open_settings_by_page_id(page_id);
-                    }
-                }
-                id_str if id_str.starts_with("quickcmd:") => {
-                    if let Some(cmd_id) = id_str
-                        .strip_prefix("quickcmd:")
-                        .and_then(|s| s.parse::<u64>().ok())
-                    {
-                        self.run_quick_command_by_id(ctx, cmd_id);
-                    }
-                }
-                id_str if id_str.starts_with("theme:") => {
-                    if let Some(theme_id) = id_str
-                        .strip_prefix("theme:")
-                        .and_then(crate::theme_palettes::ThemeId::from_id)
-                    {
-                        self.state.theme = Some(theme_id);
-                        crate::theme::apply(ctx, self.state.dark, Some(theme_id));
+            }
+            #[cfg(windows)]
+            "browser" => self.view = View::Browser,
+            #[cfg(windows)]
+            "vault" => {
+                self.overlay = Some(Overlay::Settings);
+                self.settings_section = SettingsSection::Passwords;
+            }
+            #[cfg(windows)]
+            "account" => {
+                self.overlay = Some(Overlay::Settings);
+                self.settings_section = SettingsSection::Account;
+            }
+            _ => {
+                if let Some(project) = id
+                    .strip_prefix("project:")
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    if self.state.projects.iter().any(|p| p.id == project) {
+                        self.state.active_project = Some(project);
+                        self.view = View::Work;
+                        self.refresh_project();
                         self.save();
                     }
-                }
-                #[cfg(windows)]
-                "browser" => self.view = View::Browser,
-                #[cfg(windows)]
-                "vault" => {
-                    self.overlay = Some(Overlay::Settings);
-                    self.settings_section = SettingsSection::Passwords;
-                }
-                #[cfg(windows)]
-                "account" => {
-                    self.overlay = Some(Overlay::Settings);
-                    self.settings_section = SettingsSection::Account;
-                }
-                _ => {
-                    if let Some(project) = id
-                        .strip_prefix("project:")
-                        .and_then(|s| s.parse::<u64>().ok())
-                    {
-                        if self.state.projects.iter().any(|p| p.id == project) {
-                            self.state.active_project = Some(project);
-                            self.view = View::Work;
+                } else if let Some(session_id) = id
+                    .strip_prefix("session:")
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    if let Some(session) = self.sessions.iter().find(|s| s.id == session_id) {
+                        let project = session.project;
+                        if let Some(terminal) = &session.terminal {
+                            terminal.request_focus(ctx);
+                        }
+                        self.active_session = Some(session_id);
+                        self.view = View::Work;
+                        if let Some(layout) = self
+                            .state
+                            .terminal_layouts
+                            .get_mut(&crate::terminal_layout::project_key(project))
+                            && layout.maximized.is_some()
+                        {
+                            layout.maximized = Some(session_id);
+                            self.grid_dirty = true;
+                        }
+                        if self.state.active_project != project {
+                            self.state.active_project = project;
                             self.refresh_project();
-                            self.save();
                         }
-                    } else if let Some(session_id) = id
-                        .strip_prefix("session:")
-                        .and_then(|s| s.parse::<u64>().ok())
-                    {
-                        if let Some(session) = self.sessions.iter().find(|s| s.id == session_id) {
-                            let project = session.project;
-                            if let Some(terminal) = &session.terminal {
-                                terminal.request_focus(ctx);
-                            }
-                            self.active_session = Some(session_id);
-                            self.view = View::Work;
-                            if let Some(layout) = self
-                                .state
-                                .terminal_layouts
-                                .get_mut(&crate::terminal_layout::project_key(project))
-                                && layout.maximized.is_some()
-                            {
-                                layout.maximized = Some(session_id);
-                                self.grid_dirty = true;
-                            }
-                            if self.state.active_project != project {
-                                self.state.active_project = project;
-                                self.refresh_project();
-                            }
-                            self.save();
-                        }
-                    } else if let Some(index) = id
-                        .strip_prefix("document:")
-                        .and_then(|s| s.parse::<usize>().ok())
-                        && index < self.documents.len()
-                    {
-                        self.active_document = index;
-                        self.view = View::Files;
+                        self.save();
                     }
+                } else if let Some(index) = id
+                    .strip_prefix("document:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    && index < self.documents.len()
+                {
+                    self.active_document = index;
+                    self.view = View::Files;
                 }
             }
         }
-        if !self.command_palette.open {
-            self.command_palette_focused = false;
-        }
     }
-    fn open_finder(&mut self) {
+    pub(crate) fn open_finder(&mut self) {
         if let Some(project) = self.state.active() {
             if let Err(error) = self.finder.open(&project.path) {
                 self.error = error;
@@ -3450,8 +3486,7 @@ impl Tessel {
     }
     fn sidebar(&mut self, ctx: &egui::Context) {
         use crate::project_panel::{
-            ProjectAction, ProjectEntry, ProjectPanelInput, SessionEntry, SessionKind,
-            SidebarOptions,
+            ProjectEntry, ProjectPanelInput, SessionEntry, SessionKind, SidebarOptions,
         };
         use crate::sidebar_model::{AgentDotState, PaneRuntimeKind, pane_dot_state};
 
@@ -3744,6 +3779,15 @@ impl Tessel {
                     action = self.project_panel.show_collapsed_rail(ui, input);
                 });
         }
+        self.apply_project_action(ctx, action);
+    }
+
+    pub(crate) fn apply_project_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: Option<crate::project_panel::ProjectAction>,
+    ) {
+        use crate::project_panel::ProjectAction;
         let project = match action {
             Some(ProjectAction::Search) => {
                 if !self.command_palette.open {
@@ -6128,67 +6172,74 @@ impl Tessel {
             return;
         };
         if let Some(action) = action {
-            let moved_to_done_title =
-                if let crate::tasks_board_panel::TasksBoardAction::Move { id, column: 3 } = &action
-                {
-                    self.state
-                        .tasks
+            self.apply_tasks_board_action(project, action);
+        }
+    }
+
+    pub(crate) fn apply_tasks_board_action(
+        &mut self,
+        project: u64,
+        action: crate::tasks_board_panel::TasksBoardAction,
+    ) {
+        let moved_to_done_title =
+            if let crate::tasks_board_panel::TasksBoardAction::Move { id, column: 3 } = &action {
+                self.state
+                    .tasks
+                    .iter()
+                    .find(|t| t.id == *id && t.project == project && t.column != 3)
+                    .map(|t| (t.id, t.title.clone()))
+            } else {
+                None
+            };
+        match crate::task_actions::apply(&mut self.state, project, action) {
+            Ok(true) => {
+                if let Some((task_id, title)) = moved_to_done_title {
+                    let proj_name = self
+                        .state
+                        .projects
                         .iter()
-                        .find(|t| t.id == *id && t.project == project && t.column != 3)
-                        .map(|t| (t.id, t.title.clone()))
-                } else {
-                    None
-                };
-            match crate::task_actions::apply(&mut self.state, project, action) {
-                Ok(true) => {
-                    if let Some((task_id, title)) = moved_to_done_title {
-                        let proj_name = self
-                            .state
-                            .projects
-                            .iter()
-                            .find(|p| p.id == project)
-                            .map(|p| p.name.clone())
-                            .unwrap_or_default();
-                        let (agent_name, agent_kind) = self
-                            .sessions
-                            .iter()
-                            .find(|s| s.project == Some(project))
-                            .map(|s| {
-                                let kind = match &s.launch {
-                                    Launch::Agent(a) => a.clone(),
-                                    Launch::CodexChat => "codex".into(),
-                                    Launch::ClaudeChat => "claude".into(),
-                                    Launch::Shell => "shell".into(),
-                                    Launch::Ssh(h) => format!("ssh:{}", h.alias),
-                                };
-                                (s.label().to_owned(), kind)
-                            })
-                            .unwrap_or_default();
-                        self.task_history_store.record_completed(
-                            crate::side_panels_model::TaskHistoryRecord {
-                                id: 0,
-                                task_id,
-                                title,
-                                project_id: project,
-                                project_name: proj_name,
-                                agent_name,
-                                agent_kind,
-                                created_at_ms: 0,
-                                done_at_ms: crate::side_panels_model::now_unix_ms(),
-                                duration_ms: 0,
-                                tokens: 0,
-                                cost_usd: 0.0,
-                            },
-                        );
-                        if let Some(st) = &self.store {
-                            let _ = self.task_history_store.save(st.directory());
-                        }
+                        .find(|p| p.id == project)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    let (agent_name, agent_kind) = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.project == Some(project))
+                        .map(|s| {
+                            let kind = match &s.launch {
+                                Launch::Agent(a) => a.clone(),
+                                Launch::CodexChat => "codex".into(),
+                                Launch::ClaudeChat => "claude".into(),
+                                Launch::Shell => "shell".into(),
+                                Launch::Ssh(h) => format!("ssh:{}", h.alias),
+                            };
+                            (s.label().to_owned(), kind)
+                        })
+                        .unwrap_or_default();
+                    self.task_history_store.record_completed(
+                        crate::side_panels_model::TaskHistoryRecord {
+                            id: 0,
+                            task_id,
+                            title,
+                            project_id: project,
+                            project_name: proj_name,
+                            agent_name,
+                            agent_kind,
+                            created_at_ms: 0,
+                            done_at_ms: crate::side_panels_model::now_unix_ms(),
+                            duration_ms: 0,
+                            tokens: 0,
+                            cost_usd: 0.0,
+                        },
+                    );
+                    if let Some(st) = &self.store {
+                        let _ = self.task_history_store.save(st.directory());
                     }
-                    self.save();
                 }
-                Ok(false) => {}
-                Err(error) => self.error = tr(&error).into(),
+                self.save();
             }
+            Ok(false) => {}
+            Err(error) => self.error = tr(&error).into(),
         }
     }
     fn can_restore(&self) -> bool {

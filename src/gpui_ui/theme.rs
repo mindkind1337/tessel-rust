@@ -88,6 +88,8 @@ pub fn color_mix_srgb(a: Rgba, weight_a: f32, b: Rgba) -> Rgba {
 pub struct GpuiThemeTokens {
     pub id: ThemeId,
     pub radius_px: f32,
+    pub bg: Rgba,
+    pub panel: Rgba,
     pub chrome: Rgba,
     pub surface: Rgba,
     pub surface_2: Rgba,
@@ -97,6 +99,8 @@ pub struct GpuiThemeTokens {
     pub border: Rgba,
     pub border_strong: Rgba,
     pub accent: Rgba,
+    pub accent_fg: Rgba,
+    pub accent_soft: Rgba,
     pub accent_soft_bg: Rgba,
     pub warn: Rgba,
     pub danger: Rgba,
@@ -126,6 +130,7 @@ impl GpuiThemeTokens {
         let border = color32_to_rgba(spec.ui.border);
         let border_strong = color32_to_rgba(spec.ui.border_strong);
         let accent = color32_to_rgba(spec.ui.accent);
+        let accent_soft_bg = rgba_with_alpha(accent, 0.16);
         let warn = color32_to_rgba(spec.ui.warn);
         let danger = color32_to_rgba(spec.ui.danger);
         let ok_green = color32_to_rgba(WARP_OK_GREEN);
@@ -138,6 +143,8 @@ impl GpuiThemeTokens {
         Self {
             id: theme,
             radius_px: spec.radius_px,
+            bg: backdrop,
+            panel: chrome,
             chrome,
             surface,
             surface_2,
@@ -147,7 +154,9 @@ impl GpuiThemeTokens {
             border,
             border_strong,
             accent,
-            accent_soft_bg: rgba_with_alpha(accent, 0.16),
+            accent_fg: gpui::rgb(0xffffff),
+            accent_soft: accent_soft_bg,
+            accent_soft_bg,
             warn,
             danger,
             ok_green,

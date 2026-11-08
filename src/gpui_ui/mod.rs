@@ -7,7 +7,11 @@ pub(crate) mod chat_view;
 pub(crate) mod chrome;
 pub mod editor_view;
 pub mod icons;
+pub(crate) mod modals_view;
+pub(crate) mod settings_view;
 pub(crate) mod shell;
+pub(crate) mod side_panels_view;
+pub(crate) mod sidebar_view;
 pub(crate) mod terminal_view;
 pub mod theme;
 
@@ -22,6 +26,7 @@ use crate::{
         gpui_bridge::{GpuiAction, GpuiCenterMode},
     },
     pane_grid::{FocusDir, SplitDir},
+    workspace::SideTab,
 };
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, Focusable,
@@ -46,7 +51,10 @@ use theme::{
 
 #[derive(Clone, Debug)]
 pub(crate) enum DragTarget {
-    LeftSidebar,
+    LeftSidebar {
+        start_x: f32,
+        start_width: f32,
+    },
     RightPanel,
     FloatingTerminal {
         stage_height_px: f32,
@@ -128,8 +136,61 @@ impl TesselGpuiRoot {
         }
     }
 
+    pub(crate) fn begin_drag(&mut self, drag: DragTarget, cx: &mut Context<Self>) {
+        self.active_drag = Some(drag);
+        cx.notify();
+    }
+
+    pub(crate) fn set_focus_input(
+        &mut self,
+        target: FocusInputTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_input = target;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn dispatch_action(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        self.dispatch(action, cx);
+    }
+
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        match &action {
+            GpuiAction::ToggleCommandPalette => {
+                self.focus_input = FocusInputTarget::PaletteQuery;
+            }
+            GpuiAction::OpenFinder => {
+                self.focus_input = FocusInputTarget::FinderQuery;
+            }
+            GpuiAction::OpenHelp => {
+                self.focus_input = FocusInputTarget::HelpQuery;
+            }
+            GpuiAction::OpenSettings | GpuiAction::OpenSettingsPage(_) => {
+                self.focus_input = FocusInputTarget::SettingsSearch;
+            }
+            GpuiAction::OpenNotesModal => {
+                self.focus_input = FocusInputTarget::NotesEditor;
+            }
+            GpuiAction::OpenGitHubDialog => {
+                self.focus_input = FocusInputTarget::GitHubSearch;
+            }
+            GpuiAction::OpenTeamsManager(_) => {
+                self.focus_input = FocusInputTarget::NewTeamName;
+            }
+            GpuiAction::CloseOverlays
+            | GpuiAction::CloseTeamsManager
+            | GpuiAction::CancelPromptModal
+            | GpuiAction::CancelConfirmModal => {
+                self.focus_input = FocusInputTarget::None;
+            }
+            _ => {}
+        }
         self.app.apply_gpui_action(action);
+        if let Some(copied) = self.app.gpui_take_copied_clipboard() {
+            cx.write_to_clipboard(ClipboardItem::new_string(copied));
+        }
         self.repaint_flag.store(false, Ordering::Release);
         cx.notify();
     }
@@ -151,6 +212,10 @@ impl TesselGpuiRoot {
             return;
         }
         if key == "escape" {
+            if self.app.gpui_escape_clears_modal_search() {
+                cx.notify();
+                return;
+            }
             if self.app.gpui_has_open_modal() {
                 self.dispatch(GpuiAction::CloseOverlays, cx);
                 return;
@@ -186,6 +251,10 @@ impl TesselGpuiRoot {
                     self.dispatch(GpuiAction::ToggleCommandPalette, cx);
                     return;
                 }
+                "k" if shift => {
+                    self.dispatch(GpuiAction::SelectSideTab(SideTab::Tasks), cx);
+                    return;
+                }
                 "p" if shift => {
                     self.dispatch(GpuiAction::ToggleCommandPalette, cx);
                     return;
@@ -196,6 +265,31 @@ impl TesselGpuiRoot {
                 }
                 "j" if !shift => {
                     self.dispatch(GpuiAction::ToggleRightSidebar, cx);
+                    return;
+                }
+                "j" if shift => {
+                    self.dispatch(GpuiAction::OpenFinder, cx);
+                    return;
+                }
+                "x" if shift => {
+                    self.dispatch(GpuiAction::SelectSideTab(SideTab::Files), cx);
+                    return;
+                }
+                "g" if shift => {
+                    self.dispatch(GpuiAction::SelectSideTab(SideTab::Changes), cx);
+                    return;
+                }
+                "t" if shift => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::LaunchDefaultOrShell, cx);
+                    return;
+                }
+                "space" | " " if shift => {
+                    self.dispatch(GpuiAction::ToggleLaunchMenu, cx);
+                    return;
+                }
+                "n" if shift => {
+                    self.dispatch(GpuiAction::OpenAddProjectDialog, cx);
                     return;
                 }
                 "`" => {
@@ -273,7 +367,81 @@ impl TesselGpuiRoot {
             }
         }
 
+        if self.app.gpui_is_palette_open() {
+            match key {
+                "up" | "arrowup" => {
+                    self.dispatch(GpuiAction::PaletteStep(-1), cx);
+                    return;
+                }
+                "down" | "arrowdown" => {
+                    self.dispatch(GpuiAction::PaletteStep(1), cx);
+                    return;
+                }
+                "enter" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(GpuiAction::PaletteExecuteSelected, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if self.app.gpui_is_finder_open() {
+            match key {
+                "up" | "arrowup" => {
+                    self.dispatch(GpuiAction::FinderStep(-1), cx);
+                    return;
+                }
+                "down" | "arrowdown" => {
+                    self.dispatch(GpuiAction::FinderStep(1), cx);
+                    return;
+                }
+                "enter" => {
+                    self.focus_input = FocusInputTarget::None;
+                    self.dispatch(
+                        GpuiAction::FinderAccept {
+                            idx: None,
+                            insert: shift,
+                        },
+                        cx,
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if self.app.gpui_has_open_modal() {
+            let modal_target = if self.app.gpui_is_palette_open() {
+                FocusInputTarget::PaletteQuery
+            } else if self.app.gpui_is_finder_open() {
+                FocusInputTarget::FinderQuery
+            } else {
+                self.focus_input
+            };
+            if !matches!(
+                modal_target,
+                FocusInputTarget::None | FocusInputTarget::Terminal(_)
+            ) {
+                let pasted = if ctrl && !alt && key == "v" {
+                    cx.read_from_clipboard().and_then(|item| item.text())
+                } else {
+                    None
+                };
+                let printable = ks
+                    .key_char
+                    .as_deref()
+                    .filter(|s| !s.is_empty() && (!ctrl || alt) && s.chars().all(|c| c >= ' '));
+                if self
+                    .app
+                    .gpui_handle_text_target_key(modal_target, key, printable, shift, pasted)
+                {
+                    if let Some(copied) = self.app.gpui_take_copied_clipboard() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copied));
+                    }
+                    cx.notify();
+                }
+            }
             return;
         }
 
@@ -324,6 +492,9 @@ impl TesselGpuiRoot {
             .app
             .gpui_handle_text_target_key(target, key, printable, shift, pasted)
         {
+            if let Some(copied) = self.app.gpui_take_copied_clipboard() {
+                cx.write_to_clipboard(ClipboardItem::new_string(copied));
+            }
             cx.notify();
         }
     }
@@ -340,9 +511,12 @@ impl TesselGpuiRoot {
         let viewport_w = f32::from(window.viewport_size().width);
         let viewport_h = f32::from(window.viewport_size().height);
         match drag {
-            DragTarget::LeftSidebar => {
-                let next =
-                    f32::from(event.position.x).clamp(SIDEBAR_MIN_WIDTH_PX, SIDEBAR_MAX_WIDTH_PX);
+            DragTarget::LeftSidebar {
+                start_x,
+                start_width,
+            } => {
+                let next = (start_width + (f32::from(event.position.x) - start_x))
+                    .clamp(SIDEBAR_MIN_WIDTH_PX, SIDEBAR_MAX_WIDTH_PX);
                 if (next - self.left_width).abs() > 0.5 {
                     self.left_width = next;
                     cx.notify();
@@ -456,8 +630,11 @@ impl Render for TesselGpuiRoot {
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
 
+        let focus_input = self.focus_input;
+
         div()
             .id("tessel-gpui-root")
+            .relative()
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
@@ -484,6 +661,7 @@ impl Render for TesselGpuiRoot {
             )
             .child(shell::render_workspace_body(
                 &snapshot,
+                focus_input,
                 &tokens,
                 self.left_width,
                 self.right_width,
@@ -494,6 +672,16 @@ impl Render for TesselGpuiRoot {
             .when_some(
                 chrome::render_status_bar(&snapshot, &tokens, viewport_w, cx),
                 |el, bar| el.child(bar),
+            )
+            .children(modals_view::render_active_modals_and_popovers(
+                &snapshot,
+                focus_input,
+                &tokens,
+                cx,
+            ))
+            .when_some(
+                settings_view::render_settings_modal(&snapshot, focus_input, &tokens, cx),
+                |el, modal| el.child(modal),
             )
     }
 }

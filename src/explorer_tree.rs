@@ -1439,4 +1439,262 @@ impl ExplorerTree {
 
         emitted
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_filter_query(&self) -> &str {
+        &self.filter_query
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_set_filter_query(&mut self, query: String) {
+        self.filter_query = query;
+        if self.filter_query.trim().is_empty() {
+            self.content_search_hits.clear();
+            self.content_search_last_key.clear();
+            self.content_search_task = None;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_toggle_search_mode(&mut self) {
+        self.content_search_mode = !self.content_search_mode;
+        self.content_search_last_key.clear();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_click_row(&mut self, key: &str, pinned: bool) -> Option<TreeAction> {
+        let idx = self.cached_tree.rows.iter().position(|r| r.path == key)?;
+        let row = self.cached_tree.rows[idx].clone();
+        let row_path = self
+            .path_by_key
+            .get(&row.path)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(&row.path));
+        self.selected_key = Some(row.path.clone());
+        if row.dir {
+            let paths = toggled_paths(&row);
+            let new_open_count = paths
+                .iter()
+                .filter(|p| !self.open_dirs.contains(p.as_str()))
+                .count();
+            let needs_fetch =
+                !self.dirs.contains_key(&row.path) && !self.queued_keys.contains(&row.path);
+            let can_fetch = !needs_fetch
+                || (self.dirs.len()
+                    + self.queued_keys.len()
+                    + usize::from(self.in_flight.is_some())
+                    < self.limits.max_cached_dirs);
+            if row.open {
+                for p in paths {
+                    self.open_dirs.remove(&p);
+                    self.restore_open.remove(&p);
+                }
+                self.rows_dirty = true;
+                self.save_current_expanded();
+            } else if row.depth.saturating_add(row.chain.len()) <= self.limits.max_depth
+                && self.open_dirs.len().saturating_add(new_open_count)
+                    <= self.limits.max_cached_dirs
+                && can_fetch
+            {
+                let next_depth = row.depth.saturating_add(row.chain.len());
+                for p in paths {
+                    self.open_dirs.insert(p);
+                }
+                self.rows_dirty = true;
+                self.save_current_expanded();
+                if !self.dirs.contains_key(&row.path) {
+                    self.enqueue_dir(row_path, next_depth);
+                    self.pump_worker();
+                }
+            } else {
+                self.truncated = true;
+            }
+            None
+        } else if pinned {
+            Some(TreeAction::OpenPinnedFile(row_path))
+        } else {
+            Some(TreeAction::OpenFile(row_path))
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_rows_snapshot(
+        &mut self,
+        root: Option<&Path>,
+        active: Option<&Path>,
+    ) -> ExplorerGpuiSnapshot {
+        self.set_root(root);
+        self.poll();
+        if let Some(task) = &self.content_search_task {
+            match task.rx.try_recv() {
+                Ok(hits) => {
+                    if task.query_key == self.content_search_last_key {
+                        self.content_search_hits = hits;
+                    }
+                    self.content_search_task = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.content_search_task = None;
+                }
+            }
+        }
+        let Some(root_path) = self.project_root.clone() else {
+            return ExplorerGpuiSnapshot::default();
+        };
+        let root_key = norm_tree_key(&root_path);
+        self.ensure_rows_built(&root_key);
+        let root_title = root_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| tr("Files").to_string());
+        let new_target_dir = self.selected_target_dir(&root_path);
+
+        let trimmed_query = self.filter_query.trim().to_owned();
+        if self.content_search_mode && !trimmed_query.is_empty() {
+            let query_key = format!("{root_key}::{trimmed_query}");
+            if self.content_search_last_key != query_key {
+                self.content_search_last_key = query_key.clone();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let worker_cancel = Arc::clone(&cancel);
+                let worker_root = root_path.clone();
+                let worker_q = trimmed_query.clone();
+                let (tx, rx) = mpsc::sync_channel(1);
+                thread::spawn(move || {
+                    let res = search_project_contents(&worker_root, &worker_q, &worker_cancel);
+                    let _ = tx.send(res);
+                });
+                self.content_search_task = Some(ContentSearchTask {
+                    query_key,
+                    cancel,
+                    rx,
+                });
+            }
+            let content_hits = self
+                .content_search_hits
+                .iter()
+                .take(250)
+                .map(|h| ExplorerGpuiContentHit {
+                    path: h.path.clone(),
+                    rel_display: h.rel_display.clone(),
+                    line: h.line,
+                    preview: h.preview.clone(),
+                })
+                .collect();
+            return ExplorerGpuiSnapshot {
+                has_root: true,
+                root_path,
+                root_title,
+                new_target_dir,
+                filter_query: self.filter_query.clone(),
+                content_search_mode: true,
+                show_dotfiles: self.show_dotfiles,
+                compact_folders: self.compact_folders,
+                loading: self.is_loading() || self.content_search_task.is_some(),
+                truncated: self.truncated,
+                error: self.error.clone(),
+                rows: Vec::new(),
+                content_hits,
+            };
+        }
+
+        let active_key = active.map(norm_tree_key);
+        let filter_lc = trimmed_query.to_lowercase();
+        let rows = self
+            .cached_tree
+            .rows
+            .iter()
+            .filter(|r| {
+                filter_lc.is_empty()
+                    || r.name.to_lowercase().contains(&filter_lc)
+                    || r.path.to_lowercase().contains(&filter_lc)
+            })
+            .take(500)
+            .map(|row| {
+                let row_path = self
+                    .path_by_key
+                    .get(&row.path)
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from(&row.path));
+                let display_name = if row.chain.len() > 1 {
+                    row.chain
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                } else {
+                    row.name.clone()
+                };
+                ExplorerGpuiRow {
+                    key: row.path.clone(),
+                    path: row_path,
+                    name: row.name.clone(),
+                    display_name,
+                    depth: row.depth,
+                    dir: row.dir,
+                    open: row.open,
+                    selected: self.selected_key.as_deref() == Some(row.path.as_str()),
+                    active_doc: active_key.as_deref() == Some(row.path.as_str()),
+                }
+            })
+            .collect();
+
+        ExplorerGpuiSnapshot {
+            has_root: true,
+            root_path,
+            root_title,
+            new_target_dir,
+            filter_query: self.filter_query.clone(),
+            content_search_mode: self.content_search_mode,
+            show_dotfiles: self.show_dotfiles,
+            compact_folders: self.compact_folders,
+            loading: self.is_loading(),
+            truncated: self.truncated,
+            error: self.error.clone(),
+            rows,
+            content_hits: Vec::new(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ExplorerGpuiRow {
+    pub key: String,
+    pub path: PathBuf,
+    pub name: String,
+    pub display_name: String,
+    pub depth: usize,
+    pub dir: bool,
+    pub open: bool,
+    pub selected: bool,
+    pub active_doc: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ExplorerGpuiContentHit {
+    pub path: PathBuf,
+    pub rel_display: String,
+    pub line: usize,
+    pub preview: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExplorerGpuiSnapshot {
+    pub has_root: bool,
+    pub root_path: PathBuf,
+    pub root_title: String,
+    pub new_target_dir: PathBuf,
+    pub filter_query: String,
+    pub content_search_mode: bool,
+    pub show_dotfiles: bool,
+    pub compact_folders: bool,
+    pub loading: bool,
+    pub truncated: bool,
+    pub error: String,
+    pub rows: Vec<ExplorerGpuiRow>,
+    pub content_hits: Vec<ExplorerGpuiContentHit>,
 }

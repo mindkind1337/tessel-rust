@@ -8,7 +8,80 @@ use crate::i18n::tr;
 use crate::pane_grid::{FocusDir, GridPreset, PxRect, SplitDir};
 use crate::theme_palettes::ThemeId;
 use crate::workspace::{KeepAwakeSetting, RendererPreference, SideTab, Workspace};
-use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+pub(crate) type SettingsNavGroupRow = (String, Vec<(String, String)>);
+pub(crate) type BuiltinAgentSettingRow = (String, String, bool, bool);
+pub(crate) type ProviderSecretRow = (String, String, bool);
+pub(crate) type ReviewBranchOption = (String, Option<PathBuf>);
+
+pub(crate) struct GpuiExtraUiState {
+    pub dummy_egui_ctx: eframe::egui::Context,
+    pub usage_popover_open: bool,
+    pub notifications_popover_open: bool,
+    pub status_popover: Option<crate::status_strip::StatusBarItemId>,
+    pub launch_menu_open: bool,
+    pub launch_placement: crate::finder_model::LaunchPlacement,
+    pub launch_in_worktree: bool,
+    pub help_query: String,
+    pub settings_search: String,
+    pub scm_commit_msg: String,
+    pub new_task_title: String,
+    pub new_ssh_alias: String,
+    pub new_ssh_folder: String,
+    pub new_custom_agent_name: String,
+    pub new_custom_agent_cmd: String,
+    pub new_account_label: String,
+    pub secret_key_idx: usize,
+    pub secret_value_draft: String,
+    pub skills_git_url: String,
+    pub new_quick_cmd_name: String,
+    pub new_quick_cmd_text: String,
+    pub new_quick_cmd_enter: bool,
+    pub new_auto_name: String,
+    pub new_auto_prompt: String,
+    pub new_auto_every_mins: u32,
+    pub copied_clipboard: Option<String>,
+}
+
+impl Default for GpuiExtraUiState {
+    fn default() -> Self {
+        Self {
+            dummy_egui_ctx: eframe::egui::Context::default(),
+            usage_popover_open: false,
+            notifications_popover_open: false,
+            status_popover: None,
+            launch_menu_open: false,
+            launch_placement: crate::finder_model::LaunchPlacement::Auto,
+            launch_in_worktree: false,
+            help_query: String::new(),
+            settings_search: String::new(),
+            scm_commit_msg: String::new(),
+            new_task_title: String::new(),
+            new_ssh_alias: String::new(),
+            new_ssh_folder: String::new(),
+            new_custom_agent_name: String::new(),
+            new_custom_agent_cmd: String::new(),
+            new_account_label: String::new(),
+            secret_key_idx: 0,
+            secret_value_draft: String::new(),
+            skills_git_url: String::new(),
+            new_quick_cmd_name: String::new(),
+            new_quick_cmd_text: String::new(),
+            new_quick_cmd_enter: true,
+            new_auto_name: String::new(),
+            new_auto_prompt: String::new(),
+            new_auto_every_mins: 60,
+            copied_clipboard: None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum GpuiFocusTarget {
@@ -26,6 +99,35 @@ pub(crate) enum GpuiFocusTarget {
     EditorGoto,
     EditorBody,
     BrowserUrl,
+    PaletteQuery,
+    FinderQuery,
+    HelpQuery,
+    ExplorerFilter,
+    ScmCommitMessage,
+    TaskNewTitle,
+    DashboardQuery,
+    TaskHistoryQuery,
+    SessionsQuery,
+    ConversationsQuery,
+    SettingsSearch,
+    NotesEditor,
+    AddProjectCloneUrl,
+    AddProjectFolderName,
+    GitHubSearch,
+    LiveShareJoinCode,
+    PromptDraft,
+    NewTeamName,
+    QuickCommandName,
+    QuickCommandText,
+    CustomAgentName,
+    CustomAgentCmd,
+    AccountLabel,
+    ProviderSecretValue,
+    SkillsGitUrl,
+    SshAlias,
+    SshFolder,
+    AutomationName,
+    AutomationPrompt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +148,9 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub broadcast_count: usize,
     pub floating_open: bool,
     pub share_active: bool,
+    pub share_pill_label: Option<String>,
     pub waiting_agents_count: usize,
+    pub first_waiting_pane: Option<u64>,
     pub unread_notifications: usize,
     pub has_active_project: bool,
     pub active_project_name: Option<String>,
@@ -54,6 +158,34 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub installed_agents: Vec<(String, String)>,
     pub command_palette_open: bool,
     pub error_banner: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiSessionSidebarRow {
+    pub id: u64,
+    pub project_id: Option<u64>,
+    pub title: String,
+    pub kind_label: String,
+    pub is_agent: bool,
+    pub active: bool,
+    pub sleeping: bool,
+    pub waiting: bool,
+    pub working: bool,
+    pub exited: bool,
+    pub worktree_branch: Option<String>,
+    pub task_line: Option<String>,
+    pub team_badge: Option<crate::teams_relay::SessionTeamBadge>,
+    pub share_guests: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiWorktreeSidebarRow {
+    pub branch: String,
+    pub path: String,
+    pub dirty: bool,
+    pub hidden: bool,
 }
 
 #[allow(dead_code)]
@@ -70,6 +202,18 @@ pub(crate) struct GpuiProjectItem {
     pub running_agents: usize,
     pub waiting_agents: usize,
     pub secondary_worktrees: Vec<(String, String)>,
+    pub sessions: Vec<GpuiSessionSidebarRow>,
+    pub visible_worktrees: Vec<GpuiWorktreeSidebarRow>,
+    pub hidden_worktrees: Vec<GpuiWorktreeSidebarRow>,
+    pub inbox_dismissed: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiSidebarSnapshot {
+    pub prefs: crate::workspace::SidebarPreferences,
+    pub collapsed_groups: BTreeSet<String>,
+    pub orphan_sessions: Vec<GpuiSessionSidebarRow>,
 }
 
 #[allow(dead_code)]
@@ -111,6 +255,9 @@ pub(crate) struct GpuiPaneTileSnapshot {
     pub terminal_render: Option<crate::terminal::TerminalRenderSnapshot>,
     pub cursor_style: crate::workspace::TerminalCursorStyle,
     pub native_chat: Option<crate::chat::NativeChatViewSnapshot>,
+    pub team_badge: Option<crate::teams_relay::SessionTeamBadge>,
+    pub share_guests: Vec<String>,
+    pub wake_banner: Option<crate::teams_relay::WakeBanner>,
     pub error: String,
 }
 
@@ -147,6 +294,8 @@ pub(crate) struct GpuiStatusBarSnapshot {
     pub session_count: usize,
     pub working_agents: usize,
     pub ssh_host_count: usize,
+    pub listening_ports_count: usize,
+    pub app_rss_mb: u64,
     pub version_build: String,
 }
 
@@ -215,6 +364,182 @@ pub(crate) struct GpuiSidePanelSummary {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
+pub(crate) struct GpuiSidePanelsSnapshot {
+    pub dashboard_vm: crate::side_panels_model::DashboardViewModel,
+    pub dashboard_group: crate::side_panels_model::DashboardGroupBy,
+    pub dashboard_filter: Option<crate::side_panels_model::DashboardState>,
+    pub dashboard_query: String,
+    pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
+    pub scm_branch: Option<String>,
+    pub scm_ahead: usize,
+    pub scm_behind: usize,
+    pub scm_busy: bool,
+    pub scm_commit_msg: String,
+    pub scm_entries: Vec<crate::scm_changes_panel::ScmEntry>,
+    pub scm_error: Option<String>,
+    pub commits_open: bool,
+    pub commits: Vec<crate::side_panels_model::CommitHistoryRow>,
+    pub expanded_commits: BTreeSet<String>,
+    pub commit_files: BTreeMap<String, Vec<crate::side_panels_model::CommitChangedFile>>,
+    pub tasks: Vec<crate::workspace::Task>,
+    pub new_task_title: String,
+    pub history_window: crate::side_panels_model::TaskHistoryFilter,
+    pub history_sort: crate::side_panels_model::TaskHistorySort,
+    pub history_current_project_only: bool,
+    pub history_query: String,
+    pub task_history_rows: Vec<crate::side_panels_model::TaskHistoryRecord>,
+    pub sessions_scope: crate::side_panels_model::SessionHistoryScope,
+    pub sessions_group: crate::side_panels_model::SessionHistoryGroupBy,
+    pub sessions_query: String,
+    pub past_sessions: Vec<crate::side_panels_model::SessionHistoryEntry>,
+    pub conv_window: crate::side_panels_model::ConversationWindow,
+    pub conv_query: String,
+    pub selected_thread_key: Option<String>,
+    pub threads: Vec<crate::side_panels_model::ConversationThread>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiSettingsSnapshot {
+    pub active_page_id: String,
+    pub search_query: String,
+    pub groups: Vec<SettingsNavGroupRow>,
+    pub general_prefs: crate::workspace::GeneralPreferences,
+    pub preferred_shell: Option<String>,
+    pub wsl_available: bool,
+    pub terminal_prefs: crate::workspace::TerminalPreferences,
+    pub editor_prefs: crate::workspace::EditorPreferences,
+    pub browser_prefs: crate::workspace::BrowserPreferences,
+    pub git_prefs: crate::workspace::GitPreferences,
+    pub git_username: Option<String>,
+    pub stats_prefs: crate::workspace::StatsPreferences,
+    pub stats_snapshot: crate::settings_pages_panel::StatsSnapshot,
+    pub usage_summary: crate::dialogs_toolbar_model::UsageSummary,
+    pub quick_commands: Vec<crate::workspace::QuickCommand>,
+    pub new_quick_cmd_name: String,
+    pub new_quick_cmd_text: String,
+    pub new_quick_cmd_enter: bool,
+    pub ssh_hosts: Vec<crate::workspace::Host>,
+    pub new_ssh_alias: String,
+    pub new_ssh_folder: String,
+    pub builtin_agents: Vec<BuiltinAgentSettingRow>,
+    pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
+    pub new_custom_agent_name: String,
+    pub new_custom_agent_cmd: String,
+    pub claude_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    pub codex_accounts: crate::settings_extra_model::ManagedAccountsRoster,
+    pub new_account_label: String,
+    pub provider_secrets: Vec<ProviderSecretRow>,
+    pub secret_key_idx: usize,
+    pub secret_value_draft: String,
+    pub cli_sign_ins: crate::settings_extra_model::CliSignInProbe,
+    pub skills: Vec<crate::settings_extra_model::SkillEntry>,
+    pub skills_git_url: String,
+    pub installed_mcp: Vec<crate::settings_extra_model::InstalledMcpServer>,
+    pub context_prefs: crate::settings_extra_model::ContextPreferences,
+    pub context_scan: crate::settings_extra_model::ContextScanReport,
+    pub orchestration_prefs: crate::settings_extra_model::OrchestrationPreferences,
+    pub notification_prefs: crate::settings_extra_model::NotificationPreferences,
+    pub voice_prefs: crate::settings_extra_model::VoicePreferences,
+    pub devtools: Vec<crate::settings_extra_model::DevToolStatus>,
+    pub automations: crate::automations::AutomationsFile,
+    pub new_auto_name: String,
+    pub new_auto_prompt: String,
+    pub new_auto_every_mins: u32,
+    pub vault: Option<crate::vault_panel::VaultGpuiSnapshot>,
+    pub account: Option<crate::account_panel::AccountGpuiSnapshot>,
+    pub backup_status: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiPromptModalSnapshot {
+    pub title: String,
+    pub subtitle: String,
+    pub draft: String,
+    pub confirm_label: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiConfirmModalSnapshot {
+    pub title: String,
+    pub body: String,
+    pub confirm_label: String,
+    pub secondary_label: Option<String>,
+    pub danger: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct GpuiModalsSnapshot {
+    pub palette_open: bool,
+    pub palette_query: String,
+    pub palette_selected: usize,
+    pub palette_rows: Vec<crate::palette::PaletteRow>,
+    pub finder: Option<crate::finder_panel::FinderGpuiSnapshot>,
+    pub launch_menu_open: bool,
+    pub launch_placement: crate::finder_model::LaunchPlacement,
+    pub launch_placements: Vec<crate::finder_model::LaunchPlacement>,
+    pub launch_where_hint: String,
+    pub launch_in_worktree: bool,
+    pub help_open: bool,
+    pub help_query: String,
+    pub help_groups: Vec<crate::shortcuts::FilteredShortcutGroup>,
+    pub help_footer: String,
+    pub share_modal_open: bool,
+    pub share: crate::share_panel::ShareGpuiSnapshot,
+    pub add_project_open: bool,
+    pub add_project_tab: crate::dialogs_toolbar_ui::AddProjectTab,
+    pub add_picked_folder: Option<PathBuf>,
+    pub add_nested_repos: Vec<(PathBuf, bool)>,
+    pub add_clone_url: String,
+    pub add_clone_parent: PathBuf,
+    pub add_folder_name: String,
+    pub add_ssh_aliases: Vec<String>,
+    pub add_ssh_selected: String,
+    pub add_ssh_remote_dir: String,
+    pub add_error: String,
+    pub github_open: bool,
+    pub github_tab: crate::dialogs_toolbar_ui::GitHubTab,
+    pub github_query: String,
+    pub github_prs: Vec<crate::dialogs_toolbar_model::GhPullRequest>,
+    pub github_issues: Vec<crate::dialogs_toolbar_model::GhIssue>,
+    pub github_error: String,
+    pub notes_open: bool,
+    pub notes_text: String,
+    pub notes_dirty: bool,
+    pub review_open: bool,
+    pub review_candidates: Vec<ReviewBranchOption>,
+    pub review_head_branch: String,
+    pub review_snapshot: Option<crate::side_panels_model::ReviewSnapshot>,
+    pub review_selected_file: Option<String>,
+    pub review_selected_diff: String,
+    pub review_error: Option<String>,
+    pub worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
+    pub teams_manager_project: Option<u64>,
+    pub teams_new_name: String,
+    pub teams_list: Vec<crate::teams_relay::SavedTeam>,
+    pub teams_project_panes: Vec<(u64, String)>,
+    pub teams_workers: Vec<crate::teams_relay::WorkerRecord>,
+    pub teams_pending_workers: Vec<crate::teams_relay::WorkerRecord>,
+    pub teams_relay_prompts: Vec<crate::teams_relay::RelayApprovalPrompt>,
+    pub usage_popover_open: bool,
+    pub usage_summary: crate::dialogs_toolbar_model::UsageSummary,
+    pub notifications_popover_open: bool,
+    pub notifications_items: Vec<crate::dialogs_toolbar_model::NotificationItem>,
+    pub status_popover: Option<crate::status_strip::StatusBarItemId>,
+    pub telemetry_app_rss_bytes: u64,
+    pub telemetry_panes_rss_bytes: u64,
+    pub telemetry_panes_cpu_pct: f32,
+    pub telemetry_app_sparkline: Vec<f64>,
+    pub telemetry_ports: Vec<crate::status_metrics::DetectedPort>,
+    pub prompt_modal: Option<GpuiPromptModalSnapshot>,
+    pub confirm_modal: Option<GpuiConfirmModalSnapshot>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub(crate) struct GpuiWorkspaceSnapshot {
     pub theme: ThemeId,
     pub dark: bool,
@@ -226,6 +551,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub center_mode: GpuiCenterMode,
     pub overlay_title: Option<String>,
     pub toolbar: GpuiToolbarSnapshot,
+    pub sidebar: GpuiSidebarSnapshot,
     pub projects: Vec<GpuiProjectItem>,
     pub view_tabs: Vec<GpuiViewTabItem>,
     pub tiles: Vec<GpuiPaneTileSnapshot>,
@@ -234,6 +560,9 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub active_document: Option<GpuiActiveDocumentSummary>,
     pub browser: GpuiBrowserSnapshot,
     pub side_panel: GpuiSidePanelSummary,
+    pub side_panels: GpuiSidePanelsSnapshot,
+    pub settings: Option<GpuiSettingsSnapshot>,
+    pub modals: GpuiModalsSnapshot,
     pub status_bar: GpuiStatusBarSnapshot,
 }
 
@@ -384,14 +713,174 @@ pub(crate) enum GpuiAction {
     BrowserDismissPopup,
     BrowserToggleDownloads,
     BrowserCancelDownload(u64),
-    // Global modals & settings
+    // Sidebar (`ProjectAction`) & Options
+    Project(crate::project_panel::ProjectAction),
+    SetSidebarPrefs(crate::workspace::SidebarPreferences),
+    // SidePanel 7 Tabs (Dashboard, Explorer, SCM Changes + Commits, Tasks, Runs, Sessions, Threads)
+    SidePanels(crate::side_panels_ui::SidePanelsAction),
+    SetDashboardGroup(crate::side_panels_model::DashboardGroupBy),
+    SetDashboardFilter(Option<crate::side_panels_model::DashboardState>),
+    SetDashboardQuery(String),
+    ExplorerSetFilter(String),
+    ExplorerToggleSearchMode,
+    ExplorerToggleDotfiles,
+    ExplorerToggleCompact,
+    ExplorerRefresh,
+    ExplorerClickRow {
+        key: String,
+        pinned: bool,
+    },
+    ExplorerOpenContentHit {
+        path: PathBuf,
+        line: usize,
+    },
+    ExplorerNewItem {
+        dir: bool,
+    },
+    ExplorerDeletePath {
+        path: PathBuf,
+        permanent: bool,
+    },
+    ScmRefresh,
+    ScmSetCommitMessage(String),
+    ScmCommit,
+    ScmStage(Vec<String>),
+    ScmUnstage(Vec<String>),
+    ScmRequestDiscard {
+        area: crate::scm_changes_panel::ScmArea,
+        paths: Vec<String>,
+    },
+    ScmOpenDiff {
+        area: crate::scm_changes_panel::ScmArea,
+        path: String,
+        old_path: Option<String>,
+        pinned: bool,
+    },
+    ScmRemoteOp(crate::scm_changes_panel::ScmRemoteOp),
+    ScmToggleCommitsOpen,
+    OpenNotesModal,
+    SetNotesText(String),
+    OpenReviewModal,
+    TasksSetNewTitle(String),
+    TasksAddFromDraft,
+    TasksBoard(crate::tasks_board_panel::TasksBoardAction),
+    SetTaskHistoryWindow(crate::side_panels_model::TaskHistoryFilter),
+    SetTaskHistorySort(crate::side_panels_model::TaskHistorySort),
+    ToggleTaskHistoryCurrentProject,
+    SetTaskHistoryQuery(String),
+    SetSessionsScope(crate::side_panels_model::SessionHistoryScope),
+    SetSessionsGroup(crate::side_panels_model::SessionHistoryGroupBy),
+    SetSessionsQuery(String),
+    SetConversationsWindow(crate::side_panels_model::ConversationWindow),
+    SetConversationsQuery(String),
+    SelectConversationThread(Option<String>),
+    // Settings (22 pages + Windows Vault & Tessel Account)
+    SetSettingsSearch(String),
+    SettingsPage(crate::settings_pages_panel::SettingsPageAction),
+    SettingsExtra(crate::settings_extra_panel::SettingsExtraAction),
+    UpdateGeneralPrefs(crate::workspace::GeneralPreferences),
+    UpdateTerminalPrefs(crate::workspace::TerminalPreferences),
+    UpdateEditorPrefs(crate::workspace::EditorPreferences),
+    UpdateBrowserPrefs(crate::workspace::BrowserPreferences),
+    UpdateGitPrefs(crate::workspace::GitPreferences),
+    UpdateStatsPrefs(crate::workspace::StatsPreferences),
+    UpdateContextPrefs(crate::settings_extra_model::ContextPreferences),
+    UpdateOrchestrationPrefs(crate::settings_extra_model::OrchestrationPreferences),
+    UpdateNotificationPrefs(crate::settings_extra_model::NotificationPreferences),
+    UpdateVoicePrefs(crate::settings_extra_model::VoicePreferences),
+    ToggleBuiltinAgentEnabled(String),
+    SetQuickCommandDraft {
+        name: String,
+        text: String,
+        press_enter: bool,
+    },
+    SubmitNewQuickCommand,
+    SetSshDraft {
+        alias: String,
+        folder: String,
+    },
+    AddSshHostFromDraft,
+    RemoveSshHost(usize),
+    LaunchSshHost(usize),
+    SetCustomAgentDraft {
+        name: String,
+        cmd: String,
+    },
+    SubmitNewCustomAgent,
+    SetAccountLabelDraft(String),
+    SelectSecretKeyIndex(usize),
+    SetSecretValueDraft(String),
+    SaveSecretFromDraft,
+    SetSkillsGitUrlDraft(String),
+    SetAutomationDraft {
+        name: String,
+        prompt: String,
+        every_mins: u32,
+    },
+    SubmitNewAutomation,
+    VaultUnlock,
+    VaultImportCsv,
+    VaultDeleteEntry(String),
+    VaultFillEntry(String),
+    AccountOpenStore,
+    AccountSignInBrowser,
+    AccountSignOut,
+    AccountSuggestPhrase,
+    // Modals, Popovers & Navigation
     ToggleCommandPalette,
+    PaletteSetQuery(String),
+    PaletteStep(isize),
+    PaletteExecute(String),
+    PaletteExecuteSelected,
+    OpenFinder,
+    FinderSetQuery(String),
+    FinderStep(isize),
+    FinderAccept {
+        idx: Option<usize>,
+        insert: bool,
+    },
+    ToggleLaunchMenu,
+    SetLaunchPlacement(crate::finder_model::LaunchPlacement),
+    ToggleLaunchInWorktree,
+    LaunchFromMenu {
+        agent_id: Option<String>,
+        native_chat: Option<&'static str>,
+    },
     OpenSettings,
     OpenSettingsPage(String),
     CloseOverlays,
     OpenHelp,
+    SetHelpQuery(String),
     OpenLiveShare,
+    Share(crate::share_panel::ShareGpuiAction),
     OpenGitHubDialog,
+    DialogsToolbar(crate::dialogs_toolbar_ui::DialogsToolbarAction),
+    SetAddProjectTab(crate::dialogs_toolbar_ui::AddProjectTab),
+    ToggleNestedRepo(PathBuf),
+    SetAddProjectCloneUrl(String),
+    SetAddProjectFolderName(String),
+    SetAddProjectSshAlias(String),
+    SetGitHubTab(crate::dialogs_toolbar_ui::GitHubTab),
+    SetGitHubQuery(String),
+    OpenTeamsManager(u64),
+    CloseTeamsManager,
+    SetNewTeamName(String),
+    Teams(crate::teams_ui::TeamsUiAction),
+    WorktreeCleanupTogglePath(PathBuf),
+    WorktreeCleanupSelectSafe,
+    WorktreeCleanupSelectNone,
+    WorktreeCleanupConfirmRemove,
+    WorktreeCleanupClose,
+    ToggleUsagePopover,
+    ToggleNotificationsPopover,
+    ToggleStatusPopover(crate::status_strip::StatusBarItemId),
+    RefreshPortsNow,
+    SetPromptDraft(String),
+    SubmitPromptModal,
+    CancelPromptModal,
+    ConfirmModalPrimary,
+    ConfirmModalSecondary,
+    CancelConfirmModal,
     SetTheme(ThemeId),
     SetLanguage {
         french: bool,
@@ -425,6 +914,27 @@ fn project_initials(name: &str) -> String {
         }
     }
     if out.is_empty() { "WS".into() } else { out }
+}
+
+fn apply_singleline_edit(
+    cur: &mut String,
+    lower: &str,
+    printable: Option<&str>,
+    pasted: Option<String>,
+) -> bool {
+    if let Some(p) = pasted {
+        let single = p.replace(['\r', '\n'], " ");
+        cur.push_str(&single);
+        true
+    } else if lower == "backspace" {
+        let _ = cur.pop();
+        true
+    } else if let Some(txt) = printable {
+        cur.push_str(txt);
+        true
+    } else {
+        false
+    }
 }
 
 impl Tessel {
@@ -632,6 +1142,7 @@ impl Tessel {
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
             scm_commits_project: None,
+            gpui_extra: Default::default(),
             #[cfg(windows)]
             browser_tab_open: false,
             #[cfg(windows)]
@@ -804,11 +1315,55 @@ impl Tessel {
         copied
     }
 
+    pub(crate) fn gpui_take_copied_clipboard(&mut self) -> Option<String> {
+        self.gpui_extra.copied_clipboard.take()
+    }
+
+    pub(crate) fn gpui_is_palette_open(&self) -> bool {
+        self.command_palette.open
+    }
+
+    pub(crate) fn gpui_is_finder_open(&self) -> bool {
+        self.finder.is_open()
+    }
+
+    pub(crate) fn gpui_escape_clears_modal_search(&mut self) -> bool {
+        if self.overlay == Some(Overlay::Help) && !self.gpui_extra.help_query.is_empty() {
+            self.gpui_extra.help_query.clear();
+            return true;
+        }
+        if self.overlay == Some(Overlay::Settings) && !self.gpui_extra.settings_search.is_empty() {
+            self.gpui_extra.settings_search.clear();
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
         self.overlay.is_some()
             || self.command_palette.open
-            || self.dialogs_toolbar_ui.add_project_open
-            || self.dialogs_toolbar_ui.github_open
+            || self.finder.is_open()
+            || self.gpui_extra.launch_menu_open
+            || self.dialogs_toolbar_ui.any_modal_open()
+            || self.side_panels_ui.any_modal_open()
+            || self.worktree_cleanup.is_some()
+            || self.teams_ui.manager_project.is_some()
+            || !self.teams_hub.approval_prompts.is_empty()
+            || self
+                .teams_hub
+                .workers
+                .iter()
+                .any(|w| w.state == crate::teams_relay::WorkerState::Confirming)
+            || self.share.has_pending_ask()
+            || self.rename_project_modal.is_some()
+            || self.rename_agent.is_some()
+            || self.pending_close.is_some()
+            || self.pending_close_session.is_some()
+            || self.pending_remove_project.is_some()
+            || self.pending_scm_discard.is_some()
+            || self.pending_delete_worktree.is_some()
+            || self.pending_agent_install.is_some()
+            || self.file_action.is_some()
     }
 
     pub(crate) fn gpui_is_document_view(&self) -> bool {
@@ -1126,6 +1681,380 @@ impl Tessel {
                     false
                 }
             }
+            GpuiFocusTarget::PaletteQuery => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::PaletteExecuteSelected);
+                    return true;
+                }
+                let mut cur = self.command_palette.query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::PaletteSetQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::FinderQuery => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::FinderAccept {
+                        idx: None,
+                        insert: shift,
+                    });
+                    return true;
+                }
+                let mut cur = self
+                    .finder
+                    .gpui_snapshot()
+                    .map(|s| s.query)
+                    .unwrap_or_default();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::FinderSetQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::HelpQuery => {
+                let mut cur = self.gpui_extra.help_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetHelpQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ExplorerFilter => {
+                let mut cur = self.explorer_tree.gpui_filter_query().to_owned();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::ExplorerSetFilter(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ScmCommitMessage => {
+                if lower == "enter" && !shift {
+                    self.apply_gpui_action(GpuiAction::ScmCommit);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.scm_commit_msg.clone();
+                if lower == "enter" && shift {
+                    cur.push('\n');
+                    self.apply_gpui_action(GpuiAction::ScmSetCommitMessage(cur));
+                    true
+                } else if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::ScmSetCommitMessage(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::TaskNewTitle => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::TasksAddFromDraft);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.new_task_title.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::TasksSetNewTitle(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::DashboardQuery => {
+                let mut cur = self.side_panels_ui.dashboard_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetDashboardQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::TaskHistoryQuery => {
+                let mut cur = self.side_panels_ui.history_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetTaskHistoryQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::SessionsQuery => {
+                let mut cur = self.side_panels_ui.sessions_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetSessionsQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ConversationsQuery => {
+                let mut cur = self.side_panels_ui.conv_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetConversationsQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::SettingsSearch => {
+                let mut cur = self.gpui_extra.settings_search.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetSettingsSearch(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::NotesEditor => {
+                let mut cur = self.side_panels_ui.notes.text.clone();
+                if lower == "enter" {
+                    cur.push('\n');
+                    self.apply_gpui_action(GpuiAction::SetNotesText(cur));
+                    true
+                } else if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetNotesText(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::AddProjectCloneUrl => {
+                let mut cur = self.dialogs_toolbar_ui.clone_url.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetAddProjectCloneUrl(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::AddProjectFolderName => {
+                let mut cur = match self.dialogs_toolbar_ui.add_tab {
+                    crate::dialogs_toolbar_ui::AddProjectTab::CloneRepo => {
+                        self.dialogs_toolbar_ui.clone_folder_name.clone()
+                    }
+                    crate::dialogs_toolbar_ui::AddProjectTab::SshRemote => {
+                        self.dialogs_toolbar_ui.ssh_remote_dir.clone()
+                    }
+                    _ => self.dialogs_toolbar_ui.init_folder_name.clone(),
+                };
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetAddProjectFolderName(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::GitHubSearch => {
+                let mut cur = self.dialogs_toolbar_ui.github_query.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetGitHubQuery(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::LiveShareJoinCode => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::Share(
+                        crate::share_panel::ShareGpuiAction::JoinSession,
+                    ));
+                    return true;
+                }
+                let mut cur = self.share.gpui_snapshot(false).join_code;
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::Share(
+                        crate::share_panel::ShareGpuiAction::SetJoinCode(cur),
+                    ));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::PromptDraft => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::SubmitPromptModal);
+                    return true;
+                }
+                let mut cur = self.current_prompt_draft();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetPromptDraft(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::NewTeamName => {
+                let mut cur = self.teams_ui.new_team_name.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetNewTeamName(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::QuickCommandName => {
+                let mut cur = self.gpui_extra.new_quick_cmd_name.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let text = self.gpui_extra.new_quick_cmd_text.clone();
+                    let press_enter = self.gpui_extra.new_quick_cmd_enter;
+                    self.apply_gpui_action(GpuiAction::SetQuickCommandDraft {
+                        name: cur,
+                        text,
+                        press_enter,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::QuickCommandText => {
+                if lower == "enter" && !shift {
+                    self.apply_gpui_action(GpuiAction::SubmitNewQuickCommand);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.new_quick_cmd_text.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let name = self.gpui_extra.new_quick_cmd_name.clone();
+                    let press_enter = self.gpui_extra.new_quick_cmd_enter;
+                    self.apply_gpui_action(GpuiAction::SetQuickCommandDraft {
+                        name,
+                        text: cur,
+                        press_enter,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::CustomAgentName => {
+                let mut cur = self.gpui_extra.new_custom_agent_name.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let cmd = self.gpui_extra.new_custom_agent_cmd.clone();
+                    self.apply_gpui_action(GpuiAction::SetCustomAgentDraft { name: cur, cmd });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::CustomAgentCmd => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::SubmitNewCustomAgent);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.new_custom_agent_cmd.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let name = self.gpui_extra.new_custom_agent_name.clone();
+                    self.apply_gpui_action(GpuiAction::SetCustomAgentDraft { name, cmd: cur });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::AccountLabel => {
+                let mut cur = self.gpui_extra.new_account_label.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetAccountLabelDraft(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::ProviderSecretValue => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::SaveSecretFromDraft);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.secret_value_draft.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetSecretValueDraft(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::SkillsGitUrl => {
+                let mut cur = self.gpui_extra.skills_git_url.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetSkillsGitUrlDraft(cur));
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::SshAlias => {
+                let mut cur = self.gpui_extra.new_ssh_alias.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let folder = self.gpui_extra.new_ssh_folder.clone();
+                    self.apply_gpui_action(GpuiAction::SetSshDraft { alias: cur, folder });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::SshFolder => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.new_ssh_folder.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let alias = self.gpui_extra.new_ssh_alias.clone();
+                    self.apply_gpui_action(GpuiAction::SetSshDraft { alias, folder: cur });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::AutomationName => {
+                let mut cur = self.gpui_extra.new_auto_name.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let prompt = self.gpui_extra.new_auto_prompt.clone();
+                    let every_mins = self.gpui_extra.new_auto_every_mins;
+                    self.apply_gpui_action(GpuiAction::SetAutomationDraft {
+                        name: cur,
+                        prompt,
+                        every_mins,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            GpuiFocusTarget::AutomationPrompt => {
+                if lower == "enter" && !shift {
+                    self.apply_gpui_action(GpuiAction::SubmitNewAutomation);
+                    return true;
+                }
+                let mut cur = self.gpui_extra.new_auto_prompt.clone();
+                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
+                    let name = self.gpui_extra.new_auto_name.clone();
+                    let every_mins = self.gpui_extra.new_auto_every_mins;
+                    self.apply_gpui_action(GpuiAction::SetAutomationDraft {
+                        name,
+                        prompt: cur,
+                        every_mins,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn current_prompt_draft(&self) -> String {
+        if let Some((_, draft, _)) = &self.rename_project_modal {
+            draft.clone()
+        } else if let Some(ra) = &self.rename_agent {
+            ra.draft.clone()
+        } else if self.dialogs_toolbar_ui.group_modal_project.is_some() {
+            self.dialogs_toolbar_ui.group_modal_draft.clone()
+        } else if let Some(fa) = &self.file_action {
+            fa.name.clone()
+        } else {
+            String::new()
         }
     }
 
@@ -1228,8 +2157,39 @@ impl Tessel {
             layout.maximized
         };
 
+        if self.state.panels.right_open {
+            if self.state.panels.right_tab == SideTab::Changes
+                && self.scm_commits_project != self.state.active_project
+            {
+                self.refresh_scm_commits();
+            } else if self.state.panels.right_tab == SideTab::History
+                && self.past_sessions_cache.is_empty()
+                && self.store.is_some()
+            {
+                self.refresh_past_sessions();
+            }
+        }
+        if self.overlay == Some(Overlay::Settings) {
+            match self.current_settings_page_id() {
+                "skills" if self.scanned_skills.is_empty() => {
+                    self.refresh_scanned_skills();
+                }
+                "mcp" if self.installed_mcp_servers.is_empty() => {
+                    self.refresh_installed_mcp_servers();
+                }
+                "context"
+                    if self.context_scan.total_tokens == 0
+                        && self.context_scan.rules_files.is_empty() =>
+                {
+                    self.refresh_context_scan();
+                }
+                _ => {}
+            }
+        }
+
         let mut any_agent_working = false;
         let mut total_waiting_agents = 0usize;
+        let mut first_waiting_pane: Option<u64> = None;
         let mut active_working_agents = 0usize;
         for s in &self.sessions {
             let is_agent = matches!(
@@ -1267,6 +2227,9 @@ impl Tessel {
             }
             if is_waiting {
                 total_waiting_agents += 1;
+                if first_waiting_pane.is_none() {
+                    first_waiting_pane = Some(s.id);
+                }
             }
             if s.project == self.state.active_project && is_working {
                 active_working_agents += 1;
@@ -1379,6 +2342,23 @@ impl Tessel {
             }
         };
 
+        let team_badges = self.teams_hub.session_badges(&self.state);
+        let share_snap = self.share.gpui_snapshot(french);
+        let joined_guest_initials: Vec<String> = share_snap
+            .guests
+            .iter()
+            .filter(|g| g.joined)
+            .map(|g| g.initials.clone())
+            .collect();
+
+        let orphan_sessions: Vec<GpuiSessionSidebarRow> = self
+            .sessions
+            .iter()
+            .filter(|s| s.project.is_none())
+            .filter(|s| !self.state.sidebar.hide_sleeping || !self.session_is_sleeping(s))
+            .map(|s| self.build_sidebar_session_row(s, &team_badges, &joined_guest_initials))
+            .collect();
+
         let projects: Vec<GpuiProjectItem> = self
             .state
             .projects
@@ -1386,36 +2366,54 @@ impl Tessel {
             .map(|p| {
                 let summary = self.worktree_state.summary(p.id);
                 let git_branch = summary.map(|s| s.branch.clone()).filter(|b| !b.is_empty());
-                let secondary_worktrees = summary
-                    .map(|s| {
-                        s.worktrees
-                            .iter()
-                            .filter(|wt| !wt.is_primary)
-                            .map(|wt| (wt.branch.clone(), wt.path.clone()))
-                            .collect::<Vec<_>>()
-                    })
+                let wt_prefs = self.state.project_worktrees.get(&p.id);
+                let shown_set: std::collections::HashSet<&str> = wt_prefs
+                    .map(|wp| wp.shown_worktrees.iter().map(String::as_str).collect())
                     .unwrap_or_default();
+                let inbox_dismissed = wt_prefs.is_some_and(|wp| wp.inbox_dismissed);
+                let mut secondary_worktrees = Vec::new();
+                let mut visible_worktrees = Vec::new();
+                let mut hidden_worktrees = Vec::new();
+                if let Some(s) = summary {
+                    for wt in s.worktrees.iter().filter(|wt| !wt.is_primary) {
+                        secondary_worktrees.push((wt.branch.clone(), wt.path.clone()));
+                        let has_open_pane = self.sessions.iter().any(|sess| {
+                            sess.project == Some(p.id)
+                                && sess
+                                    .worktree
+                                    .as_ref()
+                                    .is_some_and(|sw| sw.path.to_string_lossy() == wt.path)
+                        });
+                        let is_shown = has_open_pane || shown_set.contains(wt.path.as_str());
+                        let row = GpuiWorktreeSidebarRow {
+                            branch: wt.branch.clone(),
+                            path: wt.path.clone(),
+                            dirty: wt.locked,
+                            hidden: !is_shown,
+                        };
+                        if is_shown {
+                            visible_worktrees.push(row);
+                        } else if !wt.detached {
+                            hidden_worktrees.push(row);
+                        }
+                    }
+                }
                 let mut sess_count = 0usize;
                 let mut running_agents = 0usize;
                 let mut waiting_agents = 0usize;
+                let mut sessions = Vec::new();
                 for s in self.sessions.iter().filter(|s| s.project == Some(p.id)) {
                     sess_count += 1;
                     if self.session_is_running_agent(s.id) {
                         running_agents += 1;
                     }
-                    let waiting = match &s.launch {
-                        Launch::CodexChat => self
-                            .chats
-                            .iter()
-                            .any(|c| c.pane == s.id && c.waiting_for_user()),
-                        Launch::ClaudeChat => self
-                            .claude_chats
-                            .iter()
-                            .any(|c| c.pane == s.id && c.waiting_for_user()),
-                        _ => false,
-                    };
-                    if waiting {
+                    let row =
+                        self.build_sidebar_session_row(s, &team_badges, &joined_guest_initials);
+                    if row.waiting {
                         waiting_agents += 1;
+                    }
+                    if !self.state.sidebar.hide_sleeping || !row.sleeping {
+                        sessions.push(row);
                     }
                 }
                 GpuiProjectItem {
@@ -1430,6 +2428,10 @@ impl Tessel {
                     running_agents,
                     waiting_agents,
                     secondary_worktrees,
+                    sessions,
+                    visible_worktrees,
+                    hidden_worktrees,
+                    inbox_dismissed,
                 }
             })
             .collect();
@@ -1592,11 +2594,35 @@ impl Tessel {
             }
         }
 
-        let active_proj_ref = self.state.active();
+        let active_project_name = self.state.active().map(|p| p.name.clone());
+        let active_project_path = self
+            .state
+            .active()
+            .map(|p| p.path.to_string_lossy().into_owned());
+        let has_active_project = active_project_name.is_some();
         let active_branch = active_pid
             .and_then(|pid| self.worktree_state.summary(pid))
             .map(|s| s.branch.clone())
             .filter(|b| !b.is_empty());
+
+        let telemetry = self.status_telemetry.latest();
+        let app_rss_bytes: u64 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.app.iter().map(|e| e.memory_bytes as u64).sum())
+            .unwrap_or(0);
+        let app_rss_mb = app_rss_bytes / (1024 * 1024);
+        let listening_ports_count = telemetry.ports.len();
+
+        let sidebar = GpuiSidebarSnapshot {
+            prefs: self.state.sidebar,
+            collapsed_groups: self.state.collapsed_project_groups.clone(),
+            orphan_sessions,
+        };
+        let side_panels = self.build_side_panels_snapshot(french);
+        let settings = (self.overlay == Some(Overlay::Settings))
+            .then(|| self.build_settings_snapshot(french, &telemetry));
+        let modals = self.build_modals_snapshot(french, &share_snap, &telemetry);
 
         let overlay_title = if self.command_palette.open {
             Some(tr("Command Palette").into())
@@ -1631,16 +2657,21 @@ impl Tessel {
                 floating_open: floating.open,
                 share_active: self.overlay == Some(Overlay::Share)
                     || self.share.has_pending_ask()
-                    || self.share.is_pill_popover_open(),
+                    || self.share.is_pill_popover_open()
+                    || share_snap.hosting
+                    || share_snap.guest_active,
+                share_pill_label: share_snap.pill_label,
                 waiting_agents_count: total_waiting_agents,
+                first_waiting_pane,
                 unread_notifications: self.notifications.unread_count(),
-                has_active_project: active_proj_ref.is_some(),
-                active_project_name: active_proj_ref.map(|p| p.name.clone()),
+                has_active_project,
+                active_project_name: active_project_name.clone(),
                 preferred_shell_label,
                 installed_agents,
                 command_palette_open: self.command_palette.open,
                 error_banner: (!self.error.is_empty()).then(|| self.error.clone()),
             },
+            sidebar,
             projects,
             view_tabs,
             tiles,
@@ -1657,17 +2688,22 @@ impl Tessel {
                 tasks_done,
                 history_count: self.task_history_store.records.len(),
                 conversations_count: self.activity_store.messages.len(),
-                explorer_root_name: active_proj_ref.map(|p| p.name.clone()),
+                explorer_root_name: active_project_name,
             },
+            side_panels,
+            settings,
+            modals,
             status_bar: GpuiStatusBarSnapshot {
                 visible: self.state.status_bar.visible,
                 keep_awake: self.state.status_bar.keep_awake,
                 keep_awake_active,
-                workspace_path: active_proj_ref.map(|p| p.path.to_string_lossy().into_owned()),
+                workspace_path: active_project_path,
                 git_branch: active_branch,
                 session_count: project_session_ids.len(),
                 working_agents: active_working_agents,
                 ssh_host_count: self.state.hosts.len(),
+                listening_ports_count,
+                app_rss_mb,
                 version_build: format!("v{} {}", env!("CARGO_PKG_VERSION"), env!("TESSEL_BUILD")),
             },
         }
@@ -1909,6 +2945,20 @@ impl Tessel {
             _ => None,
         };
 
+        let team_badge = self.teams_hub.session_badges(&self.state).remove(&sess.id);
+        let share_guests = if self.active_session == Some(sess.id) {
+            self.share
+                .gpui_snapshot(false)
+                .guests
+                .into_iter()
+                .filter(|g| g.joined)
+                .map(|g| g.initials)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let wake_banner = self.teams_hub.wake_banners.get(&sess.id).cloned();
+
         GpuiPaneTileSnapshot {
             session_id: sess.id,
             title: sess.label().to_owned(),
@@ -1931,7 +2981,731 @@ impl Tessel {
             terminal_render,
             cursor_style,
             native_chat,
+            team_badge,
+            share_guests,
+            wake_banner,
             error: sess.error.clone(),
+        }
+    }
+
+    fn session_is_sleeping(&self, sess: &Session) -> bool {
+        let is_native_chat = sess.launch.native_chat().is_some();
+        !is_native_chat
+            && sess.terminal.is_none()
+            && sess.loading.is_none()
+            && sess.restarting.is_none()
+    }
+
+    fn build_sidebar_session_row(
+        &self,
+        sess: &Session,
+        team_badges: &std::collections::HashMap<u64, crate::teams_relay::SessionTeamBadge>,
+        joined_guest_initials: &[String],
+    ) -> GpuiSessionSidebarRow {
+        let is_agent = matches!(
+            sess.launch,
+            Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+        );
+        let sleeping = self.session_is_sleeping(sess);
+        let working = self.session_is_running_agent(sess.id);
+        let waiting = match &sess.launch {
+            Launch::CodexChat => self
+                .chats
+                .iter()
+                .any(|c| c.pane == sess.id && c.waiting_for_user()),
+            Launch::ClaudeChat => self
+                .claude_chats
+                .iter()
+                .any(|c| c.pane == sess.id && c.waiting_for_user()),
+            _ => false,
+        };
+        let exited = sess.terminal.as_ref().is_some_and(|t| t.exited());
+        let kind_label = match &sess.launch {
+            Launch::Shell => "Shell".into(),
+            Launch::CodexChat => "Codex Chat".into(),
+            Launch::ClaudeChat => "Claude Chat".into(),
+            Launch::Agent(agent) => agent.clone(),
+            Launch::Ssh(host) => format!("SSH · {}", host.alias),
+        };
+        let task_line = if self.state.sidebar.hide_agent_task_line || !is_agent {
+            None
+        } else {
+            sess.terminal
+                .as_ref()
+                .and_then(|t| {
+                    t.output()
+                        .lines()
+                        .rev()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty())
+                        .map(|l| l.chars().take(64).collect::<String>())
+                })
+                .or_else(|| sess.worktree.as_ref().map(|w| format!("⎇ {}", w.branch)))
+        };
+        let share_guests = if self.active_session == Some(sess.id) {
+            joined_guest_initials.to_vec()
+        } else {
+            Vec::new()
+        };
+        GpuiSessionSidebarRow {
+            id: sess.id,
+            project_id: sess.project,
+            title: sess.label().to_owned(),
+            kind_label,
+            is_agent,
+            active: self.active_session == Some(sess.id),
+            sleeping,
+            waiting,
+            working,
+            exited,
+            worktree_branch: sess.worktree.as_ref().map(|w| w.branch.clone()),
+            task_line,
+            team_badge: team_badges.get(&sess.id).cloned(),
+            share_guests,
+        }
+    }
+
+    fn build_side_panels_snapshot(&mut self, french: bool) -> GpuiSidePanelsSnapshot {
+        use crate::side_panels_model::{
+            build_conversation_threads, build_dashboard, filter_and_sort_task_history,
+            filter_sessions, now_unix_ms,
+        };
+
+        let dash_items = self.build_dashboard_items();
+        let dashboard_vm = build_dashboard(
+            &dash_items,
+            self.side_panels_ui.dashboard_group,
+            self.side_panels_ui.dashboard_filter,
+            &self.side_panels_ui.dashboard_query,
+            french,
+        );
+
+        let active_root = self.state.active().map(|p| p.path.clone());
+        let active_doc_path = (self.view == View::Files)
+            .then(|| {
+                self.documents
+                    .get(self.active_document)
+                    .map(|d| d.path.clone())
+            })
+            .flatten();
+        let explorer = self
+            .explorer_tree
+            .gpui_rows_snapshot(active_root.as_deref(), active_doc_path.as_deref());
+
+        let (scm_branch, scm_ahead, scm_behind, scm_entries, scm_error) =
+            match &self.scm_state.result {
+                Some(Ok(parsed)) => (
+                    parsed.branch.clone(),
+                    parsed.ahead,
+                    parsed.behind,
+                    parsed.entries.clone(),
+                    None,
+                ),
+                Some(Err(err)) => (None, 0, 0, Vec::new(), Some(err.clone())),
+                None => (None, 0, 0, Vec::new(), None),
+            };
+
+        let active_pid = self.state.active_project;
+        let tasks: Vec<crate::workspace::Task> = active_pid
+            .map(|pid| {
+                self.state
+                    .tasks
+                    .iter()
+                    .filter(|t| t.project == pid)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let proj_filter = if self.side_panels_ui.history_current_project_only {
+            active_pid
+        } else {
+            None
+        };
+        let (task_history_rows, _) = filter_and_sort_task_history(
+            &self.task_history_store.records,
+            proj_filter,
+            self.side_panels_ui.history_window,
+            self.side_panels_ui.history_sort,
+            &self.side_panels_ui.history_query,
+            now_unix_ms(),
+        );
+
+        let workspace_roots: Vec<PathBuf> =
+            self.state.projects.iter().map(|p| p.path.clone()).collect();
+        let agent_filter = (!self.side_panels_ui.sessions_agent_filter.is_empty())
+            .then_some(self.side_panels_ui.sessions_agent_filter.as_str());
+        let past_sessions = filter_sessions(
+            &self.past_sessions_cache,
+            self.side_panels_ui.sessions_scope,
+            active_root.as_deref(),
+            &workspace_roots,
+            agent_filter,
+            &self.side_panels_ui.sessions_query,
+            self.side_panels_ui.sessions_include_transcripts,
+        );
+
+        let threads = build_conversation_threads(
+            &self.activity_store.messages,
+            self.side_panels_ui.conv_window,
+            self.side_panels_ui.conv_media,
+            &self.side_panels_ui.conv_query,
+            now_unix_ms(),
+        );
+
+        GpuiSidePanelsSnapshot {
+            dashboard_vm,
+            dashboard_group: self.side_panels_ui.dashboard_group,
+            dashboard_filter: self.side_panels_ui.dashboard_filter,
+            dashboard_query: self.side_panels_ui.dashboard_query.clone(),
+            explorer,
+            scm_branch,
+            scm_ahead: scm_ahead as usize,
+            scm_behind: scm_behind as usize,
+            scm_busy: self.commit_in_flight || self.git_result.busy(),
+            scm_commit_msg: self.gpui_extra.scm_commit_msg.clone(),
+            scm_entries,
+            scm_error,
+            commits_open: self.side_panels_ui.commits_open,
+            commits: self.scm_commits_cache.clone(),
+            expanded_commits: self.side_panels_ui.expanded_commits.clone(),
+            commit_files: self.side_panels_ui.commit_files_cache.clone(),
+            tasks,
+            new_task_title: self.gpui_extra.new_task_title.clone(),
+            history_window: self.side_panels_ui.history_window,
+            history_sort: self.side_panels_ui.history_sort,
+            history_current_project_only: self.side_panels_ui.history_current_project_only,
+            history_query: self.side_panels_ui.history_query.clone(),
+            task_history_rows,
+            sessions_scope: self.side_panels_ui.sessions_scope,
+            sessions_group: self.side_panels_ui.sessions_group,
+            sessions_query: self.side_panels_ui.sessions_query.clone(),
+            past_sessions,
+            conv_window: self.side_panels_ui.conv_window,
+            conv_query: self.side_panels_ui.conv_query.clone(),
+            selected_thread_key: self.side_panels_ui.selected_thread_key.clone(),
+            threads,
+        }
+    }
+
+    fn build_settings_snapshot(
+        &mut self,
+        french: bool,
+        telemetry: &crate::status_metrics::TelemetryReport,
+    ) -> GpuiSettingsSnapshot {
+        use crate::settings_model::{ALL_SETTINGS_GROUPS, SettingsLang};
+
+        let lang = if french {
+            SettingsLang::Fr
+        } else {
+            SettingsLang::En
+        };
+        let q = self.gpui_extra.settings_search.trim().to_lowercase();
+        let mut groups = Vec::new();
+        for group in ALL_SETTINGS_GROUPS {
+            let mut pages = Vec::new();
+            for page in group.pages() {
+                if !cfg!(windows)
+                    && matches!(page, crate::settings_model::SettingsPageId::TesselAccount)
+                {
+                    continue;
+                }
+                let title = page.title(lang);
+                let desc = page.description(lang);
+                if q.is_empty()
+                    || title.to_lowercase().contains(&q)
+                    || desc.to_lowercase().contains(&q)
+                    || page.as_str().to_lowercase().contains(&q)
+                {
+                    pages.push((page.as_str().to_owned(), title.to_owned()));
+                }
+            }
+            if !pages.is_empty() {
+                groups.push((group.title(lang).to_owned(), pages));
+            }
+        }
+
+        let mut running_agents = 0usize;
+        let mut sleeping_sessions = 0usize;
+        for s in &self.sessions {
+            if self.session_is_running_agent(s.id) {
+                running_agents += 1;
+            }
+            if self.session_is_sleeping(s) {
+                sleeping_sessions += 1;
+            }
+        }
+        let mut tasks_todo = 0usize;
+        let mut tasks_doing = 0usize;
+        let mut tasks_review = 0usize;
+        let mut tasks_done = 0usize;
+        for t in &self.state.tasks {
+            match t.column {
+                0 => tasks_todo += 1,
+                1 => tasks_doing += 1,
+                2 => tasks_review += 1,
+                _ => tasks_done += 1,
+            }
+        }
+        let app_rss_bytes: u64 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.app.iter().map(|e| e.memory_bytes as u64).sum())
+            .unwrap_or(0);
+        let panes_rss_bytes: u64 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.terminals.values().map(|e| e.memory_bytes as u64).sum())
+            .unwrap_or(0);
+        let panes_cpu_pct: f32 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.terminals.values().map(|e| e.cpu_percent as f32).sum())
+            .unwrap_or(0.0);
+
+        let stats_snapshot = crate::settings_pages_panel::StatsSnapshot {
+            project_count: self.state.projects.len(),
+            session_count: self.sessions.len(),
+            running_agents,
+            sleeping_sessions,
+            open_documents: self.documents.len(),
+            tasks_todo,
+            tasks_doing,
+            tasks_review,
+            tasks_done,
+            app_rss_bytes,
+            panes_rss_bytes,
+            panes_cpu_pct,
+            listening_ports: telemetry.ports.len(),
+        };
+
+        let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
+            &self.task_history_store.records,
+            10.0,
+            crate::dialogs_toolbar_model::now_ms(),
+        );
+
+        let builtin_agents: Vec<BuiltinAgentSettingRow> = crate::agent_catalog::ALL
+            .iter()
+            .map(|entry| {
+                let installed = self
+                    .agents
+                    .entries()
+                    .iter()
+                    .any(|(id, inst)| id == entry.id && *inst);
+                let enabled = crate::agent_preferences::enabled(&self.state, entry.id);
+                (
+                    entry.id.to_owned(),
+                    entry.name.to_owned(),
+                    installed,
+                    enabled,
+                )
+            })
+            .collect();
+
+        let provider_secrets: Vec<ProviderSecretRow> =
+            crate::settings_extra_model::PROVIDER_SECRET_KEYS
+                .iter()
+                .map(|&k| {
+                    let stored = self.provider_secret_flags.get(k).copied().unwrap_or(false);
+                    (k.to_owned(), k.to_owned(), stored)
+                })
+                .collect();
+
+        #[cfg(windows)]
+        let vault = (self.settings_section == SettingsSection::Passwords)
+            .then(|| self.vault.gpui_snapshot(&self.browser));
+        #[cfg(not(windows))]
+        let vault = None;
+
+        #[cfg(windows)]
+        let account = (self.settings_section == SettingsSection::Account)
+            .then(|| self.account.gpui_snapshot());
+        #[cfg(not(windows))]
+        let account = None;
+
+        let active_page_id = match self.settings_section {
+            #[cfg(windows)]
+            SettingsSection::Passwords => "passwords".into(),
+            _ => self.current_settings_page_id().to_owned(),
+        };
+
+        GpuiSettingsSnapshot {
+            active_page_id,
+            search_query: self.gpui_extra.settings_search.clone(),
+            groups,
+            general_prefs: self.state.general_prefs.clone(),
+            preferred_shell: self.state.launcher_prefs.preferred_shell.clone(),
+            wsl_available: self.wsl_available,
+            terminal_prefs: self.state.terminal_prefs,
+            editor_prefs: self.state.editor_prefs,
+            browser_prefs: self.state.browser_prefs,
+            git_prefs: self.state.git_prefs.clone(),
+            git_username: self.git_username.clone(),
+            stats_prefs: self.state.stats_prefs,
+            stats_snapshot,
+            usage_summary,
+            quick_commands: self.state.quick_commands.clone(),
+            new_quick_cmd_name: self.gpui_extra.new_quick_cmd_name.clone(),
+            new_quick_cmd_text: self.gpui_extra.new_quick_cmd_text.clone(),
+            new_quick_cmd_enter: self.gpui_extra.new_quick_cmd_enter,
+            ssh_hosts: self.state.hosts.clone(),
+            new_ssh_alias: self.gpui_extra.new_ssh_alias.clone(),
+            new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
+            builtin_agents,
+            custom_agents: self.state.custom_agents.clone(),
+            new_custom_agent_name: self.gpui_extra.new_custom_agent_name.clone(),
+            new_custom_agent_cmd: self.gpui_extra.new_custom_agent_cmd.clone(),
+            claude_accounts: self.claude_managed_accounts.clone(),
+            codex_accounts: self.codex_managed_accounts.clone(),
+            new_account_label: self.gpui_extra.new_account_label.clone(),
+            provider_secrets,
+            secret_key_idx: self.gpui_extra.secret_key_idx,
+            secret_value_draft: self.gpui_extra.secret_value_draft.clone(),
+            cli_sign_ins: self.cli_sign_ins.clone(),
+            skills: self.scanned_skills.clone(),
+            skills_git_url: self.gpui_extra.skills_git_url.clone(),
+            installed_mcp: self.installed_mcp_servers.clone(),
+            context_prefs: self.state.context_prefs,
+            context_scan: self.context_scan.clone(),
+            orchestration_prefs: self.state.orchestration_prefs.clone(),
+            notification_prefs: self.state.notification_prefs.clone(),
+            voice_prefs: self.state.voice_prefs.clone(),
+            devtools: self.devtools_statuses.clone(),
+            automations: self.automations_store.clone(),
+            new_auto_name: self.gpui_extra.new_auto_name.clone(),
+            new_auto_prompt: self.gpui_extra.new_auto_prompt.clone(),
+            new_auto_every_mins: self.gpui_extra.new_auto_every_mins,
+            vault,
+            account,
+            backup_status: self.backup_status.clone(),
+        }
+    }
+
+    fn build_modals_snapshot(
+        &self,
+        french: bool,
+        share_snap: &crate::share_panel::ShareGpuiSnapshot,
+        telemetry: &crate::status_metrics::TelemetryReport,
+    ) -> GpuiModalsSnapshot {
+        let palette_rows = if self.command_palette.open {
+            let current_theme = self.state.theme.unwrap_or(ThemeId::Classic);
+            let cmds = self.build_palette_commands(current_theme);
+            crate::palette::filter_palette_commands(&cmds, &self.command_palette.query)
+        } else {
+            Vec::new()
+        };
+
+        let has_panes = self
+            .sessions
+            .iter()
+            .any(|s| s.project == self.state.active_project);
+        let auto_tile = self.state.terminal_prefs.tile_new_panes;
+        let launch_placements = crate::finder_model::available_placements(has_panes, auto_tile);
+        let target_pane_name = self
+            .active_session
+            .and_then(|id| self.sessions.iter().find(|s| s.id == id))
+            .map(Session::label);
+        let launch_lang = if french {
+            crate::finder_model::LauncherLang::Fr
+        } else {
+            crate::finder_model::LauncherLang::En
+        };
+        let launch_where_hint = crate::finder_model::where_text(
+            self.gpui_extra.launch_placement,
+            has_panes,
+            auto_tile,
+            target_pane_name,
+            launch_lang,
+        );
+
+        let help_open = self.overlay == Some(Overlay::Help);
+        let help_groups = if help_open {
+            crate::help_panel::filter_supported_shortcuts(
+                french,
+                super::SUPPORTED_HELP_SHORTCUT_KEYS,
+                &self.gpui_extra.help_query,
+            )
+        } else {
+            Vec::new()
+        };
+        let help_footer = crate::help_panel::help_footer_text(french).to_owned();
+
+        let add_nested_repos = self
+            .dialogs_toolbar_ui
+            .nested_repos
+            .iter()
+            .map(|p| {
+                (
+                    p.clone(),
+                    self.dialogs_toolbar_ui.selected_nested_repos.contains(p),
+                )
+            })
+            .collect();
+        let add_ssh_aliases = self.state.hosts.iter().map(|h| h.alias.clone()).collect();
+        let add_folder_name = match self.dialogs_toolbar_ui.add_tab {
+            crate::dialogs_toolbar_ui::AddProjectTab::CloneRepo => {
+                self.dialogs_toolbar_ui.clone_folder_name.clone()
+            }
+            _ => self.dialogs_toolbar_ui.init_folder_name.clone(),
+        };
+
+        let review_candidates = if self.side_panels_ui.review_modal_open {
+            self.review_candidate_branches()
+        } else {
+            Vec::new()
+        };
+
+        let teams_project = self.teams_ui.manager_project;
+        let teams_list = teams_project
+            .map(|pid| {
+                self.state
+                    .teams
+                    .iter()
+                    .filter(|t| t.project == pid)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let teams_project_panes = teams_project
+            .map(|pid| {
+                self.sessions
+                    .iter()
+                    .filter(|s| s.project == Some(pid))
+                    .map(|s| (s.id, s.label().to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let teams_pending_workers = self
+            .teams_hub
+            .workers
+            .iter()
+            .filter(|w| w.state == crate::teams_relay::WorkerState::Confirming)
+            .cloned()
+            .collect();
+
+        let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
+            &self.task_history_store.records,
+            10.0,
+            crate::dialogs_toolbar_model::now_ms(),
+        );
+
+        let telemetry_app_rss_bytes: u64 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.app.iter().map(|e| e.memory_bytes as u64).sum())
+            .unwrap_or(0);
+        let telemetry_panes_rss_bytes: u64 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.terminals.values().map(|e| e.memory_bytes as u64).sum())
+            .unwrap_or(0);
+        let telemetry_panes_cpu_pct: f32 = telemetry
+            .resources
+            .as_ref()
+            .map(|r| r.terminals.values().map(|e| e.cpu_percent as f32).sum())
+            .unwrap_or(0.0);
+        let telemetry_app_sparkline = telemetry
+            .sparklines
+            .samples(crate::sidebar_model::APP_HISTORY_KEY)
+            .to_vec();
+
+        let prompt_modal = if let Some((_, draft, _)) = &self.rename_project_modal {
+            Some(GpuiPromptModalSnapshot {
+                title: tr("Rename project").into(),
+                subtitle: tr("Enter a new display name for this workspace:").into(),
+                draft: draft.clone(),
+                confirm_label: tr("Rename").into(),
+            })
+        } else if let Some(ra) = &self.rename_agent {
+            Some(GpuiPromptModalSnapshot {
+                title: tr("Rename pane").into(),
+                subtitle: tr("Enter a custom label for this pane:").into(),
+                draft: ra.draft.clone(),
+                confirm_label: tr("Save").into(),
+            })
+        } else if self.dialogs_toolbar_ui.group_modal_project.is_some() {
+            Some(GpuiPromptModalSnapshot {
+                title: if french {
+                    "Groupe de projets".into()
+                } else {
+                    "Project folder group".into()
+                },
+                subtitle: if french {
+                    "Nom du dossier (laisser vide pour retirer du groupe) :".into()
+                } else {
+                    "Folder group name (leave empty to ungroup):".into()
+                },
+                draft: self.dialogs_toolbar_ui.group_modal_draft.clone(),
+                confirm_label: tr("Save").into(),
+            })
+        } else if let Some(fa) = &self.file_action {
+            match fa.kind {
+                crate::file_actions::Kind::File
+                | crate::file_actions::Kind::Folder
+                | crate::file_actions::Kind::Rename => Some(GpuiPromptModalSnapshot {
+                    title: match fa.kind {
+                        crate::file_actions::Kind::File => tr("New file").into(),
+                        crate::file_actions::Kind::Folder => tr("New folder").into(),
+                        _ => tr("Rename").into(),
+                    },
+                    subtitle: fa.path.to_string_lossy().into_owned(),
+                    draft: fa.name.clone(),
+                    confirm_label: tr("Confirm").into(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let confirm_modal = if let Some(doc_idx) = self.pending_close {
+            let doc_name = self
+                .documents
+                .get(doc_idx)
+                .and_then(|d| d.path.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".into());
+            Some(GpuiConfirmModalSnapshot {
+                title: tr("Unsaved changes").into(),
+                body: format!("{doc_name} — {}", tr("Save changes before closing?")),
+                confirm_label: tr("Save & close").into(),
+                secondary_label: Some(tr("Discard").into()),
+                danger: false,
+            })
+        } else if let Some(sid) = self.pending_close_session {
+            let pane_lbl = self
+                .sessions
+                .iter()
+                .find(|s| s.id == sid)
+                .map_or("pane", Session::label);
+            Some(GpuiConfirmModalSnapshot {
+                title: tr("Close running agent?").into(),
+                body: format!("{pane_lbl} — {}", tr("Terminate this active session?")),
+                confirm_label: tr("Close pane").into(),
+                secondary_label: None,
+                danger: true,
+            })
+        } else if let Some(pid) = self.pending_remove_project {
+            let p_name = self
+                .state
+                .projects
+                .iter()
+                .find(|p| p.id == pid)
+                .map_or("project", |p| p.name.as_str());
+            Some(GpuiConfirmModalSnapshot {
+                title: tr("Remove project from Tessel?").into(),
+                body: format!("{p_name} — {}", tr("Files on disk will not be deleted.")),
+                confirm_label: tr("Remove").into(),
+                secondary_label: None,
+                danger: true,
+            })
+        } else if let Some((_, _, copy)) = &self.pending_scm_discard {
+            Some(GpuiConfirmModalSnapshot {
+                title: copy.title.clone(),
+                body: copy.description.clone(),
+                confirm_label: copy.confirm_label.clone(),
+                secondary_label: None,
+                danger: true,
+            })
+        } else if let Some((_, wt_path, branch)) = &self.pending_delete_worktree {
+            Some(GpuiConfirmModalSnapshot {
+                title: tr("Delete Git worktree?").into(),
+                body: format!("{branch} ({})", wt_path.display()),
+                confirm_label: tr("Delete worktree").into(),
+                secondary_label: None,
+                danger: true,
+            })
+        } else if let Some(spec) = &self.pending_agent_install {
+            Some(GpuiConfirmModalSnapshot {
+                title: spec.title.clone(),
+                body: format!("{}\n{}", spec.description, spec.code),
+                confirm_label: spec.confirm_label.clone(),
+                secondary_label: None,
+                danger: false,
+            })
+        } else if let Some(fa) = &self.file_action {
+            match fa.kind {
+                crate::file_actions::Kind::Delete | crate::file_actions::Kind::Trash => {
+                    Some(GpuiConfirmModalSnapshot {
+                        title: tr("Delete path?").into(),
+                        body: fa.path.to_string_lossy().into_owned(),
+                        confirm_label: tr("Delete").into(),
+                        secondary_label: None,
+                        danger: true,
+                    })
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        GpuiModalsSnapshot {
+            palette_open: self.command_palette.open,
+            palette_query: self.command_palette.query.clone(),
+            palette_selected: self.command_palette.index,
+            palette_rows,
+            finder: self.finder.gpui_snapshot(),
+            launch_menu_open: self.gpui_extra.launch_menu_open
+                || self.overlay == Some(Overlay::Launcher),
+            launch_placement: self.gpui_extra.launch_placement,
+            launch_placements,
+            launch_where_hint,
+            launch_in_worktree: self.gpui_extra.launch_in_worktree,
+            help_open,
+            help_query: self.gpui_extra.help_query.clone(),
+            help_groups,
+            help_footer,
+            share_modal_open: self.overlay == Some(Overlay::Share),
+            share: share_snap.clone(),
+            add_project_open: self.dialogs_toolbar_ui.add_project_open,
+            add_project_tab: self.dialogs_toolbar_ui.add_tab,
+            add_picked_folder: self.dialogs_toolbar_ui.picked_folder.clone(),
+            add_nested_repos,
+            add_clone_url: self.dialogs_toolbar_ui.clone_url.clone(),
+            add_clone_parent: self.dialogs_toolbar_ui.clone_parent.clone(),
+            add_folder_name,
+            add_ssh_aliases,
+            add_ssh_selected: self.dialogs_toolbar_ui.ssh_selected_alias.clone(),
+            add_ssh_remote_dir: self.dialogs_toolbar_ui.ssh_remote_dir.clone(),
+            add_error: self.dialogs_toolbar_ui.add_error.clone(),
+            github_open: self.dialogs_toolbar_ui.github_open,
+            github_tab: self.dialogs_toolbar_ui.github_tab,
+            github_query: self.dialogs_toolbar_ui.github_query.clone(),
+            github_prs: self.dialogs_toolbar_ui.github_prs.clone(),
+            github_issues: self.dialogs_toolbar_ui.github_issues.clone(),
+            github_error: self.dialogs_toolbar_ui.github_error.clone(),
+            notes_open: self.side_panels_ui.notes_modal_open,
+            notes_text: self.side_panels_ui.notes.text.clone(),
+            notes_dirty: self.side_panels_ui.notes.is_dirty(),
+            review_open: self.side_panels_ui.review_modal_open,
+            review_candidates,
+            review_head_branch: self.side_panels_ui.review_head_branch.clone(),
+            review_snapshot: self.side_panels_ui.review_snapshot.clone(),
+            review_selected_file: self.side_panels_ui.review_selected_file.clone(),
+            review_selected_diff: self.side_panels_ui.review_selected_diff.clone(),
+            review_error: self.side_panels_ui.review_error.clone(),
+            worktree_cleanup: self.worktree_cleanup.clone(),
+            teams_manager_project: teams_project,
+            teams_new_name: self.teams_ui.new_team_name.clone(),
+            teams_list,
+            teams_project_panes,
+            teams_workers: self.teams_hub.workers.clone(),
+            teams_pending_workers,
+            teams_relay_prompts: self.teams_hub.approval_prompts.iter().cloned().collect(),
+            usage_popover_open: self.gpui_extra.usage_popover_open,
+            usage_summary,
+            notifications_popover_open: self.gpui_extra.notifications_popover_open,
+            notifications_items: self.notifications.items.clone(),
+            status_popover: self.gpui_extra.status_popover,
+            telemetry_app_rss_bytes,
+            telemetry_panes_rss_bytes,
+            telemetry_panes_cpu_pct,
+            telemetry_app_sparkline,
+            telemetry_ports: telemetry.ports.clone(),
+            prompt_modal,
+            confirm_modal,
         }
     }
 
@@ -2658,8 +4432,636 @@ impl Tessel {
                 #[cfg(not(windows))]
                 let _ = id;
             }
+            GpuiAction::Project(pa) => {
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.apply_project_action(&ctx, Some(pa));
+            }
+            GpuiAction::SetSidebarPrefs(prefs) => {
+                self.state.sidebar = prefs;
+                self.save();
+            }
+            GpuiAction::SidePanels(spa) => {
+                if let crate::side_panels_ui::SidePanelsAction::CopyText(ref txt) = spa {
+                    self.gpui_extra.copied_clipboard = Some(txt.clone());
+                }
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.handle_side_panels_action(&ctx, spa);
+            }
+            GpuiAction::SetDashboardGroup(g) => {
+                self.side_panels_ui.dashboard_group = g;
+            }
+            GpuiAction::SetDashboardFilter(f) => {
+                self.side_panels_ui.dashboard_filter = f;
+            }
+            GpuiAction::SetDashboardQuery(q) => {
+                self.side_panels_ui.dashboard_query = q;
+            }
+            GpuiAction::ExplorerSetFilter(q) => {
+                self.explorer_tree.gpui_set_filter_query(q);
+            }
+            GpuiAction::ExplorerToggleSearchMode => {
+                self.explorer_tree.gpui_toggle_search_mode();
+            }
+            GpuiAction::ExplorerToggleDotfiles => {
+                let next = !self.explorer_tree.show_dotfiles();
+                self.explorer_tree.set_show_dotfiles(next);
+                self.state.editor_prefs.show_git_ignored = next;
+                self.save();
+            }
+            GpuiAction::ExplorerToggleCompact => {
+                let next = !self.explorer_tree.compact_folders();
+                self.explorer_tree.set_compact_folders(next);
+                self.state.editor_prefs.compact_folders = next;
+                self.save();
+            }
+            GpuiAction::ExplorerRefresh => {
+                self.explorer_tree.refresh();
+            }
+            GpuiAction::ExplorerClickRow { key, pinned } => {
+                if let Some(act) = self.explorer_tree.gpui_click_row(&key, pinned) {
+                    match act {
+                        crate::explorer_tree::TreeAction::OpenFile(p) => {
+                            self.open_document_preview(p);
+                        }
+                        crate::explorer_tree::TreeAction::OpenPinnedFile(p) => {
+                            self.open_document(p);
+                        }
+                        crate::explorer_tree::TreeAction::CopyPath(p) => {
+                            self.gpui_extra.copied_clipboard = Some(p.display().to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            GpuiAction::ExplorerOpenContentHit { path, line } => {
+                self.open_document_preview(path);
+                if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.pending_scroll_line = Some(line.saturating_sub(1));
+                }
+            }
+            GpuiAction::ExplorerNewItem { dir } => {
+                let active_root = self.state.active().map(|p| p.path.clone());
+                let snap = self
+                    .explorer_tree
+                    .gpui_rows_snapshot(active_root.as_deref(), None);
+                if snap.has_root {
+                    self.file_action = Some(crate::file_actions::Action {
+                        kind: if dir {
+                            crate::file_actions::Kind::Folder
+                        } else {
+                            crate::file_actions::Kind::File
+                        },
+                        root: snap.root_path,
+                        path: snap.new_target_dir,
+                        name: String::new(),
+                    });
+                }
+            }
+            GpuiAction::ExplorerDeletePath { path, permanent } => {
+                if let Some(root) = self.state.active().map(|p| p.path.clone()) {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.file_action = Some(crate::file_actions::Action {
+                        kind: if permanent {
+                            crate::file_actions::Kind::Delete
+                        } else {
+                            crate::file_actions::Kind::Trash
+                        },
+                        root,
+                        path,
+                        name,
+                    });
+                }
+            }
+            GpuiAction::ScmRefresh => {
+                self.sync_git_project();
+                self.scm_state.refresh();
+                self.refresh_scm_commits();
+            }
+            GpuiAction::ScmSetCommitMessage(msg) => {
+                self.gpui_extra.scm_commit_msg = msg;
+            }
+            GpuiAction::ScmCommit => {
+                let message = self.gpui_extra.scm_commit_msg.trim().to_owned();
+                if message.is_empty() {
+                    self.error = tr("Enter a commit message.").into();
+                } else if !self.git_result.busy() {
+                    if let Err(err) = self.scm_state.validate_commit() {
+                        self.error = err;
+                    } else {
+                        self.commit_in_flight = true;
+                        self.gpui_extra.scm_commit_msg.clear();
+                        self.git_start_work(move |root| crate::git::commit_staged(&root, &message));
+                    }
+                }
+            }
+            GpuiAction::ScmStage(paths) => {
+                if !self.git_result.busy() {
+                    match self.scm_state.stage_paths(&paths) {
+                        Ok(valid) => {
+                            self.git_start_work(move |root| crate::git::stage_files(&root, &valid));
+                        }
+                        Err(e) => self.error = e,
+                    }
+                }
+            }
+            GpuiAction::ScmUnstage(paths) => {
+                if !self.git_result.busy() {
+                    match self.scm_state.unstage_paths(&paths) {
+                        Ok(valid) => {
+                            self.git_start_work(move |root| {
+                                crate::git::unstage_files(&root, &valid)
+                            });
+                        }
+                        Err(e) => self.error = e,
+                    }
+                }
+            }
+            GpuiAction::ScmRequestDiscard { area, paths } => {
+                if !self.git_result.busy() && !paths.is_empty() {
+                    let french = self.state.language == crate::i18n::Language::French;
+                    let copy = crate::scm_changes_panel::discard_area_copy(
+                        area,
+                        paths.len(),
+                        false,
+                        french,
+                    );
+                    self.pending_scm_discard = Some((area, paths, copy));
+                }
+            }
+            GpuiAction::ScmOpenDiff {
+                area,
+                path,
+                old_path,
+                pinned,
+            } => {
+                self.open_scm_diff(area, path, old_path, pinned);
+            }
+            GpuiAction::ScmRemoteOp(op) => {
+                if !self.git_result.busy() {
+                    let branch = self.scm_state.branch_name();
+                    self.git_start_work(move |root| {
+                        crate::git::remote_op(&root, op, branch.as_deref())
+                    });
+                }
+            }
+            GpuiAction::ScmToggleCommitsOpen => {
+                self.side_panels_ui.commits_open = !self.side_panels_ui.commits_open;
+                if self.side_panels_ui.commits_open {
+                    self.refresh_scm_commits();
+                }
+            }
+            GpuiAction::OpenNotesModal => {
+                self.open_notes_modal();
+            }
+            GpuiAction::SetNotesText(text) => {
+                self.side_panels_ui.notes.text = text;
+            }
+            GpuiAction::OpenReviewModal => {
+                self.open_review_modal();
+            }
+            GpuiAction::TasksSetNewTitle(t) => {
+                self.gpui_extra.new_task_title = t;
+            }
+            GpuiAction::TasksAddFromDraft => {
+                let title = self.gpui_extra.new_task_title.trim().to_owned();
+                if !title.is_empty()
+                    && let Some(pid) = self.state.active_project
+                {
+                    self.gpui_extra.new_task_title.clear();
+                    self.apply_tasks_board_action(
+                        pid,
+                        crate::tasks_board_panel::TasksBoardAction::Add(title),
+                    );
+                }
+            }
+            GpuiAction::TasksBoard(tba) => {
+                if let Some(pid) = self.state.active_project {
+                    self.apply_tasks_board_action(pid, tba);
+                }
+            }
+            GpuiAction::SetTaskHistoryWindow(w) => {
+                self.side_panels_ui.history_window = w;
+            }
+            GpuiAction::SetTaskHistorySort(s) => {
+                self.side_panels_ui.history_sort = s;
+            }
+            GpuiAction::ToggleTaskHistoryCurrentProject => {
+                self.side_panels_ui.history_current_project_only =
+                    !self.side_panels_ui.history_current_project_only;
+            }
+            GpuiAction::SetTaskHistoryQuery(q) => {
+                self.side_panels_ui.history_query = q;
+            }
+            GpuiAction::SetSessionsScope(sc) => {
+                self.side_panels_ui.sessions_scope = sc;
+            }
+            GpuiAction::SetSessionsGroup(g) => {
+                self.side_panels_ui.sessions_group = g;
+            }
+            GpuiAction::SetSessionsQuery(q) => {
+                self.side_panels_ui.sessions_query = q;
+            }
+            GpuiAction::SetConversationsWindow(w) => {
+                self.side_panels_ui.conv_window = w;
+            }
+            GpuiAction::SetConversationsQuery(q) => {
+                self.side_panels_ui.conv_query = q;
+            }
+            GpuiAction::SelectConversationThread(k) => {
+                self.side_panels_ui.selected_thread_key = k;
+            }
+            GpuiAction::SetSettingsSearch(q) => {
+                self.gpui_extra.settings_search = q;
+            }
+            GpuiAction::SettingsPage(spa) => {
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.handle_settings_page_action(&ctx, spa);
+            }
+            GpuiAction::SettingsExtra(sexa) => {
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.handle_settings_extra_action(&ctx, sexa);
+            }
+            GpuiAction::UpdateGeneralPrefs(p) => {
+                self.state.general_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateTerminalPrefs(p) => {
+                self.state.terminal_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateEditorPrefs(p) => {
+                self.explorer_tree.set_show_dotfiles(p.show_git_ignored);
+                self.explorer_tree.set_compact_folders(p.compact_folders);
+                self.state.editor_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateBrowserPrefs(p) => {
+                self.state.browser_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateGitPrefs(p) => {
+                self.scm_panel
+                    .set_group_order(p.scm_group_order.into_panel());
+                self.scm_panel.set_view_mode(p.scm_view_mode.into_panel());
+                self.state.git_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateStatsPrefs(p) => {
+                self.state.stats_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateContextPrefs(p) => {
+                self.state.context_prefs = p;
+                self.save();
+                self.refresh_context_scan();
+            }
+            GpuiAction::UpdateOrchestrationPrefs(p) => {
+                self.state.orchestration_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateNotificationPrefs(p) => {
+                self.state.notification_prefs = p;
+                self.save();
+            }
+            GpuiAction::UpdateVoicePrefs(p) => {
+                self.state.voice_prefs = p;
+                self.save();
+            }
+            GpuiAction::ToggleBuiltinAgentEnabled(id) => {
+                let cur = crate::agent_preferences::enabled(&self.state, &id);
+                let canonical = crate::agent_catalog::find(&id).map_or(id.as_str(), |e| e.id);
+                self.state
+                    .agent_prefs
+                    .entry(canonical.to_owned())
+                    .or_default()
+                    .enabled = !cur;
+                self.save();
+            }
+            GpuiAction::SetQuickCommandDraft {
+                name,
+                text,
+                press_enter,
+            } => {
+                self.gpui_extra.new_quick_cmd_name = name;
+                self.gpui_extra.new_quick_cmd_text = text;
+                self.gpui_extra.new_quick_cmd_enter = press_enter;
+            }
+            GpuiAction::SubmitNewQuickCommand => {
+                let name = self.gpui_extra.new_quick_cmd_name.trim().to_owned();
+                let text = self.gpui_extra.new_quick_cmd_text.trim().to_owned();
+                let press_enter = self.gpui_extra.new_quick_cmd_enter;
+                if !name.is_empty() && !text.is_empty() {
+                    self.gpui_extra.new_quick_cmd_name.clear();
+                    self.gpui_extra.new_quick_cmd_text.clear();
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_settings_page_action(
+                        &ctx,
+                        crate::settings_pages_panel::SettingsPageAction::AddQuickCommand {
+                            name,
+                            text,
+                            press_enter,
+                        },
+                    );
+                }
+            }
+            GpuiAction::SetSshDraft { alias, folder } => {
+                self.gpui_extra.new_ssh_alias = alias;
+                self.gpui_extra.new_ssh_folder = folder;
+            }
+            GpuiAction::AddSshHostFromDraft => {
+                let alias = self.gpui_extra.new_ssh_alias.trim().to_owned();
+                let folder = self.gpui_extra.new_ssh_folder.trim().to_owned();
+                if !alias.is_empty() {
+                    self.state.hosts.push(crate::workspace::Host {
+                        alias,
+                        folder: if folder.is_empty() {
+                            "~".into()
+                        } else {
+                            folder
+                        },
+                    });
+                    self.gpui_extra.new_ssh_alias.clear();
+                    self.gpui_extra.new_ssh_folder.clear();
+                    self.save();
+                }
+            }
+            GpuiAction::RemoveSshHost(idx) => {
+                if idx < self.state.hosts.len() {
+                    self.state.hosts.remove(idx);
+                    self.save();
+                }
+            }
+            GpuiAction::LaunchSshHost(idx) => {
+                if let Some(host) = self.state.hosts.get(idx).cloned() {
+                    self.overlay = None;
+                    self.new_session_placed(Launch::Ssh(host), None);
+                }
+            }
+            GpuiAction::SetCustomAgentDraft { name, cmd } => {
+                self.gpui_extra.new_custom_agent_name = name;
+                self.gpui_extra.new_custom_agent_cmd = cmd;
+            }
+            GpuiAction::SubmitNewCustomAgent => {
+                let id = crate::settings_extra_model::generate_custom_agent_id();
+                let name = self.gpui_extra.new_custom_agent_name.trim().to_owned();
+                let cmd = self.gpui_extra.new_custom_agent_cmd.trim().to_owned();
+                let accent = crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[0].to_owned();
+                if crate::settings_extra_model::validate_custom_agent_fields(
+                    &id, &name, &cmd, &accent,
+                )
+                .is_ok()
+                {
+                    let agent = crate::settings_extra_model::CustomAgent {
+                        id,
+                        name,
+                        command: cmd,
+                        accent,
+                        enabled: true,
+                    };
+                    self.gpui_extra.new_custom_agent_name.clear();
+                    self.gpui_extra.new_custom_agent_cmd.clear();
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_settings_extra_action(
+                        &ctx,
+                        crate::settings_extra_panel::SettingsExtraAction::UpsertCustomAgent(agent),
+                    );
+                }
+            }
+            GpuiAction::SetAccountLabelDraft(lbl) => {
+                self.gpui_extra.new_account_label = lbl;
+            }
+            GpuiAction::SelectSecretKeyIndex(idx) => {
+                self.gpui_extra.secret_key_idx = idx.min(
+                    crate::settings_extra_model::PROVIDER_SECRET_KEYS
+                        .len()
+                        .saturating_sub(1),
+                );
+            }
+            GpuiAction::SetSecretValueDraft(val) => {
+                self.gpui_extra.secret_value_draft = val;
+            }
+            GpuiAction::SaveSecretFromDraft => {
+                let idx = self.gpui_extra.secret_key_idx.min(
+                    crate::settings_extra_model::PROVIDER_SECRET_KEYS
+                        .len()
+                        .saturating_sub(1),
+                );
+                let key = crate::settings_extra_model::PROVIDER_SECRET_KEYS[idx].to_owned();
+                let val = self.gpui_extra.secret_value_draft.trim().to_owned();
+                if !val.is_empty() {
+                    self.gpui_extra.secret_value_draft.clear();
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_settings_extra_action(
+                        &ctx,
+                        crate::settings_extra_panel::SettingsExtraAction::SaveProviderSecret {
+                            key,
+                            value: val,
+                        },
+                    );
+                }
+            }
+            GpuiAction::SetSkillsGitUrlDraft(url) => {
+                self.gpui_extra.skills_git_url = url;
+            }
+            GpuiAction::SetAutomationDraft {
+                name,
+                prompt,
+                every_mins,
+            } => {
+                self.gpui_extra.new_auto_name = name;
+                self.gpui_extra.new_auto_prompt = prompt;
+                self.gpui_extra.new_auto_every_mins = every_mins.max(15);
+            }
+            GpuiAction::SubmitNewAutomation => {
+                let name = self.gpui_extra.new_auto_name.trim().to_owned();
+                let prompt = self.gpui_extra.new_auto_prompt.trim().to_owned();
+                let mins = self.gpui_extra.new_auto_every_mins.max(15);
+                if !name.is_empty()
+                    && !prompt.is_empty()
+                    && let Some(proj) = self.state.active().cloned()
+                {
+                    let schedule = if mins >= 60 && mins.is_multiple_of(60) {
+                        crate::automations::AutomationSchedule::Hourly { minute: 0 }
+                    } else {
+                        crate::automations::AutomationSchedule::Cron {
+                            expr: format!("*/{} * * * *", mins.min(59)),
+                        }
+                    };
+                    let auto = crate::automations::Automation {
+                        id: crate::automations::generate_automation_id(&name),
+                        name,
+                        project_id: proj.id,
+                        project_path: proj.path,
+                        agent: crate::automations::AutomationAgent::Claude,
+                        isolation: crate::automations::AutomationIsolation::Worktree,
+                        schedule,
+                        prompt,
+                        enabled: false,
+                        confirmed_sig: None,
+                        last_minute_slot: None,
+                        runs: Vec::new(),
+                    };
+                    self.gpui_extra.new_auto_name.clear();
+                    self.gpui_extra.new_auto_prompt.clear();
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_settings_extra_action(
+                        &ctx,
+                        crate::settings_extra_panel::SettingsExtraAction::UpsertAutomation(auto),
+                    );
+                }
+            }
+            GpuiAction::VaultUnlock => {
+                #[cfg(windows)]
+                self.vault.gpui_unlock();
+            }
+            GpuiAction::VaultImportCsv => {
+                #[cfg(windows)]
+                self.vault.gpui_import_csv();
+            }
+            GpuiAction::VaultDeleteEntry(id) => {
+                #[cfg(windows)]
+                self.vault.gpui_delete_entry(id);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
+            GpuiAction::VaultFillEntry(id) => {
+                #[cfg(windows)]
+                self.vault.gpui_fill_entry(id, &self.browser);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
+            GpuiAction::AccountOpenStore => {
+                #[cfg(windows)]
+                self.account.gpui_open_store();
+            }
+            GpuiAction::AccountSignInBrowser => {
+                #[cfg(windows)]
+                self.account.gpui_begin_browser_sign_in();
+            }
+            GpuiAction::AccountSignOut => {
+                #[cfg(windows)]
+                self.account.gpui_sign_out();
+            }
+            GpuiAction::AccountSuggestPhrase => {
+                #[cfg(windows)]
+                self.account.gpui_suggest_sync_phrase();
+            }
             GpuiAction::ToggleCommandPalette => {
                 self.command_palette.open = !self.command_palette.open;
+                if self.command_palette.open {
+                    self.command_palette.query.clear();
+                    self.command_palette.index = 0;
+                }
+            }
+            GpuiAction::PaletteSetQuery(q) => {
+                self.command_palette.query = q;
+                self.command_palette.index = 0;
+            }
+            GpuiAction::PaletteStep(delta) => {
+                let current_theme = self.state.theme.unwrap_or(ThemeId::Classic);
+                let cmds = self.build_palette_commands(current_theme);
+                let rows =
+                    crate::palette::filter_palette_commands(&cmds, &self.command_palette.query);
+                if !rows.is_empty() {
+                    let len = rows.len() as isize;
+                    let cur = (self.command_palette.index.min(rows.len() - 1)) as isize;
+                    self.command_palette.index = (cur + delta).rem_euclid(len) as usize;
+                }
+            }
+            GpuiAction::PaletteExecute(cmd_id) => {
+                self.command_palette.open = false;
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.execute_palette_command(&ctx, &cmd_id);
+            }
+            GpuiAction::PaletteExecuteSelected => {
+                let current_theme = self.state.theme.unwrap_or(ThemeId::Classic);
+                let cmds = self.build_palette_commands(current_theme);
+                let rows =
+                    crate::palette::filter_palette_commands(&cmds, &self.command_palette.query);
+                let picked = rows
+                    .get(self.command_palette.index)
+                    .or_else(|| rows.first())
+                    .map(|r| r.command.id.clone());
+                self.command_palette.open = false;
+                if let Some(cmd_id) = picked {
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.execute_palette_command(&ctx, &cmd_id);
+                }
+            }
+            GpuiAction::OpenFinder => {
+                self.open_finder();
+            }
+            GpuiAction::FinderSetQuery(q) => {
+                self.finder.gpui_set_query(q);
+            }
+            GpuiAction::FinderStep(delta) => {
+                self.finder.gpui_step(delta);
+            }
+            GpuiAction::FinderAccept { idx, insert } => {
+                let act = match idx {
+                    Some(i) => self.finder.gpui_accept_index(i, insert),
+                    None => self.finder.gpui_accept(insert),
+                };
+                if let Some(a) = act {
+                    match a {
+                        crate::finder_panel::FinderAction::OpenFile(p) => {
+                            self.open_document(p);
+                        }
+                        crate::finder_panel::FinderAction::InsertInTerminal(p) => {
+                            let quoted = format!("\"{}\"", p.display());
+                            let sid = self.active_session;
+                            self.apply_gpui_action(GpuiAction::TerminalPaste {
+                                session_id: sid,
+                                text: quoted,
+                            });
+                        }
+                    }
+                }
+            }
+            GpuiAction::ToggleLaunchMenu => {
+                self.gpui_extra.launch_menu_open = !self.gpui_extra.launch_menu_open;
+                if !self.gpui_extra.launch_menu_open && self.overlay == Some(Overlay::Launcher) {
+                    self.overlay = None;
+                }
+            }
+            GpuiAction::SetLaunchPlacement(p) => {
+                self.gpui_extra.launch_placement = p;
+            }
+            GpuiAction::ToggleLaunchInWorktree => {
+                self.gpui_extra.launch_in_worktree = !self.gpui_extra.launch_in_worktree;
+            }
+            GpuiAction::LaunchFromMenu {
+                agent_id,
+                native_chat,
+            } => {
+                self.gpui_extra.launch_menu_open = false;
+                if self.overlay == Some(Overlay::Launcher) {
+                    self.overlay = None;
+                }
+                let placement = match (self.gpui_extra.launch_placement, self.active_session) {
+                    (crate::finder_model::LaunchPlacement::Left, Some(sid))
+                    | (crate::finder_model::LaunchPlacement::Right, Some(sid)) => {
+                        Some((sid, SplitDir::Row))
+                    }
+                    (crate::finder_model::LaunchPlacement::Down, Some(sid)) => {
+                        Some((sid, SplitDir::Col))
+                    }
+                    _ => None,
+                };
+                if let Some(nc) = native_chat {
+                    if nc == "codex" {
+                        self.apply_gpui_action(GpuiAction::LaunchCodexChat);
+                    } else {
+                        self.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+                    }
+                } else if let Some(aid) = agent_id {
+                    self.new_session_placed(Launch::Agent(aid), placement);
+                } else {
+                    self.new_session_placed(Launch::Shell, placement);
+                }
             }
             GpuiAction::OpenSettings => {
                 if self.overlay == Some(Overlay::Settings) {
@@ -2673,9 +5075,30 @@ impl Tessel {
             }
             GpuiAction::CloseOverlays => {
                 self.command_palette.open = false;
+                self.finder.close();
+                self.gpui_extra.launch_menu_open = false;
+                self.gpui_extra.usage_popover_open = false;
+                self.gpui_extra.notifications_popover_open = false;
+                self.gpui_extra.status_popover = None;
                 self.overlay = None;
                 self.dialogs_toolbar_ui.add_project_open = false;
                 self.dialogs_toolbar_ui.github_open = false;
+                self.dialogs_toolbar_ui.group_modal_project = None;
+                self.side_panels_ui.notes_modal_open = false;
+                self.side_panels_ui.review_modal_open = false;
+                self.side_panels_ui.sessions_modal_open = false;
+                self.worktree_cleanup = None;
+                self.teams_ui.close_manager();
+                self.share.close_pill_popover();
+                self.rename_project_modal = None;
+                self.rename_agent = None;
+                self.pending_close = None;
+                self.pending_close_session = None;
+                self.pending_remove_project = None;
+                self.pending_scm_discard = None;
+                self.pending_delete_worktree = None;
+                self.pending_agent_install = None;
+                self.file_action = None;
             }
             GpuiAction::OpenHelp => {
                 if self.overlay == Some(Overlay::Help) {
@@ -2684,6 +5107,9 @@ impl Tessel {
                     self.overlay = Some(Overlay::Help);
                 }
             }
+            GpuiAction::SetHelpQuery(q) => {
+                self.gpui_extra.help_query = q;
+            }
             GpuiAction::OpenLiveShare => {
                 if self.overlay == Some(Overlay::Share) {
                     self.overlay = None;
@@ -2691,8 +5117,235 @@ impl Tessel {
                     self.overlay = Some(Overlay::Share);
                 }
             }
+            GpuiAction::Share(sa) => {
+                let all_projects = self.live_share_project_list();
+                self.share.apply_gpui_share_action(sa, &all_projects);
+            }
             GpuiAction::OpenGitHubDialog => {
                 self.open_github_modal(self.state.active_project);
+            }
+            GpuiAction::DialogsToolbar(dta) => {
+                let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                self.handle_dialogs_toolbar_action(&ctx, dta);
+            }
+            GpuiAction::SetAddProjectTab(tab) => {
+                self.dialogs_toolbar_ui.add_tab = tab;
+            }
+            GpuiAction::ToggleNestedRepo(path) => {
+                if !self.dialogs_toolbar_ui.selected_nested_repos.remove(&path) {
+                    self.dialogs_toolbar_ui.selected_nested_repos.insert(path);
+                }
+            }
+            GpuiAction::SetAddProjectCloneUrl(url) => {
+                let default_name = crate::dialogs_toolbar_model::default_repo_folder_name(&url);
+                if self.dialogs_toolbar_ui.clone_folder_name.is_empty() {
+                    self.dialogs_toolbar_ui.clone_folder_name = default_name;
+                }
+                self.dialogs_toolbar_ui.clone_url = url;
+            }
+            GpuiAction::SetAddProjectFolderName(name) => match self.dialogs_toolbar_ui.add_tab {
+                crate::dialogs_toolbar_ui::AddProjectTab::CloneRepo => {
+                    self.dialogs_toolbar_ui.clone_folder_name = name;
+                }
+                crate::dialogs_toolbar_ui::AddProjectTab::SshRemote => {
+                    self.dialogs_toolbar_ui.ssh_remote_dir = name;
+                }
+                _ => {
+                    self.dialogs_toolbar_ui.init_folder_name = name;
+                }
+            },
+            GpuiAction::SetAddProjectSshAlias(alias) => {
+                self.dialogs_toolbar_ui.ssh_selected_alias = alias;
+            }
+            GpuiAction::SetGitHubTab(tab) => {
+                self.dialogs_toolbar_ui.github_tab = tab;
+            }
+            GpuiAction::SetGitHubQuery(q) => {
+                self.dialogs_toolbar_ui.github_query = q;
+            }
+            GpuiAction::OpenTeamsManager(pid) => {
+                self.teams_ui.open_manager(pid);
+            }
+            GpuiAction::CloseTeamsManager => {
+                self.teams_ui.close_manager();
+            }
+            GpuiAction::SetNewTeamName(name) => {
+                self.teams_ui.new_team_name = name;
+            }
+            GpuiAction::Teams(tua) => {
+                self.handle_teams_ui_action(tua);
+            }
+            GpuiAction::WorktreeCleanupTogglePath(p) => {
+                if let Some(modal) = &mut self.worktree_cleanup
+                    && !modal.selected.remove(&p)
+                {
+                    modal.selected.insert(p);
+                }
+            }
+            GpuiAction::WorktreeCleanupSelectSafe => {
+                if let Some(modal) = &mut self.worktree_cleanup {
+                    modal.select_safe();
+                }
+            }
+            GpuiAction::WorktreeCleanupSelectNone => {
+                if let Some(modal) = &mut self.worktree_cleanup {
+                    modal.selected.clear();
+                }
+            }
+            GpuiAction::WorktreeCleanupConfirmRemove => {
+                if let Some(modal) = self.worktree_cleanup.take() {
+                    let pid = modal.project_id;
+                    let batch: Vec<(PathBuf, String, bool)> = modal
+                        .items
+                        .into_iter()
+                        .filter(|it| modal.selected.contains(&it.path) && it.blocker.is_none())
+                        .map(|it| {
+                            let force = !it.risks.is_empty();
+                            (it.path, it.branch, force)
+                        })
+                        .collect();
+                    if !batch.is_empty()
+                        && let Some(proj) =
+                            self.state.projects.iter().find(|p| p.id == pid).cloned()
+                    {
+                        let paths: Vec<PathBuf> = batch.iter().map(|(p, _, _)| p.clone()).collect();
+                        self.close_sessions_for_worktree_paths(pid, &paths);
+                        self.worktree_state
+                            .request_remove_batch(pid, proj.path, batch);
+                    }
+                }
+            }
+            GpuiAction::WorktreeCleanupClose => {
+                self.worktree_cleanup = None;
+            }
+            GpuiAction::ToggleUsagePopover => {
+                self.gpui_extra.usage_popover_open = !self.gpui_extra.usage_popover_open;
+                if self.gpui_extra.usage_popover_open {
+                    self.gpui_extra.notifications_popover_open = false;
+                }
+            }
+            GpuiAction::ToggleNotificationsPopover => {
+                self.gpui_extra.notifications_popover_open =
+                    !self.gpui_extra.notifications_popover_open;
+                if self.gpui_extra.notifications_popover_open {
+                    self.gpui_extra.usage_popover_open = false;
+                }
+            }
+            GpuiAction::ToggleStatusPopover(item) => {
+                if self.gpui_extra.status_popover == Some(item) {
+                    self.gpui_extra.status_popover = None;
+                } else {
+                    self.gpui_extra.status_popover = Some(item);
+                }
+            }
+            GpuiAction::RefreshPortsNow => {
+                self.status_telemetry.refresh_ports_now();
+            }
+            GpuiAction::SetPromptDraft(draft) => {
+                if let Some((_, d, _)) = &mut self.rename_project_modal {
+                    *d = draft;
+                } else if let Some(ra) = &mut self.rename_agent {
+                    ra.draft = draft;
+                } else if self.dialogs_toolbar_ui.group_modal_project.is_some() {
+                    self.dialogs_toolbar_ui.group_modal_draft = draft;
+                } else if let Some(fa) = &mut self.file_action {
+                    fa.name = draft;
+                }
+            }
+            GpuiAction::SubmitPromptModal => {
+                if let Some((pid, draft, _)) = self.rename_project_modal.take() {
+                    let trimmed = draft.trim();
+                    if !trimmed.is_empty()
+                        && let Some(p) = self.state.projects.iter_mut().find(|p| p.id == pid)
+                    {
+                        p.name = trimmed.to_owned();
+                        self.save();
+                    }
+                } else if let Some(ra) = self.rename_agent.take() {
+                    let trimmed = ra.draft.trim();
+                    if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == ra.pane) {
+                        sess.pane_name = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+                        self.save();
+                    }
+                } else if let Some(pid) = self.dialogs_toolbar_ui.group_modal_project.take() {
+                    let grp = self.dialogs_toolbar_ui.group_modal_draft.trim().to_owned();
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_dialogs_toolbar_action(
+                        &ctx,
+                        crate::dialogs_toolbar_ui::DialogsToolbarAction::SaveProjectGroup {
+                            project_id: pid,
+                            group: (!grp.is_empty()).then_some(grp),
+                        },
+                    );
+                } else if let Some(fa) = self.file_action.take() {
+                    self.file_action_pending = true;
+                    let sender = self.sender.clone();
+                    thread::spawn(move || {
+                        let _ = sender
+                            .send(super::Message::FileAction(crate::file_actions::execute(fa)));
+                    });
+                }
+            }
+            GpuiAction::CancelPromptModal => {
+                self.rename_project_modal = None;
+                self.rename_agent = None;
+                self.dialogs_toolbar_ui.group_modal_project = None;
+                self.file_action = None;
+            }
+            GpuiAction::ConfirmModalPrimary => {
+                if let Some(idx) = self.pending_close.take() {
+                    if let Some(doc) = self.documents.get_mut(idx) {
+                        match doc.save() {
+                            Ok(()) => self.remove_document(idx),
+                            Err(e) => self.error = e,
+                        }
+                    }
+                } else if let Some(sid) = self.pending_close_session.take() {
+                    self.close_session_immediate(sid);
+                } else if let Some(pid) = self.pending_remove_project.take() {
+                    self.remove_project_immediate(pid);
+                } else if let Some((area, paths, _)) = self.pending_scm_discard.take() {
+                    match self.scm_state.discard_selection(area, &paths) {
+                        Ok((tracked, untracked)) => {
+                            self.git_start_work(move |root| {
+                                crate::git::discard_worktree(&root, &tracked, &untracked)
+                            });
+                        }
+                        Err(e) => self.error = e,
+                    }
+                } else if let Some((pid, wt_path, branch)) = self.pending_delete_worktree.take() {
+                    if let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned() {
+                        self.close_sessions_for_worktree_paths(pid, std::slice::from_ref(&wt_path));
+                        self.worktree_state.request_remove_batch(
+                            pid,
+                            proj.path,
+                            vec![(wt_path, branch, true)],
+                        );
+                    }
+                } else if let Some(spec) = self.pending_agent_install.take() {
+                    self.start_agent_install(spec.execution);
+                } else if let Some(fa) = self.file_action.take() {
+                    self.file_action_pending = true;
+                    let sender = self.sender.clone();
+                    thread::spawn(move || {
+                        let _ = sender
+                            .send(super::Message::FileAction(crate::file_actions::execute(fa)));
+                    });
+                }
+            }
+            GpuiAction::ConfirmModalSecondary => {
+                if let Some(idx) = self.pending_close.take() {
+                    self.remove_document(idx);
+                }
+            }
+            GpuiAction::CancelConfirmModal => {
+                self.pending_close = None;
+                self.pending_close_session = None;
+                self.pending_remove_project = None;
+                self.pending_scm_discard = None;
+                self.pending_delete_worktree = None;
+                self.pending_agent_install = None;
+                self.file_action = None;
             }
             GpuiAction::SetTheme(theme) => {
                 if self.state.theme != Some(theme) {

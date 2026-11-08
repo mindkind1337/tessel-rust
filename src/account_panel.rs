@@ -80,6 +80,108 @@ impl AccountPanel {
         self.store.as_ref().is_some_and(|s| s.session.is_some())
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn gpui_snapshot(&self) -> AccountGpuiSnapshot {
+        let store_open = self.store.is_some();
+        let (signed_in, user_name, user_email) =
+            match self.store.as_ref().and_then(|s| s.session.as_ref()) {
+                Some(sess) => (
+                    true,
+                    sess.user.name.clone().unwrap_or_default(),
+                    sess.user.email.clone(),
+                ),
+                None => (false, String::new(), String::new()),
+            };
+        AccountGpuiSnapshot {
+            store_open,
+            signed_in,
+            signing_in_browser: self.flow.is_some(),
+            busy: self.pending.is_some(),
+            user_name,
+            user_email,
+            sync_phrase_len: self.sync_phrase.len(),
+            sync_seq: self.sync_meta.as_ref().map(|m| m.seq),
+            sync_versions_count: self.sync_versions.len(),
+            status: self.status.clone(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_open_store(&mut self) {
+        if self.store.is_none() {
+            match Store::open_default() {
+                Ok(s) => {
+                    self.store = Some(s);
+                    self.status.clear();
+                }
+                Err(e) => self.status = e,
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_begin_browser_sign_in(&mut self) {
+        self.gpui_open_store();
+        let Some(store) = &self.store else {
+            return;
+        };
+        let result = crate::account::register_protocol().and_then(|_| store.begin());
+        match result {
+            Ok(flow) => {
+                if webbrowser::open(&flow.login_url()).is_ok() {
+                    self.flow = Some(flow);
+                    self.status.clear();
+                } else {
+                    store.cancel(&flow);
+                    self.status = "Could not open the sign-in browser".into();
+                }
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_sign_out(&mut self) {
+        if let Some(store) = &mut self.store {
+            match store.clear() {
+                Ok(Some(s)) => self.run(move || {
+                    Api::production()?.logout(&s.bearer())?;
+                    Ok(Reply::LoggedOut)
+                }),
+                Ok(None) => {}
+                Err(e) => self.status = e,
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_suggest_sync_phrase(&mut self) {
+        match suggest_phrase() {
+            Ok(phrase) => {
+                self.sync_phrase = phrase;
+                self.show_phrase = true;
+            }
+            Err(e) => self.status = e,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AccountGpuiSnapshot {
+    pub store_open: bool,
+    pub signed_in: bool,
+    pub signing_in_browser: bool,
+    pub busy: bool,
+    pub user_name: String,
+    pub user_email: String,
+    pub sync_phrase_len: usize,
+    pub sync_seq: Option<u64>,
+    pub sync_versions_count: usize,
+    pub status: String,
+}
+
+impl AccountPanel {
     pub fn take_restored_workspace(&mut self) -> Option<Workspace> {
         self.restored_workspace.take()
     }

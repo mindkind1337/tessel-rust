@@ -325,6 +325,93 @@ impl VaultPanel {
             }
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_snapshot(&mut self, browser: &crate::browser::Browser) -> VaultGpuiSnapshot {
+        self.poll(browser);
+        VaultGpuiSnapshot {
+            unlocked: self.worker.is_some(),
+            busy: self.pending.is_some() || self.fill.is_some() || self.picker.is_some(),
+            entries: self
+                .snapshot
+                .as_ref()
+                .map(|s| s.entries.clone())
+                .unwrap_or_default(),
+            can_fill_current_page: browser.private_login_origin().is_ok(),
+            status: self.status.clone(),
+            warning: self.warning,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_unlock(&mut self) {
+        if self.worker.is_none() {
+            match Worker::open_default() {
+                Ok(worker) => {
+                    self.worker = Some(worker);
+                    self.pending = Some(0);
+                    self.panel.reset_on_open();
+                    self.status.clear();
+                    self.warning = false;
+                }
+                Err(error) => {
+                    self.status = tr(&error).into();
+                    self.warning = true;
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_import_csv(&mut self) {
+        if self.worker.is_none() || self.pending.is_some() || self.picker.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let dialog = self
+            .dialog
+            .clone()
+            .unwrap_or_default()
+            .add_filter("Password export", &["csv"]);
+        if std::thread::Builder::new()
+            .name("vault-csv-picker".into())
+            .spawn(move || {
+                let path = dialog.pick_file();
+                let _ = sender.send(path);
+            })
+            .is_ok()
+        {
+            self.picker = Some(receiver);
+            self.picker_cancelled = false;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_delete_entry(&mut self, id: String) {
+        self.submit(Command::Delete(id));
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_fill_entry(&mut self, id: String, browser: &crate::browser::Browser) {
+        match browser.private_login_origin() {
+            Ok(origin) => self.submit(Command::Fill { id, origin }),
+            Err(error) => {
+                self.status = tr(&error).into();
+                self.warning = true;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VaultGpuiSnapshot {
+    pub unlocked: bool,
+    pub busy: bool,
+    pub entries: Vec<crate::browser_passwords_model::VaultEntryMetadata>,
+    pub can_fill_current_page: bool,
+    pub status: String,
+    pub warning: bool,
 }
 
 #[cfg(test)]

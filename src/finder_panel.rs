@@ -233,6 +233,71 @@ impl Finder {
             }
         })
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_snapshot(&self) -> Option<FinderGpuiSnapshot> {
+        if !self.open {
+            return None;
+        }
+        Some(FinderGpuiSnapshot {
+            query: self.state.query().to_owned(),
+            results: self.results.iter().take(120).cloned().collect(),
+            selected: self.state.selected,
+            scanning: self.scan.is_some(),
+            truncated: self.state.truncated,
+            error: self.error.clone(),
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_set_query(&mut self, query: String) {
+        self.state.set_query(query);
+        self.results = self.state.results().to_vec();
+        self.state.selected = 0;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_step(&mut self, delta: isize) {
+        let count = self.results.len();
+        if count == 0 {
+            self.state.selected = 0;
+            return;
+        }
+        self.state.selected = if delta >= 0 {
+            (self.state.selected + delta as usize) % count
+        } else {
+            (self.state.selected + count - (delta.unsigned_abs() % count)) % count
+        };
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_accept_index(&mut self, idx: usize, insert: bool) -> Option<FinderAction> {
+        let relative = self.results.get(idx)?.clone();
+        self.close();
+        let full = self.root.join(relative);
+        if insert {
+            Some(FinderAction::InsertInTerminal(full))
+        } else {
+            Some(FinderAction::OpenFile(full))
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gpui_accept(&mut self, insert: bool) -> Option<FinderAction> {
+        let idx = self.state.selected;
+        self.gpui_accept_index(idx, insert)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct FinderGpuiSnapshot {
+    pub query: String,
+    pub results: Vec<String>,
+    pub selected: usize,
+    pub scanning: bool,
+    pub truncated: bool,
+    pub error: String,
 }
 
 #[cfg(test)]

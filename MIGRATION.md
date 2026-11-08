@@ -7,7 +7,7 @@ User requirement reaffirmed on 2026-11-03: reproduce Tessel's interface and beha
 | Capability | Required acceptance | Status |
 | --- | --- | --- |
 | Native application | Rust GUI and backend; no Electron/Vue runtime | Initial window verified on Windows |
-| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Seven source palettes and terminal ANSI/default colors integrated with persisted theme IDs; base typography transcribed; projects moved left, Files/Changes/Tasks moved right, central document tabs and functional command palette integrated; native three-zone vector toolbar and right-aligned dialog close controls visually checked; remaining visual and interaction parity not accepted |
+| Exact UI parity | Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel | Dual-renderer architecture integrated and verified: primary native **GPUI** (`gpui-ce 0.3`) hardware-accelerated renderer (`--renderer gpui`, default) + universal **`eframe`/`egui`** OpenGL Compatibility renderer (`--renderer compat` / `TESSEL_RENDERER=compat` + automatic runtime fallback) over one shared `app::Tessel` core, covering all 7 CSS theme palettes (`color-mix` sRGB), DirectWrite `Segoe UI Variable Text` / `Cascadia Mono` typography, 45 `resvg` vector icons + `gpui::canvas` primitives, frameless 40px caption toolbar, left project/worktree/Live-Share sidebar, center `ViewTabs` + `pane_grid` PTY terminals/Native Chats/Code-Diff-Rich-Preview editors + Windows WebView2 HWND stage, all 7 right `SidePanel` tabs (including 5-color Git swimlanes), all 22 `Settings` pages + `Passwords` vault & `Tessel Account`, and all workspace modals, menus and status/toolbar popovers |
 | Terminals | Real PTY, input, resize, ANSI, background draining, shutdown, scrollback | Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending |
 | Projects | Persistent roots, selection, no process starts on restore | Implemented; persistence and portable settings export/restore tests pass |
 | Files/editor | Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard | Expandable native tree integrated with bounded background enumeration and cached rows; preserved expansions and project-switch cancellation; existing scoped file operations retained; real egui pointer, cancellation, cache and confinement tests pass; native tree rendering visually checked |
@@ -765,3 +765,25 @@ question cards, and in-place `CLI` ↔ `Chat` mode switch), and `gpui_ui/editor_
 `Ctrl+S` atomic save, size-gated Markdown + `gpui::canvas` vector Mermaid `flowchart`/
 `sequenceDiagram`, sticky-header `SheetView`, JSON/JSONC/JSONL tree, HTML/PDF/Office/Image
 previews, and Windows `HasWindowHandle`-generic WebView2 `Browser` child HWND sync).
+
+Phase B GPUI Left Sidebar, 7-tab `SidePanel`, 22-page `Settings` + Vault/Account, and all
+workspace modals, menus & popovers (`Lot b176` — `explorer_tree.rs` + `finder_panel.rs` +
+`share_panel.rs` + `account_panel.rs` + `vault_panel.rs` + `app.rs` + `app/gpui_bridge.rs` +
+`gpui_ui/{mod,theme,icons,chrome,shell,sidebar_view,side_panels_view,settings_view,modals_view,tests}.rs` +
+`tests/ui_gpui_shell.rs` + `tests/ui_gpui_panels_settings_modals.rs`):
+Completes 1:1 GPUI views over `app::Tessel` for `sidebar_view.rs` (`52px` collapsed rail +
+resizable sidebar with folder groups, project cards, session rows with `SessionTeamBadge` &
+Live Share guest pills, Git worktrees, hidden-worktree banner, cleanup trigger, orphan
+sessions, and `SidebarPreferences` chips), `side_panels_view.rs` (`Dashboard`, `Files`
+Explorer + background content search, `Changes` SCM + docked `Commits` drawer with
+`gpui::canvas` 5-color topological swimlanes, `Tasks` 4-column Kanban board, `TaskHistory` +
+CSV export, `History`, and `Conversations`), `settings_view.rs` (all 5 groups / 22 pages +
+Windows DPAPI `Passwords` vault, `Tessel Account` + E2EE sync, `Appearance` `GPUI` vs
+`Compatibility` renderer selector, and `Escape`-clearing search rail), and `modals_view.rs`
+(`CommandPalette`, `FileFinder`, `LaunchMenu` with `gpui::canvas` 16×16 split icons,
+`HelpDialog`, `LiveShare` host/join + SAS knock modal + toolbar pill popover,
+`AddProjectDialog`, `GitHubDialog`, `NotesPanel`, `ReviewPanel`, `WorktreeCleanupModal`,
+`Teams` manager + worker/inter-project relay modals, toolbar `Usage`/`Notifications`
+popovers, `StatusBar` `Resources` `gpui::canvas` sparkline / `Ports` / `SSH` popovers, and
+generic `prompt_modal` / `confirm_modal`), expanding `GpuiIcon` to 45 validated `resvg`
+vector icons.

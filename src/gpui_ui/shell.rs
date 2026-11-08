@@ -2,30 +2,33 @@
 //! matching `C:\Tessel\src\renderer\src\App.vue` & `style.css`.
 
 use super::{
-    DragTarget, TesselGpuiRoot, chat_view, editor_view,
+    DragTarget, FocusInputTarget, TesselGpuiRoot, chat_view, editor_view,
     icons::GpuiIcon,
-    terminal_view,
+    side_panels_view, sidebar_view, terminal_view,
     theme::{
         GpuiThemeTokens, PANE_CHIP_HIDE_ACCOUNT_BELOW_PX, PANE_CHIP_HIDE_MODEL_BELOW_PX,
-        PANE_NAV_HEIGHT_PX, SIDEBAR_RAIL_WIDTH_PX, VIEW_TABS_HEIGHT_PX, rgba_with_alpha,
+        PANE_NAV_HEIGHT_PX, VIEW_TABS_HEIGHT_PX, rgba_with_alpha,
     },
 };
 use crate::{
     app::gpui_bridge::{
-        GpuiAction, GpuiCenterMode, GpuiDividerSnapshot, GpuiPaneTileSnapshot, GpuiProjectItem,
+        GpuiAction, GpuiCenterMode, GpuiDividerSnapshot, GpuiPaneTileSnapshot,
         GpuiWorkspaceSnapshot,
     },
     pane_grid::{GridPreset, SplitDir},
-    theme_palettes::THEMES,
-    workspace::{RendererPreference, SideTab},
+    teams_relay::WakeChannel,
+    teams_ui::TeamsUiAction,
+    workspace::SideTab,
 };
 use gpui::{
     Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_workspace_body(
     snapshot: &GpuiWorkspaceSnapshot,
+    focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
     right_width_px: f32,
@@ -44,9 +47,9 @@ pub(crate) fn render_workspace_body(
         .overflow_hidden()
         .bg(tokens.backdrop)
         .child(if snapshot.toolbar.left_open {
-            render_left_sidebar_expanded(snapshot, tokens, left_width_px, cx).into_any_element()
+            sidebar_view::render_left_sidebar_expanded(snapshot, tokens, left_width_px, cx)
         } else {
-            render_left_sidebar_rail(snapshot, tokens, cx).into_any_element()
+            sidebar_view::render_left_sidebar_rail(snapshot, tokens, cx)
         })
         .when(!hide_center, |el| {
             el.child(render_center_column(
@@ -58,401 +61,14 @@ pub(crate) fn render_workspace_body(
             ))
         })
         .when(snapshot.toolbar.right_open, |el| {
-            el.child(render_right_panel(snapshot, tokens, right_width_px, cx))
+            el.child(render_right_panel(
+                snapshot,
+                focus_input,
+                tokens,
+                right_width_px,
+                cx,
+            ))
         })
-}
-
-fn render_left_sidebar_rail(
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let mut rail = div()
-        .id("gpui-sidebar-rail")
-        .w(px(SIDEBAR_RAIL_WIDTH_PX))
-        .h_full()
-        .py(px(8.0))
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_between()
-        .bg(tokens.chrome)
-        .border_r_1()
-        .border_color(tokens.border);
-
-    let mut top = div().flex().flex_col().items_center().gap(px(6.0));
-    for proj in &snapshot.projects {
-        let project_id = proj.id;
-        let initials: SharedString = proj.initials.clone().into();
-        let active = proj.active;
-        let has_waiting = proj.waiting_agents > 0;
-        let has_running = proj.running_agents > 0;
-
-        top = top.child(
-            div()
-                .id(("rail-proj", project_id))
-                .relative()
-                .w(px(36.0))
-                .h(px(36.0))
-                .rounded(px(tokens.radius_px))
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(if active {
-                    tokens.accent_soft_bg
-                } else {
-                    tokens.surface
-                })
-                .border_1()
-                .border_color(if active { tokens.accent } else { tokens.border })
-                .cursor_pointer()
-                .hover(|s| s.bg(tokens.surface_2))
-                .on_click(cx.listener(move |root, _, _, cx| {
-                    root.dispatch(GpuiAction::SelectProject(project_id), cx);
-                }))
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(if active {
-                            tokens.text_strong
-                        } else {
-                            tokens.text
-                        })
-                        .child(initials),
-                )
-                .when(has_waiting || has_running, |el| {
-                    el.child(
-                        div()
-                            .absolute()
-                            .top(px(3.0))
-                            .right(px(3.0))
-                            .w(px(6.5))
-                            .h(px(6.5))
-                            .rounded_full()
-                            .bg(if has_waiting {
-                                tokens.warn
-                            } else {
-                                tokens.ok_green
-                            }),
-                    )
-                }),
-        );
-    }
-
-    rail = rail.child(top).child(
-        div()
-            .id("rail-add-project")
-            .w(px(34.0))
-            .h(px(34.0))
-            .rounded(px(tokens.radius_px))
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(tokens.surface)
-            .border_1()
-            .border_color(tokens.border)
-            .cursor_pointer()
-            .hover(|s| s.bg(tokens.surface_2).border_color(tokens.accent))
-            .on_click(cx.listener(|root, _, _, cx| {
-                root.dispatch(GpuiAction::OpenAddProjectDialog, cx);
-            }))
-            .child(GpuiIcon::Plus.render(14.0, tokens.text)),
-    );
-    rail
-}
-
-fn render_left_sidebar_expanded(
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    left_width_px: f32,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let header_title = if snapshot.french {
-        "ESPACES DE TRAVAIL"
-    } else {
-        "WORKSPACES"
-    };
-    let add_label = if snapshot.french {
-        "Ajouter un projet"
-    } else {
-        "Add project"
-    };
-
-    let mut list = div()
-        .id("gpui-sidebar-list")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .px(px(8.0))
-        .py(px(6.0))
-        .flex()
-        .flex_col()
-        .gap(px(5.0));
-
-    let mut last_group: Option<String> = None;
-    for proj in &snapshot.projects {
-        if proj.group_name != last_group {
-            last_group.clone_from(&proj.group_name);
-            if let Some(group) = &proj.group_name {
-                list = list.child(
-                    div()
-                        .pt(px(6.0))
-                        .pb(px(2.0))
-                        .px(px(4.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .text_size(px(10.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(tokens.text_dim)
-                        .child(GpuiIcon::Folder.render(11.0, tokens.text_dim))
-                        .child(SharedString::from(group.clone())),
-                );
-            }
-        }
-        list = list.child(render_project_card(proj, tokens, cx));
-    }
-
-    if snapshot.projects.is_empty() {
-        let empty_hint = if snapshot.french {
-            "Aucun dossier ouvert."
-        } else {
-            "No project folders open yet."
-        };
-        list = list.child(
-            div()
-                .p(px(12.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.surface)
-                .border_1()
-                .border_color(tokens.border)
-                .text_size(px(11.5))
-                .text_color(tokens.text_dim)
-                .child(empty_hint),
-        );
-    }
-
-    div()
-        .id("gpui-sidebar-expanded")
-        .relative()
-        .w(px(left_width_px))
-        .h_full()
-        .flex()
-        .flex_col()
-        .bg(tokens.chrome)
-        .border_r_1()
-        .border_color(tokens.border)
-        .child(
-            div()
-                .h(px(VIEW_TABS_HEIGHT_PX))
-                .px(px(10.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .border_b_1()
-                .border_color(tokens.border)
-                .child(
-                    div()
-                        .text_size(px(10.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(tokens.text_dim)
-                        .child(header_title),
-                )
-                .child(
-                    div()
-                        .id("sidebar-header-add")
-                        .p(px(3.0))
-                        .rounded(px(4.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(tokens.surface_2))
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::OpenAddProjectDialog, cx);
-                        }))
-                        .child(GpuiIcon::Plus.render(13.0, tokens.text)),
-                ),
-        )
-        .child(list)
-        .child(
-            div()
-                .p(px(8.0))
-                .border_t_1()
-                .border_color(tokens.border)
-                .child(
-                    div()
-                        .id("sidebar-footer-add-project")
-                        .h(px(28.0))
-                        .w_full()
-                        .px(px(8.0))
-                        .rounded(px(tokens.radius_px))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(6.0))
-                        .bg(tokens.surface)
-                        .border_1()
-                        .border_color(tokens.border)
-                        .cursor_pointer()
-                        .hover(|s| s.bg(tokens.surface_2).border_color(tokens.accent))
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::PromptPickProjectFolder, cx);
-                        }))
-                        .child(GpuiIcon::Plus.render(12.5, tokens.accent))
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(tokens.text_strong)
-                                .child(add_label),
-                        ),
-                ),
-        )
-        // Interactive 4px right-edge resize handle
-        .child(
-            div()
-                .id("resize-left-sidebar")
-                .absolute()
-                .top_0()
-                .right_0()
-                .w(px(4.0))
-                .h_full()
-                .cursor_col_resize()
-                .hover(|s| s.bg(rgba_with_alpha(tokens.accent, 0.45)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|root, _: &MouseDownEvent, _, cx| {
-                        root.active_drag = Some(DragTarget::LeftSidebar);
-                        cx.notify();
-                    }),
-                ),
-        )
-}
-
-fn render_project_card(
-    proj: &GpuiProjectItem,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let project_id = proj.id;
-    let active = proj.active;
-
-    let mut card = div()
-        .id(("project-card", project_id))
-        .w_full()
-        .px(px(8.0))
-        .py(px(6.0))
-        .rounded(px(tokens.radius_px))
-        .flex()
-        .flex_col()
-        .gap(px(3.0))
-        .bg(if active {
-            tokens.surface_2
-        } else {
-            tokens.surface
-        })
-        .border_1()
-        .border_color(if active { tokens.accent } else { tokens.border })
-        .cursor_pointer()
-        .hover(|s| s.bg(tokens.surface_2).border_color(tokens.border_strong))
-        .on_click(cx.listener(move |root, _, _, cx| {
-            root.dispatch(GpuiAction::SelectProject(project_id), cx);
-        }))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .overflow_hidden()
-                        .child(GpuiIcon::Folder.render(
-                            13.0,
-                            if active {
-                                tokens.accent
-                            } else {
-                                tokens.text_dim
-                            },
-                        ))
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(if active {
-                                    gpui::FontWeight::SEMIBOLD
-                                } else {
-                                    gpui::FontWeight::NORMAL
-                                })
-                                .text_color(tokens.text_strong)
-                                .truncate()
-                                .child(SharedString::from(proj.name.clone())),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .when(proj.waiting_agents > 0, |el| {
-                            el.child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(tokens.warn))
-                        })
-                        .when(proj.running_agents > 0, |el| {
-                            el.child(
-                                div()
-                                    .w(px(7.0))
-                                    .h(px(7.0))
-                                    .rounded_full()
-                                    .bg(tokens.ok_green),
-                            )
-                        })
-                        .when(proj.session_count > 0, |el| {
-                            el.child(
-                                div()
-                                    .px(px(5.0))
-                                    .rounded(px(4.0))
-                                    .bg(tokens.surface_3)
-                                    .text_size(px(10.0))
-                                    .text_color(tokens.text_dim)
-                                    .child(SharedString::from(proj.session_count.to_string())),
-                            )
-                        }),
-                ),
-        )
-        .when_some(proj.git_branch.as_ref(), |el, branch| {
-            el.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .text_size(px(10.5))
-                    .text_color(tokens.text_dim)
-                    .child(GpuiIcon::GitBranch.render(10.5, tokens.accent))
-                    .child(div().truncate().child(SharedString::from(branch.clone()))),
-            )
-        });
-
-    for (wt_idx, (wt_branch, _wt_path)) in proj.secondary_worktrees.iter().take(3).enumerate() {
-        card = card.child(
-            div()
-                .id(("proj-wt", wt_idx))
-                .pl(px(14.0))
-                .pt(px(2.0))
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .text_size(px(10.5))
-                .text_color(tokens.text_dim)
-                .child(GpuiIcon::GitBranch.render(10.0, tokens.text_dim))
-                .child(
-                    div()
-                        .truncate()
-                        .child(SharedString::from(wt_branch.clone())),
-                ),
-        );
-    }
-
-    card
 }
 
 fn render_center_column(
@@ -512,9 +128,6 @@ fn render_center_column(
                         tokens,
                         cx,
                     ))
-                })
-                .when_some(snapshot.overlay_title.as_ref(), |el, title| {
-                    el.child(render_overlay_modal(title, snapshot, tokens, cx))
                 }),
         )
 }
@@ -1091,7 +704,84 @@ fn render_pane_tile(
                                     .child(GpuiIcon::GitBranch.render(10.0, tokens.accent))
                                     .child(SharedString::from(wt.clone())),
                             )
-                        }),
+                        })
+                        .when_some(tile.team_badge.as_ref(), |el, badge| {
+                            let mut row = el;
+                            if !badge.team_number.is_empty() {
+                                let label = if badge.is_lead {
+                                    if french {
+                                        format!("#{} · chef", badge.team_number)
+                                    } else {
+                                        format!("#{} · lead", badge.team_number)
+                                    }
+                                } else {
+                                    format!("#{}", badge.team_number)
+                                };
+                                row = row.child(
+                                    div()
+                                        .px(px(5.0))
+                                        .py(px(1.0))
+                                        .rounded(px(4.0))
+                                        .bg(if badge.is_lead {
+                                            tokens.accent_soft_bg
+                                        } else {
+                                            tokens.surface_3
+                                        })
+                                        .text_size(px(10.0))
+                                        .text_color(if badge.is_lead {
+                                            tokens.accent
+                                        } else {
+                                            tokens.text_dim
+                                        })
+                                        .child(SharedString::from(label)),
+                                );
+                            }
+                            if let Some(coord) = &badge.worker_of {
+                                let tag = if french {
+                                    format!("exécutant de {coord}")
+                                } else {
+                                    format!("worker of {coord}")
+                                };
+                                row = row.child(
+                                    div()
+                                        .px(px(5.0))
+                                        .py(px(1.0))
+                                        .rounded(px(4.0))
+                                        .bg(tokens.surface_3)
+                                        .text_size(px(10.0))
+                                        .text_color(tokens.text_dim)
+                                        .child(SharedString::from(tag)),
+                                );
+                            }
+                            if badge.unread_count > 0 {
+                                row = row.child(
+                                    div()
+                                        .px(px(5.0))
+                                        .py(px(1.0))
+                                        .rounded(px(4.0))
+                                        .bg(tokens.accent_soft_bg)
+                                        .text_size(px(10.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(tokens.accent)
+                                        .child(SharedString::from(format!(
+                                            "✉ {}",
+                                            badge.unread_count
+                                        ))),
+                                );
+                            }
+                            row
+                        })
+                        .children(tile.share_guests.iter().take(3).map(|guest| {
+                            div()
+                                .px(px(5.0))
+                                .py(px(1.0))
+                                .rounded(px(99.0))
+                                .bg(rgba_with_alpha(tokens.ok_green, 0.18))
+                                .text_size(px(9.5))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(tokens.ok_green)
+                                .child(SharedString::from(guest.clone()))
+                        })),
                 )
                 .child(
                     div()
@@ -1172,6 +862,88 @@ fn render_pane_tile(
                         )),
                 ),
         )
+        .when_some(tile.wake_banner.as_ref(), |el, banner| {
+            let wake_msg = match (banner.channel, french) {
+                (WakeChannel::Team, false) => {
+                    "Unread team message waiting (idle state not confirmed)"
+                }
+                (WakeChannel::Team, true) => {
+                    "Message d'équipe en attente (inactivité non confirmée)"
+                }
+                (WakeChannel::Relay, false) => {
+                    "Unread inter-project message waiting (idle state not confirmed)"
+                }
+                (WakeChannel::Relay, true) => {
+                    "Message inter-projets en attente (inactivité non confirmée)"
+                }
+            };
+            let send_lbl = if french {
+                "Lui envoyer le rappel"
+            } else {
+                "Send reminder"
+            };
+            let dismiss_lbl = if french { "Ignorer" } else { "Dismiss" };
+            let target_pane = banner.pane_id;
+            el.child(
+                div()
+                    .w_full()
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .bg(tokens.surface_2)
+                    .border_b_1()
+                    .border_color(tokens.border)
+                    .text_size(px(11.0))
+                    .child(div().text_color(tokens.text).truncate().child(wake_msg))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .id(("pane-wake-send", sid))
+                                    .px(px(6.0))
+                                    .py(px(1.5))
+                                    .rounded(px(4.0))
+                                    .bg(tokens.accent_soft_bg)
+                                    .text_color(tokens.accent)
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(
+                                            GpuiAction::Teams(TeamsUiAction::SendWakeReminder(
+                                                target_pane,
+                                            )),
+                                            cx,
+                                        );
+                                    }))
+                                    .child(send_lbl),
+                            )
+                            .child(
+                                div()
+                                    .id(("pane-wake-dismiss", sid))
+                                    .px(px(5.0))
+                                    .py(px(1.5))
+                                    .rounded(px(4.0))
+                                    .text_color(tokens.text_dim)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(tokens.surface_3))
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(
+                                            GpuiAction::Teams(TeamsUiAction::DismissWakeBanner(
+                                                target_pane,
+                                            )),
+                                            cx,
+                                        );
+                                    }))
+                                    .child(dismiss_lbl),
+                            ),
+                    ),
+            )
+        })
         .child(body)
 }
 
@@ -1271,206 +1043,9 @@ fn render_remote_sftp_stage(
         )
 }
 
-fn render_overlay_modal(
-    title: &str,
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let title_str = SharedString::from(title.to_owned());
-    let is_settings = title == "Settings";
-
-    div()
-        .id("gpui-overlay-backdrop")
-        .absolute()
-        .inset_0()
-        .bg(gpui::rgba(0x0000_008f))
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .child(
-            div()
-                .w(px(if is_settings { 680.0 } else { 520.0 }))
-                .max_h(px(520.0))
-                .p(px(18.0))
-                .rounded(px(tokens.radius_px + 2.0))
-                .bg(tokens.surface)
-                .border_1()
-                .border_color(tokens.border_strong)
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .pb(px(8.0))
-                        .border_b_1()
-                        .border_color(tokens.border)
-                        .child(
-                            div()
-                                .text_size(px(15.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(tokens.text_strong)
-                                .child(title_str),
-                        )
-                        .child(
-                            div()
-                                .id("btn-close-overlay")
-                                .p(px(4.0))
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(tokens.surface_2))
-                                .on_click(cx.listener(|root, _, _, cx| {
-                                    root.dispatch(GpuiAction::CloseOverlays, cx);
-                                }))
-                                .child(GpuiIcon::Close.render(13.0, tokens.text)),
-                        ),
-                )
-                .when(is_settings, |el| {
-                    el.child(render_quick_appearance_controls(snapshot, tokens, cx))
-                })
-                .when(!is_settings, |el| {
-                    el.child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(8.0))
-                            .child(launcher_card_btn(
-                                "modal-new-shell",
-                                GpuiIcon::Terminal,
-                                snapshot.toolbar.preferred_shell_label.clone(),
-                                tokens.accent,
-                                tokens,
-                                GpuiAction::NewShell,
-                                cx,
-                            ))
-                            .child(launcher_card_btn(
-                                "modal-open-folder",
-                                GpuiIcon::Folder,
-                                "Open Folder...".into(),
-                                tokens.accent,
-                                tokens,
-                                GpuiAction::PromptPickProjectFolder,
-                                cx,
-                            ))
-                            .child(launcher_card_btn(
-                                "modal-open-settings",
-                                GpuiIcon::Settings,
-                                "Settings".into(),
-                                tokens.text,
-                                tokens,
-                                GpuiAction::OpenSettings,
-                                cx,
-                            )),
-                    )
-                }),
-        )
-}
-
-fn render_quick_appearance_controls(
-    snapshot: &GpuiWorkspaceSnapshot,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let mut theme_row = div().flex().flex_wrap().gap(px(6.0));
-    for (idx, theme_id) in THEMES.iter().copied().enumerate() {
-        let active = snapshot.theme == theme_id;
-        theme_row = theme_row.child(
-            div()
-                .id(("settings-theme-chip", idx))
-                .px(px(9.0))
-                .py(px(5.0))
-                .rounded(px(tokens.radius_px))
-                .bg(if active {
-                    tokens.accent_soft_bg
-                } else {
-                    tokens.surface_2
-                })
-                .border_1()
-                .border_color(if active { tokens.accent } else { tokens.border })
-                .text_size(px(11.5))
-                .text_color(tokens.text_strong)
-                .cursor_pointer()
-                .on_click(cx.listener(move |root, _, _, cx| {
-                    root.dispatch(GpuiAction::SetTheme(theme_id), cx);
-                }))
-                .child(theme_id.label(snapshot.french)),
-        );
-    }
-
-    let mut renderer_row = div().flex().flex_col().gap(px(6.0));
-    for (idx, pref) in [RendererPreference::AutoGpui, RendererPreference::CompatEgui]
-        .into_iter()
-        .enumerate()
-    {
-        let selected = snapshot.renderer == pref;
-        renderer_row = renderer_row.child(
-            div()
-                .id(("settings-renderer-opt", idx))
-                .p(px(8.0))
-                .rounded(px(tokens.radius_px))
-                .bg(if selected {
-                    tokens.accent_soft_bg
-                } else {
-                    tokens.surface_2
-                })
-                .border_1()
-                .border_color(if selected {
-                    tokens.accent
-                } else {
-                    tokens.border
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |root, _, _, cx| {
-                    root.dispatch(GpuiAction::SetRenderer(pref), cx);
-                }))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(tokens.text_strong)
-                        .child(pref.label(snapshot.french)),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(tokens.text_dim)
-                        .child(pref.description(snapshot.french)),
-                ),
-        );
-    }
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .child(
-            div()
-                .text_size(px(11.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(tokens.text_dim)
-                .child(if snapshot.french { "THÈME" } else { "THEME" }),
-        )
-        .child(theme_row)
-        .child(
-            div()
-                .text_size(px(11.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(tokens.text_dim)
-                .child(if snapshot.french {
-                    "MOTEUR DE RENDU UI"
-                } else {
-                    "UI RENDERER"
-                }),
-        )
-        .child(renderer_row)
-}
-
 fn render_right_panel(
     snapshot: &GpuiWorkspaceSnapshot,
+    focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     right_width_px: f32,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1547,29 +1122,6 @@ fn render_right_panel(
             ),
     );
 
-    let sp = &snapshot.side_panel;
-    let summary_text = match sp.tab {
-        SideTab::Dashboard => format!(
-            "Changed files: {} ({} staged) · Tasks: {} todo / {} doing / {} done",
-            sp.changed_files_count, sp.staged_count, sp.tasks_todo, sp.tasks_doing, sp.tasks_done
-        ),
-        SideTab::Files => sp.explorer_root_name.as_deref().map_or_else(
-            || "No workspace folder selected.".into(),
-            |n| format!("Explorer: {n}"),
-        ),
-        SideTab::Changes => format!(
-            "{} modified file(s), {} staged",
-            sp.changed_files_count, sp.staged_count
-        ),
-        SideTab::Tasks => format!(
-            "Kanban — {} todo · {} doing · {} done",
-            sp.tasks_todo, sp.tasks_doing, sp.tasks_done
-        ),
-        SideTab::TaskHistory => format!("{} recorded task run(s)", sp.history_count),
-        SideTab::History => "Past CLI & chat sessions".into(),
-        SideTab::Conversations => format!("{} team / project thread(s)", sp.conversations_count),
-    };
-
     let mut panel = div()
         .id("gpui-right-panel")
         .relative()
@@ -1592,19 +1144,16 @@ fn render_right_panel(
             div()
                 .id("gpui-right-panel-body")
                 .flex_1()
-                .p(px(12.0))
-                .overflow_y_scroll()
-                .child(
-                    div()
-                        .p(px(10.0))
-                        .rounded(px(tokens.radius_px))
-                        .bg(tokens.surface)
-                        .border_1()
-                        .border_color(tokens.border)
-                        .text_size(px(12.0))
-                        .text_color(tokens.text)
-                        .child(SharedString::from(summary_text)),
-                ),
+                .min_h_0()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .child(side_panels_view::render_side_panel_tab_body(
+                    snapshot,
+                    focus_input,
+                    tokens,
+                    cx,
+                )),
         )
         .when(!snapshot.right_fullscreen, |el| {
             el.child(

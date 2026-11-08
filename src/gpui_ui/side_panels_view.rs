@@ -1,0 +1,2040 @@
+//! 1:1 `GPUI` views for all 7 `SidePanel` tabs:
+//! - `SideTab::Dashboard` (`AgentDashboard.vue`)
+//! - `SideTab::Files` (`ExplorerPanel.vue`)
+//! - `SideTab::Changes` (`ScmPanel.vue` + docked `ScmHistoryPanel.vue` with `gpui::canvas` 5-color swimlanes)
+//! - `SideTab::Tasks` (`TasksBoard.vue` 4-column Kanban board)
+//! - `SideTab::TaskHistory` (`TaskHistoryPanel.vue`)
+//! - `SideTab::History` (`SessionHistoryPanel.vue`)
+//! - `SideTab::Conversations` (`ConversationsPanel.vue`)
+
+use super::{
+    FocusInputTarget, TesselGpuiRoot,
+    icons::GpuiIcon,
+    theme::{GpuiThemeTokens, mono_font_family, rgba_with_alpha},
+};
+use crate::{
+    app::gpui_bridge::{GpuiAction, GpuiSidePanelsSnapshot, GpuiWorkspaceSnapshot},
+    scm_changes_panel::{ScmArea, ScmRemoteOp},
+    side_panels_model::{
+        ConversationWindow, DashboardGroupBy, DashboardState, SWIMLANE_PALETTE,
+        SessionHistoryGroupBy, SessionHistoryScope, TaskHistoryFilter, TaskHistorySort,
+        format_duration_compact, format_thread_as_text, history_csv,
+    },
+    side_panels_ui::SidePanelsAction,
+    tasks_board_panel::TasksBoardAction,
+    workspace::SideTab,
+};
+use gpui::{
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    Rgba, SharedString, StatefulInteractiveElement, Styled, canvas, div, point,
+    prelude::FluentBuilder as _, px,
+};
+
+fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
+    gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
+}
+
+pub(crate) fn render_side_panel_tab_body(
+    snapshot: &GpuiWorkspaceSnapshot,
+    focus_input: FocusInputTarget,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let sp = &snapshot.side_panels;
+    let french = snapshot.french;
+    match snapshot.side_panel.tab {
+        SideTab::Dashboard => render_dashboard_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Files => render_explorer_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Changes => render_scm_changes_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Tasks => render_tasks_board_tab(sp, focus_input, french, tokens, cx),
+        SideTab::TaskHistory => render_task_history_tab(sp, focus_input, french, tokens, cx),
+        SideTab::History => render_sessions_history_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Conversations => render_conversations_tab(sp, focus_input, french, tokens, cx),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 1. `SideTab::Dashboard` (`AgentDashboard.vue`)
+// ---------------------------------------------------------------------------
+
+fn render_dashboard_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let vm = &sp.dashboard_vm;
+    let sleep_ids = vm.sleepable_pane_ids.clone();
+
+    let mut filter_bar = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(4.0))
+        .child(render_chip(
+            "gpui-dash-filter-all",
+            format!("{} ({})", if french { "Tous" } else { "All" }, vm.total),
+            sp.dashboard_filter.is_none(),
+            tokens,
+            GpuiAction::SetDashboardFilter(None),
+            cx,
+        ));
+
+    for st in DashboardState::ALL {
+        let count = vm.counts.get(&st).copied().unwrap_or(0);
+        if count > 0 || sp.dashboard_filter == Some(st) {
+            filter_bar = filter_bar.child(render_chip(
+                format!("gpui-dash-filter-{st:?}"),
+                format!("{} ({count})", st.label(french)),
+                sp.dashboard_filter == Some(st),
+                tokens,
+                GpuiAction::SetDashboardFilter(Some(st)),
+                cx,
+            ));
+        }
+    }
+
+    let mut controls = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .child(render_chip(
+                    "gpui-dash-grp-status",
+                    if french { "Par état" } else { "By status" }.to_owned(),
+                    sp.dashboard_group == DashboardGroupBy::Status,
+                    tokens,
+                    GpuiAction::SetDashboardGroup(DashboardGroupBy::Status),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-dash-grp-project",
+                    if french { "Par projet" } else { "By project" }.to_owned(),
+                    sp.dashboard_group == DashboardGroupBy::Project,
+                    tokens,
+                    GpuiAction::SetDashboardGroup(DashboardGroupBy::Project),
+                    cx,
+                )),
+        );
+
+    if !sleep_ids.is_empty() {
+        let n = sleep_ids.len();
+        controls = controls.child(
+            div()
+                .id("gpui-dash-sleep-idle")
+                .px(px(6.0))
+                .py(px(2.5))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(tokens.surface_2)
+                .border_1()
+                .border_color(tokens.border)
+                .text_size(px(10.5))
+                .text_color(tokens.text_strong)
+                .hover(|s| s.border_color(tokens.accent))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch_action(
+                        GpuiAction::SidePanels(SidePanelsAction::SleepPanes(sleep_ids.clone())),
+                        cx,
+                    );
+                }))
+                .child(SharedString::from(if french {
+                    format!("Mettre en veille ({n})")
+                } else {
+                    format!("Sleep idle ({n})")
+                })),
+        );
+    }
+
+    let mut list = div()
+        .id("gpui-dash-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(8.0));
+
+    if vm.groups.is_empty() {
+        list = list.child(render_empty_note(
+            if french {
+                "Aucun agent actif."
+            } else {
+                "No matching agent panes."
+            },
+            tokens,
+        ));
+    } else {
+        for grp in &vm.groups {
+            let mut grp_col = div().flex().flex_col().gap(px(4.0)).child(
+                div()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(tokens.text_dim)
+                    .child(SharedString::from(grp.heading.clone())),
+            );
+            for item in &grp.items {
+                let pane_id = item.pane_id;
+                let dot = rgb_tuple(item.state.rgb());
+                grp_col = grp_col.child(
+                    div()
+                        .id(("gpui-dash-item", pane_id))
+                        .p(px(7.0))
+                        .rounded(px(tokens.radius_px))
+                        .bg(if item.is_focused {
+                            tokens.accent_soft
+                        } else {
+                            tokens.surface
+                        })
+                        .border_1()
+                        .border_color(if item.is_focused {
+                            tokens.accent
+                        } else {
+                            tokens.border
+                        })
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.dispatch_action(
+                                GpuiAction::SidePanels(SidePanelsAction::FocusPane(pane_id)),
+                                cx,
+                            );
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(5.0))
+                                        .child(div().w(px(7.0)).h(px(7.0)).rounded(px(3.5)).bg(dot))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(tokens.text_strong)
+                                                .truncate()
+                                                .child(SharedString::from(item.title.clone())),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(3.0))
+                                        .child(
+                                            div()
+                                                .id(("gpui-dash-restart", pane_id))
+                                                .w(px(18.0))
+                                                .h(px(18.0))
+                                                .rounded(px(3.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .hover(|s| s.bg(tokens.panel))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.dispatch_action(
+                                                        GpuiAction::SidePanels(
+                                                            SidePanelsAction::RestartPane(pane_id),
+                                                        ),
+                                                        cx,
+                                                    );
+                                                }))
+                                                .child(
+                                                    GpuiIcon::RefreshCw
+                                                        .render(10.5, tokens.text_dim),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("gpui-dash-close", pane_id))
+                                                .w(px(18.0))
+                                                .h(px(18.0))
+                                                .rounded(px(3.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .hover(|s| s.bg(tokens.panel))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.dispatch_action(
+                                                        GpuiAction::SidePanels(
+                                                            SidePanelsAction::ClosePane(pane_id),
+                                                        ),
+                                                        cx,
+                                                    );
+                                                }))
+                                                .child(
+                                                    GpuiIcon::Close.render(10.5, tokens.text_dim),
+                                                ),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(tokens.text_dim)
+                                .truncate()
+                                .child(SharedString::from(format!(
+                                    "{} · {}",
+                                    item.project_name, item.agent_kind
+                                ))),
+                        )
+                        .when_some(item.task_line.clone(), |el, tline| {
+                            el.child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(tokens.text)
+                                    .truncate()
+                                    .child(SharedString::from(tline)),
+                            )
+                        }),
+                );
+            }
+            list = list.child(grp_col);
+        }
+    }
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(render_focus_input_box(
+            "gpui-dash-query",
+            FocusInputTarget::DashboardQuery,
+            focus_input == FocusInputTarget::DashboardQuery,
+            &sp.dashboard_query,
+            if french {
+                "Filtrer les agents…"
+            } else {
+                "Filter agents…"
+            },
+            tokens,
+            cx,
+        ))
+        .child(filter_bar)
+        .child(controls)
+        .child(list)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 2. `SideTab::Files` (`ExplorerPanel.vue`)
+// ---------------------------------------------------------------------------
+
+fn render_explorer_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let ex = &sp.explorer;
+    if !ex.has_root {
+        return div()
+            .size_full()
+            .p(px(12.0))
+            .child(render_empty_note(
+                if french {
+                    "Ouvrez un projet pour parcourir ses fichiers."
+                } else {
+                    "Select a workspace project to browse files."
+                },
+                tokens,
+            ))
+            .into_any_element();
+    }
+
+    let toolbar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(11.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens.text_strong)
+                .truncate()
+                .child(SharedString::from(ex.root_title.clone())),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .child(render_chip(
+                    "gpui-ex-mode",
+                    if ex.content_search_mode {
+                        if french { "Contenu" } else { "Content" }.to_owned()
+                    } else {
+                        if french { "Nom" } else { "Name" }.to_owned()
+                    },
+                    ex.content_search_mode,
+                    tokens,
+                    GpuiAction::ExplorerToggleSearchMode,
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-new-file",
+                    "+F".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::ExplorerNewItem { dir: false },
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-new-dir",
+                    "+D".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::ExplorerNewItem { dir: true },
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-dotfiles",
+                    ".*".to_owned(),
+                    ex.show_dotfiles,
+                    tokens,
+                    GpuiAction::ExplorerToggleDotfiles,
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-compact",
+                    "a/b".to_owned(),
+                    ex.compact_folders,
+                    tokens,
+                    GpuiAction::ExplorerToggleCompact,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .id("gpui-ex-refresh")
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .rounded(px(tokens.radius_px - 1.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch_action(GpuiAction::ExplorerRefresh, cx);
+                        }))
+                        .child(GpuiIcon::RefreshCw.render(11.5, tokens.text_dim)),
+                ),
+        );
+
+    let mut scroll = div()
+        .id("gpui-explorer-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(1.5));
+
+    if !ex.error.is_empty() {
+        scroll = scroll.child(
+            div()
+                .p(px(6.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(rgba_with_alpha(tokens.danger, 0.14))
+                .text_size(px(11.0))
+                .text_color(tokens.danger)
+                .child(SharedString::from(ex.error.clone())),
+        );
+    }
+
+    if ex.content_search_mode && !ex.filter_query.trim().is_empty() {
+        for (idx, hit) in ex.content_hits.iter().enumerate() {
+            let hit_path = hit.path.clone();
+            let hit_line = hit.line;
+            scroll = scroll.child(
+                div()
+                    .id(("gpui-ex-hit", idx as u64))
+                    .px(px(6.0))
+                    .py(px(4.0))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(tokens.surface)
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_action(
+                            GpuiAction::ExplorerOpenContentHit {
+                                path: hit_path.clone(),
+                                line: hit_line,
+                            },
+                            cx,
+                        );
+                    }))
+                    .child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens.accent)
+                            .truncate()
+                            .child(SharedString::from(format!(
+                                "{}:{}",
+                                hit.rel_display, hit.line
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.5))
+                            .text_color(tokens.text)
+                            .truncate()
+                            .child(SharedString::from(hit.preview.clone())),
+                    ),
+            );
+        }
+    } else {
+        for (idx, row) in ex.rows.iter().enumerate() {
+            let row_key = row.key.clone();
+            let del_path = row.path.clone();
+            let indent = (row.depth as f32) * 12.0;
+            let icon = if row.dir {
+                if row.open {
+                    GpuiIcon::ChevronDown
+                } else {
+                    GpuiIcon::ChevronRight
+                }
+            } else {
+                GpuiIcon::FileCode
+            };
+
+            scroll = scroll.child(
+                div()
+                    .id(("gpui-ex-row", idx as u64))
+                    .pl(px(6.0 + indent))
+                    .pr(px(6.0))
+                    .py(px(3.0))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(if row.active_doc || row.selected {
+                        tokens.accent_soft
+                    } else {
+                        gpui::rgba(0x0000_0000)
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(4.0))
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_action(
+                            GpuiAction::ExplorerClickRow {
+                                key: row_key.clone(),
+                                pinned: true,
+                            },
+                            cx,
+                        );
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .child(icon.render(
+                                11.5,
+                                if row.dir {
+                                    tokens.accent
+                                } else {
+                                    tokens.text_dim
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(if row.active_doc {
+                                        tokens.text_strong
+                                    } else {
+                                        tokens.text
+                                    })
+                                    .truncate()
+                                    .child(SharedString::from(row.display_name.clone())),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(("gpui-ex-del", idx as u64))
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .rounded(px(3.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|s| s.bg(tokens.surface))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dispatch_action(
+                                    GpuiAction::ExplorerDeletePath {
+                                        path: del_path.clone(),
+                                        permanent: false,
+                                    },
+                                    cx,
+                                );
+                            }))
+                            .child(GpuiIcon::Trash2.render(10.0, tokens.text_dim)),
+                    ),
+            );
+        }
+    }
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(toolbar)
+        .child(render_focus_input_box(
+            "gpui-explorer-filter",
+            FocusInputTarget::ExplorerFilter,
+            focus_input == FocusInputTarget::ExplorerFilter,
+            &ex.filter_query,
+            if ex.content_search_mode {
+                if french {
+                    "Rechercher dans les fichiers…"
+                } else {
+                    "Search file contents…"
+                }
+            } else if french {
+                "Filtrer les fichiers…"
+            } else {
+                "Filter files…"
+            },
+            tokens,
+            cx,
+        ))
+        .child(scroll)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 3. `SideTab::Changes` (`ScmPanel.vue` + `ScmHistoryPanel.vue` Swimlanes)
+// ---------------------------------------------------------------------------
+
+fn render_scm_changes_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let branch_lbl = sp.scm_branch.clone().unwrap_or_else(|| "HEAD".to_owned());
+
+    let top_bar = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(GpuiIcon::GitBranch.render(12.5, tokens.accent))
+                .child(
+                    div()
+                        .font_family(mono_font_family())
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.text_strong)
+                        .child(SharedString::from(branch_lbl)),
+                )
+                .when(sp.scm_ahead > 0 || sp.scm_behind > 0, |el| {
+                    el.child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.5))
+                            .text_color(tokens.text_dim)
+                            .child(SharedString::from(format!(
+                                "↑{} ↓{}",
+                                sp.scm_ahead, sp.scm_behind
+                            ))),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(3.0))
+                .child(render_chip(
+                    "gpui-scm-fetch",
+                    "Fetch".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::ScmRemoteOp(ScmRemoteOp::Fetch),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-scm-pull",
+                    "Pull".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::ScmRemoteOp(ScmRemoteOp::Pull),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-scm-push",
+                    "Push".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::ScmRemoteOp(ScmRemoteOp::Push),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-scm-notes",
+                    "Notes".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::OpenNotesModal,
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-scm-review",
+                    "Review".to_owned(),
+                    false,
+                    tokens,
+                    GpuiAction::OpenReviewModal,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .id("gpui-scm-refresh")
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .rounded(px(tokens.radius_px - 1.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch_action(GpuiAction::ScmRefresh, cx);
+                        }))
+                        .child(GpuiIcon::RefreshCw.render(11.5, tokens.text_dim)),
+                ),
+        );
+
+    let commit_row = div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(div().flex_1().child(render_focus_input_box(
+            "gpui-scm-commit-msg",
+            FocusInputTarget::ScmCommitMessage,
+            focus_input == FocusInputTarget::ScmCommitMessage,
+            &sp.scm_commit_msg,
+            if french {
+                "Message de commit…"
+            } else {
+                "Commit message…"
+            },
+            tokens,
+            cx,
+        )))
+        .child(
+            div()
+                .id("gpui-scm-commit-btn")
+                .px(px(10.0))
+                .h(px(28.0))
+                .rounded(px(tokens.radius_px))
+                .bg(tokens.accent)
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens.accent_fg)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch_action(GpuiAction::ScmCommit, cx);
+                }))
+                .child("Commit"),
+        );
+
+    let mut changes_scroll = div()
+        .id("gpui-scm-changes-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(6.0));
+
+    if let Some(err) = &sp.scm_error {
+        changes_scroll = changes_scroll.child(
+            div()
+                .p(px(6.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(rgba_with_alpha(tokens.danger, 0.14))
+                .text_size(px(11.0))
+                .text_color(tokens.danger)
+                .child(SharedString::from(err.clone())),
+        );
+    }
+
+    for (area, heading_en, heading_fr) in [
+        (ScmArea::Staged, "STAGED", "INDEXÉS"),
+        (ScmArea::Unstaged, "CHANGES", "MODIFIÉS"),
+        (ScmArea::Untracked, "UNTRACKED", "NON SUIVIS"),
+    ] {
+        let entries: Vec<_> = sp.scm_entries.iter().filter(|e| e.area == area).collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let all_paths: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+        let bulk_action = if area == ScmArea::Staged {
+            GpuiAction::ScmUnstage(all_paths)
+        } else {
+            GpuiAction::ScmStage(all_paths)
+        };
+        let bulk_lbl = if area == ScmArea::Staged {
+            if french {
+                "Tout désindexer"
+            } else {
+                "Unstage all"
+            }
+        } else if french {
+            "Tout indexer"
+        } else {
+            "Stage all"
+        };
+
+        let mut sec = div().flex().flex_col().gap(px(2.0)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.text_dim)
+                        .child(SharedString::from(format!(
+                            "{} ({})",
+                            if french { heading_fr } else { heading_en },
+                            entries.len()
+                        ))),
+                )
+                .child(render_chip(
+                    format!("gpui-scm-bulk-{area:?}"),
+                    bulk_lbl.to_owned(),
+                    false,
+                    tokens,
+                    bulk_action,
+                    cx,
+                )),
+        );
+
+        for (e_idx, entry) in entries.iter().enumerate() {
+            let path = entry.path.clone();
+            let old_path = entry.old_path.clone();
+            let stage_path = path.clone();
+            let discard_path = path.clone();
+            let entry_area = entry.area;
+            let st_code = entry.status.code();
+
+            sec = sec.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "gpui-scm-entry-{entry_area:?}-{e_idx}"
+                    )))
+                    .px(px(6.0))
+                    .py(px(3.5))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(tokens.surface)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(4.0))
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_action(
+                            GpuiAction::ScmOpenDiff {
+                                area: entry_area,
+                                path: path.clone(),
+                                old_path: old_path.clone(),
+                                pinned: true,
+                            },
+                            cx,
+                        );
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .font_family(mono_font_family())
+                                    .text_size(px(10.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(tokens.accent)
+                                    .child(st_code),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .font_family(mono_font_family())
+                                    .text_size(px(11.0))
+                                    .text_color(tokens.text_strong)
+                                    .truncate()
+                                    .child(SharedString::from(entry.path.clone())),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "gpui-scm-toggle-{entry_area:?}-{e_idx}"
+                                    )))
+                                    .px(px(5.0))
+                                    .py(px(1.0))
+                                    .rounded(px(3.0))
+                                    .bg(tokens.surface_2)
+                                    .text_size(px(10.5))
+                                    .text_color(tokens.text_strong)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        let act = if entry_area == ScmArea::Staged {
+                                            GpuiAction::ScmUnstage(vec![stage_path.clone()])
+                                        } else {
+                                            GpuiAction::ScmStage(vec![stage_path.clone()])
+                                        };
+                                        this.dispatch_action(act, cx);
+                                    }))
+                                    .child(if entry_area == ScmArea::Staged {
+                                        "−"
+                                    } else {
+                                        "+"
+                                    }),
+                            )
+                            .when(entry_area != ScmArea::Staged, |el| {
+                                el.child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "gpui-scm-discard-{entry_area:?}-{e_idx}"
+                                        )))
+                                        .px(px(5.0))
+                                        .py(px(1.0))
+                                        .rounded(px(3.0))
+                                        .bg(tokens.surface_2)
+                                        .text_size(px(10.5))
+                                        .text_color(tokens.danger)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.dispatch_action(
+                                                GpuiAction::ScmRequestDiscard {
+                                                    area: entry_area,
+                                                    paths: vec![discard_path.clone()],
+                                                },
+                                                cx,
+                                            );
+                                        }))
+                                        .child("↺"),
+                                )
+                            }),
+                    ),
+            );
+        }
+        changes_scroll = changes_scroll.child(sec);
+    }
+
+    if sp.scm_entries.is_empty() {
+        changes_scroll = changes_scroll.child(render_empty_note(
+            if french {
+                "Arbre de travail propre."
+            } else {
+                "Working tree clean."
+            },
+            tokens,
+        ));
+    }
+
+    let commits_dock = render_scm_commits_dock(sp, french, tokens, cx);
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(top_bar)
+        .child(commit_row)
+        .child(changes_scroll)
+        .child(commits_dock)
+        .into_any_element()
+}
+
+fn render_scm_commits_dock(
+    sp: &GpuiSidePanelsSnapshot,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let header = div()
+        .id("gpui-scm-commits-toggle")
+        .w_full()
+        .px(px(6.0))
+        .py(px(4.0))
+        .rounded(px(tokens.radius_px - 1.0))
+        .bg(tokens.surface)
+        .border_1()
+        .border_color(tokens.border)
+        .flex()
+        .items_center()
+        .justify_between()
+        .hover(|s| s.bg(tokens.surface_2))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.dispatch_action(GpuiAction::ScmToggleCommitsOpen, cx);
+        }))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(
+                    if sp.commits_open {
+                        GpuiIcon::ChevronDown
+                    } else {
+                        GpuiIcon::ChevronRight
+                    }
+                    .render(11.5, tokens.text_dim),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.text_strong)
+                        .child(if french { "Historique Git" } else { "Commits" }),
+                ),
+        )
+        .child(
+            div()
+                .font_family(mono_font_family())
+                .text_size(px(10.5))
+                .text_color(tokens.text_dim)
+                .child(SharedString::from(sp.commits.len().to_string())),
+        );
+
+    if !sp.commits_open {
+        return header.into_any_element();
+    }
+
+    let mut list = div()
+        .id("gpui-scm-commits-scroll")
+        .h(px(210.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(2.0));
+
+    for (c_idx, row) in sp.commits.iter().take(120).enumerate() {
+        let hash = row.node.hash.clone();
+        let expanded = sp.expanded_commits.contains(&hash);
+        let lane = row.lane.min(5);
+        let active_lanes = row.active_lanes.clamp(1, 6);
+        let color_idx = row.color_index % SWIMLANE_PALETTE.len();
+        let node_color = rgb_tuple(SWIMLANE_PALETTE[color_idx]);
+        let graph_w = (active_lanes as f32 * 10.0 + 8.0).max(22.0);
+
+        let swimlane_canvas = canvas(
+            |_, _, _| (),
+            move |bounds, (), window, _cx| {
+                let ox = bounds.origin.x;
+                let oy = bounds.origin.y;
+                let h = bounds.size.height;
+                for l in 0..active_lanes {
+                    let x = ox + px(6.0 + l as f32 * 10.0);
+                    let col = rgb_tuple(SWIMLANE_PALETTE[l % SWIMLANE_PALETTE.len()]);
+                    let mut pb = PathBuilder::stroke(px(1.5));
+                    pb.move_to(point(x, oy));
+                    pb.line_to(point(x, oy + h));
+                    if let Ok(path) = pb.build() {
+                        window.paint_path(path, col);
+                    }
+                }
+                let nx = ox + px(6.0 + lane as f32 * 10.0);
+                let ny = oy + px(11.0);
+                let mut dot_pb = PathBuilder::fill();
+                dot_pb.move_to(point(nx - px(3.2), ny));
+                dot_pb.line_to(point(nx, ny - px(3.2)));
+                dot_pb.line_to(point(nx + px(3.2), ny));
+                dot_pb.line_to(point(nx, ny + px(3.2)));
+                dot_pb.close();
+                if let Ok(path) = dot_pb.build() {
+                    window.paint_path(path, node_color);
+                }
+            },
+        )
+        .w(px(graph_w))
+        .h(px(22.0));
+
+        let toggle_hash = hash.clone();
+        list = list.child(
+            div()
+                .id(("gpui-scm-commit-row", c_idx as u64))
+                .px(px(4.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .hover(|s| s.bg(tokens.surface_2))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch_action(
+                        GpuiAction::SidePanels(SidePanelsAction::ToggleExpandCommit(
+                            toggle_hash.clone(),
+                        )),
+                        cx,
+                    );
+                }))
+                .child(swimlane_canvas)
+                .child(
+                    div()
+                        .font_family(mono_font_family())
+                        .text_size(px(10.0))
+                        .text_color(tokens.accent)
+                        .child(SharedString::from(row.node.short_hash.clone())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(11.0))
+                        .text_color(tokens.text_strong)
+                        .truncate()
+                        .child(SharedString::from(row.node.subject.clone())),
+                ),
+        );
+
+        if expanded && let Some(files) = sp.commit_files.get(&hash) {
+            for (f_idx, cf) in files.iter().enumerate() {
+                let c_hash = hash.clone();
+                let c_path = cf.path.clone();
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "gpui-scm-cfile-{c_idx}-{f_idx}"
+                        )))
+                        .pl(px(graph_w + 14.0))
+                        .pr(px(6.0))
+                        .py(px(2.0))
+                        .rounded(px(3.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .hover(|s| s.bg(tokens.surface))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.dispatch_action(
+                                GpuiAction::SidePanels(SidePanelsAction::OpenCommitDiff {
+                                    commit_hash: c_hash.clone(),
+                                    path: c_path.clone(),
+                                    pinned: true,
+                                }),
+                                cx,
+                            );
+                        }))
+                        .child(
+                            div()
+                                .font_family(mono_font_family())
+                                .text_size(px(10.0))
+                                .text_color(tokens.accent)
+                                .child(SharedString::from(cf.status.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_family(mono_font_family())
+                                .text_size(px(10.5))
+                                .text_color(tokens.text)
+                                .truncate()
+                                .child(SharedString::from(cf.path.clone())),
+                        ),
+                );
+            }
+        }
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(header)
+        .child(list)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 4. `SideTab::Tasks` (`TasksBoard.vue` 4-Column Kanban)
+// ---------------------------------------------------------------------------
+
+fn render_tasks_board_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    const COL_SPECS: [(usize, &str, &str, u32); 4] = [
+        (0, "Todo", "À faire", 0x8b93a1),
+        (1, "Doing", "En cours", 0x6c9cff),
+        (2, "Review", "En revue", 0xf5a524),
+        (3, "Done", "Terminé", 0x3ddc84),
+    ];
+
+    let add_bar = div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(div().flex_1().child(render_focus_input_box(
+            "gpui-tasks-new-input",
+            FocusInputTarget::TaskNewTitle,
+            focus_input == FocusInputTarget::TaskNewTitle,
+            &sp.new_task_title,
+            if french {
+                "Nouvelle tâche…"
+            } else {
+                "Add a task…"
+            },
+            tokens,
+            cx,
+        )))
+        .child(
+            div()
+                .id("gpui-tasks-add-btn")
+                .px(px(9.0))
+                .h(px(28.0))
+                .rounded(px(tokens.radius_px))
+                .bg(tokens.accent)
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens.accent_fg)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch_action(GpuiAction::TasksAddFromDraft, cx);
+                }))
+                .child("+"),
+        );
+
+    let mut columns = div()
+        .id("gpui-tasks-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(8.0));
+
+    for (col_idx, en_lbl, fr_lbl, hex) in COL_SPECS {
+        let accent = gpui::rgb(hex);
+        let cards: Vec<_> = sp.tasks.iter().filter(|t| t.column == col_idx).collect();
+
+        let mut col_box = div()
+            .p(px(6.0))
+            .rounded(px(tokens.radius_px))
+            .bg(tokens.surface)
+            .border_1()
+            .border_color(tokens.border)
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .child(div().w(px(7.0)).h(px(7.0)).rounded(px(3.5)).bg(accent))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(tokens.text_strong)
+                                    .child(if french { fr_lbl } else { en_lbl }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.5))
+                            .text_color(tokens.text_dim)
+                            .child(SharedString::from(cards.len().to_string())),
+                    ),
+            );
+
+        for task in cards {
+            let tid = task.id;
+            let cur_col = task.column;
+            col_box = col_box.child(
+                div()
+                    .pl(px(7.0))
+                    .pr(px(6.0))
+                    .py(px(5.0))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(tokens.panel)
+                    .border_l_2()
+                    .border_color(accent)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(11.5))
+                            .text_color(tokens.text_strong)
+                            .child(SharedString::from(task.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(3.0))
+                            .when(cur_col > 0, |el| {
+                                el.child(
+                                    div()
+                                        .id(("gpui-task-left", tid))
+                                        .px(px(4.0))
+                                        .py(px(1.0))
+                                        .rounded(px(3.0))
+                                        .bg(tokens.surface_2)
+                                        .text_size(px(10.0))
+                                        .text_color(tokens.text_strong)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.dispatch_action(
+                                                GpuiAction::TasksBoard(TasksBoardAction::Move {
+                                                    id: tid,
+                                                    column: cur_col - 1,
+                                                }),
+                                                cx,
+                                            );
+                                        }))
+                                        .child("←"),
+                                )
+                            })
+                            .when(cur_col < 3, |el| {
+                                el.child(
+                                    div()
+                                        .id(("gpui-task-right", tid))
+                                        .px(px(4.0))
+                                        .py(px(1.0))
+                                        .rounded(px(3.0))
+                                        .bg(tokens.surface_2)
+                                        .text_size(px(10.0))
+                                        .text_color(tokens.text_strong)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.dispatch_action(
+                                                GpuiAction::TasksBoard(TasksBoardAction::Move {
+                                                    id: tid,
+                                                    column: cur_col + 1,
+                                                }),
+                                                cx,
+                                            );
+                                        }))
+                                        .child("→"),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id(("gpui-task-del", tid))
+                                    .px(px(4.0))
+                                    .py(px(1.0))
+                                    .rounded(px(3.0))
+                                    .text_size(px(10.0))
+                                    .text_color(tokens.danger)
+                                    .hover(|s| s.bg(tokens.surface_2))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch_action(
+                                            GpuiAction::TasksBoard(TasksBoardAction::Delete(tid)),
+                                            cx,
+                                        );
+                                    }))
+                                    .child("×"),
+                            ),
+                    ),
+            );
+        }
+
+        columns = columns.child(col_box);
+    }
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(add_bar)
+        .child(columns)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 5. `SideTab::TaskHistory` (`TaskHistoryPanel.vue`)
+// ---------------------------------------------------------------------------
+
+fn render_task_history_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let mut win_chips = div().flex().flex_wrap().items_center().gap(px(3.0));
+    for w in TaskHistoryFilter::ALL {
+        win_chips = win_chips.child(render_chip(
+            format!("gpui-th-win-{w:?}"),
+            w.label(french).to_owned(),
+            sp.history_window == w,
+            tokens,
+            GpuiAction::SetTaskHistoryWindow(w),
+            cx,
+        ));
+    }
+
+    let mut sort_bar = div().flex().flex_wrap().items_center().gap(px(3.0));
+    for s in TaskHistorySort::ALL {
+        sort_bar = sort_bar.child(render_chip(
+            format!("gpui-th-sort-{s:?}"),
+            s.label(french).to_owned(),
+            sp.history_sort == s,
+            tokens,
+            GpuiAction::SetTaskHistorySort(s),
+            cx,
+        ));
+    }
+    sort_bar = sort_bar.child(render_chip(
+        "gpui-th-proj-only",
+        if french {
+            "Projet actif"
+        } else {
+            "Project only"
+        }
+        .to_owned(),
+        sp.history_current_project_only,
+        tokens,
+        GpuiAction::ToggleTaskHistoryCurrentProject,
+        cx,
+    ));
+
+    let csv_payload = history_csv(&sp.task_history_rows);
+    let actions_row = div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(render_chip(
+            "gpui-th-export-csv",
+            "Export CSV".to_owned(),
+            false,
+            tokens,
+            GpuiAction::SidePanels(SidePanelsAction::ExportTaskHistoryCsv(csv_payload)),
+            cx,
+        ))
+        .child(render_chip(
+            "gpui-th-clear",
+            if french { "Effacer" } else { "Clear" }.to_owned(),
+            false,
+            tokens,
+            GpuiAction::SidePanels(SidePanelsAction::ClearTaskHistory),
+            cx,
+        ));
+
+    let mut list = div()
+        .id("gpui-th-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(4.0));
+
+    if sp.task_history_rows.is_empty() {
+        list = list.child(render_empty_note(
+            if french {
+                "Aucune exécution terminée."
+            } else {
+                "No completed task runs yet."
+            },
+            tokens,
+        ));
+    } else {
+        for rec in &sp.task_history_rows {
+            list = list.child(
+                div()
+                    .p(px(7.0))
+                    .rounded(px(tokens.radius_px))
+                    .bg(tokens.surface)
+                    .border_1()
+                    .border_color(tokens.border)
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens.text_strong)
+                            .child(SharedString::from(rec.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.0))
+                            .text_color(tokens.text_dim)
+                            .child(SharedString::from(format!(
+                                "{} · {} · {} · ${:.3}",
+                                rec.project_name,
+                                rec.agent_name,
+                                format_duration_compact(rec.duration_ms),
+                                rec.cost_usd
+                            ))),
+                    ),
+            );
+        }
+    }
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(render_focus_input_box(
+            "gpui-th-query",
+            FocusInputTarget::TaskHistoryQuery,
+            focus_input == FocusInputTarget::TaskHistoryQuery,
+            &sp.history_query,
+            if french {
+                "Rechercher les exécutions…"
+            } else {
+                "Search completed runs…"
+            },
+            tokens,
+            cx,
+        ))
+        .child(win_chips)
+        .child(sort_bar)
+        .child(actions_row)
+        .child(list)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 6. `SideTab::History` (`SessionHistoryPanel.vue`)
+// ---------------------------------------------------------------------------
+
+fn render_sessions_history_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let mut scope_bar = div().flex().flex_wrap().items_center().gap(px(3.0));
+    for sc in SessionHistoryScope::ALL {
+        scope_bar = scope_bar.child(render_chip(
+            format!("gpui-sh-scope-{sc:?}"),
+            sc.label(french).to_owned(),
+            sp.sessions_scope == sc,
+            tokens,
+            GpuiAction::SetSessionsScope(sc),
+            cx,
+        ));
+    }
+
+    let group_bar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .child(render_chip(
+                    "gpui-sh-grp-folder",
+                    SessionHistoryGroupBy::Folder.label(french).to_owned(),
+                    sp.sessions_group == SessionHistoryGroupBy::Folder,
+                    tokens,
+                    GpuiAction::SetSessionsGroup(SessionHistoryGroupBy::Folder),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-sh-grp-agent",
+                    SessionHistoryGroupBy::Agent.label(french).to_owned(),
+                    sp.sessions_group == SessionHistoryGroupBy::Agent,
+                    tokens,
+                    GpuiAction::SetSessionsGroup(SessionHistoryGroupBy::Agent),
+                    cx,
+                )),
+        )
+        .child(
+            div()
+                .id("gpui-sh-refresh")
+                .w(px(22.0))
+                .h(px(22.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(|s| s.bg(tokens.surface_2))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch_action(
+                        GpuiAction::SidePanels(SidePanelsAction::RefreshSessions),
+                        cx,
+                    );
+                }))
+                .child(GpuiIcon::RefreshCw.render(11.5, tokens.text_dim)),
+        );
+
+    let mut list = div()
+        .id("gpui-sh-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(4.0));
+
+    if sp.past_sessions.is_empty() {
+        list = list.child(render_empty_note(
+            if french {
+                "Aucune session passée trouvée."
+            } else {
+                "No past transcripts found."
+            },
+            tokens,
+        ));
+    } else {
+        for (idx, entry) in sp.past_sessions.iter().enumerate() {
+            let resume_act = if let Some(pid) = entry.open_pane_id {
+                GpuiAction::SidePanels(SidePanelsAction::FocusPane(pid))
+            } else {
+                GpuiAction::SidePanels(SidePanelsAction::ResumeSession {
+                    agent_id: entry.agent_id.clone(),
+                    session_id: entry.id.clone(),
+                    folder: entry.folder.clone(),
+                })
+            };
+            let del_entry = entry.clone();
+
+            list = list.child(
+                div()
+                    .id(("gpui-sh-row", idx as u64))
+                    .p(px(7.0))
+                    .rounded(px(tokens.radius_px))
+                    .bg(tokens.surface)
+                    .border_1()
+                    .border_color(tokens.border)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_action(resume_act.clone(), cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(tokens.text_strong)
+                                    .truncate()
+                                    .child(SharedString::from(entry.title.clone())),
+                            )
+                            .child(
+                                div()
+                                    .font_family(mono_font_family())
+                                    .text_size(px(10.0))
+                                    .text_color(tokens.text_dim)
+                                    .truncate()
+                                    .child(SharedString::from(format!(
+                                        "{} · {}",
+                                        entry.agent_id,
+                                        entry.folder.display()
+                                    ))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(("gpui-sh-del", idx as u64))
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded(px(3.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|s| s.bg(tokens.panel))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dispatch_action(
+                                    GpuiAction::SidePanels(SidePanelsAction::DeleteSession(
+                                        del_entry.clone(),
+                                    )),
+                                    cx,
+                                );
+                            }))
+                            .child(GpuiIcon::Trash2.render(10.5, tokens.text_dim)),
+                    ),
+            );
+        }
+    }
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(render_focus_input_box(
+            "gpui-sh-query",
+            FocusInputTarget::SessionsQuery,
+            focus_input == FocusInputTarget::SessionsQuery,
+            &sp.sessions_query,
+            if french {
+                "Rechercher les sessions…"
+            } else {
+                "Search past sessions…"
+            },
+            tokens,
+            cx,
+        ))
+        .child(scope_bar)
+        .child(group_bar)
+        .child(list)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// 7. `SideTab::Conversations` (`ConversationsPanel.vue`)
+// ---------------------------------------------------------------------------
+
+fn render_conversations_tab(
+    sp: &GpuiSidePanelsSnapshot,
+    focus_input: FocusInputTarget,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let mut win_bar = div().flex().flex_wrap().items_center().gap(px(3.0));
+    for w in ConversationWindow::ALL {
+        win_bar = win_bar.child(render_chip(
+            format!("gpui-conv-win-{w:?}"),
+            w.label(french).to_owned(),
+            sp.conv_window == w,
+            tokens,
+            GpuiAction::SetConversationsWindow(w),
+            cx,
+        ));
+    }
+
+    let selected = sp
+        .selected_thread_key
+        .as_ref()
+        .and_then(|k| sp.threads.iter().find(|t| &t.key == k))
+        .or_else(|| sp.threads.first());
+
+    let mut thread_list = div()
+        .id("gpui-conv-threads")
+        .max_h(px(160.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(3.0));
+
+    for (idx, th) in sp.threads.iter().enumerate() {
+        let is_sel = selected.is_some_and(|s| s.key == th.key);
+        let key = th.key.clone();
+        thread_list = thread_list.child(
+            div()
+                .id(("gpui-conv-th", idx as u64))
+                .px(px(7.0))
+                .py(px(4.5))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(if is_sel {
+                    tokens.accent_soft
+                } else {
+                    tokens.surface
+                })
+                .border_1()
+                .border_color(if is_sel { tokens.accent } else { tokens.border })
+                .flex()
+                .items_center()
+                .justify_between()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch_action(
+                        GpuiAction::SelectConversationThread(Some(key.clone())),
+                        cx,
+                    );
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.text_strong)
+                        .truncate()
+                        .child(SharedString::from(th.title.clone())),
+                )
+                .child(
+                    div()
+                        .font_family(mono_font_family())
+                        .text_size(px(10.0))
+                        .text_color(tokens.text_dim)
+                        .child(SharedString::from(th.messages.len().to_string())),
+                ),
+        );
+    }
+
+    let detail = if let Some(th) = selected {
+        let copy_txt = format_thread_as_text(th);
+        let mut msgs = div()
+            .id("gpui-conv-messages")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(5.0));
+        for msg in &th.messages {
+            msgs = msgs.child(
+                div()
+                    .p(px(6.0))
+                    .rounded(px(tokens.radius_px - 1.0))
+                    .bg(tokens.surface)
+                    .border_1()
+                    .border_color(tokens.border)
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .font_family(mono_font_family())
+                            .text_size(px(10.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens.accent)
+                            .child(SharedString::from(format!(
+                                "{} → {}",
+                                msg.sender, msg.recipient
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(tokens.text)
+                            .child(SharedString::from(msg.body.clone())),
+                    ),
+            );
+        }
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens.text_strong)
+                            .truncate()
+                            .child(SharedString::from(th.title.clone())),
+                    )
+                    .child(render_chip(
+                        "gpui-conv-copy",
+                        if french { "Copier" } else { "Copy" }.to_owned(),
+                        false,
+                        tokens,
+                        GpuiAction::SidePanels(SidePanelsAction::CopyText(copy_txt)),
+                        cx,
+                    )),
+            )
+            .child(msgs)
+            .into_any_element()
+    } else {
+        render_empty_note(
+            if french {
+                "Aucun fil de conversation."
+            } else {
+                "No conversation threads yet."
+            },
+            tokens,
+        )
+    };
+
+    div()
+        .size_full()
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(render_focus_input_box(
+            "gpui-conv-query",
+            FocusInputTarget::ConversationsQuery,
+            focus_input == FocusInputTarget::ConversationsQuery,
+            &sp.conv_query,
+            if french {
+                "Filtrer les conversations…"
+            } else {
+                "Filter conversations…"
+            },
+            tokens,
+            cx,
+        ))
+        .child(win_bar)
+        .child(thread_list)
+        .child(detail)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Shared Side-Panel Primitives
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_focus_input_box(
+    id: impl Into<gpui::ElementId>,
+    target: FocusInputTarget,
+    focused: bool,
+    value: &str,
+    placeholder: &str,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let empty = value.is_empty();
+    let shown = if empty {
+        placeholder.to_owned()
+    } else if focused {
+        format!("{value}▍")
+    } else {
+        value.to_owned()
+    };
+
+    div()
+        .id(id)
+        .w_full()
+        .h(px(28.0))
+        .px(px(8.0))
+        .rounded(px(tokens.radius_px))
+        .bg(tokens.surface)
+        .border_1()
+        .border_color(if focused {
+            tokens.accent
+        } else {
+            tokens.border
+        })
+        .flex()
+        .items_center()
+        .text_size(px(11.5))
+        .text_color(if empty && !focused {
+            tokens.text_dim
+        } else {
+            tokens.text_strong
+        })
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.set_focus_input(target, window, cx);
+        }))
+        .child(SharedString::from(shown))
+        .into_any_element()
+}
+
+fn render_chip(
+    id: impl Into<SharedString>,
+    label: String,
+    active: bool,
+    tokens: &GpuiThemeTokens,
+    action: GpuiAction,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let id_shared: SharedString = id.into();
+    div()
+        .id(id_shared)
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(tokens.radius_px - 1.0))
+        .bg(if active {
+            tokens.accent_soft
+        } else {
+            tokens.surface
+        })
+        .border_1()
+        .border_color(if active { tokens.accent } else { tokens.border })
+        .text_size(px(10.5))
+        .text_color(if active {
+            tokens.text_strong
+        } else {
+            tokens.text_dim
+        })
+        .hover(|s| s.bg(tokens.surface_2))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.dispatch_action(action.clone(), cx);
+        }))
+        .child(SharedString::from(label))
+        .into_any_element()
+}
+
+fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
+    div()
+        .p(px(12.0))
+        .rounded(px(tokens.radius_px))
+        .bg(tokens.surface)
+        .border_1()
+        .border_color(tokens.border)
+        .text_size(px(11.5))
+        .text_color(tokens.text_dim)
+        .child(SharedString::from(text.to_owned()))
+        .into_any_element()
+}
