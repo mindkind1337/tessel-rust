@@ -42,14 +42,20 @@ const TEXT_DANGER_SOFT: Color32 = Color32::from_rgb(0xf8, 0x71, 0x71);
 const PRIMARY_BTN_DARK_TEXT: Color32 = Color32::from_rgb(0x0b, 0x15, 0x30);
 
 /// Pure-UI representation of `workspace::Host` (`alias` + optional remote `folder`).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SshHostSpec {
     pub alias: String,
     pub folder: String,
     /// `None` = persistent `tmux` sessions on (default); `Some(false)` = explicitly off.
     pub persistent_sessions: Option<bool>,
-    /// Opt-in `tessel-host` daemon for fast `Files` / `Changes` (default off).
+    /// `tessel-host` daemon for fast `Files` / `Changes` (default on).
     pub host_daemon: bool,
+}
+
+impl Default for SshHostSpec {
+    fn default() -> Self {
+        Self::new(String::new(), String::new())
+    }
 }
 
 impl SshHostSpec {
@@ -60,7 +66,7 @@ impl SshHostSpec {
             alias: alias.into(),
             folder: folder.into(),
             persistent_sessions: None,
-            host_daemon: false,
+            host_daemon: true,
         }
     }
 }
@@ -463,7 +469,7 @@ impl SshHostsPanel {
             alias: String::new(),
             folder: String::new(),
             persistent_sessions: true,
-            host_daemon: false,
+            host_daemon: true,
             advanced_open: false,
             error: String::new(),
             focus_alias_on_open: true,
@@ -472,7 +478,7 @@ impl SshHostsPanel {
 
     /// Opens the Edit SSH host form pre-populated with `host` at `index`.
     ///
-    /// `Advanced` auto-expands when the host has persistent sessions off or `host_daemon` on.
+    /// `Advanced` auto-expands when the host has persistent sessions or `host_daemon` turned off.
     pub fn open_edit(&mut self, index: usize, host: SshHostSpec) {
         self.pending_remove = None;
         self.selected_index = index;
@@ -482,7 +488,7 @@ impl SshHostsPanel {
             folder: host.folder.clone(),
             persistent_sessions: persistent,
             host_daemon: host.host_daemon,
-            advanced_open: !persistent || host.host_daemon,
+            advanced_open: !persistent || !host.host_daemon,
             original: Some((index, host)),
             error: String::new(),
             focus_alias_on_open: true,
@@ -514,7 +520,7 @@ impl SshHostsPanel {
                 alias: String::new(),
                 folder: String::new(),
                 persistent_sessions: true,
-                host_daemon: false,
+                host_daemon: true,
                 advanced_open: false,
                 error: text,
                 focus_alias_on_open: true,
@@ -3325,8 +3331,8 @@ pub const fn advanced_daemon_label(french: bool) -> &'static str {
 #[must_use]
 pub const fn advanced_daemon_hint(french: bool) -> &'static str {
     if french {
-        "Installe tessel-host dans ~/.tessel-server sur cet hôte. Désactivé : SFTP et git, comme avant."
+        "Utilise tessel-host dans ~/.tessel-server sur cet hôte (activé par défaut). Désactivé : SFTP et git, comme avant."
     } else {
-        "Installs tessel-host in ~/.tessel-server on this host. Off: SFTP and git, as before."
+        "Uses tessel-host in ~/.tessel-server on this host (on by default). Off: SFTP and git, as before."
     }
 }

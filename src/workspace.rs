@@ -524,14 +524,35 @@ pub struct Project {
     pub path: PathBuf,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Host {
     pub alias: String,
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistent_sessions: Option<bool>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// `tessel-host` daemon for fast Files/Changes: on by default, off only when the user says so.
+    #[serde(default = "default_host_daemon", skip_serializing_if = "is_true")]
     pub host_daemon: bool,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self {
+            alias: String::new(),
+            folder: String::new(),
+            persistent_sessions: None,
+            host_daemon: true,
+        }
+    }
+}
+
+const fn default_host_daemon() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Host {
