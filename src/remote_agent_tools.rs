@@ -17,6 +17,7 @@
 //!   imported workspaces, and `~/.claude.json` files over `4 MiB`.
 
 use std::fs;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
@@ -259,7 +260,19 @@ pub fn install_antigravity_mcp_on_fs(
 }
 
 fn normalize_path_for_compare(raw: &str) -> String {
-    let mut s = raw.trim().replace('\\', "/");
+    let separators = raw.trim().replace('\\', "/");
+    let absolute = separators.starts_with('/');
+    let mut s = separators
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    if absolute {
+        s.insert(0, '/');
+    }
+    if s.len() == 2 && s.as_bytes()[1] == b':' {
+        s.push('/');
+    }
     while s.len() > 1 && s.ends_with('/') {
         let is_win_drive_root = s.len() == 3 && s.as_bytes()[1] == b':';
         if is_win_drive_root {
@@ -302,8 +315,13 @@ pub fn validate_trust_folder_path(folder: &str, home: &str) -> Result<String, St
     }
 
     let norm_home = normalize_path_for_compare(home);
-    if !norm_home.is_empty() && norm_folder == norm_home {
-        return Err("Refusing home directory itself for Claude folder trust.".into());
+    if !norm_home.is_empty()
+        && (norm_folder == norm_home
+            || norm_home
+                .strip_prefix(&norm_folder)
+                .is_some_and(|rest| rest.starts_with('/')))
+    {
+        return Err("Refusing home directory or its ancestors for Claude folder trust.".into());
     }
 
     for seg in norm_folder.split('/') {
@@ -364,6 +382,49 @@ pub fn apply_local_claude_folder_trust(
     agent_folder_trust_enabled: bool,
     workspace_from_copy: bool,
 ) -> Result<bool, String> {
+    apply_local_claude_folder_trust_at(
+        home,
+        &home.join(".claude.json"),
+        project_folder,
+        agent_folder_trust_enabled,
+        workspace_from_copy,
+    )
+}
+
+/// The configuration path belongs to the account used by this launch.
+pub fn claude_config_path(
+    home: &Path,
+    config_dir: Option<&std::ffi::OsStr>,
+    custom_oauth: bool,
+) -> std::path::PathBuf {
+    let config_dir = config_dir
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from);
+    let legacy = config_dir
+        .clone()
+        .unwrap_or_else(|| home.join(".claude"))
+        .join(".config.json");
+    if legacy.exists() {
+        legacy
+    } else {
+        config_dir
+            .unwrap_or_else(|| home.to_owned())
+            .join(if custom_oauth {
+                ".claude-custom-oauth.json"
+            } else {
+                ".claude.json"
+            })
+    }
+}
+
+/// Updates only an existing account configuration, under Claude's own lock.
+pub fn apply_local_claude_folder_trust_at(
+    home: &Path,
+    claude_json: &Path,
+    project_folder: &Path,
+    agent_folder_trust_enabled: bool,
+    workspace_from_copy: bool,
+) -> Result<bool, String> {
     if !agent_folder_trust_enabled || workspace_from_copy {
         return Ok(false);
     }
@@ -382,32 +443,83 @@ pub fn apply_local_claude_folder_trust(
         }
     }
 
-    let home_str = home.to_str().ok_or("Non-UTF-8 home path")?;
-    let folder_str = project_folder.to_str().ok_or("Non-UTF-8 project path")?;
-    let key = validate_trust_folder_path(folder_str, home_str)?;
+    // Validate both the spelling and the filesystem target: dot components,
+    // short Windows names and ancestor aliases must not bypass the home/root gate.
+    validate_trust_folder_path(
+        project_folder.to_str().ok_or("Non-UTF-8 project path")?,
+        home.to_str().ok_or("Non-UTF-8 home path")?,
+    )?;
+    let real_home = dunce::canonicalize(home).map_err(|e| e.to_string())?;
+    let real_folder = dunce::canonicalize(project_folder).map_err(|e| e.to_string())?;
+    let key = validate_trust_folder_path(
+        real_folder.to_str().ok_or("Non-UTF-8 project path")?,
+        real_home.to_str().ok_or("Non-UTF-8 home path")?,
+    )?;
 
-    let claude_json = home.join(".claude.json");
-    let bak_json = home.join(".claude.json.tessel-bak");
-    ensure_not_symlink(&claude_json)?;
-    ensure_not_symlink(&bak_json)?;
-
-    let existing_raw = if claude_json.exists() {
-        let fmeta = fs::metadata(&claude_json).map_err(|e| e.to_string())?;
-        if fmeta.len() > MAX_CLAUDE_JSON_BYTES {
-            return Err("~/.claude.json exceeds 4 MiB safety limit.".into());
+    ensure_not_symlink(claude_json)?;
+    if !claude_json.exists() {
+        return Ok(false); // Claude creates its configuration on first use.
+    }
+    let mut lock_name = claude_json.as_os_str().to_owned();
+    lock_name.push(".lock");
+    let lock_path = std::path::PathBuf::from(lock_name);
+    let mut acquired = false;
+    for attempt in 0..=4 {
+        match fs::create_dir(&lock_path) {
+            Ok(()) => {
+                acquired = true;
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 4 => {
+                std::thread::sleep(std::time::Duration::from_millis((50 << attempt).min(250)));
+            }
+            Err(_) => return Ok(false), // Never break Claude's lock.
         }
-        let raw = fs::read_to_string(&claude_json).map_err(|e| e.to_string())?;
-        fs::write(&bak_json, raw.as_bytes()).map_err(|e| e.to_string())?;
-        Some(raw)
+    }
+    if !acquired {
+        return Ok(false);
+    }
+    struct Lock(std::path::PathBuf);
+    impl Drop for Lock {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+    let _lock = Lock(lock_path);
+    // Re-read under the same lock Claude uses. Bound the read itself, not only
+    // metadata, and use a unique temporary file so simultaneous launches cannot
+    // lose one another's entries or share a predictable temporary filename.
+    ensure_not_symlink(claude_json)?;
+    let file = fs::File::open(claude_json).map_err(|e| e.to_string())?;
+    let permissions = file.metadata().map_err(|e| e.to_string())?.permissions();
+    let mut bytes = Vec::new();
+    file.take(MAX_CLAUDE_JSON_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_CLAUDE_JSON_BYTES {
+        return Err("~/.claude.json exceeds 4 MiB safety limit.".into());
+    }
+    let raw = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    let key = if cfg!(windows) {
+        key.replace('\\', "/")
     } else {
-        None
+        key
     };
-
-    let merged = merge_claude_trust_json(existing_raw.as_deref(), &key)?;
-    let tmp_json = home.join(".claude.json.tessel-tmp");
-    ensure_not_symlink(&tmp_json)?;
-    fs::write(&tmp_json, merged.as_bytes()).map_err(|e| e.to_string())?;
-    fs::rename(&tmp_json, &claude_json).map_err(|e| e.to_string())?;
+    let current: Value = serde_json::from_str(raw)
+        .map_err(|_| "Existing Claude configuration is not valid JSON.".to_owned())?;
+    if current["projects"][&key]["hasTrustDialogAccepted"] == Value::Bool(true) {
+        return Ok(false);
+    }
+    let merged = merge_claude_trust_json(Some(raw), &key)?;
+    let parent = claude_json.parent().ok_or("Configuration has no parent")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    temp.as_file()
+        .set_permissions(permissions)
+        .map_err(|e| e.to_string())?;
+    temp.write_all(merged.as_bytes())
+        .map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(claude_json).map_err(|e| e.to_string())?;
     Ok(true)
 }
 

@@ -347,6 +347,18 @@ fn lot_b180_claude_folder_trust_rejections_and_merge() {
     assert!(validate_trust_folder_path("/", home).is_err());
     assert!(validate_trust_folder_path("/home/u", home).is_err());
     assert!(validate_trust_folder_path("/home/u/", home).is_err());
+    assert!(validate_trust_folder_path("/home", home).is_err());
+    assert!(validate_trust_folder_path("/home/other", home).is_ok());
+    assert!(validate_trust_folder_path("/home/user", home).is_ok());
+    for alias in ["/home/u/.", "/home//u", "/home/./u/./", "/./", "//"] {
+        assert!(validate_trust_folder_path(alias, home).is_err(), "{alias}");
+    }
+    for alias in ["C:/Users/test/.", "C:/Users//test/", "C:/.", "C://"] {
+        assert!(
+            validate_trust_folder_path(alias, "C:/Users/test").is_err(),
+            "{alias}"
+        );
+    }
     assert!(validate_trust_folder_path("/home/u/.ssh/x", home).is_err());
     assert!(validate_trust_folder_path("relative/dir", home).is_err());
     assert!(validate_trust_folder_path("/srv/../etc", home).is_err());
@@ -391,10 +403,96 @@ fn lot_b180_claude_folder_trust_rejections_and_merge() {
     std::fs::create_dir_all(&proj).unwrap();
     assert!(!apply_local_claude_folder_trust(tmp_home.path(), &proj, false, false).unwrap());
     assert!(!apply_local_claude_folder_trust(tmp_home.path(), &proj, true, true).unwrap());
+    assert!(!apply_local_claude_folder_trust(tmp_home.path(), &proj, true, false).unwrap());
+    std::fs::write(tmp_home.path().join(".claude.json"), r#"{"numStartups":7}"#).unwrap();
     assert!(apply_local_claude_folder_trust(tmp_home.path(), &proj, true, false).unwrap());
     let raw = std::fs::read_to_string(tmp_home.path().join(".claude.json")).unwrap();
     assert!(raw.contains("hasTrustDialogAccepted"));
     assert!(
         apply_local_claude_folder_trust(tmp_home.path(), tmp_home.path(), true, false).is_err()
     );
+    assert!(
+        apply_local_claude_folder_trust(tmp_home.path(), &tmp_home.path().join("."), true, false)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp_home.path().join(".claude.json")).unwrap(),
+        raw
+    );
+}
+
+#[test]
+fn claude_trust_serializes_updates_and_preserves_invalid_or_locked_config() {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".claude.json");
+    let a = home.path().join("a");
+    let b = home.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::write(&config, r#"{"keep":"value"}"#).unwrap();
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| apply_local_claude_folder_trust(home.path(), &a, true, false));
+        let second = scope.spawn(|| apply_local_claude_folder_trust(home.path(), &b, true, false));
+        assert!(first.join().unwrap().unwrap());
+        assert!(second.join().unwrap().unwrap());
+    });
+    let content: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(content["keep"], "value");
+    assert_eq!(content["projects"].as_object().unwrap().len(), 2);
+    assert!(!home.path().join(".claude.json.lock").exists());
+    std::fs::write(&config, "invalid original").unwrap();
+    assert!(apply_local_claude_folder_trust(home.path(), &a, true, false).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "invalid original"
+    );
+    assert!(!home.path().join(".claude.json.lock").exists());
+    std::fs::create_dir(home.path().join(".claude.json.lock")).unwrap();
+    assert!(!apply_local_claude_folder_trust(home.path(), &a, true, false).unwrap());
+    assert!(home.path().join(".claude.json.lock").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "invalid original"
+    );
+}
+
+#[test]
+fn claude_trust_uses_only_the_selected_account_configuration() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    let account = home.path().join("account");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&account).unwrap();
+    let original = r#"{"keep":"default account"}"#;
+    std::fs::write(home.path().join(".claude.json"), original).unwrap();
+    let selected = account.join(".claude.json");
+    assert_eq!(
+        claude_config_path(home.path(), None, false),
+        home.path().join(".claude.json")
+    );
+    assert_eq!(
+        claude_config_path(home.path(), Some(account.as_os_str()), false),
+        selected
+    );
+    assert_eq!(
+        claude_config_path(home.path(), Some(account.as_os_str()), true),
+        account.join(".claude-custom-oauth.json")
+    );
+    std::fs::write(account.join(".config.json"), "{}").unwrap();
+    assert_eq!(
+        claude_config_path(home.path(), Some(account.as_os_str()), true),
+        account.join(".config.json")
+    );
+    std::fs::write(&selected, "{}").unwrap();
+    assert!(
+        apply_local_claude_folder_trust_at(home.path(), &selected, &project, true, false).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join(".claude.json")).unwrap(),
+        original
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(selected).unwrap()).unwrap();
+    assert_eq!(value["projects"].as_object().unwrap().len(), 1);
 }

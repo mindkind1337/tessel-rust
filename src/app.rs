@@ -183,6 +183,14 @@ impl Session {
         prefs: Option<crate::agent_preferences::Preferences>,
         preferred_shell: Option<String>,
     ) {
+        self.start_with_trust(prefs, preferred_shell, None);
+    }
+    fn start_with_trust(
+        &mut self,
+        prefs: Option<crate::agent_preferences::Preferences>,
+        preferred_shell: Option<String>,
+        trust_home: Option<PathBuf>,
+    ) {
         if self.native_host.is_some()
             || self.codex_restore.is_some()
             || self.restarting.is_some()
@@ -277,6 +285,20 @@ impl Session {
                     prefs.as_ref(),
                     preferred_shell.as_deref(),
                 )?;
+                if let Some(home) = &trust_home
+                    && matches!(&launch, Launch::Agent(id) if id == "claude")
+                {
+                    let config = crate::remote_agent_tools::claude_config_path(
+                        home,
+                        command.get_env("CLAUDE_CONFIG_DIR"),
+                        command
+                            .get_env("CLAUDE_CODE_CUSTOM_OAUTH_URL")
+                            .is_some_and(|v| !v.is_empty()),
+                    );
+                    let _ = crate::remote_agent_tools::apply_local_claude_folder_trust_at(
+                        home, &config, &cwd, true, false,
+                    );
+                }
                 let custom = prefs
                     .as_ref()
                     .is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
@@ -2239,27 +2261,19 @@ impl Tessel {
             self.error = "Session limit: 100".into();
             return;
         }
-        // Claude folder trust (`claudeTrust.js`): accept the trust prompt for this project's
-        // folder before Claude starts. Off-thread file I/O; every refusal is silent.
-        if self.state.agent_folder_trust
+        // Only a selected local project is eligible. Perform the account-specific
+        // write on the launch worker before the child starts, never in a racing thread.
+        let trust_home = if self.state.agent_folder_trust
             && matches!(&launch, Launch::Agent(id) if id == "claude")
-            && let Some(folder) = worktree.as_ref().map(|w| w.path.clone()).or_else(|| {
-                project_id.and_then(|pid| {
-                    self.state
-                        .projects
-                        .iter()
-                        .find(|p| p.id == pid)
-                        .map(|p| p.path.clone())
-                })
-            })
-            && let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_owned())
+            && worktree.is_none()
+            && project_id
+                .and_then(|pid| self.state.projects.iter().find(|p| p.id == pid))
+                .is_some()
         {
-            thread::spawn(move || {
-                let _ = crate::remote_agent_tools::apply_local_claude_folder_trust(
-                    &home, &folder, true, false,
-                );
-            });
-        }
+            directories::BaseDirs::new().map(|b| b.home_dir().to_owned())
+        } else {
+            None
+        };
         let cwd = worktree
             .as_ref()
             .map(|wt| wt.path.clone())
@@ -2357,7 +2371,7 @@ impl Tessel {
         let preferred_shell = matches!(s.launch, Launch::Shell)
             .then(|| self.state.launcher_prefs.preferred_shell.clone())
             .flatten();
-        s.start_with_shell(prefs, preferred_shell);
+        s.start_with_trust(prefs, preferred_shell, trust_home);
         self.sessions.push(s);
         if let Some((target, dir)) = split {
             let layout = self
@@ -13379,6 +13393,74 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn claude_launch_finishes_account_trust_before_the_child_reads_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let project = home.join("project");
+        let account = home.join("account");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir(&account).unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"defaultAccount":true}"#).unwrap();
+        std::fs::write(account.join(".claude.json"), "{}").unwrap();
+        let script = fixture.path().join("observe.ps1");
+        std::fs::write(&script, r#"
+$config = Get-Content -Raw -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR '.claude.json') | ConvertFrom-Json
+$trusted = @($config.projects.PSObject.Properties | Where-Object { $_.Value.hasTrustDialogAccepted -eq $true }).Count
+Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Value $trusted
+"#).unwrap();
+        let prefs = crate::agent_preferences::Preferences {
+            command: format!("& '{}'", script.display().to_string().replace('\'', "''")),
+            env: format!("CLAUDE_CONFIG_DIR={}", account.display()),
+            ..Default::default()
+        };
+        let mut session = Session {
+            native_host: None,
+            restarting: None,
+            codex_discovery: None,
+            codex_restore: None,
+            model_picker: Default::default(),
+            last_model: None,
+            model_save_attempt: None,
+            settings_changed: false,
+            codex_seed: None,
+            conversation_id: None,
+            launch_fingerprint: None,
+            session_options: None,
+            worktree: None,
+            pane_name: None,
+            broadcast: true,
+            scrollback: 100,
+            id: 1,
+            project: Some(1),
+            title: "Synthetic trust launch".into(),
+            launch: Launch::Agent("claude".into()),
+            cwd: project,
+            terminal: None,
+            loading: None,
+            error: String::new(),
+        };
+        session.start_with_trust(Some(prefs), None, Some(home.clone()));
+        let observed = account.join("observed.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !std::fs::read_to_string(&observed).is_ok_and(|value| value.trim() == "1")
+            && std::time::Instant::now() < deadline
+        {
+            session.poll();
+            assert!(session.error.is_empty(), "{}", session.error);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(std::fs::read_to_string(observed).unwrap().trim(), "1");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".claude.json")).unwrap(),
+            r#"{"defaultAccount":true}"#
+        );
+        if let Some(mut terminal) = session.terminal.take() {
+            terminal.stop_for_restart().unwrap();
+        }
+    }
     #[test]
     fn restart_shortcut_requires_a_fresh_press_and_unblocked_workspace() {
         let ctx = egui::Context::default();

@@ -729,7 +729,7 @@ and 1,041 passing tests (`0` failures)** (`393` binary unit tests, `4` synthetic
 child/reference tests explicitly ignored, and `648` integration tests across `56`
 integration suites), including the rounded dual-arc `Icon::Moon` vector fix across
 `10px`–`24px` viewports. Phase A (shared UI-agnostic Rust models + universal
-`eframe`/`egui` compatibility renderer) is complete; Phase B layers the native
+`eframe`/`egui` compatibility renderer) has its implementation and listed suites landed; this is not full end-to-end parity acceptance. Phase B layers the native
 1:1 `GPUI` primary renderer with `--renderer gpui` / `--renderer compat` and
 automatic runtime fallback.
 
@@ -798,9 +798,16 @@ synthetic child/reference fixtures explicitly ignored, plus `673` integration te
 universal `eframe`/`egui` OpenGL Compatibility renderer) and Phase B (native 1:1 `GPUI`
 hardware-accelerated primary renderer with `--renderer gpui` / `--renderer compat`,
 `TESSEL_RENDERER`, `Settings > Appearance` selector, and automatic runtime fallback) are
-complete on `main`.
+implemented on `main`; the suite totals above do not establish complete visual or functional parity. Unwired services and native acceptance gaps below remain part of the migration objective.
 
 ## Phase C: Tessel parity through 2026-11-08 (Lots b178–b182)
+
+### Resumed integration audit (2026-11-11)
+
+- Full parity remains unproven. `RemoteTreeCache` and `RemoteGitLruCache` currently have no production consumers; `start_background_if_enabled` has no caller. The SSH tools bridge is also not connected to running sessions.
+- The GPUI `render_remote_sftp_stage` is still only a return-to-work button, not a remote file browser. Its shared panel commands, real navigation/editing controls and native validation are the next integration lot.
+- The pinned native host already exposes typed `Tree` and `Git` clients. Its messages are `tree.*` and `git.*`, not the JavaScript cache model's `fs.watch` names. Their subscription teardown must be fixed before repeated view changes can safely release watchers; Halley is implementing and testing that prerequisite.
+- Claude local trust previously raced process startup, wrote only the default account, accepted home/root aliases containing dot components, and allowed home ancestors. The launch worker now prepares the selected account before spawning, validates lexical and canonical targets, and uses Claude's lock plus an atomic unique temporary file. Missing or invalid configuration is not created/repaired implicitly. Worktree provenance and other trust providers remain integration work; the SSH trust helper is still unused.
 
 Source baseline advanced to `C:\Tessel` `cc1ec459` (2026-11-08).
 
