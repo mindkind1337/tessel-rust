@@ -11,6 +11,7 @@ fn pending_view() -> (OfficeView, mpsc::Sender<Result<Book, String>>) {
             cancel: Arc::new(AtomicBool::new(false)),
             selected: 0,
             error: String::new(),
+            summary: None,
         },
         sender,
     )
@@ -31,6 +32,7 @@ fn gpui_office_worker_completion_preserves_original_and_stops_repainting() {
     assert_eq!(ready.selected, 0);
     assert_eq!(ready.paragraphs[1].1, "A & B");
     assert!(ready.error.is_empty());
+    assert!(Arc::ptr_eq(&ready, &view.gpui_poll_summary()));
     assert!(Arc::ptr_eq(&original, &view.bytes));
 }
 
@@ -58,9 +60,11 @@ fn gpui_office_sections_and_truncation_survive_worker_delivery() {
     sender.send(Ok(book)).unwrap();
     let sheet = view.gpui_poll_summary();
     assert!(sheet.truncated);
-    assert_eq!(sheet.sheet.unwrap().rows[0][0], "Original value");
+    assert_eq!(sheet.sheet.as_ref().unwrap().rows[0][0], "Original value");
     view.select_section(1);
     let document = view.gpui_poll_summary();
+    assert!(!Arc::ptr_eq(&sheet, &document));
+    assert!(Arc::ptr_eq(&document, &view.gpui_poll_summary()));
     assert_eq!(document.selected, 1);
     assert!(document.sheet.is_none());
     assert_eq!(document.paragraphs[1].1, "A & B");

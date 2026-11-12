@@ -33,12 +33,12 @@ fn dimensions(sheet: &SheetTable) -> (usize, usize, bool) {
 }
 
 pub(crate) fn render(
-    sheet: &SheetTable,
+    sheet: std::sync::Arc<SheetTable>,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &Context<TesselGpuiRoot>,
 ) -> gpui::Div {
-    let (row_count, cols, truncated) = dimensions(sheet);
+    let (row_count, cols, truncated) = dimensions(&sheet);
     let width = ROW_LABEL + cols as f32 * CELL_WIDTH;
     let mut header = div()
         .h(px(ROW_HEIGHT))

@@ -191,6 +191,7 @@ pub struct OfficeView {
     cancel: Arc<AtomicBool>,
     selected: usize,
     error: String,
+    summary: Option<Arc<OfficeSummary>>,
 }
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
@@ -198,7 +199,7 @@ pub struct OfficeSummary {
     pub section_titles: Vec<String>,
     pub selected: usize,
     pub paragraphs: Vec<(bool, String)>,
-    pub sheet: Option<crate::rich_previews::SheetTable>,
+    pub sheet: Option<Arc<crate::rich_previews::SheetTable>>,
     pub truncated: bool,
     pub busy: bool,
     pub error: String,
@@ -218,14 +219,18 @@ impl OfficeView {
             _ => return,
         };
         self.pending = None;
+        self.summary = None;
         match result {
             Ok(book) => self.book = Some(book),
             Err(error) => self.error = error,
         }
     }
 
-    pub fn gpui_poll_summary(&mut self) -> OfficeSummary {
+    pub fn gpui_poll_summary(&mut self) -> Arc<OfficeSummary> {
         self.poll_completed();
+        if let Some(summary) = &self.summary {
+            return summary.clone();
+        }
         if self.book.is_none() && self.error.is_empty() && self.pending.is_none() {
             let (tx, rx) = mpsc::channel();
             self.pending = Some(rx);
@@ -236,7 +241,7 @@ impl OfficeView {
                 let _ = tx.send(decode(&bytes, &extension, &cancel));
             });
         }
-        if let Some(book) = &self.book {
+        let summary = if let Some(book) = &self.book {
             let idx = self.selected.min(book.sections.len().saturating_sub(1));
             let page = &book.sections[idx];
             let sheet = (!page.rows.is_empty()).then(|| crate::rich_previews::SheetTable {
@@ -255,7 +260,7 @@ impl OfficeView {
                     .iter()
                     .map(|p| (p.heading, p.text.clone()))
                     .collect(),
-                sheet,
+                sheet: sheet.map(Arc::new),
                 truncated: book.truncated,
                 busy: self.pending.is_some(),
                 error: self.error.clone(),
@@ -266,11 +271,21 @@ impl OfficeView {
                 error: self.error.clone(),
                 ..Default::default()
             }
+        };
+        let summary = Arc::new(summary);
+        // Keep completed content stable across frames; pending summaries are tiny
+        // and must be polled until the worker delivers its result.
+        if !summary.busy {
+            self.summary = Some(summary.clone());
         }
+        summary
     }
 
     pub fn select_section(&mut self, idx: usize) {
-        self.selected = idx;
+        if self.selected != idx {
+            self.selected = idx;
+            self.summary = None;
+        }
     }
 
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -295,6 +310,7 @@ impl OfficeView {
             cancel: Arc::new(AtomicBool::new(false)),
             selected: 0,
             error: String::new(),
+            summary: None,
         })
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -307,6 +323,7 @@ impl OfficeView {
                     tr("Preview truncated at the document limits."),
                 );
             }
+            let previous_section = self.selected;
             egui::ScrollArea::horizontal()
                 .id_salt("office-tabs")
                 .show(ui, |ui| {
@@ -316,6 +333,9 @@ impl OfficeView {
                         }
                     });
                 });
+            if previous_section != self.selected {
+                self.summary = None;
+            }
             let page = &book.sections[self.selected.min(book.sections.len() - 1)];
             egui::ScrollArea::both()
                 .id_salt(("office-content", self.selected))
@@ -363,6 +383,7 @@ impl OfficeView {
     #[cfg(feature = "visual-test")]
     pub fn prime(&mut self) -> Result<(), String> {
         self.book = Some(decode(&self.bytes, &self.extension, &self.cancel)?);
+        self.summary = None;
         Ok(())
     }
 }

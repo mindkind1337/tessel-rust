@@ -345,11 +345,11 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub text: String,
     pub preview_lines: Vec<String>,
     pub force_large_markdown_render: bool,
-    pub sheet: Option<crate::rich_previews::SheetTable>,
+    pub sheet: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
     pub json_preview: Option<crate::rich_previews::JsonDocumentPreview>,
     pub readable_blocks: Vec<crate::preview::ReadableBlock>,
     pub pdf_summary: Option<crate::pdf::PdfSummaryTuple>,
-    pub office_summary: Option<crate::office::OfficeSummary>,
+    pub office_summary: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub image_dims: Option<[usize; 2]>,
     pub media_pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub error: String,
@@ -3080,8 +3080,8 @@ impl Tessel {
         let sheet = if doc.preview_mode && matches!(extension.as_str(), "csv" | "tsv") {
             if doc.sheet_cache.is_none() {
                 let explicit = (extension == "tsv").then_some(b'\t');
-                doc.sheet_cache = Some(crate::rich_previews::parse_delimited_sheet(
-                    &doc.text, explicit,
+                doc.sheet_cache = Some(std::sync::Arc::new(
+                    crate::rich_previews::parse_delimited_sheet(&doc.text, explicit),
                 ));
             }
             doc.sheet_cache.clone()

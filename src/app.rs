@@ -6136,7 +6136,9 @@ impl Tessel {
                 let explicit = (extension == "tsv").then_some(b'\t');
                 let text_ref = &d.text;
                 let sheet = d.sheet_cache.get_or_insert_with(|| {
-                    crate::rich_previews::parse_delimited_sheet(text_ref, explicit)
+                    std::sync::Arc::new(crate::rich_previews::parse_delimited_sheet(
+                        text_ref, explicit,
+                    ))
                 });
                 crate::rich_previews::show_sheet_grid(ui, &d.path, sheet);
             } else if matches!(extension.as_str(), "json" | "jsonc" | "jsonl" | "ndjson") {

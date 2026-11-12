@@ -42,7 +42,7 @@ pub(crate) struct Snapshot {
     pub document: Option<(String, Option<String>, usize)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub pdf: Option<crate::pdf::PdfSummaryTuple>,
-    pub office: Option<crate::office::OfficeSummary>,
+    pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
 }
 

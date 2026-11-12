@@ -280,7 +280,7 @@ pub struct Document {
     pub deleted_on_disk: bool,
     pub last_edited_at: Option<std::time::Instant>,
     pub force_large_markdown_render: bool,
-    pub sheet_cache: Option<crate::rich_previews::SheetTable>,
+    pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
     pub fn from_diff(

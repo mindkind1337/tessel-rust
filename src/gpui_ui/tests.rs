@@ -381,6 +381,14 @@ fn gpui_document_editor_rich_previews_and_mermaid_layouts_work_end_to_end() {
         .expect("csv doc");
     assert!(csv_doc.preview_mode);
     assert_eq!(csv_doc.sheet.as_ref().map(|s| s.rows.len()), Some(3));
+    let cached_sheet = csv_doc.sheet.unwrap();
+    let repeated_sheet = app
+        .gpui_snapshot(960., 640., 4.)
+        .active_document
+        .unwrap()
+        .sheet
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&cached_sheet, &repeated_sheet));
     app.apply_gpui_action(GpuiAction::ToggleActiveDocumentPreview);
     assert!(
         !app.gpui_snapshot(960.0, 640.0, 4.0)
@@ -388,6 +396,20 @@ fn gpui_document_editor_rich_previews_and_mermaid_layouts_work_end_to_end() {
             .expect("csv source doc")
             .preview_mode
     );
+
+    app.apply_gpui_action(GpuiAction::SetEditorFindQuery("Alice".into()));
+    app.apply_gpui_action(GpuiAction::SetEditorReplaceText("Alicia".into()));
+    app.apply_gpui_action(GpuiAction::ReplaceEditorAll);
+    app.apply_gpui_action(GpuiAction::ToggleActiveDocumentPreview);
+    let updated_sheet = app
+        .gpui_snapshot(960., 640., 4.)
+        .active_document
+        .unwrap()
+        .sheet
+        .unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&cached_sheet, &updated_sheet));
+    assert_eq!(cached_sheet.rows[1][0], "Alice");
+    assert_eq!(updated_sheet.rows[1][0], "Alicia");
 
     app.apply_gpui_action(GpuiAction::OpenDocumentPath(jsonl_path));
     app.apply_gpui_action(GpuiAction::ToggleActiveDocumentPreview);

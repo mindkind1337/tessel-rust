@@ -225,7 +225,7 @@ pub(crate) fn render_document_editor_stage(
         render_image_stage(doc, dims, french, tokens).into_any_element()
     } else if doc.preview_mode {
         if let Some(sheet) = &doc.sheet {
-            super::sheet_view::render(sheet, french, tokens, cx).into_any_element()
+            super::sheet_view::render(sheet.clone(), french, tokens, cx).into_any_element()
         } else if let Some(json_prev) = &doc.json_preview {
             render_json_tree_stage(json_prev, french, tokens).into_any_element()
         } else if matches!(doc.extension.as_str(), "md" | "markdown") {
@@ -1433,7 +1433,7 @@ pub(crate) fn render_office_summary(
     }
 
     let body = if let Some(sheet) = &summary.sheet {
-        super::sheet_view::render(sheet, french, tokens, cx).into_any_element()
+        super::sheet_view::render(sheet.clone(), french, tokens, cx).into_any_element()
     } else {
         let mut p_col = div()
             .id("office-paragraphs")
