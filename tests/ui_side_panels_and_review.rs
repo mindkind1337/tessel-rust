@@ -2,6 +2,9 @@
 #[path = "../src/session_profile_identity.rs"]
 mod session_profile_identity;
 #[allow(dead_code)]
+#[path = "../src/task_timeline.rs"]
+mod task_timeline;
+#[allow(dead_code)]
 mod git {
     use std::io::Write;
     use std::path::Path;
@@ -155,6 +158,7 @@ fn task_history_store_filters_sorts_and_exports_formula_safe_csv() {
         duration_ms: 0,
         tokens: 4_200,
         cost_usd: 0.125,
+        ..Default::default()
     });
     store.record_completed(TaskHistoryRecord {
         id: 0,
@@ -169,6 +173,7 @@ fn task_history_store_filters_sorts_and_exports_formula_safe_csv() {
         duration_ms: 15_000,
         tokens: 1_000,
         cost_usd: 0.025,
+        ..Default::default()
     });
     store.save(&dir).expect("save history");
 

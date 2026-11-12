@@ -1628,6 +1628,7 @@ impl TeamsRelayHub {
             "team_bootstrap" => {
                 let name = obj.get("name").and_then(Value::as_str);
                 let team = self.ensure_team_for_pane(state, caller_project, caller_pane, name);
+                let mut draft = state.clone();
                 let mut added_tasks = Vec::new();
                 if let Some(tasks) = obj.get("tasks").and_then(Value::as_array) {
                     for item in tasks.iter().take(25) {
@@ -1635,9 +1636,11 @@ impl TeamsRelayHub {
                             .as_str()
                             .map(str::trim)
                             .filter(|s| !s.is_empty() && s.len() <= 4096)
-                            && let Ok(id) = state.id()
+                            && draft.tasks.len() < 10_000
+                            && let Ok(id) = draft.id()
                         {
-                            state.tasks.push(crate::workspace::Task {
+                            draft.tasks.push(crate::workspace::Task {
+                                timeline: crate::task_timeline::Timeline::created(now_ms, 0, None),
                                 guest_by: None,
                                 id,
                                 project: caller_project,
@@ -1648,6 +1651,8 @@ impl TeamsRelayHub {
                         }
                     }
                 }
+                draft.check_storage_budget()?;
+                *state = draft;
                 Ok((
                     json!({
                         "team_id": team.id,

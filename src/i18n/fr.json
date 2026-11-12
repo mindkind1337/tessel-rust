@@ -526,5 +526,13 @@
   "GitHub PRs & Issues\u2026": "PRs et issues GitHub\u2026",
   "Clear notifications": "Effacer les notifications",
   "Move conversation to Recycle Bin?": "Déplacer la conversation dans la Corbeille ?",
-  "The local transcript will be removed from history. Close its pane before continuing.": "Le fichier local de la conversation sera retiré de l’historique. Fermez son volet avant de continuer."
+  "The local transcript will be removed from history. Close its pane before continuing.": "Le fichier local de la conversation sera retiré de l’historique. Fermez son volet avant de continuer.",
+  "Cannot read existing task history; original retained.": "Impossible de lire l’ancien historique des tâches; l’original est conservé.",
+  "Cannot read existing task history.": "Impossible de lire l’ancien historique des tâches.",
+  "Existing task history is too large; original retained.": "L’ancien historique des tâches est trop volumineux; l’original est conservé.",
+  "Invalid existing task history; original retained.": "L’ancien historique des tâches est invalide; l’original est conservé.",
+  "Invalid task history.": "Historique des tâches invalide.",
+  "Task history exceeds its limit.": "L’historique des tâches dépasse sa limite.",
+  "Task history identifiers are exhausted.": "Les identifiants de l’historique des tâches sont épuisés.",
+  "Task history contains an unfinished period.": "L’historique des tâches contient une période non terminée."
 }

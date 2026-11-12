@@ -6,7 +6,39 @@ use crate::{
     workspace::{Task, Workspace},
 };
 
+pub fn commit(
+    state: &mut Workspace,
+    store: Option<&crate::workspace::Store>,
+    project: u64,
+    action: TasksBoardAction,
+) -> Result<bool, String> {
+    let mut draft = state.clone();
+    let changed = apply_inner(&mut draft, project, action)?;
+    if changed {
+        let bytes = draft.prepare_task_change_from(state.task_cards_size()?)?;
+        store
+            .ok_or("Workspace storage is unavailable.")?
+            .save_task_bytes(&bytes)?;
+        *state = draft;
+    }
+    Ok(changed)
+}
+
+#[cfg(test)]
 pub fn apply(
+    state: &mut Workspace,
+    project: u64,
+    action: TasksBoardAction,
+) -> Result<bool, String> {
+    let mut draft = state.clone();
+    let changed = apply_inner(&mut draft, project, action)?;
+    if changed {
+        draft.prepare_task_change_from(state.task_cards_size()?)?;
+        *state = draft;
+    }
+    Ok(changed)
+}
+fn apply_inner(
     state: &mut Workspace,
     project: u64,
     action: TasksBoardAction,
@@ -15,6 +47,9 @@ pub fn apply(
         return Ok(false);
     }
     match action {
+        TasksBoardAction::Assign { id, pane } => {
+            crate::task_history::assign(state, project, id, pane, crate::task_timeline::now_ms())
+        }
         TasksBoardAction::Add(title) => {
             let title: String = title.trim().chars().take(MAX_TASK_TITLE_CHARS).collect();
             if title.is_empty() {
@@ -25,6 +60,11 @@ pub fn apply(
             }
             let id = state.id()?;
             state.tasks.push(Task {
+                timeline: crate::task_timeline::Timeline::created(
+                    crate::task_timeline::now_ms(),
+                    0,
+                    None,
+                ),
                 guest_by: None,
                 id,
                 project,
@@ -38,10 +78,18 @@ pub fn apply(
                 .tasks
                 .iter_mut()
                 .find(|task| task.id == id && task.project == project)
-                && task.column != column
             {
+                let changed = task.timeline.transition(
+                    task.column,
+                    column,
+                    task.timeline.pane_id,
+                    crate::task_timeline::now_ms(),
+                );
                 task.column = column;
-                return Ok(true);
+                if changed {
+                    crate::task_history::record(state, id);
+                }
+                return Ok(changed);
             }
             Ok(false)
         }
@@ -94,12 +142,12 @@ mod tests {
                 Project {
                     id: 1,
                     name: "One".into(),
-                    path: "one".into(),
+                    path: std::env::temp_dir().join("one"),
                 },
                 Project {
                     id: 2,
                     name: "Two".into(),
-                    path: "two".into(),
+                    path: std::env::temp_dir().join("two"),
                 },
             ],
             active_project: Some(1),
@@ -127,6 +175,7 @@ mod tests {
         let mut state = workspace();
         state.tasks = (0..10_000)
             .map(|n| Task {
+                timeline: Default::default(),
                 guest_by: None,
                 id: n + 3,
                 project: 1,
@@ -142,8 +191,10 @@ mod tests {
     #[test]
     fn rename_delete_and_delete_many_are_scoped_to_active_project() {
         let mut state = workspace();
+        state.next_id = 20;
         state.tasks = vec![
             Task {
+                timeline: Default::default(),
                 guest_by: None,
                 id: 10,
                 project: 1,
@@ -151,6 +202,7 @@ mod tests {
                 column: 0,
             },
             Task {
+                timeline: Default::default(),
                 guest_by: None,
                 id: 11,
                 project: 1,
@@ -158,6 +210,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                timeline: Default::default(),
                 guest_by: None,
                 id: 12,
                 project: 2,

@@ -575,6 +575,11 @@ pub struct Task {
     pub column: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_by: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::task_timeline::Timeline::is_empty"
+    )]
+    pub timeline: crate::task_timeline::Timeline,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -659,6 +664,10 @@ pub struct Workspace {
     #[serde(default = "default_agent_folder_trust")]
     pub agent_folder_trust: bool,
     pub tasks: Vec<Task>,
+    #[serde(skip_serializing_if = "crate::task_history::is_empty")]
+    pub task_history: crate::side_panels_model::TaskHistoryStore,
+    #[serde(skip_serializing_if = "crate::task_history::not_migrated")]
+    pub task_history_migrated: bool,
     pub sessions: Vec<SavedSession>,
     pub next_pane: u64,
     pub native_threads: std::collections::HashMap<u64, NativeThread>,
@@ -719,6 +728,8 @@ impl Default for Workspace {
             agent_folder_trust: true,
             agent_model_defaults: Default::default(),
             tasks: vec![],
+            task_history: Default::default(),
+            task_history_migrated: false,
             sessions: vec![],
             next_pane: 1,
             native_threads: Default::default(),
@@ -1072,7 +1083,18 @@ impl Workspace {
                 return Err("Invalid project metadata.".into());
             }
         }
+        crate::task_history::validate(&self.task_history)?;
         for task in &self.tasks {
+            task.timeline.validate()?;
+            if task.column != 1
+                && task
+                    .timeline
+                    .work_periods
+                    .iter()
+                    .any(|p| p.end_ms.is_none())
+            {
+                return Err("Only Doing tasks may have an open work period.".into());
+            }
             if !ids.insert(task.id)
                 || task.id >= self.next_id
                 || task.column > 3
@@ -1089,6 +1111,72 @@ impl Workspace {
             validate_host(&host.alias)?;
         }
         Ok(())
+    }
+    pub fn check_storage_budget(&self) -> Result<()> {
+        if serde_json::to_vec_pretty(self)
+            .map_err(|_| "Cannot encode workspace")?
+            .len()
+            > 4 * 1024 * 1024
+        {
+            return Err(
+                "Task change exceeds workspace storage capacity; no change was applied.".into(),
+            );
+        }
+        Ok(())
+    }
+    /// Reserve space for settings; discard oldest history before refusing a card.
+    pub fn task_cards_size(&self) -> Result<usize> {
+        serde_json::to_vec_pretty(&self.tasks)
+            .map(|b| b.len())
+            .map_err(|_| "Cannot encode task cards".into())
+    }
+    #[cfg(test)]
+    pub fn prepare_task_change(&mut self) -> Result<Vec<u8>> {
+        self.prepare_task_change_from(0)
+    }
+    pub fn prepare_task_change_from(&mut self, previous_cards: usize) -> Result<Vec<u8>> {
+        const BOARD_LIMIT: usize = 5 * 1024 * 1024 / 2;
+        let cards_size = self.task_cards_size()?;
+        if cards_size > 2 * 1024 * 1024 && cards_size > previous_cards {
+            return Err("Task cards exceed their storage capacity; no change was applied.".into());
+        }
+        let allowed = BOARD_LIMIT.max(cards_size + 512 * 1024);
+        loop {
+            let size = serde_json::to_vec_pretty(&(&self.tasks, &self.task_history))
+                .map_err(|_| "Cannot encode task board")?
+                .len();
+            if size <= allowed {
+                break;
+            }
+            if self.task_history.records.is_empty() {
+                return Err(
+                    "Task board exceeds its storage capacity; no change was applied.".into(),
+                );
+            }
+            let history_size = serde_json::to_vec_pretty(&self.task_history)
+                .map_err(|_| "Cannot encode task history")?
+                .len();
+            let average = (history_size / self.task_history.records.len()).max(1);
+            let remove = ((size - allowed) / average + 1).min(self.task_history.records.len());
+            self.task_history.records.drain(..remove);
+        }
+        self.validate()?;
+        loop {
+            let bytes = serde_json::to_vec_pretty(self).map_err(|_| "Cannot encode workspace")?;
+            if bytes.len() <= 4 * 1024 * 1024 {
+                return Ok(bytes);
+            }
+            if self.task_history.records.is_empty() {
+                return Err("Workspace storage capacity exceeded; no change was applied.".into());
+            }
+            let history_size = serde_json::to_vec_pretty(&self.task_history)
+                .map_err(|_| "Cannot encode history")?
+                .len();
+            let average = (history_size / self.task_history.records.len()).max(1);
+            let remove = ((bytes.len() - 4 * 1024 * 1024) / average + 1)
+                .min(self.task_history.records.len());
+            self.task_history.records.drain(..remove);
+        }
     }
     pub fn next_pane_id(&self) -> u64 {
         self.sessions
@@ -1379,6 +1467,7 @@ pub fn validate_host(alias: &str) -> Result<()> {
 }
 
 pub struct Store {
+    pub warning: String,
     path: PathBuf,
     _lock: fs::File,
 }
@@ -1399,7 +1488,7 @@ impl Store {
         lock.try_lock_exclusive()
             .map_err(|_| "Another Tessel Rust instance is using this workspace.".to_string())?;
         let path = dir.join("workspace.json");
-        let state = match fs::File::open(&path) {
+        let mut state = match fs::File::open(&path) {
             Ok(file) => {
                 let mut bytes = Vec::new();
                 file.take(4 * 1024 * 1024 + 1)
@@ -1418,7 +1507,41 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Workspace::default(),
             Err(e) => return Err(e.to_string()),
         };
-        Ok((Self { path, _lock: lock }, state))
+        let mut warning = String::new();
+        if !state.task_history_migrated {
+            match crate::task_history::load_legacy(dir) {
+                Ok(legacy) => {
+                    let mut merged = state.task_history.clone();
+                    match crate::task_history::merge_legacy(
+                        &mut merged,
+                        legacy,
+                        &state.tasks,
+                        state.next_id,
+                    ) {
+                        Ok(()) => {
+                            state.task_history = merged;
+                            state.task_history_migrated = true;
+                        }
+                        Err(error) => {
+                            warning = error;
+                        }
+                    }
+                }
+                Err(error) => {
+                    warning = error;
+                }
+            }
+        }
+        crate::task_history::raise_identity_floors(&mut state)?;
+        state.validate()?;
+        Ok((
+            Self {
+                path,
+                _lock: lock,
+                warning,
+            },
+            state,
+        ))
     }
     pub fn restore(&self, before: &Workspace, after: &Workspace) -> Result<PathBuf> {
         after.validate()?;
@@ -1442,6 +1565,12 @@ impl Store {
             return Err("Workspace exceeds 4 MiB; previous settings retained".into());
         }
         atomic_write(&self.path, &bytes)
+    }
+    pub(crate) fn save_task_bytes(&self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err("Workspace storage capacity exceeded.".into());
+        }
+        atomic_write(&self.path, bytes)
     }
 }
 

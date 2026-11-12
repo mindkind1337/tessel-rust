@@ -54,10 +54,10 @@ pub fn commit(
     actor: &str,
     op: &GuestTaskOp,
 ) -> Result<(bool, Vec<SharedTask>), String> {
-    transact(state, project, actor, op, |draft| {
+    transact(state, project, actor, op, |_, bytes| {
         store
             .ok_or("Workspace storage is unavailable.")?
-            .save(draft)
+            .save_task_bytes(bytes)
             .map_err(|_| "The host could not save the task board; no change was applied.".into())
     })
 }
@@ -67,7 +67,7 @@ fn transact(
     project: u64,
     actor: &str,
     op: &GuestTaskOp,
-    save: impl FnOnce(&Workspace) -> Result<(), String>,
+    save: impl FnOnce(&Workspace, &[u8]) -> Result<(), String>,
 ) -> Result<(bool, Vec<SharedTask>), String> {
     if !state.projects.iter().any(|p| p.id == project) {
         return Err("Shared project is no longer open.".into());
@@ -82,6 +82,11 @@ fn transact(
             }
             let id = draft.id()?;
             draft.tasks.push(Task {
+                timeline: crate::task_timeline::Timeline::created(
+                    crate::task_timeline::now_ms(),
+                    *column,
+                    None,
+                ),
                 id,
                 project,
                 title: title.trim().into(),
@@ -103,8 +108,14 @@ fn transact(
                     if *column > 3 {
                         return Err("Invalid task column.".into());
                     }
-                    let changed = draft.tasks[index].column != *column;
-                    draft.tasks[index].column = *column;
+                    let task = &mut draft.tasks[index];
+                    let changed = task.timeline.transition(
+                        task.column,
+                        *column,
+                        task.timeline.pane_id,
+                        crate::task_timeline::now_ms(),
+                    );
+                    task.column = *column;
                     changed
                 }
                 GuestTaskOp::Rename { title, .. } => {
@@ -127,7 +138,15 @@ fn transact(
         }
     };
     if changed {
-        save(&draft)?;
+        let id = match op {
+            GuestTaskOp::Add { .. } => draft.tasks.last().unwrap().id,
+            GuestTaskOp::Move { id, .. }
+            | GuestTaskOp::Rename { id, .. }
+            | GuestTaskOp::Delete { id } => *id,
+        };
+        crate::task_history::record(&mut draft, id);
+        let bytes = draft.prepare_task_change_from(state.task_cards_size()?)?;
+        save(&draft, &bytes)?;
         *state = draft;
     }
     Ok((changed, snapshot(state)))
@@ -152,7 +171,7 @@ mod tests {
                 title: "Request".into(),
                 column: 0,
             },
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .unwrap();
         assert!(cache.update(&state, scope.clone()).is_some());
@@ -191,16 +210,35 @@ mod tests {
             serde_json::from_slice(&std::fs::read(dir.path().join("workspace.json")).unwrap())
                 .unwrap();
         assert_eq!(disk.tasks, state.tasks);
+        commit(
+            &mut state,
+            Some(&store),
+            1,
+            "Guest",
+            &GuestTaskOp::Move { id: 3, column: 3 },
+        )
+        .unwrap();
+        assert_eq!(state.task_history.records.len(), 1);
         #[cfg(windows)]
         {
             let synced = crate::tessel_sync::sanitize_workspace_json_for_sync(
                 serde_json::to_value(&state).unwrap(),
             );
             assert!(synced["tasks"][0].get("guest_by").is_none());
+            assert!(synced["tasks"][0].get("timeline").is_none());
+            assert!(synced.get("task_history").is_none());
             assert_eq!(synced["tasks"][0]["title"], "Request");
         }
         let portable = dir.path().join("portable.json");
         crate::backup::export(&portable, &state).unwrap();
+        let portable_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&portable).unwrap()).unwrap();
+        assert!(portable_json["workspace"].get("task_history").is_none());
+        assert!(
+            portable_json["workspace"]["tasks"][0]
+                .get("timeline")
+                .is_none()
+        );
         assert!(
             crate::backup::import(&portable).unwrap().tasks[0]
                 .guest_by
@@ -253,7 +291,7 @@ mod tests {
             column: 0,
         };
         let mut saved = None;
-        let (changed, cards) = transact(&mut state, 1, "Guest", &op, |draft| {
+        let (changed, cards) = transact(&mut state, 1, "Guest", &op, |draft, _| {
             saved = Some(draft.clone());
             Ok(())
         })
@@ -269,7 +307,7 @@ mod tests {
                 2,
                 "Guest",
                 &GuestTaskOp::Delete { id: 3 },
-                |_| panic!("foreign mutation")
+                |_, _| panic!("foreign mutation")
             )
             .is_err()
         );
@@ -287,7 +325,7 @@ mod tests {
                     title: "Request".into(),
                     column: 0
                 },
-                |_| Err("fixture failure".into())
+                |_, _| Err("fixture failure".into())
             )
             .is_err()
         );
@@ -305,7 +343,7 @@ mod tests {
                 title: "Request".into(),
                 column: 0,
             },
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .unwrap();
         assert_eq!(
@@ -318,7 +356,7 @@ mod tests {
                 1,
                 "Guest",
                 &GuestTaskOp::Move { id: 3, column: 0 },
-                |_| panic!("noop saved")
+                |_, _| panic!("noop saved")
             )
             .unwrap()
             .0
@@ -328,7 +366,7 @@ mod tests {
             1,
             "Guest",
             &GuestTaskOp::Move { id: 3, column: 1 },
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .unwrap();
         assert!(
@@ -340,7 +378,7 @@ mod tests {
                     id: 3,
                     title: "Rename".into()
                 },
-                |_| panic!("invalid rename saved")
+                |_, _| panic!("invalid rename saved")
             )
             .is_err()
         );
@@ -350,7 +388,7 @@ mod tests {
                 1,
                 "Guest",
                 &GuestTaskOp::Move { id: 3, column: 4 },
-                |_| panic!("invalid column saved")
+                |_, _| panic!("invalid column saved")
             )
             .is_err()
         );

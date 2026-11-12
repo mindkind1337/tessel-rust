@@ -708,7 +708,6 @@ pub struct Tessel {
     teams_ui: crate::teams_ui::TeamsUiState,
     notifications: crate::dialogs_toolbar_model::NotificationCenter,
     notified_waiting_panes: std::collections::HashSet<u64>,
-    task_history_store: crate::side_panels_model::TaskHistoryStore,
     activity_store: crate::side_panels_model::ActivityStore,
     past_sessions_cache: Vec<crate::side_panels_model::SessionHistoryEntry>,
     scm_commits_cache: Vec<crate::side_panels_model::CommitHistoryRow>,
@@ -754,7 +753,10 @@ impl Tessel {
             .ok_or_else(|| "Cannot locate app data.".to_string())
             .and_then(|dir| Store::open(&dir));
         let (store, state, error) = match opened {
-            Ok((s, w)) => (Some(s), w, String::new()),
+            Ok((s, w)) => {
+                let warning = crate::i18n::translate(w.language, &s.warning).to_owned();
+                (Some(s), w, warning)
+            }
             Err(e) => (None, Workspace::default(), e),
         };
         #[cfg(windows)]
@@ -785,10 +787,6 @@ impl Tessel {
         let automations_store = store
             .as_ref()
             .map(|s| crate::automations::AutomationsFile::load(s.directory()))
-            .unwrap_or_default();
-        let task_history_store = store
-            .as_ref()
-            .map(|s| crate::side_panels_model::TaskHistoryStore::load(s.directory()))
             .unwrap_or_default();
         let activity_store = store
             .as_ref()
@@ -937,7 +935,6 @@ impl Tessel {
             teams_ui: Default::default(),
             notifications: Default::default(),
             notified_waiting_panes: Default::default(),
-            task_history_store,
             activity_store,
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
@@ -1997,6 +1994,11 @@ impl Tessel {
             native_changed |= chat.poll();
             #[cfg(windows)]
             self.agent_browsers.poll(chat);
+        }
+        if self.chats.iter().any(|chat| !chat.tool_calls.is_empty()) {
+            self.capture_runtime_state();
+        }
+        for chat in &mut self.chats {
             while let Some(call) = chat.tool_calls.pop_front() {
                 #[cfg(windows)]
                 if call.name == "tessel_browser" {
@@ -2013,8 +2015,9 @@ impl Tessel {
                     }
                     continue;
                 }
-                let result = crate::agent_tools::execute_for_pane(
+                let result = crate::agent_tools::execute_persisted_for_pane(
                     &mut self.state,
+                    self.store.as_ref(),
                     &mut self.teams_hub,
                     chat.pane,
                     chat.project,
@@ -6911,64 +6914,9 @@ impl Tessel {
         project: u64,
         action: crate::tasks_board_panel::TasksBoardAction,
     ) -> bool {
-        let moved_to_done_title =
-            if let crate::tasks_board_panel::TasksBoardAction::Move { id, column: 3 } = &action {
-                self.state
-                    .tasks
-                    .iter()
-                    .find(|t| t.id == *id && t.project == project && t.column != 3)
-                    .map(|t| (t.id, t.title.clone()))
-            } else {
-                None
-            };
-        match crate::task_actions::apply(&mut self.state, project, action) {
-            Ok(true) => {
-                if let Some((task_id, title)) = moved_to_done_title {
-                    let proj_name = self
-                        .state
-                        .projects
-                        .iter()
-                        .find(|p| p.id == project)
-                        .map(|p| p.name.clone())
-                        .unwrap_or_default();
-                    let (agent_name, agent_kind) = self
-                        .sessions
-                        .iter()
-                        .find(|s| s.project == Some(project))
-                        .map(|s| {
-                            let kind = match &s.launch {
-                                Launch::Agent(a) => a.clone(),
-                                Launch::CodexChat => "codex".into(),
-                                Launch::ClaudeChat => "claude".into(),
-                                Launch::Shell => "shell".into(),
-                                Launch::Ssh(h) => format!("ssh:{}", h.alias),
-                            };
-                            (s.label().to_owned(), kind)
-                        })
-                        .unwrap_or_default();
-                    self.task_history_store.record_completed(
-                        crate::side_panels_model::TaskHistoryRecord {
-                            id: 0,
-                            task_id,
-                            title,
-                            project_id: project,
-                            project_name: proj_name,
-                            agent_name,
-                            agent_kind,
-                            created_at_ms: 0,
-                            done_at_ms: crate::side_panels_model::now_unix_ms(),
-                            duration_ms: 0,
-                            tokens: 0,
-                            cost_usd: 0.0,
-                        },
-                    );
-                    if let Some(st) = &self.store {
-                        let _ = self.task_history_store.save(st.directory());
-                    }
-                }
-                self.save();
-                true
-            }
+        self.capture_runtime_state();
+        match crate::task_actions::commit(&mut self.state, self.store.as_ref(), project, action) {
+            Ok(true) => true,
             Ok(false) => false,
             Err(error) => {
                 self.error = tr(&error).into();
@@ -7007,8 +6955,10 @@ impl Tessel {
                     .into(),
             );
         }
+        crate::task_history::preserve_for_restore(&self.state, &mut state)?;
         state.active_project = None;
         state.migrate_native_threads();
+        state.prepare_task_change_from(state.task_cards_size()?)?;
         self.save();
         let backup = self
             .store
@@ -7042,6 +6992,10 @@ impl Tessel {
         let (sender, receiver) = mpsc::channel();
         self.sender = sender;
         self.receiver = receiver;
+        self.tasks_board.reset();
+        self.tasks_board_project = None;
+        self.gpui_extra.task_board = Default::default();
+        self.gpui_extra.new_task_title.clear();
         self.state = state;
         self.remember_next_project_launch = self.state.launcher_prefs.remember_default.is_some();
         self.agents_panel = Default::default();
@@ -11182,7 +11136,7 @@ impl Tessel {
         if let Some(act) = crate::side_panels_ui::show_task_history_panel(
             ui,
             &mut self.side_panels_ui,
-            &self.task_history_store.records,
+            &self.state.task_history.records,
             self.state.active_project,
             french,
         ) {
@@ -11560,9 +11514,10 @@ impl Tessel {
                 }
             }
             SidePanelsAction::ClearTaskHistory => {
-                self.task_history_store.clear();
-                if let Some(st) = &self.store {
-                    let _ = self.task_history_store.save(st.directory());
+                self.capture_runtime_state();
+                if let Err(error) = crate::task_history::clear(&mut self.state, self.store.as_ref())
+                {
+                    self.error = error;
                 }
             }
             SidePanelsAction::RefreshSessions => {
@@ -12814,7 +12769,7 @@ impl eframe::App for Tessel {
                     );
                 }
                 let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
-                    &self.task_history_store.records,
+                    &self.state.task_history.records,
                     10.0,
                     crate::dialogs_toolbar_model::now_ms(),
                 );

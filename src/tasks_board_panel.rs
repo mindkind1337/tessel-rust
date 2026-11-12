@@ -51,6 +51,7 @@ pub struct TasksBoardInput<'a> {
 pub enum TasksBoardAction {
     Add(String),
     Move { id: u64, column: usize },
+    Assign { id: u64, pane: Option<u64> },
     Rename { id: u64, title: String },
     Delete(u64),
     DeleteMany(Vec<u64>),

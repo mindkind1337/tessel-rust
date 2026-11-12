@@ -1242,7 +1242,10 @@ impl Tessel {
             .ok_or_else(|| "Cannot locate app data.".to_string())
             .and_then(|dir| Store::open(&dir));
         let (store, state, error) = match opened {
-            Ok((s, w)) => (Some(s), w, String::new()),
+            Ok((s, w)) => {
+                let warning = crate::i18n::translate(w.language, &s.warning).to_owned();
+                (Some(s), w, warning)
+            }
             Err(e) => (None, Workspace::default(), e),
         };
         crate::i18n::set_language(state.language);
@@ -1270,10 +1273,6 @@ impl Tessel {
         let automations_store = store
             .as_ref()
             .map(|s| crate::automations::AutomationsFile::load(s.directory()))
-            .unwrap_or_default();
-        let task_history_store = store
-            .as_ref()
-            .map(|s| crate::side_panels_model::TaskHistoryStore::load(s.directory()))
             .unwrap_or_default();
         let activity_store = store
             .as_ref()
@@ -1441,7 +1440,6 @@ impl Tessel {
             teams_ui: Default::default(),
             notifications: Default::default(),
             notified_waiting_panes: Default::default(),
-            task_history_store,
             activity_store,
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
@@ -3348,7 +3346,7 @@ impl Tessel {
                 tasks_todo,
                 tasks_doing,
                 tasks_done,
-                history_count: self.task_history_store.records.len(),
+                history_count: self.state.task_history.records.len(),
                 conversations_count: self.activity_store.messages.len(),
                 explorer_root_name: active_project_name,
             },
@@ -3828,7 +3826,7 @@ impl Tessel {
         };
         let task_history_rows = if visible == Some(SideTab::TaskHistory) {
             filter_and_sort_task_history(
-                &self.task_history_store.records,
+                &self.state.task_history.records,
                 proj_filter,
                 self.side_panels_ui.history_window,
                 self.side_panels_ui.history_sort,
@@ -4031,7 +4029,7 @@ impl Tessel {
         };
 
         let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
-            &self.task_history_store.records,
+            &self.state.task_history.records,
             10.0,
             crate::dialogs_toolbar_model::now_ms(),
         );
@@ -4274,7 +4272,7 @@ impl Tessel {
             .collect();
 
         let usage_summary = crate::dialogs_toolbar_model::compute_usage_summary(
-            &self.task_history_store.records,
+            &self.state.task_history.records,
             10.0,
             crate::dialogs_toolbar_model::now_ms(),
         );
@@ -6864,6 +6862,41 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn native_task_tool_persists_current_runtime_panes_before_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("state");
+        let (store, mut state) = crate::workspace::Store::open(&data).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        state.sessions.push(serde_json::from_value(serde_json::json!({
+            "id":7,"project":project,"title":"Sleeping fixture","launch":"Shell","cwd":dir.path()
+        })).unwrap());
+        state.next_pane = 8;
+        store.save(&state).unwrap();
+        drop(store);
+        let mut app = Tessel::new_for_gpui_in_dir(Some(data.clone()), false, || {});
+        assert!(app.sessions[0].terminal.is_none());
+        app.sessions[0].id = 41;
+        app.sessions[0].title = "Current runtime pane".into();
+        app.next_session = 42;
+        let mut chat = crate::chat::Chat::new(project, dir.path().into());
+        chat.pane = 41;
+        chat.tool_calls.push_back(crate::chat::ToolCall {
+            id: serde_json::json!(1),
+            name: "tessel_task_add".into(),
+            arguments: serde_json::json!({"title":"Synthetic task", "column":1}),
+        });
+        app.chats.push(chat);
+        app.poll_for_gpui();
+        let disk: crate::workspace::Workspace =
+            serde_json::from_slice(&std::fs::read(data.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(disk.next_pane, 42);
+        assert_eq!(disk.sessions[0].id, 41);
+        assert_eq!(disk.sessions[0].title, "Current runtime pane");
+        assert_eq!(disk.tasks[0].timeline.pane_id, Some(41));
+        assert_eq!(disk.tasks[0].timeline.work_periods.len(), 1);
+    }
+
+    #[test]
     fn native_mode_switch_waits_for_confirmed_cli_exit() {
         let temp = tempfile::tempdir().unwrap();
         let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
@@ -7269,6 +7302,7 @@ mod panel_snapshot_tests {
         let pid = app.state.active_project.unwrap();
         app.state.tasks = (0..10_000)
             .map(|id| crate::workspace::Task {
+                timeline: Default::default(),
                 guest_by: None,
                 id,
                 project: pid,

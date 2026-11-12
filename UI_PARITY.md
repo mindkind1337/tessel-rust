@@ -375,3 +375,6 @@ GPUI task-board follow-up: inline rename now uses native EditableText with selec
 
 
 Live Share board data now comes from the host Workspace task model, with transactional, scoped guest mutations; the phantom project-local board file is not used or migrated. Compatibility guest controls display refresh/add errors and partial-view notices. Full guest card controls, native guest board rendering, assignment/timing/dependencies and visual acceptance remain incomplete.
+
+
+Task model/history follow-up: shared timing transitions, per-pane Doing periods, scoped assignment tool and transactional completion history are implemented in the core. Native and Compatibility card timing/assignee controls still require UI work and visual acceptance. Source history is bounded by record count; Rust additionally enforces encoded byte limits and keeps unknown legacy dates rather than inventing a completion date.

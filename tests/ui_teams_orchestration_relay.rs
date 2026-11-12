@@ -8,6 +8,9 @@ mod settings_extra_model;
 #[path = "../src/sidebar_model.rs"]
 mod sidebar_model;
 #[allow(dead_code)]
+#[path = "../src/task_timeline.rs"]
+mod task_timeline;
+#[allow(dead_code)]
 #[path = "../src/teams_relay.rs"]
 mod teams_relay;
 #[allow(dead_code)]
@@ -54,8 +57,9 @@ mod workspace {
         pub path: PathBuf,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
     pub struct Task {
+        pub timeline: crate::task_timeline::Timeline,
         pub guest_by: Option<String>,
         pub id: u64,
         pub project: u64,
@@ -94,6 +98,12 @@ mod workspace {
     }
 
     impl Workspace {
+        pub fn check_storage_budget(&self) -> Result<(), String> {
+            if serde_json::to_vec_pretty(&self.tasks).unwrap().len() > 4 * 1024 * 1024 {
+                return Err("Task budget exceeded".into());
+            }
+            Ok(())
+        }
         pub fn id(&mut self) -> Result<u64, String> {
             self.next_id = self.next_id.saturating_add(1).max(1);
             Ok(self.next_id)

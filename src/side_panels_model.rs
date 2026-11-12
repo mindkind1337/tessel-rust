@@ -254,6 +254,9 @@ pub struct TaskHistoryRecord {
     pub duration_ms: u64,
     pub tokens: u64,
     pub cost_usd: f64,
+    pub pane_id: Option<u64>,
+    pub started_at_ms: u64,
+    pub work_periods: Vec<crate::task_timeline::WorkPeriod>,
 }
 
 impl Default for TaskHistoryRecord {
@@ -271,6 +274,9 @@ impl Default for TaskHistoryRecord {
             duration_ms: 0,
             tokens: 0,
             cost_usd: 0.0,
+            pane_id: None,
+            started_at_ms: 0,
+            work_periods: Vec::new(),
         }
     }
 }
