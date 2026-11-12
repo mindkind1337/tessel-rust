@@ -12,6 +12,7 @@ pub(crate) mod editor_input;
 mod editor_syntax;
 mod editor_tool_inputs;
 pub mod editor_view;
+mod explorer_input;
 pub mod icons;
 mod modal_query_input;
 pub(crate) mod modals_view;
@@ -102,6 +103,7 @@ pub(crate) struct TesselGpuiRoot {
     browser_input: browser_input::Input,
     modal_query_input: modal_query_input::Input,
     scm_input: scm_input::Input,
+    explorer_input: explorer_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -131,6 +133,16 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "escape",
+                explorer_input::Clear,
+                Some("TesselExplorerFilter"),
+            ),
+            gpui::KeyBinding::new(
+                "enter",
+                explorer_input::ConsumeEnter,
+                Some("TesselExplorerFilter"),
+            ),
             gpui::KeyBinding::new("ctrl-enter", scm_input::Submit, Some("TesselScm")),
             gpui::KeyBinding::new("escape", scm_input::Dismiss, Some("TesselScm")),
             gpui::KeyBinding::new(
@@ -252,11 +264,13 @@ impl TesselGpuiRoot {
             browser_input: browser_input::Input::default(),
             modal_query_input: modal_query_input::Input::default(),
             scm_input: scm_input::Input::default(),
+            explorer_input: explorer_input::Input::default(),
             _poller_task: poller_task,
         }
     }
 
     fn poll_backend(&mut self, cx: &mut Context<Self>) -> bool {
+        explorer_input::flush(self, cx);
         scm_input::flush(self, cx);
         self.app.poll_for_gpui()
     }
@@ -282,6 +296,7 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        explorer_input::flush(self, cx);
         if !matches!(
             &action,
             GpuiAction::NativeScmEdit { .. } | GpuiAction::NativeScmTouch { .. }
@@ -390,6 +405,11 @@ impl TesselGpuiRoot {
         let native_target = self
             .search_inputs
             .focused(window, cx)
+            .or_else(|| {
+                self.explorer_input
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::ExplorerFilter)
+            })
             .or_else(|| self.modal_query_input.focused(window, cx))
             .or_else(|| {
                 self.scm_input
@@ -454,6 +474,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::HelpQuery
                         | FocusInputTarget::SettingsSearch
                         | FocusInputTarget::ScmCommitMessage
+                        | FocusInputTarget::ExplorerFilter
                 )
             )
         {
@@ -1062,6 +1083,23 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
+        let explorer_was_focused = self.explorer_input.focused(window, cx);
+        if let Some((scope, text)) = self
+            .app
+            .gpui_explorer_input()
+            .map(|(s, t)| (s, t.to_owned()))
+        {
+            self.explorer_input.sync(scope, &text, cx);
+            if self.focus_input == FocusInputTarget::ExplorerFilter
+                && let Some(input) = self.explorer_input.state()
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            } else if explorer_was_focused {
+                window.focus(&self.focus_handle, cx);
+            }
+        } else if explorer_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         let scm_was_focused = self.scm_input.focused(window, cx);
         self.scm_input.retain(&self.app.gpui_scm_input_ids());
         if let Some((scope, text)) = self.app.gpui_scm_input().map(|(s, t)| (s, t.to_owned())) {
@@ -1202,6 +1240,7 @@ impl Render for TesselGpuiRoot {
                 &self.terminal_find_inputs,
                 &self.browser_input,
                 &self.scm_input,
+                &self.explorer_input,
                 focus_input,
                 &tokens,
                 self.left_width,

@@ -37,6 +37,7 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
 pub(crate) fn render_side_panel_tab_body(
     snapshot: &GpuiWorkspaceSnapshot,
     scm_input: &super::scm_input::Input,
+    explorer_input: &super::explorer_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -45,7 +46,7 @@ pub(crate) fn render_side_panel_tab_body(
     let french = snapshot.french;
     match snapshot.side_panel.tab {
         SideTab::Dashboard => render_dashboard_tab(sp, focus_input, french, tokens, cx),
-        SideTab::Files => render_explorer_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Files => render_explorer_tab(sp, explorer_input, french, tokens, cx),
         SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
         SideTab::Tasks => render_tasks_board_tab(sp, focus_input, french, tokens, cx),
         SideTab::TaskHistory => render_task_history_tab(sp, focus_input, french, tokens, cx),
@@ -341,7 +342,7 @@ fn render_dashboard_tab(
 
 fn render_explorer_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    explorer_input: &super::explorer_input::Input,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -611,25 +612,7 @@ fn render_explorer_tab(
         .flex_col()
         .gap(px(6.0))
         .child(toolbar)
-        .child(render_focus_input_box(
-            "gpui-explorer-filter",
-            FocusInputTarget::ExplorerFilter,
-            focus_input == FocusInputTarget::ExplorerFilter,
-            &ex.filter_query,
-            if ex.content_search_mode {
-                if french {
-                    "Rechercher dans les fichiers…"
-                } else {
-                    "Search file contents…"
-                }
-            } else if french {
-                "Filtrer les fichiers…"
-            } else {
-                "Filter files…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
         .child(scroll)
         .into_any_element()
 }

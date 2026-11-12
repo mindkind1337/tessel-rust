@@ -34,6 +34,7 @@ pub(crate) fn render_workspace_body(
     terminal_inputs: &super::terminal_find_inputs::Inputs,
     browser_input: &super::browser_input::Input,
     scm_input: &super::scm_input::Input,
+    explorer_input: &super::explorer_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -76,6 +77,7 @@ pub(crate) fn render_workspace_body(
             el.child(render_right_panel(
                 snapshot,
                 scm_input,
+                explorer_input,
                 focus_input,
                 tokens,
                 right_width_px,
@@ -1080,6 +1082,7 @@ fn render_remote_sftp_stage(
 fn render_right_panel(
     snapshot: &GpuiWorkspaceSnapshot,
     scm_input: &super::scm_input::Input,
+    explorer_input: &super::explorer_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     right_width_px: f32,
@@ -1186,6 +1189,7 @@ fn render_right_panel(
                 .child(side_panels_view::render_side_panel_tab_body(
                     snapshot,
                     scm_input,
+                    explorer_input,
                     focus_input,
                     tokens,
                     cx,

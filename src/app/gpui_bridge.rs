@@ -22,6 +22,12 @@ pub(crate) type ProviderSecretRow = (String, String, bool);
 pub(crate) type ReviewBranchOption = (String, Option<PathBuf>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeExplorerScope {
+    pub generation: u64,
+    pub owner: crate::git_result::Owner,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NativeScmScope {
     pub owner: crate::git_result::Owner,
     pub id: u64,
@@ -37,6 +43,7 @@ pub(crate) struct GpuiExtraUiState {
     pub launch_placement: crate::finder_model::LaunchPlacement,
     pub launch_in_worktree: bool,
     pub modal_input_generation: u64,
+    pub explorer_input_generation: u64,
     pub help_query: String,
     pub settings_search: String,
     pub scm_drafts: crate::scm_drafts::Drafts,
@@ -71,6 +78,7 @@ impl Default for GpuiExtraUiState {
             launch_placement: crate::finder_model::LaunchPlacement::Auto,
             launch_in_worktree: false,
             modal_input_generation: 1,
+            explorer_input_generation: 1,
             help_query: String::new(),
             settings_search: String::new(),
             scm_drafts: crate::scm_drafts::Drafts::default(),
@@ -838,6 +846,11 @@ pub(crate) enum GpuiAction {
     SetDashboardFilter(Option<crate::side_panels_model::DashboardState>),
     SetDashboardQuery(String),
     ExplorerSetFilter(String),
+    NativeExplorerEdit {
+        scope: NativeExplorerScope,
+        base: String,
+        text: String,
+    },
     ExplorerToggleSearchMode,
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
@@ -1460,7 +1473,10 @@ impl Tessel {
     pub(crate) fn poll_for_gpui(&mut self) -> bool {
         // These workers use channels rather than the terminal repaint callback.
         // Keep their visible view updating through the frame that consumes completion.
-        let refresh = (self.view == View::Remote && self.remote.gpui_needs_frame())
+        let refresh = (self.state.panels.right_open
+            && self.state.panels.right_tab == SideTab::Files
+            && self.explorer_tree.gpui_needs_frame())
+            || (self.view == View::Remote && self.remote.gpui_needs_frame())
             || !self.document_pending.is_empty()
             || (self.view == View::Files
                 && self.documents.get(self.active_document).is_some_and(|doc| {
@@ -1632,6 +1648,25 @@ impl Tessel {
             &capture.output.bytes,
             crate::scm_changes_panel::STATUS_ENTRIES_MAX,
         )));
+    }
+
+    fn gpui_explorer_owner(&self) -> Option<crate::git_result::Owner> {
+        if self.gpui_has_open_modal()
+            || !self.state.panels.right_open
+            || self.state.panels.right_tab != SideTab::Files
+        {
+            return None;
+        }
+        self.gpui_scm_owner()
+    }
+    pub(crate) fn gpui_explorer_input(&self) -> Option<(NativeExplorerScope, &str)> {
+        Some((
+            NativeExplorerScope {
+                generation: self.gpui_extra.explorer_input_generation,
+                owner: self.gpui_explorer_owner()?,
+            },
+            self.explorer_tree.gpui_filter_query(),
+        ))
     }
 
     pub(crate) fn gpui_scm_input(&self) -> Option<(NativeScmScope, &str)> {
@@ -2170,15 +2205,7 @@ impl Tessel {
             GpuiFocusTarget::BrowserUrl => false,
             GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
             GpuiFocusTarget::HelpQuery => false,
-            GpuiFocusTarget::ExplorerFilter => {
-                let mut cur = self.explorer_tree.gpui_filter_query().to_owned();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::ExplorerSetFilter(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::ExplorerFilter => false,
             GpuiFocusTarget::ScmCommitMessage => false,
             GpuiFocusTarget::TaskNewTitle => {
                 if lower == "enter" {
@@ -4289,7 +4316,15 @@ impl Tessel {
 
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
         let overlay = self.overlay;
+        let explorer = self.gpui_explorer_owner();
         self.apply_gpui_action_inner(action);
+        if explorer != self.gpui_explorer_owner() {
+            self.gpui_extra.explorer_input_generation = self
+                .gpui_extra
+                .explorer_input_generation
+                .checked_add(1)
+                .expect("explorer input identity exhausted");
+        }
         if overlay != self.overlay {
             self.gpui_extra.modal_input_generation = self
                 .gpui_extra
@@ -5205,6 +5240,15 @@ impl Tessel {
             }
             GpuiAction::SetDashboardQuery(q) => {
                 self.side_panels_ui.dashboard_query = q;
+            }
+            GpuiAction::NativeExplorerEdit { scope, base, text } => {
+                if text.len() <= 8192
+                    && self
+                        .gpui_explorer_input()
+                        .is_some_and(|(s, t)| s == scope && t == base)
+                {
+                    self.explorer_tree.gpui_set_filter_query(text);
+                }
             }
             GpuiAction::ExplorerSetFilter(q) => {
                 self.explorer_tree.gpui_set_filter_query(q);

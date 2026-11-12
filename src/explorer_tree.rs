@@ -426,6 +426,8 @@ pub struct ExplorerTree {
     compact_folders: bool,
     show_dotfiles: bool,
     filter_query: String,
+    gpui_applied_filter: String,
+    gpui_filter_due: Option<Instant>,
     content_search_mode: bool,
     content_search_hits: Vec<ContentMatch>,
     content_search_last_key: String,
@@ -472,6 +474,8 @@ impl ExplorerTree {
             compact_folders: false,
             show_dotfiles: true,
             filter_query: String::new(),
+            gpui_applied_filter: String::new(),
+            gpui_filter_due: None,
             content_search_mode: false,
             content_search_hits: Vec::new(),
             content_search_last_key: String::new(),
@@ -556,6 +560,8 @@ impl ExplorerTree {
     #[allow(dead_code)]
     pub fn set_filter_query(&mut self, query: impl Into<String>) {
         self.filter_query = query.into();
+        self.gpui_applied_filter = self.filter_query.trim().to_owned();
+        self.gpui_filter_due = None;
     }
 
     #[allow(dead_code)]
@@ -739,6 +745,8 @@ impl ExplorerTree {
         self.content_search_hits.clear();
         self.content_search_last_key.clear();
         self.content_search_task = None;
+        self.gpui_applied_filter = self.filter_query.trim().to_owned();
+        self.gpui_filter_due = None;
         self.project_root = root.map(Path::to_path_buf);
 
         if let Some(r) = root {
@@ -1447,18 +1455,38 @@ impl ExplorerTree {
 
     #[allow(dead_code)]
     pub(crate) fn gpui_set_filter_query(&mut self, query: String) {
+        if self.filter_query == query {
+            return;
+        }
         self.filter_query = query;
+        self.gpui_schedule_filter(Instant::now());
+    }
+    fn gpui_schedule_filter(&mut self, now: Instant) {
+        // Drop cancels an obsolete content worker before accepting any result.
+        self.content_search_task = None;
+        self.content_search_last_key.clear();
         if self.filter_query.trim().is_empty() {
             self.content_search_hits.clear();
-            self.content_search_last_key.clear();
-            self.content_search_task = None;
+            self.gpui_applied_filter.clear();
+            self.gpui_filter_due = None;
+        } else {
+            self.gpui_filter_due =
+                Some(now + Duration::from_millis(if self.content_search_mode { 300 } else { 120 }));
         }
     }
-
+    fn gpui_advance_filter(&mut self, now: Instant) {
+        if self.gpui_filter_due.is_some_and(|due| now >= due) {
+            self.gpui_filter_due = None;
+            self.gpui_applied_filter = self.filter_query.trim().to_owned();
+        }
+    }
+    pub(crate) fn gpui_needs_frame(&self) -> bool {
+        self.is_loading() || self.content_search_task.is_some() || self.gpui_filter_due.is_some()
+    }
     #[allow(dead_code)]
     pub(crate) fn gpui_toggle_search_mode(&mut self) {
         self.content_search_mode = !self.content_search_mode;
-        self.content_search_last_key.clear();
+        self.gpui_schedule_filter(Instant::now());
     }
 
     #[allow(dead_code)]
@@ -1525,6 +1553,7 @@ impl ExplorerTree {
     ) -> ExplorerGpuiSnapshot {
         self.set_root(root);
         self.poll();
+        self.gpui_advance_filter(Instant::now());
         if let Some(task) = &self.content_search_task {
             match task.rx.try_recv() {
                 Ok(hits) => {
@@ -1551,10 +1580,10 @@ impl ExplorerTree {
             .unwrap_or_else(|| tr("Files").to_string());
         let new_target_dir = self.selected_target_dir(&root_path);
 
-        let trimmed_query = self.filter_query.trim().to_owned();
-        if self.content_search_mode && !trimmed_query.is_empty() {
+        let trimmed_query = self.gpui_applied_filter.clone();
+        if self.content_search_mode && !self.filter_query.trim().is_empty() {
             let query_key = format!("{root_key}::{trimmed_query}");
-            if self.content_search_last_key != query_key {
+            if self.gpui_filter_due.is_none() && self.content_search_last_key != query_key {
                 self.content_search_last_key = query_key.clone();
                 let cancel = Arc::new(AtomicBool::new(false));
                 let worker_cancel = Arc::clone(&cancel);
@@ -1591,7 +1620,7 @@ impl ExplorerTree {
                 content_search_mode: true,
                 show_dotfiles: self.show_dotfiles,
                 compact_folders: self.compact_folders,
-                loading: self.is_loading() || self.content_search_task.is_some(),
+                loading: self.gpui_needs_frame(),
                 truncated: self.truncated,
                 error: self.error.clone(),
                 rows: Vec::new(),
@@ -1649,7 +1678,7 @@ impl ExplorerTree {
             content_search_mode: self.content_search_mode,
             show_dotfiles: self.show_dotfiles,
             compact_folders: self.compact_folders,
-            loading: self.is_loading(),
+            loading: self.gpui_needs_frame(),
             truncated: self.truncated,
             error: self.error.clone(),
             rows,
@@ -1697,4 +1726,89 @@ pub(crate) struct ExplorerGpuiSnapshot {
     pub error: String,
     pub rows: Vec<ExplorerGpuiRow>,
     pub content_hits: Vec<ExplorerGpuiContentHit>,
+}
+
+#[cfg(test)]
+mod native_filter_tests {
+    use super::*;
+    fn fixture(root: &Path) -> ExplorerTree {
+        ExplorerTree::fixture(
+            root.to_path_buf(),
+            vec![(
+                root.to_path_buf(),
+                vec![
+                    TreeDirEntry {
+                        name: "alpha.txt".into(),
+                        path: root.join("alpha.txt"),
+                        directory: false,
+                    },
+                    TreeDirEntry {
+                        name: "beta.txt".into(),
+                        path: root.join("beta.txt"),
+                        directory: false,
+                    },
+                ],
+            )],
+            vec![],
+        )
+    }
+    #[test]
+    fn native_filter_debounce_coalesces_names_and_clear_is_immediate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tree = fixture(dir.path());
+        tree.gpui_set_filter_query("a".into());
+        tree.gpui_set_filter_query("alpha".into());
+        let now = Instant::now() + Duration::from_secs(5);
+        tree.gpui_schedule_filter(now);
+        assert_eq!(tree.gpui_filter_due, Some(now + Duration::from_millis(120)));
+        let before = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert_eq!(before.rows.len(), 2);
+        assert!(before.loading);
+        tree.gpui_advance_filter(now + Duration::from_millis(120));
+        let after = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert_eq!(after.rows.len(), 1);
+        assert_eq!(after.rows[0].name, "alpha.txt");
+        tree.gpui_set_filter_query(String::new());
+        assert_eq!(
+            tree.gpui_rows_snapshot(Some(dir.path()), None).rows.len(),
+            2
+        );
+        assert!(!tree.gpui_needs_frame());
+    }
+    #[test]
+    fn native_filter_content_waits_cancels_obsolete_worker_and_repaints_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "needle\n").unwrap();
+        let mut tree = fixture(dir.path());
+        tree.gpui_toggle_search_mode();
+        tree.gpui_set_filter_query("needle".into());
+        let now = Instant::now() + Duration::from_secs(5);
+        tree.gpui_schedule_filter(now);
+        assert_eq!(tree.gpui_filter_due, Some(now + Duration::from_millis(300)));
+        let waiting = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert!(waiting.loading);
+        assert!(waiting.rows.is_empty());
+        assert!(tree.content_search_task.is_none());
+        tree.gpui_advance_filter(now + Duration::from_millis(300));
+        tree.gpui_rows_snapshot(Some(dir.path()), None);
+        let cancel = Arc::clone(&tree.content_search_task.as_ref().unwrap().cancel);
+        assert!(tree.gpui_needs_frame());
+        tree.content_search_hits.push(ContentMatch {
+            path: dir.path().join("alpha.txt"),
+            rel_display: "alpha.txt".into(),
+            line: 1,
+            preview: "needle".into(),
+        });
+        tree.gpui_set_filter_query("different".into());
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(tree.content_search_task.is_none());
+        let pending = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert!(pending.loading);
+        assert_eq!(pending.content_hits.len(), 1);
+        assert_eq!(pending.content_hits[0].preview, "needle");
+        tree.gpui_set_filter_query(String::new());
+        let cleared = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert!(cleared.content_hits.is_empty());
+        assert!(!tree.gpui_needs_frame());
+    }
 }
