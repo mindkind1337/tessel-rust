@@ -452,6 +452,7 @@ mod tests {
 
 #[derive(Default)]
 pub(crate) struct Input {
+    pub tools: super::editor_tool_inputs::Inputs,
     bindings: HashMap<u64, Binding>,
     pub syntax: editor_syntax::Cache,
     styled: Option<editor_syntax::StyledSource>,

@@ -216,7 +216,7 @@ pub(crate) fn render_document_editor_stage(
     let french = snapshot.french;
 
     let header = render_editor_toolbar(doc, french, tokens, cx).into_any_element();
-    let tools_bar = render_editor_tools_bar(doc, french, tokens, cx);
+    let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
     let content = if doc.pdf_summary.is_some() {
         render_pdf_stage(doc, french, tokens, cx).into_any_element()
@@ -442,6 +442,7 @@ fn render_editor_toolbar(
 
 fn render_editor_tools_bar(
     doc: &GpuiActiveDocumentSummary,
+    inputs: &super::editor_tool_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -461,16 +462,10 @@ fn render_editor_tools_bar(
         .gap(px(8.0))
         .text_size(px(11.5));
 
+    let id = doc.instance_id;
+    use super::editor_tool_inputs::{Command, run};
+    use crate::app::gpui_bridge::EditorToolField;
     if doc.find_open {
-        let q_txt = if doc.find_query.is_empty() {
-            if french {
-                "Rechercher…".into()
-            } else {
-                "Find…".into()
-            }
-        } else {
-            doc.find_query.clone()
-        };
         let badge = if doc.find_query.is_empty() {
             String::new()
         } else if doc.match_count == 0 {
@@ -479,29 +474,7 @@ fn render_editor_tools_bar(
             format!("{}/{}", doc.match_index + 1, doc.match_count)
         };
         bar = bar
-            .child(
-                div()
-                    .id("editor-find-input")
-                    .w(px(200.0))
-                    .px(px(7.0))
-                    .py(px(2.5))
-                    .rounded(px(4.0))
-                    .bg(tokens.term)
-                    .border_1()
-                    .border_color(tokens.accent)
-                    .font_family(mono_font_family())
-                    .text_color(if doc.find_query.is_empty() {
-                        tokens.text_dim
-                    } else {
-                        tokens.text_strong
-                    })
-                    .cursor_text()
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.focus_input = FocusInputTarget::EditorFind;
-                        cx.notify();
-                    }))
-                    .child(SharedString::from(q_txt)),
-            )
+            .child(inputs.render(doc, EditorToolField::Find, french, tokens, cx))
             .when(!badge.is_empty(), |el| {
                 el.child(
                     div()
@@ -517,8 +490,8 @@ fn render_editor_tools_bar(
                     .rounded(px(4.0))
                     .bg(tokens.surface_2)
                     .cursor_pointer()
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.dispatch(GpuiAction::StepEditorFind(-1), cx);
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        run(root, id, Command::Find(-1), window, cx)
                     }))
                     .child("↑"),
             )
@@ -530,99 +503,45 @@ fn render_editor_tools_bar(
                     .rounded(px(4.0))
                     .bg(tokens.surface_2)
                     .cursor_pointer()
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.dispatch(GpuiAction::StepEditorFind(1), cx);
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        run(root, id, Command::Find(1), window, cx)
                     }))
                     .child("↓"),
             )
-            .when(!doc.media, |el| {
-                let r_txt = if doc.replace_text.is_empty() {
-                    if french {
-                        "Remplacer par…".into()
-                    } else {
-                        "Replace with…".into()
-                    }
-                } else {
-                    doc.replace_text.clone()
-                };
-                el.child(
-                    div()
-                        .id("editor-replace-input")
-                        .w(px(160.0))
-                        .px(px(7.0))
-                        .py(px(2.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.term)
-                        .border_1()
-                        .border_color(tokens.border_strong)
-                        .font_family(mono_font_family())
-                        .text_color(if doc.replace_text.is_empty() {
-                            tokens.text_dim
-                        } else {
-                            tokens.text_strong
-                        })
-                        .cursor_text()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.focus_input = FocusInputTarget::EditorReplace;
-                            cx.notify();
-                        }))
-                        .child(SharedString::from(r_txt)),
-                )
-                .child(
-                    div()
-                        .id("editor-replace-one")
-                        .px(px(7.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::ReplaceEditorCurrent, cx);
-                        }))
-                        .child(if french { "Remplacer" } else { "Replace" }),
-                )
-                .child(
-                    div()
-                        .id("editor-replace-all")
-                        .px(px(7.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::ReplaceEditorAll, cx);
-                        }))
-                        .child(if french { "Tout" } else { "Replace all" }),
-                )
+            .when(!doc.media && !doc.preview_mode, |el| {
+                el.child(inputs.render(doc, EditorToolField::Replace, french, tokens, cx))
+                    .child(
+                        div()
+                            .id("editor-replace-one")
+                            .px(px(7.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(tokens.surface_2)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |root, _, window, cx| {
+                                run(root, id, Command::Replace(false), window, cx)
+                            }))
+                            .child(if french { "Remplacer" } else { "Replace" }),
+                    )
+                    .child(
+                        div()
+                            .id("editor-replace-all")
+                            .px(px(7.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(tokens.surface_2)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |root, _, window, cx| {
+                                run(root, id, Command::Replace(true), window, cx)
+                            }))
+                            .child(if french { "Tout" } else { "Replace all" }),
+                    )
             });
     }
 
     if doc.goto_open {
-        let g_txt = if doc.goto_line.is_empty() {
-            "line:col".into()
-        } else {
-            doc.goto_line.clone()
-        };
         bar = bar
-            .child(
-                div()
-                    .id("editor-goto-input")
-                    .w(px(110.0))
-                    .px(px(7.0))
-                    .py(px(2.5))
-                    .rounded(px(4.0))
-                    .bg(tokens.term)
-                    .border_1()
-                    .border_color(tokens.accent)
-                    .font_family(mono_font_family())
-                    .text_color(tokens.text_strong)
-                    .cursor_text()
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.focus_input = FocusInputTarget::EditorGoto;
-                        cx.notify();
-                    }))
-                    .child(SharedString::from(g_txt)),
-            )
+            .child(inputs.render(doc, EditorToolField::Goto, french, tokens, cx))
             .child(
                 div()
                     .id("editor-goto-go")
@@ -632,8 +551,8 @@ fn render_editor_tools_bar(
                     .bg(tokens.accent)
                     .text_color(gpui::rgb(0xFF_FF_FF))
                     .cursor_pointer()
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.dispatch(GpuiAction::ApplyEditorGoto, cx);
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        run(root, id, Command::Goto, window, cx)
                     }))
                     .child("Go"),
             );

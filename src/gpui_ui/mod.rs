@@ -9,6 +9,7 @@ pub(crate) mod chrome;
 mod editor_indent;
 pub(crate) mod editor_input;
 mod editor_syntax;
+mod editor_tool_inputs;
 pub mod editor_view;
 pub mod icons;
 pub(crate) mod modals_view;
@@ -29,7 +30,8 @@ mod styled_input_tests;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use crate::app::gpui_bridge::GpuiFocusTarget as FocusInputTarget;
+use crate::app::gpui_bridge::GpuiFocusTarget as FocusInputTarget;
+pub(crate) use gpui::EntityInputHandler;
 
 use crate::{
     app::{
@@ -121,6 +123,21 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "enter",
+                editor_tool_inputs::Submit,
+                Some("TesselEditorTools"),
+            ),
+            gpui::KeyBinding::new(
+                "shift-enter",
+                editor_tool_inputs::Previous,
+                Some("TesselEditorTools"),
+            ),
+            gpui::KeyBinding::new(
+                "escape",
+                editor_tool_inputs::Dismiss,
+                Some("TesselEditorTools"),
+            ),
             gpui::KeyBinding::new("enter", search_inputs::Accept, Some("TesselNativeSearch")),
             gpui::KeyBinding::new(
                 "shift-enter",
@@ -291,6 +308,7 @@ impl TesselGpuiRoot {
         let native_target = self
             .search_inputs
             .focused(window, cx)
+            .or_else(|| self.editor_input.tools.focused(window, cx))
             .or_else(|| self.chat_inputs.focused(window, cx))
             .or_else(|| self.remote_inputs.focused(window, cx))
             .or_else(|| {
@@ -316,7 +334,13 @@ impl TesselGpuiRoot {
         if key == "escape"
             && matches!(
                 native_target,
-                Some(FocusInputTarget::PaletteQuery | FocusInputTarget::FinderQuery)
+                Some(
+                    FocusInputTarget::PaletteQuery
+                        | FocusInputTarget::FinderQuery
+                        | FocusInputTarget::EditorFind
+                        | FocusInputTarget::EditorReplace
+                        | FocusInputTarget::EditorGoto
+                )
             )
         {
             return; // The scoped native Dismiss action handles IME and closing.
@@ -440,18 +464,30 @@ impl TesselGpuiRoot {
                     return;
                 }
                 "f" if !shift && self.app.gpui_is_document_view() => {
-                    self.focus_input = FocusInputTarget::EditorFind;
-                    self.dispatch(GpuiAction::ToggleEditorFind, cx);
+                    editor_tool_inputs::open(
+                        self,
+                        crate::app::gpui_bridge::EditorToolField::Find,
+                        window,
+                        cx,
+                    );
                     return;
                 }
                 "h" if !shift && self.app.gpui_is_document_view() => {
-                    self.focus_input = FocusInputTarget::EditorReplace;
-                    self.dispatch(GpuiAction::ToggleEditorReplace, cx);
+                    editor_tool_inputs::open(
+                        self,
+                        crate::app::gpui_bridge::EditorToolField::Replace,
+                        window,
+                        cx,
+                    );
                     return;
                 }
                 "g" if !shift && self.app.gpui_is_document_view() => {
-                    self.focus_input = FocusInputTarget::EditorGoto;
-                    self.dispatch(GpuiAction::ToggleEditorGoto, cx);
+                    editor_tool_inputs::open(
+                        self,
+                        crate::app::gpui_bridge::EditorToolField::Goto,
+                        window,
+                        cx,
+                    );
                     return;
                 }
                 _ => {}
@@ -772,6 +808,42 @@ impl Render for TesselGpuiRoot {
         } else if self.search_inputs.focused(window, cx).is_some() {
             window.focus(&self.focus_handle, cx);
         }
+        let tool_doc = snapshot
+            .active_document
+            .as_ref()
+            .filter(|_| snapshot.center_mode == GpuiCenterMode::DocumentEditor);
+        if !self.app.gpui_has_open_modal() {
+            self.editor_input
+                .tools
+                .sync(tool_doc, &self.app.gpui_document_ids(), cx);
+            if matches!(
+                self.focus_input,
+                FocusInputTarget::EditorFind
+                    | FocusInputTarget::EditorReplace
+                    | FocusInputTarget::EditorGoto
+            ) && tool_doc
+                .and_then(|d| {
+                    self.editor_input
+                        .tools
+                        .for_target(d.instance_id, self.focus_input)
+                })
+                .is_none()
+            {
+                self.focus_input = FocusInputTarget::None;
+            }
+        }
+        if self
+            .editor_input
+            .tools
+            .focused(window, cx)
+            .is_some_and(|t| {
+                self.app.gpui_has_open_modal()
+                    || tool_doc.is_none()
+                    || t != self.effective_focus_target()
+            })
+        {
+            window.focus(&self.focus_handle, cx);
+        }
         let native_doc = snapshot.active_document.as_ref().filter(|doc| {
             snapshot.center_mode == GpuiCenterMode::DocumentEditor
                 && !doc.preview_mode
@@ -805,6 +877,25 @@ impl Render for TesselGpuiRoot {
                         state.select_to(selection.1, cx);
                     });
                 }
+            }
+        }
+        if !self.app.gpui_has_open_modal()
+            && let Some(doc) = tool_doc
+            && let Some(input) = self
+                .editor_input
+                .tools
+                .for_target(doc.instance_id, self.effective_focus_target())
+                .cloned()
+        {
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+            if let Some((id, f)) = self.editor_input.tools.select_on_focus.take()
+                && id == doc.instance_id
+                && self.effective_focus_target() == editor_tool_inputs::target(f)
+            {
+                input.update(cx, |s, cx| {
+                    let len = s.as_str().encode_utf16().count();
+                    s.set_selected_text_range(0..len, window, cx);
+                });
             }
         }
         if (snapshot.center_mode != GpuiCenterMode::RemoteSftp || self.app.gpui_has_open_modal())

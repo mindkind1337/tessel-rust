@@ -515,6 +515,13 @@ pub(crate) struct GpuiConfirmModalSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum EditorToolField {
+    Find,
+    Replace,
+    Goto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum NativeSearchKind {
     Palette,
     Finder,
@@ -769,6 +776,12 @@ pub(crate) enum GpuiAction {
     EditActiveDocumentLine {
         line_idx: usize,
         new_line: String,
+    },
+    ApplyNativeEditorToolEdit {
+        instance_id: u64,
+        field: EditorToolField,
+        base: String,
+        text: String,
     },
     ApplyNativeDocumentEdit {
         instance_id: u64,
@@ -1806,6 +1819,33 @@ impl Tessel {
             .collect()
     }
 
+    pub(crate) fn gpui_editor_tool_document_id(&self) -> Option<u64> {
+        if self.view != View::Files || self.gpui_has_open_modal() {
+            return None;
+        }
+        self.documents
+            .get(self.active_document)
+            .map(crate::files::Document::instance_id)
+    }
+
+    pub(crate) fn gpui_editor_tool_value(&self, id: u64, field: EditorToolField) -> Option<&str> {
+        if self.view != View::Files || self.gpui_has_open_modal() {
+            return None;
+        }
+        let doc = self.documents.get(self.active_document)?;
+        if doc.instance_id() != id {
+            return None;
+        }
+        match field {
+            EditorToolField::Find if doc.tools.find_open => Some(&doc.tools.find_query),
+            EditorToolField::Replace if doc.tools.find_open && !doc.media && !doc.preview_mode => {
+                Some(&doc.tools.replace_text)
+            }
+            EditorToolField::Goto if doc.tools.goto_open => Some(&doc.tools.goto_line),
+            _ => None,
+        }
+    }
+
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
         (self.view == View::Files && !self.gpui_has_open_modal())
             .then(|| self.documents.get(self.active_document))
@@ -1974,84 +2014,9 @@ impl Tessel {
             }
             GpuiFocusTarget::ChatComposer(_) => false,
             GpuiFocusTarget::ChatQuestion { .. } => false,
-            GpuiFocusTarget::EditorFind => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::StepEditorFind(if shift { -1 } else { 1 }));
-                    return true;
-                }
-                let mut cur = self
-                    .documents
-                    .get(self.active_document)
-                    .map(|d| d.tools.find_query.clone())
-                    .unwrap_or_default();
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::SetEditorFindQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::EditorReplace => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::ReplaceEditorCurrent);
-                    return true;
-                }
-                let mut cur = self
-                    .documents
-                    .get(self.active_document)
-                    .map(|d| d.tools.replace_text.clone())
-                    .unwrap_or_default();
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::SetEditorReplaceText(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::EditorGoto => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::ApplyEditorGoto);
-                    return true;
-                }
-                let mut cur = self
-                    .documents
-                    .get(self.active_document)
-                    .map(|d| d.tools.goto_line.clone())
-                    .unwrap_or_default();
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::SetEditorGotoSpec(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::EditorFind
+            | GpuiFocusTarget::EditorReplace
+            | GpuiFocusTarget::EditorGoto => false,
             // Only the native entity may edit document text; root focus must never append.
             GpuiFocusTarget::EditorBody => false,
             GpuiFocusTarget::BrowserUrl => {
@@ -4906,6 +4871,23 @@ impl Tessel {
                         doc.preview = None;
                         doc.last_edited_at = Some(std::time::Instant::now());
                     }
+                }
+            }
+            GpuiAction::ApplyNativeEditorToolEdit {
+                instance_id,
+                field,
+                base,
+                text,
+            } => {
+                if text.len() <= crate::files::MAX_TEXT
+                    && self.gpui_editor_tool_value(instance_id, field) == Some(base.as_str())
+                    && text != base
+                {
+                    self.apply_gpui_action(match field {
+                        EditorToolField::Find => GpuiAction::SetEditorFindQuery(text),
+                        EditorToolField::Replace => GpuiAction::SetEditorReplaceText(text),
+                        EditorToolField::Goto => GpuiAction::SetEditorGotoSpec(text),
+                    });
                 }
             }
             GpuiAction::ApplyNativeDocumentEdit {
