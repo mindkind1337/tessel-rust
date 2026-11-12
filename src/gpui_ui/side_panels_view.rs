@@ -38,6 +38,7 @@ pub(crate) fn render_side_panel_tab_body(
     snapshot: &GpuiWorkspaceSnapshot,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -45,13 +46,15 @@ pub(crate) fn render_side_panel_tab_body(
     let sp = &snapshot.side_panels;
     let french = snapshot.french;
     match snapshot.side_panel.tab {
-        SideTab::Dashboard => render_dashboard_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Dashboard => render_dashboard_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Files => render_explorer_tab(sp, explorer_input, french, tokens, cx),
         SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
         SideTab::Tasks => render_tasks_board_tab(sp, focus_input, french, tokens, cx),
-        SideTab::TaskHistory => render_task_history_tab(sp, focus_input, french, tokens, cx),
-        SideTab::History => render_sessions_history_tab(sp, focus_input, french, tokens, cx),
-        SideTab::Conversations => render_conversations_tab(sp, focus_input, french, tokens, cx),
+        SideTab::TaskHistory => render_task_history_tab(sp, panel_query_inputs, french, tokens, cx),
+        SideTab::History => render_sessions_history_tab(sp, panel_query_inputs, french, tokens, cx),
+        SideTab::Conversations => {
+            render_conversations_tab(sp, panel_query_inputs, french, tokens, cx)
+        }
     }
 }
 
@@ -61,7 +64,7 @@ pub(crate) fn render_side_panel_tab_body(
 
 fn render_dashboard_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -317,19 +320,7 @@ fn render_dashboard_tab(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(render_focus_input_box(
-            "gpui-dash-query",
-            FocusInputTarget::DashboardQuery,
-            focus_input == FocusInputTarget::DashboardQuery,
-            &sp.dashboard_query,
-            if french {
-                "Filtrer les agents…"
-            } else {
-                "Filter agents…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(panel_query_inputs.render(FocusInputTarget::DashboardQuery, french, tokens, cx))
         .child(filter_bar)
         .child(controls)
         .child(list)
@@ -1433,7 +1424,7 @@ fn render_tasks_board_tab(
 
 fn render_task_history_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1557,19 +1548,7 @@ fn render_task_history_tab(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(render_focus_input_box(
-            "gpui-th-query",
-            FocusInputTarget::TaskHistoryQuery,
-            focus_input == FocusInputTarget::TaskHistoryQuery,
-            &sp.history_query,
-            if french {
-                "Rechercher les exécutions…"
-            } else {
-                "Search completed runs…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(panel_query_inputs.render(FocusInputTarget::TaskHistoryQuery, french, tokens, cx))
         .child(win_chips)
         .child(sort_bar)
         .child(actions_row)
@@ -1583,7 +1562,7 @@ fn render_task_history_tab(
 
 fn render_sessions_history_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1751,19 +1730,7 @@ fn render_sessions_history_tab(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(render_focus_input_box(
-            "gpui-sh-query",
-            FocusInputTarget::SessionsQuery,
-            focus_input == FocusInputTarget::SessionsQuery,
-            &sp.sessions_query,
-            if french {
-                "Rechercher les sessions…"
-            } else {
-                "Search past sessions…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(panel_query_inputs.render(FocusInputTarget::SessionsQuery, french, tokens, cx))
         .child(scope_bar)
         .child(group_bar)
         .child(list)
@@ -1776,7 +1743,7 @@ fn render_sessions_history_tab(
 
 fn render_conversations_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1939,19 +1906,7 @@ fn render_conversations_tab(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(render_focus_input_box(
-            "gpui-conv-query",
-            FocusInputTarget::ConversationsQuery,
-            focus_input == FocusInputTarget::ConversationsQuery,
-            &sp.conv_query,
-            if french {
-                "Filtrer les conversations…"
-            } else {
-                "Filter conversations…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(panel_query_inputs.render(FocusInputTarget::ConversationsQuery, french, tokens, cx))
         .child(win_bar)
         .child(thread_list)
         .child(detail)

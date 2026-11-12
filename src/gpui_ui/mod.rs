@@ -16,6 +16,7 @@ mod explorer_input;
 pub mod icons;
 mod modal_query_input;
 pub(crate) mod modals_view;
+mod panel_query_inputs;
 mod question_inputs;
 pub(crate) mod remote_inputs;
 pub(crate) mod remote_view;
@@ -104,6 +105,7 @@ pub(crate) struct TesselGpuiRoot {
     modal_query_input: modal_query_input::Input,
     scm_input: scm_input::Input,
     explorer_input: explorer_input::Input,
+    panel_query_inputs: panel_query_inputs::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -142,6 +144,16 @@ impl TesselGpuiRoot {
                 "enter",
                 explorer_input::ConsumeEnter,
                 Some("TesselExplorerFilter"),
+            ),
+            gpui::KeyBinding::new(
+                "escape",
+                panel_query_inputs::Clear,
+                Some("TesselPanelQuery"),
+            ),
+            gpui::KeyBinding::new(
+                "enter",
+                panel_query_inputs::ConsumeEnter,
+                Some("TesselPanelQuery"),
             ),
             gpui::KeyBinding::new("ctrl-enter", scm_input::Submit, Some("TesselScm")),
             gpui::KeyBinding::new("escape", scm_input::Dismiss, Some("TesselScm")),
@@ -265,11 +277,13 @@ impl TesselGpuiRoot {
             modal_query_input: modal_query_input::Input::default(),
             scm_input: scm_input::Input::default(),
             explorer_input: explorer_input::Input::default(),
+            panel_query_inputs: panel_query_inputs::Inputs::default(),
             _poller_task: poller_task,
         }
     }
 
     fn poll_backend(&mut self, cx: &mut Context<Self>) -> bool {
+        panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
         scm_input::flush(self, cx);
         self.app.poll_for_gpui()
@@ -296,6 +310,7 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
         if !matches!(
             &action,
@@ -410,6 +425,7 @@ impl TesselGpuiRoot {
                     .focused(window, cx)
                     .then_some(FocusInputTarget::ExplorerFilter)
             })
+            .or_else(|| self.panel_query_inputs.focused(window, cx))
             .or_else(|| self.modal_query_input.focused(window, cx))
             .or_else(|| {
                 self.scm_input
@@ -475,6 +491,10 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::SettingsSearch
                         | FocusInputTarget::ScmCommitMessage
                         | FocusInputTarget::ExplorerFilter
+                        | FocusInputTarget::DashboardQuery
+                        | FocusInputTarget::TaskHistoryQuery
+                        | FocusInputTarget::SessionsQuery
+                        | FocusInputTarget::ConversationsQuery
                 )
             )
         {
@@ -1083,6 +1103,23 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
+        let panel_query_was_focused = self.panel_query_inputs.focused(window, cx).is_some();
+        if let Some((scope, text)) = self
+            .app
+            .gpui_panel_query_input()
+            .map(|(s, t)| (s, t.to_owned()))
+        {
+            self.panel_query_inputs.sync(scope, &text, cx);
+            if self.focus_input == scope.target
+                && let Some(input) = self.panel_query_inputs.state()
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            } else if panel_query_was_focused {
+                window.focus(&self.focus_handle, cx);
+            }
+        } else if panel_query_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         let explorer_was_focused = self.explorer_input.focused(window, cx);
         if let Some((scope, text)) = self
             .app
@@ -1241,6 +1278,7 @@ impl Render for TesselGpuiRoot {
                 &self.browser_input,
                 &self.scm_input,
                 &self.explorer_input,
+                &self.panel_query_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,

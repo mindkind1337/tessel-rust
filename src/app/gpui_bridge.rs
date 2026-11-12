@@ -21,6 +21,12 @@ pub(crate) type BuiltinAgentSettingRow = (String, String, bool, bool);
 pub(crate) type ProviderSecretRow = (String, String, bool);
 pub(crate) type ReviewBranchOption = (String, Option<PathBuf>);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativePanelQueryScope {
+    pub generation: u64,
+    pub target: GpuiFocusTarget,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NativeExplorerScope {
     pub generation: u64,
@@ -44,6 +50,7 @@ pub(crate) struct GpuiExtraUiState {
     pub launch_in_worktree: bool,
     pub modal_input_generation: u64,
     pub explorer_input_generation: u64,
+    pub panel_query_generation: u64,
     pub help_query: String,
     pub settings_search: String,
     pub scm_drafts: crate::scm_drafts::Drafts,
@@ -79,6 +86,7 @@ impl Default for GpuiExtraUiState {
             launch_in_worktree: false,
             modal_input_generation: 1,
             explorer_input_generation: 1,
+            panel_query_generation: 1,
             help_query: String::new(),
             settings_search: String::new(),
             scm_drafts: crate::scm_drafts::Drafts::default(),
@@ -103,7 +111,7 @@ impl Default for GpuiExtraUiState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum GpuiFocusTarget {
     #[default]
     None,
@@ -845,6 +853,15 @@ pub(crate) enum GpuiAction {
     SetDashboardGroup(crate::side_panels_model::DashboardGroupBy),
     SetDashboardFilter(Option<crate::side_panels_model::DashboardState>),
     SetDashboardQuery(String),
+    NativePanelQueryEdit {
+        scope: NativePanelQueryScope,
+        base: String,
+        text: String,
+    },
+    NativePanelQueryExitFullscreen {
+        scope: NativePanelQueryScope,
+        base: String,
+    },
     ExplorerSetFilter(String),
     NativeExplorerEdit {
         scope: NativeExplorerScope,
@@ -1650,6 +1667,39 @@ impl Tessel {
         )));
     }
 
+    fn gpui_panel_query_context(
+        &self,
+    ) -> Option<(GpuiFocusTarget, Option<crate::git_result::Owner>)> {
+        if self.gpui_has_open_modal() || !self.state.panels.right_open {
+            return None;
+        }
+        let target = match self.state.panels.right_tab {
+            SideTab::Dashboard => GpuiFocusTarget::DashboardQuery,
+            SideTab::TaskHistory => GpuiFocusTarget::TaskHistoryQuery,
+            SideTab::History => GpuiFocusTarget::SessionsQuery,
+            SideTab::Conversations => GpuiFocusTarget::ConversationsQuery,
+            _ => return None,
+        };
+        Some((target, self.gpui_scm_owner()))
+    }
+    pub(crate) fn gpui_panel_query_input(&self) -> Option<(NativePanelQueryScope, &str)> {
+        let target = self.gpui_panel_query_context()?.0;
+        let text = match target {
+            GpuiFocusTarget::DashboardQuery => &self.side_panels_ui.dashboard_query,
+            GpuiFocusTarget::TaskHistoryQuery => &self.side_panels_ui.history_query,
+            GpuiFocusTarget::SessionsQuery => &self.side_panels_ui.sessions_query,
+            GpuiFocusTarget::ConversationsQuery => &self.side_panels_ui.conv_query,
+            _ => return None,
+        };
+        Some((
+            NativePanelQueryScope {
+                generation: self.gpui_extra.panel_query_generation,
+                target,
+            },
+            text,
+        ))
+    }
+
     fn gpui_explorer_owner(&self) -> Option<crate::git_result::Owner> {
         if self.gpui_has_open_modal()
             || !self.state.panels.right_open
@@ -2220,42 +2270,10 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::DashboardQuery => {
-                let mut cur = self.side_panels_ui.dashboard_query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetDashboardQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::TaskHistoryQuery => {
-                let mut cur = self.side_panels_ui.history_query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetTaskHistoryQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::SessionsQuery => {
-                let mut cur = self.side_panels_ui.sessions_query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetSessionsQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::ConversationsQuery => {
-                let mut cur = self.side_panels_ui.conv_query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetConversationsQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::DashboardQuery
+            | GpuiFocusTarget::TaskHistoryQuery
+            | GpuiFocusTarget::SessionsQuery
+            | GpuiFocusTarget::ConversationsQuery => false,
             GpuiFocusTarget::SettingsSearch => false,
             GpuiFocusTarget::NotesEditor => {
                 let mut cur = self.side_panels_ui.notes.text.clone();
@@ -4317,7 +4335,15 @@ impl Tessel {
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
         let overlay = self.overlay;
         let explorer = self.gpui_explorer_owner();
+        let panel_query = self.gpui_panel_query_context();
         self.apply_gpui_action_inner(action);
+        if panel_query != self.gpui_panel_query_context() {
+            self.gpui_extra.panel_query_generation = self
+                .gpui_extra
+                .panel_query_generation
+                .checked_add(1)
+                .expect("panel query identity exhausted");
+        }
         if explorer != self.gpui_explorer_owner() {
             self.gpui_extra.explorer_input_generation = self
                 .gpui_extra
@@ -5240,6 +5266,33 @@ impl Tessel {
             }
             GpuiAction::SetDashboardQuery(q) => {
                 self.side_panels_ui.dashboard_query = q;
+            }
+            GpuiAction::NativePanelQueryEdit { scope, base, text } => {
+                if text.len() <= 8192
+                    && self.gpui_panel_query_input() == Some((scope, base.as_str()))
+                {
+                    match scope.target {
+                        GpuiFocusTarget::DashboardQuery => {
+                            self.side_panels_ui.dashboard_query = text
+                        }
+                        GpuiFocusTarget::TaskHistoryQuery => {
+                            self.side_panels_ui.history_query = text
+                        }
+                        GpuiFocusTarget::SessionsQuery => self.side_panels_ui.sessions_query = text,
+                        GpuiFocusTarget::ConversationsQuery => {
+                            self.side_panels_ui.conv_query = text
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            GpuiAction::NativePanelQueryExitFullscreen { scope, base } => {
+                if base.is_empty()
+                    && scope.target != GpuiFocusTarget::SessionsQuery
+                    && self.gpui_panel_query_input() == Some((scope, base.as_str()))
+                {
+                    self.right_fullscreen = false;
+                }
             }
             GpuiAction::NativeExplorerEdit { scope, base, text } => {
                 if text.len() <= 8192

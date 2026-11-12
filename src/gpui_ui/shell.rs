@@ -35,6 +35,7 @@ pub(crate) fn render_workspace_body(
     browser_input: &super::browser_input::Input,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -78,6 +79,7 @@ pub(crate) fn render_workspace_body(
                 snapshot,
                 scm_input,
                 explorer_input,
+                panel_query_inputs,
                 focus_input,
                 tokens,
                 right_width_px,
@@ -1079,10 +1081,12 @@ fn render_remote_sftp_stage(
     super::remote_view::render(snapshot, remote_inputs, focus_input, tokens, cx)
 }
 
+#[allow(clippy::too_many_arguments)] // Explicit native input owners share the panel render context.
 fn render_right_panel(
     snapshot: &GpuiWorkspaceSnapshot,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     right_width_px: f32,
@@ -1190,6 +1194,7 @@ fn render_right_panel(
                     snapshot,
                     scm_input,
                     explorer_input,
+                    panel_query_inputs,
                     focus_input,
                     tokens,
                     cx,
