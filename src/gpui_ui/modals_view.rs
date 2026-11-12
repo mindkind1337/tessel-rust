@@ -76,7 +76,13 @@ pub(crate) fn render_active_modals_and_popovers(
         layers.push(render_help_modal(m, modal_query, french, tokens, cx));
     }
     if m.share_modal_open {
-        layers.push(render_share_modal(snapshot, focus_input, tokens, cx));
+        layers.push(render_share_modal(
+            snapshot,
+            modal_query,
+            focus_input,
+            tokens,
+            cx,
+        ));
     }
     if m.add_project_open {
         layers.push(render_add_project_modal(m, focus_input, french, tokens, cx));
@@ -681,6 +687,7 @@ fn render_help_modal(
 
 fn render_share_modal(
     snapshot: &GpuiWorkspaceSnapshot,
+    modal_query: &super::modal_query_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -889,6 +896,158 @@ fn render_share_modal(
                         .text_color(tokens.accent)
                         .child(SharedString::from(st)),
                 )
+            })
+            .when(
+                sh.guest_board.scope.is_none() && !sh.guest_board.draft.is_empty(),
+                |el| {
+                    el.child(div().text_color(tokens.warn).child(if french {
+                        "Brouillon conservé de la session précédente"
+                    } else {
+                        "Retained draft from the previous session"
+                    }))
+                    .child(
+                        div()
+                            .id("guest-recovery-draft")
+                            .max_h(px(80.))
+                            .overflow_y_scroll()
+                            .child(sh.guest_board.draft.clone()),
+                    )
+                    .child(modal_btn(
+                        "guest-copy-draft",
+                        if french {
+                            "Copier le brouillon"
+                        } else {
+                            "Copy draft"
+                        }
+                        .into(),
+                        false,
+                        tokens,
+                        GpuiAction::SidePanels(SidePanelsAction::CopyText(
+                            sh.guest_board.draft.clone(),
+                        )),
+                        cx,
+                    ))
+                    .when_some(
+                        sh.guest_board.notice.as_ref(),
+                        |el, notice| {
+                            el.child(div().text_color(tokens.warn).child(notice.text(french)))
+                        },
+                    )
+                },
+            )
+            .when_some(sh.guest_board.scope, |el, scope| {
+                let board = &sh.guest_board;
+                let mut content = div()
+                    .id("gpui-guest-tasks")
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .max_h(px(340.))
+                    .overflow_y_scroll();
+                let mut projects = div().flex().flex_wrap().gap(px(4.));
+                for (id, name) in &sh.guest_projects {
+                    projects = projects.child(modal_btn(
+                        format!("guest-project-{id}"),
+                        name.clone(),
+                        *id == scope.project,
+                        tokens,
+                        GpuiAction::Share(ShareGpuiAction::GuestProject {
+                            session: scope.session,
+                            project: *id,
+                        }),
+                        cx,
+                    ));
+                }
+                content = content.child(projects).child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(if french { "Tâches" } else { "Tasks" }),
+                );
+                if !board.pending {
+                    content = content.child(modal_btn(
+                        "guest-tasks-refresh",
+                        if french { "Actualiser" } else { "Refresh" }.into(),
+                        false,
+                        tokens,
+                        GpuiAction::Share(ShareGpuiAction::GuestTask {
+                            scope,
+                            action: crate::guest_task_board::Action::Refresh,
+                        }),
+                        cx,
+                    ));
+                } else {
+                    content = content.child(div().child(if french {
+                        "Requête en cours…"
+                    } else {
+                        "Request pending…"
+                    }));
+                }
+                if board.limited {
+                    content = content.child(div().text_color(tokens.warn).child(if french {
+                        "Affichage partiel du tableau."
+                    } else {
+                        "Partial task board."
+                    }));
+                }
+                let columns = if french {
+                    ["À faire", "En cours", "À examiner", "Terminé"]
+                } else {
+                    ["To do", "Doing", "Review", "Done"]
+                };
+                for (column, label) in columns.iter().enumerate() {
+                    content = content.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(tokens.text_dim)
+                            .child(*label),
+                    );
+                    for card in board.cards.iter().filter(|c| c.column == column) {
+                        content = content.child(
+                            div()
+                                .id(("guest-task", card.id))
+                                .px(px(8.))
+                                .py(px(5.))
+                                .bg(tokens.surface_2)
+                                .rounded(px(4.))
+                                .child(SharedString::from(card.title.clone()))
+                                .when_some(card.guest_by.clone(), |el, name| {
+                                    el.child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(tokens.text_dim)
+                                            .child(name),
+                                    )
+                                }),
+                        );
+                    }
+                }
+                if board.writable {
+                    content = content.child(modal_query.render(
+                        FocusInputTarget::GuestTaskDraft(scope),
+                        french,
+                        tokens,
+                        cx,
+                    ));
+                    if !board.pending && !board.draft_over_limit && !board.draft.trim().is_empty() {
+                        content = content.child(modal_btn(
+                            "guest-task-add",
+                            if french { "Ajouter" } else { "Add" }.into(),
+                            true,
+                            tokens,
+                            GpuiAction::Share(ShareGpuiAction::GuestTask {
+                                scope,
+                                action: crate::guest_task_board::Action::Add,
+                            }),
+                            cx,
+                        ));
+                    }
+                }
+                if let Some(notice) = &board.notice {
+                    content =
+                        content.child(div().text_color(tokens.warn).child(notice.text(french)));
+                }
+                el.child(content)
             })
             .into_any_element()
     };

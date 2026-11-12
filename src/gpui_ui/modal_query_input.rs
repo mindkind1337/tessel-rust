@@ -5,6 +5,13 @@ use gpui::{App, AppContext, Context, Entity, EntityInputHandler, Focusable, Subs
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
 type Scope = (u64, FocusInputTarget);
 const LIMIT: usize = 8192;
+fn limit(target: FocusInputTarget) -> usize {
+    if matches!(target, FocusInputTarget::GuestTaskDraft(_)) {
+        4096
+    } else {
+        LIMIT
+    }
+}
 struct Binding {
     scope: Scope,
     state: Entity<EditableTextState>,
@@ -48,20 +55,7 @@ impl Input {
             {
                 return;
             }
-            let base = b.synced.clone();
-            let too_long = state.read(cx).as_str().len() > LIMIT;
-            root.modal_query_input.binding.as_mut().unwrap().too_long = too_long;
-            if !too_long && state.read(cx).as_str() != base {
-                root.dispatch(
-                    GpuiAction::NativeModalQuery {
-                        scope,
-                        base,
-                        text: state.read(cx).as_str().to_owned(),
-                    },
-                    cx,
-                );
-                acknowledge(root);
-            }
+            flush(root, cx);
             cx.notify();
         });
         self.binding = Some(Binding {
@@ -87,7 +81,11 @@ impl Input {
         };
         let expected = b.state.clone();
         let clicked = b.state.clone();
+        let enter = b.state.clone();
+        let scope = b.scope;
         let placeholder = match (target, french) {
+            (FocusInputTarget::GuestTaskDraft(_), true) => "Nouvelle tâche…",
+            (FocusInputTarget::GuestTaskDraft(_), false) => "New task…",
             (FocusInputTarget::HelpQuery, true) => "Filtrer les raccourcis…",
             (FocusInputTarget::HelpQuery, false) => "Search shortcuts…",
             (_, true) => "Rechercher un paramètre…",
@@ -102,7 +100,33 @@ impl Input {
                     dismiss(root, w, cx);
                 }
             }))
-            .on_action(cx.listener(|_, _: &ConsumeEnter, _, _| {}))
+            .on_action(cx.listener(move |root, _: &ConsumeEnter, w, cx| {
+                flush(root, cx);
+                let FocusInputTarget::GuestTaskDraft(guest_scope) = scope.1 else {
+                    return;
+                };
+                let Some(binding) = root.modal_query_input.binding.as_ref() else {
+                    return;
+                };
+                if binding.scope != scope
+                    || binding.state != enter
+                    || binding.too_long
+                    || binding.state.read(cx).as_str() != binding.synced
+                    || root.app.gpui_modal_query() != Some((scope, binding.synced.as_str()))
+                {
+                    return;
+                }
+                if enter.update(cx, |s, cx| s.marked_text_range(w, cx).is_some()) {
+                    return;
+                }
+                root.dispatch(
+                    GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestTask {
+                        scope: guest_scope,
+                        action: crate::guest_task_board::Action::Add,
+                    }),
+                    cx,
+                );
+            }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |root, _, _, cx| {
@@ -133,15 +157,53 @@ impl Input {
                         .text_size(px(10.))
                         .text_color(tokens.warn)
                         .child(if french {
-                            "Recherche limitée à 8 Kio"
+                            if matches!(target, FocusInputTarget::GuestTaskDraft(_)) {
+                                "Brouillon limité à 4 Kio"
+                            } else {
+                                "Recherche limitée à 8 Kio"
+                            }
                         } else {
-                            "Search limit: 8 KiB"
+                            if matches!(target, FocusInputTarget::GuestTaskDraft(_)) {
+                                "Draft limit: 4 KiB"
+                            } else {
+                                "Search limit: 8 KiB"
+                            }
                         }),
                 )
             })
             .into_any_element()
     }
 }
+pub fn flush(root: &mut TesselGpuiRoot, cx: &mut Context<TesselGpuiRoot>) {
+    let Some(b) = root.modal_query_input.binding.as_ref() else {
+        return;
+    };
+    if root.app.gpui_modal_query() != Some((b.scope, b.synced.as_str())) {
+        return;
+    }
+    let scope = b.scope;
+    let base = b.synced.clone();
+    let text = b.state.read(cx).as_str().to_owned();
+    let was_too_long = b.too_long;
+    let too_long = text.len() > limit(scope.1);
+    root.modal_query_input.binding.as_mut().unwrap().too_long = too_long;
+    if too_long {
+        if !was_too_long && let FocusInputTarget::GuestTaskDraft(guest_scope) = scope.1 {
+            root.dispatch(
+                GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestDraftTouch(
+                    guest_scope,
+                )),
+                cx,
+            );
+        }
+    } else if text != base
+        || (was_too_long && matches!(scope.1, FocusInputTarget::GuestTaskDraft(_)))
+    {
+        root.dispatch(GpuiAction::NativeModalQuery { scope, base, text }, cx);
+        acknowledge(root);
+    }
+}
+
 fn acknowledge(root: &mut TesselGpuiRoot) {
     if let Some((scope, text)) = root.app.gpui_modal_query()
         && let Some(b) = root.modal_query_input.binding.as_mut()
@@ -379,3 +441,7 @@ mod tests {
         .unwrap();
     }
 }
+
+#[cfg(all(test, feature = "visual-test"))]
+#[path = "guest_task_input_tests.rs"]
+mod guest_tests;

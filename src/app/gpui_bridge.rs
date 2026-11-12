@@ -160,6 +160,7 @@ pub(crate) enum GpuiFocusTarget {
     AddProjectFolderName,
     GitHubSearch,
     LiveShareJoinCode,
+    GuestTaskDraft(crate::guest_task_board::Scope),
     PromptDraft,
     NewTeamName,
     QuickCommandName,
@@ -1524,9 +1525,10 @@ impl Tessel {
     pub(crate) fn poll_for_gpui(&mut self) -> bool {
         // These workers use channels rather than the terminal repaint callback.
         // Keep their visible view updating through the frame that consumes completion.
-        let refresh = (self.state.panels.right_open
-            && self.state.panels.right_tab == SideTab::Files
-            && self.explorer_tree.gpui_needs_frame())
+        let refresh = self.share.guest_tasks_busy()
+            || (self.state.panels.right_open
+                && self.state.panels.right_tab == SideTab::Files
+                && self.explorer_tree.gpui_needs_frame())
             || (self.state.panels.right_open
                 && self.state.panels.right_tab == SideTab::History
                 && self.gpui_extra.session_query.pending())
@@ -1817,6 +1819,10 @@ impl Tessel {
                 GpuiFocusTarget::SettingsSearch,
                 self.gpui_extra.settings_search.as_str(),
             ),
+            Some(Overlay::Share) if self.share.tab == crate::share_panel::DialogTab::Join => {
+                let (scope, text) = self.share.guest_task_input()?;
+                (GpuiFocusTarget::GuestTaskDraft(scope), text)
+            }
             _ => return None,
         };
         Some(((self.gpui_extra.modal_input_generation, target), text))
@@ -2391,6 +2397,7 @@ impl Tessel {
                     false
                 }
             }
+            GpuiFocusTarget::GuestTaskDraft(_) => false,
             GpuiFocusTarget::LiveShareJoinCode => {
                 if lower == "enter" {
                     self.apply_gpui_action(GpuiAction::Share(
@@ -6455,6 +6462,9 @@ impl Tessel {
                     match scope.1 {
                         GpuiFocusTarget::HelpQuery => self.gpui_extra.help_query = text,
                         GpuiFocusTarget::SettingsSearch => self.gpui_extra.settings_search = text,
+                        GpuiFocusTarget::GuestTaskDraft(guest_scope) => {
+                            self.share.edit_guest_task_draft(guest_scope, text);
+                        }
                         _ => {}
                     }
                 }

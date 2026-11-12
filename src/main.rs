@@ -72,6 +72,7 @@ mod git;
 mod git_result;
 mod gpui_pixels;
 pub mod gpui_ui;
+mod guest_task_board;
 pub mod help_panel;
 mod host_actions;
 pub mod host_existing_terminals_panel;

@@ -14,7 +14,7 @@ use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Frame, Id, Key, Layout, Margin, Order, Pos2, Rect,
     RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
     io::Write,
@@ -201,10 +201,7 @@ pub struct SharePanel {
     pub guest_new_file_name: String,
     pub guest_commit_msg: String,
     pub guest_git_status: String,
-    pub guest_new_task_title: String,
-    pub guest_tasks: Vec<Value>,
-    guest_tasks_limited: bool,
-    guest_tasks_error: String,
+    guest_task_board: crate::guest_task_board::Controller,
 
     // Toolbar pill popover & knock modal state
     pill_popover_open: bool,
@@ -255,10 +252,7 @@ impl Default for SharePanel {
             guest_new_file_name: String::new(),
             guest_commit_msg: String::new(),
             guest_git_status: String::new(),
-            guest_new_task_title: String::new(),
-            guest_tasks: Vec::new(),
-            guest_tasks_limited: false,
-            guest_tasks_error: String::new(),
+            guest_task_board: Default::default(),
             pill_popover_open: false,
             pill_popover_just_opened: false,
             ask_draft: None,
@@ -348,8 +342,108 @@ impl SharePanel {
 
     /// Injects an active [`GuestSession`] directly.
     pub fn set_guest_session(&mut self, session: GuestSession) {
+        self.guest_task_board.bind(None, false);
+        self.guest_selected_project = None;
         self.guest_session = Some(session);
         self.tab = DialogTab::Join;
+    }
+
+    pub fn guest_task_input(&self) -> Option<(crate::guest_task_board::Scope, &str)> {
+        self.guest_task_board.input()
+    }
+    pub fn guest_tasks_busy(&self) -> bool {
+        self.guest_task_board.busy()
+    }
+    pub fn guest_task_snapshot(&self) -> crate::guest_task_board::Snapshot {
+        self.guest_task_board.snapshot()
+    }
+    fn current_guest_scope(&mut self) -> (Option<crate::guest_task_board::Scope>, bool) {
+        let Some(session) = &self.guest_session else {
+            self.guest_selected_project = None;
+            return (None, false);
+        };
+        let g = session.snapshot();
+        if !matches!(g.phase, GuestPhase::Joined { .. }) {
+            self.guest_selected_project = None;
+            return (None, false);
+        }
+        if self.follow_host {
+            if let Some(id) = g.host_active_project
+                && g.projects.iter().any(|(project, _)| *project == id)
+            {
+                self.guest_selected_project = Some(id);
+            }
+            if let Some(id) = g.host_active_pane
+                && g.panes.iter().any(|(pane, _, _, _)| *pane == id)
+            {
+                self.guest_selected_pane = Some(id);
+            }
+        }
+        if !g
+            .projects
+            .iter()
+            .any(|(id, _)| Some(*id) == self.guest_selected_project)
+        {
+            self.guest_selected_project = g.projects.first().map(|(id, _)| *id);
+        }
+        (
+            self.guest_selected_project
+                .map(|project| crate::guest_task_board::Scope {
+                    session: session.generation(),
+                    project,
+                }),
+            g.rights.tasks,
+        )
+    }
+    pub fn poll_guest_tasks(&mut self) -> bool {
+        let mut changed = self.poll_guest_scope();
+        changed |= self.guest_task_board.poll(Instant::now());
+        if self.guest_task_board.take_reconcile()
+            && let Some(scope) = self.guest_task_snapshot().scope
+        {
+            changed |= self.request_guest_task(scope, crate::guest_task_board::Action::Refresh);
+        }
+        changed
+    }
+    pub fn request_guest_task(
+        &mut self,
+        scope: crate::guest_task_board::Scope,
+        action: crate::guest_task_board::Action,
+    ) -> bool {
+        self.poll_guest_scope();
+        let Some(session) = &self.guest_session else {
+            return false;
+        };
+        self.guest_task_board
+            .start(scope, action, Instant::now(), |payload| {
+                session.request(payload)
+            })
+    }
+    fn poll_guest_scope(&mut self) -> bool {
+        let (scope, writable) = self.current_guest_scope();
+        self.guest_task_board.bind(scope, writable)
+    }
+    pub fn edit_guest_task_draft(
+        &mut self,
+        scope: crate::guest_task_board::Scope,
+        text: String,
+    ) -> bool {
+        self.poll_guest_scope();
+        self.guest_task_board.edit_draft(scope, text)
+    }
+    fn select_guest_project(&mut self, session: u64, project: u64) {
+        if let Some(current) = &self.guest_session
+            && current.generation() == session
+            && current
+                .snapshot()
+                .projects
+                .iter()
+                .any(|(id, _)| *id == project)
+        {
+            self.follow_host = false;
+            self.guest_selected_project = Some(project);
+            self.poll_guest_tasks();
+        }
     }
 
     pub fn stop_hosting(&mut self) {
@@ -2440,6 +2534,29 @@ impl SharePanel {
     // -----------------------------------------------------------------------
 
     fn render_join_tab(&mut self, ui: &mut Ui, french: bool) {
+        self.poll_guest_tasks();
+        let recovery = self.guest_task_snapshot();
+        if recovery.scope.is_none() && !recovery.draft.is_empty() {
+            ui.label(if french {
+                "Brouillon conservé de la session précédente"
+            } else {
+                "Retained draft from the previous session"
+            });
+            ui.label(&recovery.draft);
+            if ui
+                .button(if french {
+                    "Copier le brouillon"
+                } else {
+                    "Copy draft"
+                })
+                .clicked()
+            {
+                ui.ctx().copy_text(recovery.draft);
+            }
+            if let Some(notice) = recovery.notice {
+                ui.colored_label(Color32::LIGHT_RED, notice.text(french));
+            }
+        }
         let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
 
         match guest_snap.as_ref().map(|g| &g.phase) {
@@ -2489,7 +2606,7 @@ impl SharePanel {
                                 self.guest_name.clone(),
                                 self.guest_identity_hex.clone(),
                             );
-                            self.guest_session = Some(sess);
+                            self.set_guest_session(sess);
                             self.join_code.clear();
                             self.error.clear();
                         }
@@ -2554,6 +2671,90 @@ impl SharePanel {
         }
     }
 
+    fn render_guest_tasks(&mut self, ui: &mut Ui, french: bool) {
+        use crate::guest_task_board::Action;
+        self.poll_guest_tasks();
+        let board = self.guest_task_snapshot();
+        let Some(scope) = board.scope else {
+            return;
+        };
+        let mut command = None;
+        if ui
+            .add_enabled(
+                !board.pending,
+                egui::Button::new(if french {
+                    "Actualiser les tâches"
+                } else {
+                    "Refresh tasks"
+                }),
+            )
+            .clicked()
+        {
+            command = Some(Action::Refresh);
+        }
+        if board.pending {
+            ui.spinner();
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
+        if board.limited {
+            ui.weak(if french {
+                "Affichage partiel du tableau."
+            } else {
+                "Partial task board."
+            });
+        }
+        for card in &board.cards {
+            ui.push_id(card.id, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(&card.title);
+                    if let Some(name) = &card.guest_by {
+                        ui.weak(name);
+                    }
+                    let labels = if french {
+                        ["À faire", "En cours", "À examiner", "Terminé"]
+                    } else {
+                        ["To do", "Doing", "Review", "Done"]
+                    };
+                    ui.weak(labels[card.column]);
+                });
+            });
+        }
+        if board.writable {
+            let mut draft = board.draft.clone();
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut draft)
+                            .char_limit(300)
+                            .hint_text(if french {
+                                "Nouvelle tâche…"
+                            } else {
+                                "New task…"
+                            }),
+                    )
+                    .changed()
+                {
+                    self.edit_guest_task_draft(scope, draft.clone());
+                }
+                if ui
+                    .add_enabled(
+                        !board.pending && !board.draft_over_limit && !draft.trim().is_empty(),
+                        egui::Button::new(if french { "Ajouter" } else { "Add" }),
+                    )
+                    .clicked()
+                {
+                    command = Some(Action::Add);
+                }
+            });
+        }
+        if let Some(notice) = board.notice {
+            ui.colored_label(Color32::LIGHT_RED, notice.text(french));
+        }
+        if let Some(command) = command {
+            self.request_guest_task(scope, command);
+        }
+    }
+
     fn render_joined_guest_workspace(
         &mut self,
         ui: &mut Ui,
@@ -2562,17 +2763,7 @@ impl SharePanel {
         sas_code: &str,
         french: bool,
     ) {
-        if self.follow_host {
-            if let Some(hp) = gs.host_active_project {
-                self.guest_selected_project = Some(hp);
-            }
-            if let Some(hpane) = gs.host_active_pane {
-                self.guest_selected_pane = Some(hpane);
-            }
-        }
-        if self.guest_selected_project.is_none() {
-            self.guest_selected_project = gs.projects.first().map(|(id, _)| *id);
-        }
+        self.poll_guest_tasks();
 
         ui.horizontal_wrapped(|ui| {
             ui.strong(if french {
@@ -2629,6 +2820,30 @@ impl SharePanel {
         });
         ui.add_space(4.0_f32);
 
+        let current_scope = self.guest_task_snapshot().scope;
+        if let Some(scope) = current_scope {
+            let mut selected = scope.project;
+            egui::ComboBox::from_id_salt("guest-project")
+                .selected_text(
+                    gs.projects
+                        .iter()
+                        .find(|(id, _)| *id == selected)
+                        .map(|(_, name)| name.as_str())
+                        .unwrap_or(""),
+                )
+                .show_ui(ui, |ui| {
+                    for (id, name) in &gs.projects {
+                        ui.selectable_value(&mut selected, *id, name);
+                    }
+                });
+            if selected != scope.project {
+                self.select_guest_project(scope.session, selected);
+            }
+        }
+        if self.guest_sub_view == GuestSubView::Tasks {
+            self.render_guest_tasks(ui, french);
+            return;
+        }
         let Some(sess) = &self.guest_session else {
             return;
         };
@@ -2836,66 +3051,7 @@ impl SharePanel {
                     });
                 }
             }
-            GuestSubView::Tasks => {
-                if ui
-                    .small_button(if french {
-                        "Actualiser les tâches"
-                    } else {
-                        "Refresh tasks"
-                    })
-                    .clicked()
-                {
-                    match sess.call_sync(
-                        json!({"op":"tasks.list", "projectId":self.guest_selected_project}),
-                        Duration::from_secs(3),
-                    ) {
-                        Ok(val) => {
-                            self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
-                            self.guest_tasks_limited = val["limited"].as_bool().unwrap_or(false);
-                            self.guest_tasks_error.clear();
-                        }
-                        Err(e) => {
-                            self.guest_tasks.clear();
-                            self.guest_tasks_error = e;
-                        }
-                    }
-                }
-                if self.guest_tasks_limited {
-                    ui.label(if french {
-                        "Affichage partiel : le tableau dépasse la limite de partage."
-                    } else {
-                        "Partial view: the board exceeds the sharing limit."
-                    });
-                }
-                for t in &self.guest_tasks {
-                    ui.label(format!(
-                        "[{}] {}",
-                        t["column"].as_str().unwrap_or("todo"),
-                        t["title"].as_str().unwrap_or("")
-                    ));
-                }
-                if gs.rights.tasks {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.guest_new_task_title).char_limit(300)
-                            .desired_width(220.0).hint_text(if french { "Nouvelle tâche…" } else { "New task…" }));
-                        if ui.button(if french { "Ajouter" } else { "Add" }).clicked() && !self.guest_new_task_title.trim().is_empty() {
-                            match sess.call_sync(json!({"op":"tasks.mutate", "projectId":self.guest_selected_project,
-                                "action":"add", "title":self.guest_new_task_title.trim(), "column":"todo"}), Duration::from_secs(3)) {
-                                Ok(val) => {
-                                    self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
-                                    self.guest_tasks_limited = val["limited"].as_bool().unwrap_or(false);
-                                    self.guest_new_task_title.clear();
-                                    self.guest_tasks_error.clear();
-                                }
-                                Err(e) => { self.guest_tasks_error = e; }
-                            }
-                        }
-                    });
-                }
-                if !self.guest_tasks_error.is_empty() {
-                    ui.colored_label(egui::Color32::LIGHT_RED, &self.guest_tasks_error);
-                }
-            }
+            GuestSubView::Tasks => unreachable!("task board rendered before session borrow"),
             GuestSubView::Pages => {
                 for pg in &gs.pages {
                     ui.horizontal(|ui| {
@@ -3204,6 +3360,8 @@ pub(crate) struct ShareGpuiSnapshot {
     pub guest_name: String,
     pub guest_status: Option<String>,
     pub guest_active: bool,
+    pub guest_board: crate::guest_task_board::Snapshot,
+    pub guest_projects: Vec<(u64, String)>,
     pub follow_host: bool,
     pub require_knock: bool,
     pub invites: Vec<ShareGpuiInviteRow>,
@@ -3231,11 +3389,23 @@ pub(crate) enum ShareGpuiAction {
     JoinSession,
     DisconnectGuest,
     ToggleFollowHost,
+    GuestDraftTouch(crate::guest_task_board::Scope),
+    GuestProject {
+        session: u64,
+        project: u64,
+    },
+    GuestTask {
+        scope: crate::guest_task_board::Scope,
+        action: crate::guest_task_board::Action,
+    },
     TogglePillPopover,
     ClosePillPopover,
     ToggleAskCodeChecked,
     ToggleAskTrustNext,
-    AnswerAsk { ask_key: String, allow: bool },
+    AnswerAsk {
+        ask_key: String,
+        allow: bool,
+    },
 }
 
 #[allow(dead_code)]
@@ -3369,6 +3539,12 @@ impl SharePanel {
             guest_name: self.guest_name.clone(),
             guest_status,
             guest_active,
+            guest_board: self.guest_task_snapshot(),
+            guest_projects: guest_snap
+                .as_ref()
+                .filter(|g| matches!(g.phase, GuestPhase::Joined { .. }))
+                .map(|g| g.projects.clone())
+                .unwrap_or_default(),
             follow_host: self.follow_host,
             require_knock: self.settings.hide_ignored,
             invites,
@@ -3444,7 +3620,7 @@ impl SharePanel {
                         self.guest_name.clone(),
                         self.guest_identity_hex.clone(),
                     );
-                    self.guest_session = Some(gs);
+                    self.set_guest_session(gs);
                     self.join_code.clear();
                     self.error.clear();
                 }
@@ -3452,6 +3628,16 @@ impl SharePanel {
             },
             ShareGpuiAction::DisconnectGuest => {
                 self.guest_session = None;
+            }
+            ShareGpuiAction::GuestDraftTouch(scope) => {
+                self.poll_guest_scope();
+                self.guest_task_board.touch_draft(scope);
+            }
+            ShareGpuiAction::GuestProject { session, project } => {
+                self.select_guest_project(session, project)
+            }
+            ShareGpuiAction::GuestTask { scope, action } => {
+                self.request_guest_task(scope, action);
             }
             ShareGpuiAction::ToggleFollowHost => {
                 self.follow_host = !self.follow_host;

@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/guest_task_board.rs"]
+mod guest_task_board;
+#[allow(dead_code)]
 #[path = "../src/icons.rs"]
 mod icons;
 #[allow(dead_code)]
@@ -427,4 +430,105 @@ fn live_share_pill_popover_presence_and_sidebar_badge_render_cleanly() {
         pane_name: "p".into(),
         detail: "d".into(),
     };
+}
+
+#[test]
+fn compatibility_guest_board_add_is_pending_without_waiting_for_host_commit() {
+    let dir = tempfile::Builder::new()
+        .prefix("tessel-guest-fixture-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let project = SharedProject {
+        id: 1,
+        name: "Fixture board".into(),
+        path: dir.path().into(),
+    };
+    let host = Host::start_multi(
+        vec![project],
+        "Fixture".into(),
+        InviteSpec::default(),
+        ShareSettings::default(),
+        vec![],
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1".parse().unwrap(),
+    )
+    .unwrap();
+    host.publish_tasks(vec![share::SharedTask {
+        project_id: 1,
+        id: "1".into(),
+        title: "Visible fixture card".into(),
+        column: "review".into(),
+        guest_by: Some("Guest fixture".into()),
+    }]);
+    let guest = GuestSession::connect(
+        host.invitation.clone(),
+        "Fixture guest".into(),
+        "c3".repeat(32),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(LiveShareAsk::Join { key, .. }) = host.snapshot().asks.first() {
+            host.answer_ask(share::AskAnswer::Join {
+                key: key.clone(),
+                allow: true,
+                projects: vec![1],
+                rights: ShareRights::collaborate(),
+                trust: false,
+            });
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut panel = SharePanel::default();
+    panel.set_guest_session(guest);
+    panel.guest_sub_view = share_panel::GuestSubView::Tasks;
+    let scope = loop {
+        panel.poll_guest_tasks();
+        let board = panel.guest_task_snapshot();
+        if let Some(scope) = board.scope
+            && !board.pending
+            && board.cards.len() == 1
+        {
+            break scope;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    panel.edit_guest_task_draft(scope, "Added from Compatibility".into());
+    let ctx = egui::Context::default();
+    let draw = |panel: &mut SharePanel, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 1000.))),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                panel.show_dialog_modal(ctx, &[], false);
+            },
+        )
+    };
+    let _ = draw(&mut panel, vec![]);
+    let output = draw(&mut panel, vec![]);
+    assert!(has_text_containing(&output.shapes, "Visible fixture card"));
+    assert!(has_text_containing(&output.shapes, "Guest fixture"));
+    let add = find_text_center(&output.shapes, "Add").unwrap();
+    let _ = draw(&mut panel, click_events(add));
+    assert!(panel.guest_task_snapshot().pending);
+    assert_eq!(
+        panel.guest_task_snapshot().draft,
+        "Added from Compatibility"
+    );
+    // The host has not applied a mutation; the frame nevertheless returned with a pending state.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(share::HostCommand::TaskMutation(command)) = host.drain_commands().pop() {
+            command.reject();
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

@@ -298,6 +298,7 @@ impl TesselGpuiRoot {
     }
 
     fn poll_backend(&mut self, cx: &mut Context<Self>) -> bool {
+        modal_query_input::flush(self, cx);
         task_rename_input::flush(self, cx);
         panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
@@ -326,6 +327,13 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        if !matches!(
+            &action,
+            GpuiAction::NativeModalQuery { .. }
+                | GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestDraftTouch(_))
+        ) {
+            modal_query_input::flush(self, cx);
+        }
         task_rename_input::flush(self, cx);
         panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);

@@ -19,7 +19,7 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -2953,15 +2953,21 @@ pub struct GuestSnapshot {
     pub last_error: String,
 }
 
+#[path = "share/guest_rpc.rs"]
+mod guest_rpc;
+pub use guest_rpc::{GuestRpcError, TASK_RESULT_NOT_AVAILABLE};
+type GuestRpcResult = std::result::Result<Value, GuestRpcError>;
+
 enum GuestRpcReq {
     Call {
         payload: Value,
-        reply: Option<SyncSender<Result<Value>>>,
+        reply: Option<SyncSender<GuestRpcResult>>,
     },
     Leave,
 }
 
 pub struct GuestSession {
+    generation: u64,
     state: Arc<Mutex<GuestSnapshot>>,
     tx: SyncSender<GuestRpcReq>,
     stop: Arc<AtomicBool>,
@@ -2970,6 +2976,12 @@ pub struct GuestSession {
 
 impl GuestSession {
     pub fn connect(invitation: Invitation, guest_name: String, identity_hex: String) -> Self {
+        static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+        let generation = NEXT_GENERATION
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("guest session generation exhausted");
         let snap = GuestSnapshot {
             phase: GuestPhase::Connecting,
             endpoint: invitation.endpoint(),
@@ -3003,6 +3015,7 @@ impl GuestSession {
         });
 
         Self {
+            generation,
             state,
             tx,
             stop,
@@ -3012,6 +3025,28 @@ impl GuestSession {
 
     pub fn snapshot(&self) -> GuestSnapshot {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Queue a request without blocking the UI; the receiver is polled by its owner.
+    pub fn request(&self, payload: Value) -> Result<Receiver<GuestRpcResult>> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Session closed.".into());
+        }
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.tx
+            .try_send(GuestRpcReq::Call {
+                payload,
+                reply: Some(reply),
+            })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => "The host request queue is full.".to_owned(),
+                mpsc::TrySendError::Disconnected(_) => "Session closed.".to_owned(),
+            })?;
+        Ok(receiver)
     }
 
     /// Synchronous RPC call over the persistent duplex TLS stream (used by tests & actions).
@@ -3025,6 +3060,7 @@ impl GuestSession {
             .map_err(|_| "Session closed.".to_string())?;
         rrx.recv_timeout(timeout)
             .map_err(|_| "Timed out waiting for host reply.".to_string())?
+            .map_err(|error| error.to_string())
     }
 
     /// Non-blocking fire-and-update request for UI buttons.
@@ -3299,7 +3335,7 @@ fn perform_guest_rpc(
     state: &Arc<Mutex<GuestSnapshot>>,
     host_name: &str,
     payload: &Value,
-) -> Result<Value> {
+) -> GuestRpcResult {
     tls.get_mut().reset_deadline(Duration::from_secs(15));
     if let Err(e) = write_frame(tls, payload) {
         let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -3307,7 +3343,7 @@ fn perform_guest_rpc(
             reason: "lost".into(),
             host_name: host_name.to_owned(),
         };
-        return Err(e);
+        return Err(GuestRpcError::Transport(e));
     }
     tls.get_mut().reset_deadline(Duration::from_secs(15));
     let reply = match read_frame(tls, MAX_RESPONSE) {
@@ -3318,7 +3354,7 @@ fn perform_guest_rpc(
                 reason: "closed".into(),
                 host_name: host_name.to_owned(),
             };
-            return Err(e);
+            return Err(GuestRpcError::Transport(e));
         }
     };
 
@@ -3336,13 +3372,13 @@ fn perform_guest_rpc(
             reason,
             host_name: host_name.to_owned(),
         };
-        return Err("Session ended.".into());
+        return Err(GuestRpcError::Host("Session ended.".into()));
     }
 
     if let Some(err) = reply.get("error").and_then(Value::as_str) {
         let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
         g.last_error = err.to_owned();
-        return Err(err.to_owned());
+        return Err(GuestRpcError::Host(err.to_owned()));
     }
 
     let result = reply.get("result").cloned().unwrap_or(Value::Null);
@@ -3669,3 +3705,7 @@ mod tests {
         trusted_guest.leave();
     }
 }
+
+#[cfg(test)]
+#[path = "share/guest_request_tests.rs"]
+mod guest_request_tests;

@@ -279,8 +279,10 @@ pub(super) fn dispatch(inner: &Arc<Mutex<HostInner>>, guest: &str, req: &Value) 
                 {
                     Err("Task request expired before execution; no change was made.".into())
                 } else {
-                    receiver.try_recv().or_else(|_| receiver.recv_timeout(Duration::from_millis(250)))
-                        .unwrap_or_else(|_| Err("Task result is not available yet; refresh the board before retrying.".into()))
+                    receiver
+                        .try_recv()
+                        .or_else(|_| receiver.recv_timeout(Duration::from_millis(250)))
+                        .unwrap_or_else(|_| Err(TASK_RESULT_NOT_AVAILABLE.into()))
                 }
             }
         }

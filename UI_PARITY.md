@@ -388,10 +388,12 @@ Local Review/Done assignees now share fifty embedded brand images across GPUI an
 
 ## Guest task-board integration audit (2026-11-12)
 
-This audit supersedes any suggestion that the existing host task-card renderer also covers guest tasks. `share_panel.rs::render_joined_guest_workspace` currently renders guest tasks only in the Compatibility join dialog: synchronous Refresh/Add RPCs, plain column/title labels, no move/rename/delete controls. `gpui_ui/modals_view.rs::render_share_modal` exposes join/follow/leave/status but no guest workspace or task board. `GpuiSidePanelsSnapshot` still carries only local workspace cards.
+The historical b223 audit below records why the host task-card renderer did not cover guest tasks. The controller follow-up at the end of this section supersedes its cache and Refresh/Add gaps. `share_panel.rs::render_joined_guest_workspace` rendered guest tasks only in the Compatibility join dialog: synchronous Refresh/Add RPCs, plain column/title labels, no move/rename/delete controls. `gpui_ui/modals_view.rs::render_share_modal` exposed join/follow/leave/status but no guest workspace or task board. `GpuiSidePanelsSnapshot` still carries only local workspace cards.
 
 Required next boundary: a renderer-independent guest-board controller scoped by session generation and authorized project ID, nonblocking requests with explicit pending/error states, stale-reply rejection after selection/session/rights changes, and draft preservation until matching successful acknowledgements. Never use a host pane ID to focus a local session. Until explicit visible-pane mapping exists, do not export assignment IDs, agent labels or work periods. Render guest cards through the shared board surfaces only after this controller and authorization boundary are tested. Native guest visual acceptance remains pending.
 
-The current Compatibility cache is an unscoped `Vec<Value>`; following a new project does not clear it. The guest project selector is also missing from the joined view. These are remaining implementation gaps, not accepted parity.
+At b223 the Compatibility cache was an unscoped `Vec<Value>`; following a new project did not clear it, and the joined view had no project selector. The controller follow-up replaces this cache and adds scoped selection.
 
 Native visual access was rechecked on 2026-11-12: the Computer Use inventory reports an unavailable native pipe (OS error 2) and browser access host. No active application was restarted or used for acceptance; visual parity remains unverified.
+
+The subsequent nonblocking-controller work adds a scoped project selector and Refresh/Add board to both Join dialogs, using native GPUI text input. This does not yet unify guest projects with the main sidebar/task board or provide all card controls. Controller, loopback TLS, Compatibility Add and native input regression tests pass; pixel-level acceptance remains pending.
