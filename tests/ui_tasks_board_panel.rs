@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../src/agent_brand_assets.rs"]
+mod agent_brand_assets;
+
 #[path = "../src/tasks_board_panel.rs"]
 mod tasks_board_panel;
 
@@ -1114,7 +1118,7 @@ fn assignment_menu_emits_choice_and_review_only_offers_show_agent() {
         ctx: &egui::Context,
         board: &mut TasksBoard,
         tasks: &[TaskCard],
-        agents: &[(u64, String)],
+        agents: &[(u64, String, String)],
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, Option<TasksBoardAction>) {
         let mut action = None;
@@ -1145,7 +1149,10 @@ fn assignment_menu_emits_choice_and_review_only_offers_show_agent() {
     let mut board = TasksBoard::new();
     let mut tasks = sample_tasks();
     tasks.truncate(1);
-    let agents = vec![(7, "Ada".into()), (8, "Bohr".into())];
+    let agents = vec![
+        (7, "Ada".into(), "codex".into()),
+        (8, "Bohr".into(), "claude".into()),
+    ];
     frame(&ctx, &mut board, &tasks, &agents, vec![]);
     let (out, _) = frame(&ctx, &mut board, &tasks, &agents, vec![]);
     let button = find_painted_text_rect(&out.shapes, "Unassigned")

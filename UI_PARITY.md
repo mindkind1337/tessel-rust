@@ -382,3 +382,5 @@ Task model/history follow-up: shared timing transitions, per-pane Doing periods,
 Card timing labels and timestamp tooltips are now connected in GPUI and Compatibility, preserving missing legacy values and separating elapsed card duration from accumulated history duration. Local assignment controls and Show agent are connected below; guest metadata and complete card visual acceptance remain pending.
 
 Local assignee controls and Show agent are wired to the shared mutation/focus guards in both renderers. Menu options come from current project runtime panes, with native keyboard and pointer handling. Brand icons/accents, closed-pane display improvements, guest metadata/controls and pixel acceptance still require work.
+
+Local Review/Done assignees now share fifty embedded brand images across GPUI and Compatibility (including PNG-only brands and Ollama), preserving full color, source framing and DPI-aware caches. Unknown IDs fall back to the current-color terminal glyph; the reference card has no accent swatch. Native visual acceptance and the guest-card metadata/control follow-up remain open.

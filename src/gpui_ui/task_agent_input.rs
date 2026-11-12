@@ -118,11 +118,52 @@ pub(crate) fn render(
         "Unassigned"
     };
     if task.column > 1 {
-        return div()
-            .text_size(px(11.))
-            .text_color(tokens.text_dim)
-            .child(assigned.map_or(no_agent, |p| p.label.as_str()).to_owned())
-            .into_any_element();
+        use gpui::StyledImage;
+        let fallback_color = tokens.text;
+        return if let Some(agent) = assigned {
+            let kind = agent.provider.clone();
+            let icon = if crate::agent_brand_assets::canonical(&kind).is_some() {
+                gpui::img(move |window: &mut gpui::Window, _: &mut gpui::App| {
+                    Some(
+                        crate::agent_brand_assets::raster(&kind, window.scale_factor())
+                            .ok_or_else(|| gpui::ImageCacheError::Asset("embedded brand".into())),
+                    )
+                })
+                .with_fallback(move || {
+                    gpui::svg()
+                        .data(crate::agent_brand_assets::FALLBACK_SVG)
+                        .size(px(13.))
+                        .text_color(fallback_color)
+                        .into_any_element()
+                })
+                .size(px(13.))
+                .flex_shrink_0()
+                .into_any_element()
+            } else {
+                gpui::svg()
+                    .data(crate::agent_brand_assets::FALLBACK_SVG)
+                    .size(px(13.))
+                    .flex_shrink_0()
+                    .text_color(tokens.text)
+                    .into_any_element()
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .min_w_0()
+                .text_size(px(11.5))
+                .text_color(tokens.text)
+                .child(icon)
+                .child(div().truncate().child(agent.label.clone()))
+                .into_any_element()
+        } else {
+            div()
+                .text_size(px(11.5))
+                .text_color(tokens.text_dim)
+                .child(no_agent)
+                .into_any_element()
+        };
     }
     let Some(handle) = inputs.handles.get(&id).cloned() else {
         return div().into_any_element();

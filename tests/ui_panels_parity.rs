@@ -1,4 +1,8 @@
 #[allow(dead_code)]
+#[path = "../src/agent_brand_assets.rs"]
+mod agent_brand_assets;
+
+#[allow(dead_code)]
 #[path = "../src/empty_state_panel.rs"]
 mod empty_state_panel;
 #[allow(dead_code)]

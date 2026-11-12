@@ -6921,7 +6921,7 @@ impl Tessel {
             .map(|p| self.task_agent_choices(p))
             .unwrap_or_default()
             .into_iter()
-            .map(|p| (p.id, p.label))
+            .map(|p| (p.id, p.label, p.provider))
             .collect();
         let action = self.tasks_board.show(
             ui,

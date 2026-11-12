@@ -44,7 +44,7 @@ pub struct TaskCard {
 #[derive(Debug, Clone, Copy)]
 pub struct TasksBoardInput<'a> {
     pub tasks: &'a [TaskCard],
-    pub agents: &'a [(u64, String)],
+    pub agents: &'a [(u64, String, String)],
     pub french: bool,
     pub project_selected: bool,
 }
@@ -1067,7 +1067,7 @@ impl TasksBoard {
         col_idx: usize,
         cards: &[&TaskCard],
         french: bool,
-        agents: &[(u64, String)],
+        agents: &[(u64, String, String)],
         active_focused_id: Option<u64>,
         scroll_to_focused: bool,
         pointer_pos: Option<Pos2>,
@@ -1478,7 +1478,7 @@ impl TasksBoard {
         col_color: Color32,
         card: &TaskCard,
         french: bool,
-        agents: &[(u64, String)],
+        agents: &[(u64, String, String)],
         is_key_focused: bool,
         scroll_to_focused: bool,
         interaction_blocked: bool,
@@ -1799,11 +1799,11 @@ impl TasksBoard {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         agent_ui.set_clip_rect(ui.clip_rect().intersect(agent_rect));
-        let assigned = agents.iter().find(|(id, _)| Some(*id) == card.pane);
+        let assigned = agents.iter().find(|(id, _, _)| Some(*id) == card.pane);
         if col_idx <= 1 {
             let mut pane = card.pane;
             let label = assigned
-                .map(|(_, name)| name.as_str())
+                .map(|(_, name, _)| name.as_str())
                 .unwrap_or(if pane.is_some() {
                     " "
                 } else if french {
@@ -1825,7 +1825,7 @@ impl TasksBoard {
                             "Unassigned"
                         },
                     );
-                    for (id, label) in agents {
+                    for (id, label, _) in agents {
                         ui.selectable_value(&mut pane, Some(*id), label);
                     }
                 })
@@ -1838,18 +1838,20 @@ impl TasksBoard {
             if pane != card.pane {
                 return Some(TasksBoardAction::Assign { id: card.id, pane });
             }
+        } else if let Some((_, name, provider)) = assigned {
+            agent_ui.spacing_mut().item_spacing.x = 5.;
+            let (_, icon_rect) = agent_ui.allocate_space(egui::vec2(13., 13.));
+            crate::agent_brand_assets::paint(&agent_ui, icon_rect, provider, fg);
+            agent_ui.label(egui::RichText::new(name).size(11.5).color(fg));
         } else {
             agent_ui.label(
-                egui::RichText::new(
-                    assigned
-                        .map(|(_, name)| name.as_str())
-                        .unwrap_or(if french { "Aucun agent" } else { "No agent" }),
-                )
-                .size(11.0),
+                egui::RichText::new(if french { "Aucun agent" } else { "No agent" })
+                    .size(11.5)
+                    .weak(),
             );
         }
         if matches!(col_idx, 1 | 2)
-            && let Some((pane, _)) = assigned
+            && let Some((pane, _, _)) = assigned
             && agent_ui
                 .small_button(if french { "Voir l'agent" } else { "Show agent" })
                 .on_hover_text(if french {

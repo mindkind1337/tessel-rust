@@ -4,6 +4,7 @@ mod account;
 #[cfg(windows)]
 mod account_panel;
 pub mod agent_arg_options;
+mod agent_brand_assets;
 pub mod agent_brand_icons;
 #[cfg(windows)]
 mod agent_browser;
