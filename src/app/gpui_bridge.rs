@@ -103,6 +103,9 @@ pub(crate) enum GpuiFocusTarget {
     EditorGoto,
     EditorBody,
     BrowserUrl,
+    RemoteName,
+    RemoteRename,
+    RemoteText,
     PaletteQuery,
     FinderQuery,
     HelpQuery,
@@ -348,6 +351,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub pdf_summary: Option<crate::pdf::PdfSummaryTuple>,
     pub office_summary: Option<crate::office::OfficeSummary>,
     pub image_dims: Option<[usize; 2]>,
+    pub media_pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub error: String,
 }
 
@@ -600,6 +604,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub floating: GpuiFloatingTerminalSnapshot,
     pub active_document: Option<GpuiActiveDocumentSummary>,
     pub browser: GpuiBrowserSnapshot,
+    pub remote: crate::remote_panel::control::Snapshot,
     pub side_panel: GpuiSidePanelSummary,
     pub side_panels: GpuiSidePanelsSnapshot,
     pub settings: Option<GpuiSettingsSnapshot>,
@@ -610,6 +615,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) enum GpuiAction {
+    Remote(crate::remote_panel::control::Command),
     ToggleLeftSidebar,
     ToggleRightSidebar,
     SelectSideTab(SideTab),
@@ -1000,6 +1006,54 @@ impl Tessel {
             .windows(2)
             .find(|pair| pair[0] == "--data-dir")
             .map(|pair| PathBuf::from(&pair[1]));
+        #[cfg(feature = "visual-test")]
+        if override_dir.is_some() && std::env::args().any(|arg| arg == "--remote-fixture") {
+            let fixture_dir = override_dir.clone().unwrap();
+            let mut app = Self::new_for_gpui_in_dir(override_dir, false, repaint_cb);
+            app.view = View::Remote;
+            app.remote = crate::remote_panel::RemotePanel::text_fixture();
+            if std::env::args().any(|arg| arg == "--french-fixture") {
+                app.state.language = crate::i18n::Language::French;
+            }
+            if std::env::args().any(|arg| arg == "--media-fixture") {
+                let setup = (|| -> Result<(), String> {
+                    use std::io::Write;
+                    let path = fixture_dir.join("synthetic-page.pdf");
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map_err(|e| e.to_string())?;
+                    file.write_all(&crate::pdf::fixture())
+                        .map_err(|e| e.to_string())?;
+                    app.documents
+                        .push(crate::files::Document::open(&fixture_dir, &path)?);
+                    let path = fixture_dir.join("synthetic-colors.png");
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map_err(|e| e.to_string())?;
+                    let pixels = image::RgbaImage::from_fn(320, 180, |x, _| {
+                        image::Rgba(if x < 160 {
+                            [255, 0, 0, 255]
+                        } else {
+                            [0, 0, 255, 255]
+                        })
+                    });
+                    pixels
+                        .write_to(&mut std::io::BufWriter::new(file), image::ImageFormat::Png)
+                        .map_err(|e| e.to_string())?;
+                    app.documents
+                        .push(crate::files::Document::open(&fixture_dir, &path)?);
+                    Ok(())
+                })();
+                if let Err(error) = setup {
+                    app.error = error;
+                }
+            }
+            return app;
+        }
         Self::new_for_gpui_in_dir(override_dir, true, repaint_cb)
     }
 
@@ -1292,7 +1346,17 @@ impl Tessel {
         app
     }
 
-    pub(crate) fn poll_for_gpui(&mut self) {
+    pub(crate) fn poll_for_gpui(&mut self) -> bool {
+        // These workers use channels rather than the terminal repaint callback.
+        // Keep their visible view updating through the frame that consumes completion.
+        let refresh = (self.view == View::Remote && self.remote.busy())
+            || !self.document_pending.is_empty()
+            || (self.view == View::Files
+                && self
+                    .documents
+                    .get(self.active_document)
+                    .and_then(|doc| doc.pdf.as_ref())
+                    .is_some_and(crate::pdf::PdfView::is_rendering));
         self.native_hosts.poll();
         self.poll();
         self.floating.poll();
@@ -1300,6 +1364,7 @@ impl Tessel {
         #[cfg(windows)]
         self.browser.poll();
         self.flush_gpui_terminal_side_effects();
+        refresh
     }
 
     fn flush_gpui_terminal_side_effects(&mut self) {
@@ -1525,6 +1590,50 @@ impl Tessel {
         self.ensure_native_chat_instances();
         let lower = key.to_ascii_lowercase();
         match target {
+            GpuiFocusTarget::RemoteName
+            | GpuiFocusTarget::RemoteRename
+            | GpuiFocusTarget::RemoteText => {
+                use crate::remote_panel::control::Command;
+                if self.view != View::Remote || self.remote.busy() {
+                    return false;
+                }
+                let snapshot = self.remote.snapshot(&self.state.hosts);
+                let mut text = match target {
+                    GpuiFocusTarget::RemoteName => snapshot.new_name,
+                    GpuiFocusTarget::RemoteRename => {
+                        snapshot.rename.map(|(_, name)| name).unwrap_or_default()
+                    }
+                    _ => snapshot
+                        .document
+                        .and_then(|(_, text, _)| text)
+                        .unwrap_or_default(),
+                };
+                if lower == "enter" && target == GpuiFocusTarget::RemoteRename {
+                    self.remote
+                        .command(Command::ConfirmRename, &self.state.hosts);
+                    return true;
+                }
+                if let Some(paste) = pasted {
+                    text.push_str(&paste);
+                } else if lower == "backspace" {
+                    text.pop();
+                } else if lower == "enter" && target == GpuiFocusTarget::RemoteText {
+                    text.push('\n');
+                } else if let Some(printable) = printable {
+                    text.push_str(printable);
+                } else {
+                    return false;
+                }
+                self.remote.command(
+                    match target {
+                        GpuiFocusTarget::RemoteName => Command::Name(text),
+                        GpuiFocusTarget::RemoteRename => Command::RenameDraft(text),
+                        _ => Command::Edit(text),
+                    },
+                    &self.state.hosts,
+                );
+                true
+            }
             GpuiFocusTarget::None | GpuiFocusTarget::Terminal(_) => false,
             GpuiFocusTarget::TerminalFind(session_id) => {
                 if lower == "enter" {
@@ -2851,6 +2960,7 @@ impl Tessel {
             floating,
             active_document,
             browser,
+            remote: self.remote.snapshot(&self.state.hosts),
             side_panel: GpuiSidePanelSummary {
                 tab: self.state.panels.right_tab,
                 changed_files_count,
@@ -2996,6 +3106,17 @@ impl Tessel {
             .as_mut()
             .map(crate::office::OfficeView::gpui_poll_summary);
         let image_dims = doc.image.as_ref().map(|img| img.size);
+        if doc.gpui_image.is_none() {
+            doc.gpui_image = doc
+                .image
+                .as_ref()
+                .and_then(crate::gpui_pixels::from_color_image);
+        }
+        let media_pixels = doc
+            .pdf
+            .as_ref()
+            .and_then(crate::pdf::PdfView::gpui_image)
+            .or_else(|| doc.gpui_image.clone());
 
         GpuiActiveDocumentSummary {
             doc_index,
@@ -3030,6 +3151,7 @@ impl Tessel {
             pdf_summary,
             office_summary,
             image_dims,
+            media_pixels,
             error: doc.error.clone(),
         }
     }
@@ -3955,6 +4077,11 @@ impl Tessel {
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
         self.ensure_native_chat_instances();
         match action {
+            GpuiAction::Remote(command) => {
+                if self.view == View::Remote {
+                    self.remote.command(command, &self.state.hosts);
+                }
+            }
             GpuiAction::ToggleLeftSidebar => {
                 self.state.panels.left_open = !self.state.panels.left_open;
                 self.save();

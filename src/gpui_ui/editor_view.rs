@@ -19,7 +19,7 @@ use crate::{
 };
 use gpui::{
     Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder, Rgba,
-    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, point,
+    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, img, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -1446,6 +1446,7 @@ fn render_pdf_stage(
                         }))
                         .child("−"),
                 )
+                .child(SharedString::from(format!("{:.0}%", scale * 100.0)))
                 .child(
                     div()
                         .id("pdf-zoom-in")
@@ -1460,25 +1461,33 @@ fn render_pdf_stage(
                         .child("+"),
                 ),
         )
-        .child(
+        .child(render_media_pixels(doc, dims_txt, tokens))
+}
+
+fn render_media_pixels(
+    doc: &GpuiActiveDocumentSummary,
+    fallback: String,
+    tokens: &GpuiThemeTokens,
+) -> impl IntoElement {
+    div()
+        .id("native-media-pixels")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .overflow_scroll()
+        .p(px(16.))
+        .child(if let Some(image) = &doc.media_pixels {
+            let size = image.size(0);
+            img(image.clone())
+                .w(px(size.width.0 as f32))
+                .h(px(size.height.0 as f32))
+                .into_any_element()
+        } else {
             div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .p(px(24.0))
-                .child(
-                    div()
-                        .p(px(20.0))
-                        .rounded(px(tokens.radius_px))
-                        .bg(tokens.surface)
-                        .border_1()
-                        .border_color(tokens.border)
-                        .text_size(px(12.0))
-                        .text_color(tokens.text)
-                        .child(SharedString::from(dims_txt)),
-                ),
-        )
+                .text_color(tokens.text)
+                .child(SharedString::from(fallback))
+                .into_any_element()
+        })
 }
 
 fn render_office_stage(
@@ -1578,19 +1587,14 @@ fn render_image_stage(
     div()
         .size_full()
         .flex()
-        .items_center()
-        .justify_center()
+        .flex_col()
         .child(
             div()
-                .p(px(20.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.surface)
-                .border_1()
-                .border_color(tokens.border)
-                .text_size(px(12.5))
-                .text_color(tokens.text_strong)
-                .child(SharedString::from(label)),
+                .px(px(12.))
+                .py(px(6.))
+                .child(SharedString::from(label.clone())),
         )
+        .child(render_media_pixels(doc, label, tokens))
 }
 
 // ---------------------------------------------------------------------------

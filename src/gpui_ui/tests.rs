@@ -17,6 +17,41 @@ use crate::{
 use serde_json::json;
 
 #[test]
+fn gpui_remote_files_routes_palette_commands_and_editable_fields_to_the_real_panel() {
+    use crate::remote_panel::control::Command;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().to_path_buf()), false, || {});
+    app.apply_gpui_action(GpuiAction::Remote(Command::Name("hidden".into())));
+    assert!(app.gpui_snapshot(960., 640., 4.).remote.new_name.is_empty());
+    app.apply_gpui_action(GpuiAction::PaletteExecute("remote".into()));
+    assert_eq!(
+        app.gpui_snapshot(960., 640., 4.).center_mode,
+        GpuiCenterMode::RemoteSftp
+    );
+    assert!(app.gpui_handle_text_target_key(
+        GpuiFocusTarget::RemoteName,
+        "x",
+        Some("x"),
+        false,
+        None
+    ));
+    assert_eq!(app.gpui_snapshot(960., 640., 4.).remote.new_name, "x");
+    app.apply_gpui_action(GpuiAction::Remote(Command::Connect(usize::MAX)));
+    let state = app.gpui_snapshot(960., 640., 4.);
+    assert!(!state.remote.busy);
+    assert!(state.remote.connected.is_none());
+    app.apply_gpui_action(GpuiAction::SelectWorkTab);
+    assert!(!app.gpui_handle_text_target_key(
+        GpuiFocusTarget::RemoteName,
+        "y",
+        Some("y"),
+        false,
+        None
+    ));
+    assert_eq!(app.gpui_snapshot(960., 640., 4.).remote.new_name, "x");
+}
+
+#[test]
 fn gpui_bridge_initializes_and_mutates_shared_workspace_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let proj_dir = temp.path().join("alpha-repo");

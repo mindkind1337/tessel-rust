@@ -54,6 +54,7 @@ pub(crate) fn render_workspace_body(
         .when(!hide_center, |el| {
             el.child(render_center_column(
                 snapshot,
+                focus_input,
                 tokens,
                 stage_height_px,
                 window,
@@ -73,6 +74,7 @@ pub(crate) fn render_workspace_body(
 
 fn render_center_column(
     snapshot: &GpuiWorkspaceSnapshot,
+    focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     stage_height_px: f32,
     window: &mut Window,
@@ -116,7 +118,8 @@ fn render_center_column(
                             .into_any_element()
                     }
                     GpuiCenterMode::RemoteSftp => {
-                        render_remote_sftp_stage(snapshot, tokens, cx).into_any_element()
+                        render_remote_sftp_stage(snapshot, focus_input, tokens, cx)
+                            .into_any_element()
                     }
                 })
                 .when(snapshot.floating.open, |el| {
@@ -1017,30 +1020,12 @@ fn render_split_divider(
 }
 
 fn render_remote_sftp_stage(
-    _snapshot: &GpuiWorkspaceSnapshot,
+    snapshot: &GpuiWorkspaceSnapshot,
+    focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
-    div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .id("sftp-return-work")
-                .px(px(14.0))
-                .py(px(8.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.surface)
-                .border_1()
-                .border_color(tokens.border)
-                .cursor_pointer()
-                .on_click(cx.listener(|root, _, _, cx| {
-                    root.dispatch(GpuiAction::SelectWorkTab, cx);
-                }))
-                .child("Remote SFTP Browser"),
-        )
+    super::remote_view::render(snapshot, focus_input, tokens, cx)
 }
 
 fn render_right_panel(

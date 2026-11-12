@@ -268,6 +268,7 @@ pub struct PdfView {
     fit: bool,
     last_dims: Option<[usize; 2]>,
     texture: Option<egui::TextureHandle>,
+    gpui_image: Option<Arc<gpui::RenderImage>>,
     pending: Option<Receiver<Result<Rendered, String>>>,
     cancel: Arc<AtomicBool>,
     error: String,
@@ -291,21 +292,34 @@ impl PdfView {
             fit: true,
             last_dims: None,
             texture: None,
+            gpui_image: None,
             pending: None,
             cancel: Arc::new(AtomicBool::new(false)),
             error: String::new(),
         })
     }
 
-    pub fn gpui_poll_summary(&mut self) -> PdfSummaryTuple {
-        if let Some(rx) = &self.pending
-            && let Ok(result) = rx.try_recv()
-        {
+    fn take_completed(&mut self) -> Option<Result<Rendered, String>> {
+        let result = match self.pending.as_ref()?.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err("PDF renderer stopped without returning a page.".into()))
+            }
+        };
+        if result.is_some() {
             self.pending = None;
+        }
+        result
+    }
+
+    pub fn gpui_poll_summary(&mut self) -> PdfSummaryTuple {
+        if let Some(result) = self.take_completed() {
             match result {
                 Ok(page) => {
                     self.pages = page.pages;
                     self.last_dims = Some(page.image.size);
+                    self.gpui_image = crate::gpui_pixels::from_color_image(&page.image);
                 }
                 Err(e) => self.error = e,
             }
@@ -323,6 +337,10 @@ impl PdfView {
         )
     }
 
+    pub(crate) fn is_rendering(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub fn step_page(&mut self, delta: isize) {
         if self.pending.is_some() {
             return;
@@ -337,6 +355,10 @@ impl PdfView {
             self.last_dims = None;
             self.request();
         }
+    }
+
+    pub fn gpui_image(&self) -> Option<Arc<gpui::RenderImage>> {
+        self.gpui_image.clone()
     }
 
     pub fn step_zoom(&mut self, delta: f32) {
@@ -366,16 +388,14 @@ impl PdfView {
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
         self.texture = None;
+        self.gpui_image = None;
         self.error.clear();
         std::thread::spawn(move || {
             let _ = tx.send(render(&bytes, index, scale, &cancel));
         });
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        if let Some(rx) = &self.pending
-            && let Ok(result) = rx.try_recv()
-        {
-            self.pending = None;
+        if let Some(result) = self.take_completed() {
             match result {
                 Ok(page) => {
                     self.pages = page.pages;
@@ -524,6 +544,36 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gpui_keeps_original_page_pixels_and_reports_worker_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.pdf");
+        std::fs::write(&path, fixture()).unwrap();
+        let mut view = PdfView::open(&path).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        view.pending = Some(receiver);
+        let (width, height, pages, bytes) = raster(fixture(), 0, 1.).unwrap();
+        sender
+            .send(Ok(Rendered {
+                image: egui::ColorImage::from_rgba_unmultiplied([width, height], &bytes),
+                pages,
+            }))
+            .unwrap();
+        let summary = view.gpui_poll_summary();
+        assert_eq!(summary.4, Some([width, height]));
+        let image = view.gpui_image().unwrap();
+        assert_eq!(image.as_bytes(0).unwrap().len(), width * height * 4);
+        assert!(Arc::ptr_eq(&image, &view.gpui_image().unwrap()));
+        let (sender, receiver) = mpsc::channel();
+        view.pending = Some(receiver);
+        view.gpui_image = None;
+        view.last_dims = None;
+        drop(sender);
+        let summary = view.gpui_poll_summary();
+        assert!(!summary.3);
+        assert!(summary.5.contains("stopped"));
+        assert!(view.pending.is_none());
+    }
     #[test]
     fn dimensions_and_protocol_are_bounded() {
         assert!(dimensions(f32::INFINITY, 100.0, 1.0).is_err());

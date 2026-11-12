@@ -67,6 +67,7 @@ pub mod floating_terminal_panel;
 pub mod floating_terminal_runtime;
 mod git;
 mod git_result;
+mod gpui_pixels;
 pub mod gpui_ui;
 pub mod help_panel;
 mod host_actions;

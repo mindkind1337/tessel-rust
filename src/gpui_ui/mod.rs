@@ -8,6 +8,7 @@ pub(crate) mod chrome;
 pub mod editor_view;
 pub mod icons;
 pub(crate) mod modals_view;
+pub(crate) mod remote_view;
 pub(crate) mod settings_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
@@ -113,8 +114,8 @@ impl TesselGpuiRoot {
                     .await;
                 let ok = this.update(cx, |root, cx| {
                     let flagged = poll_flag.swap(false, Ordering::AcqRel);
-                    root.app.poll_for_gpui();
-                    if flagged {
+                    let worker_refresh = root.app.poll_for_gpui();
+                    if flagged || worker_refresh {
                         cx.notify();
                     }
                 });
@@ -246,6 +247,13 @@ impl TesselGpuiRoot {
         }
 
         if ctrl && !alt {
+            if key == "s" && self.focus_input == FocusInputTarget::RemoteText {
+                self.dispatch(
+                    GpuiAction::Remote(crate::remote_panel::control::Command::Save),
+                    cx,
+                );
+                return;
+            }
             match key {
                 "k" if !shift => {
                     self.dispatch(GpuiAction::ToggleCommandPalette, cx);

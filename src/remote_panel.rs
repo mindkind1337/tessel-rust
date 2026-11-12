@@ -1,4 +1,5 @@
 use crate::i18n::tr;
+pub(crate) mod control;
 use crate::{
     remote::{self, Action, Entry, Reply},
     workspace::Host,
@@ -46,6 +47,8 @@ impl RemoteDocument {
 }
 #[derive(Default)]
 pub struct RemotePanel {
+    #[cfg(feature = "visual-test")]
+    fixture_mode: bool,
     selected: usize,
     new_name: String,
     rename: Option<(String, String)>,
@@ -76,6 +79,7 @@ impl RemotePanel {
             .expect("fixture PNG");
         let original = bytes.into_inner();
         Self {
+            fixture_mode: true,
             host: Some(Host {
                 alias: "fixture-host".into(),
                 folder: "/demo".into(),
@@ -104,6 +108,11 @@ impl RemotePanel {
         self.pending.is_some() || self.document.as_ref().is_some_and(RemoteDocument::dirty)
     }
     fn request(&mut self, action: Action) {
+        #[cfg(feature = "visual-test")]
+        if self.fixture_mode {
+            self.error = "Synthetic fixture: remote network requests are disabled.".into();
+            return;
+        }
         if self.pending.is_some() {
             return;
         }
