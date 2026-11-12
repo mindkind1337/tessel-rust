@@ -461,10 +461,20 @@ impl TesselGpuiRoot {
             })
             .or_else(|| {
                 self.task_card_input
-                    .focused(window)
+                    .focused(window, cx)
                     .map(FocusInputTarget::TaskCard)
             })
+            .or_else(|| {
+                self.task_card_input
+                    .confirm_focused(window)
+                    .then_some(FocusInputTarget::TaskBoardConfirm)
+            })
             .or_else(|| self.panel_query_inputs.focused(window, cx))
+            .or_else(|| {
+                self.task_card_input
+                    .contains_focus(window, cx)
+                    .then_some(FocusInputTarget::TaskBoardControls)
+            })
             .or_else(|| self.modal_query_input.focused(window, cx))
             .or_else(|| {
                 self.scm_input
@@ -485,6 +495,31 @@ impl TesselGpuiRoot {
                     .focused(window, cx)
                     .then_some(FocusInputTarget::EditorBody)
             });
+        if key == "tab"
+            && !ctrl
+            && !alt
+            && native_target == Some(FocusInputTarget::TaskBoardConfirm)
+        {
+            self.task_card_input.cycle_confirm(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if key == "tab"
+            && !ctrl
+            && !alt
+            && matches!(
+                native_target,
+                Some(FocusInputTarget::TaskCard(_) | FocusInputTarget::TaskBoardControls)
+            )
+        {
+            if shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if let Some(target) = native_target {
             if target == FocusInputTarget::BrowserUrl && key != "enter" && key != "escape" {
                 browser_input::begin_edit(self, cx);
@@ -516,7 +551,10 @@ impl TesselGpuiRoot {
             return;
         }
         if key == "escape"
-            && matches!(native_target, None | Some(FocusInputTarget::TaskCard(_)))
+            && matches!(
+                native_target,
+                None | Some(FocusInputTarget::TaskCard(_) | FocusInputTarget::TaskBoardControls)
+            )
             && self.app.gpui_cancel_task_selection()
         {
             cx.notify();
@@ -711,7 +749,14 @@ impl TesselGpuiRoot {
             }
         }
 
-        if alt && !ctrl && !shift {
+        if alt
+            && !ctrl
+            && !shift
+            && !matches!(
+                native_target,
+                Some(FocusInputTarget::TaskCard(_) | FocusInputTarget::TaskBoardControls)
+            )
+        {
             match key {
                 "left" => {
                     self.focus_input = FocusInputTarget::None;
@@ -1153,15 +1198,43 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
-        let card_was_focused = self.task_card_input.focused(window).is_some();
+        let cancel_card_drag = cx
+            .active_drag()
+            .and_then(|d| d.value.downcast_ref::<task_card_input::Drag>())
+            .is_some_and(|drag| {
+                snapshot.side_panels.task_board.scope != Some(drag.scope)
+                    || !snapshot.side_panels.tasks.iter().any(|t| t.id == drag.id)
+                    || snapshot
+                        .side_panels
+                        .task_board
+                        .edit
+                        .as_ref()
+                        .is_some_and(|e| e.id == drag.id)
+                    || !window.is_window_active()
+                    || self.app.gpui_has_open_modal()
+            });
+        if cancel_card_drag {
+            cx.stop_active_drag(window);
+        }
+        let card_was_focused = self.task_card_input.contains_focus(window, cx)
+            || self.task_card_input.confirm_focused(window);
         self.task_card_input.sync(
             snapshot.side_panels.task_board.scope,
             &snapshot.side_panels.tasks,
             cx,
         );
-        if card_was_focused && self.task_card_input.focused(window).is_none() {
+        if card_was_focused
+            && !self.task_card_input.contains_focus(window, cx)
+            && !self.task_card_input.confirm_focused(window)
+        {
             window.focus(&self.focus_handle, cx);
         }
+        self.task_card_input.sync_dialog(
+            &snapshot.side_panels.task_board,
+            self.app.gpui_has_open_modal(),
+            window,
+            cx,
+        );
         let rename = self
             .app
             .gpui_task_rename_input()
@@ -1366,6 +1439,7 @@ impl Render for TesselGpuiRoot {
                 &snapshot,
                 &self.search_inputs,
                 &self.modal_query_input,
+                &self.task_card_input,
                 focus_input,
                 &tokens,
                 cx,

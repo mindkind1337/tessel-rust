@@ -148,6 +148,8 @@ pub(crate) enum GpuiFocusTarget {
     TaskNewTitle,
     TaskRenameTitle,
     TaskCard(u64),
+    TaskBoardControls,
+    TaskBoardConfirm,
     DashboardQuery,
     TaskHistoryQuery,
     SessionsQuery,
@@ -2311,7 +2313,9 @@ impl Tessel {
             GpuiFocusTarget::ScmCommitMessage => false,
             GpuiFocusTarget::TaskNewTitle
             | GpuiFocusTarget::TaskRenameTitle
-            | GpuiFocusTarget::TaskCard(_) => false,
+            | GpuiFocusTarget::TaskCard(_)
+            | GpuiFocusTarget::TaskBoardControls
+            | GpuiFocusTarget::TaskBoardConfirm => false,
             GpuiFocusTarget::DashboardQuery
             | GpuiFocusTarget::TaskHistoryQuery
             | GpuiFocusTarget::SessionsQuery

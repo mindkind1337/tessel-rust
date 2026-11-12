@@ -95,9 +95,12 @@ impl Input {
                     .on_action(cx.listener(move |root, _: &Cancel, w, cx| {
                         finish(root, &cancel, true, w, cx)
                     }))
-                    .h(px(28.))
-                    .px(px(5.))
-                    .text_size(px(12.))
+                    .h(px(26.))
+                    .px(px(7.))
+                    .border_1()
+                    .border_color(tokens.accent)
+                    .rounded(px(5.))
+                    .text_size(px(12.5))
                     .text_color(tokens.text)
                     .bg(tokens.term),
             )
@@ -186,7 +189,12 @@ fn finish(
     });
     root.focus_input = FocusInputTarget::None;
     if token.2.read(cx).focus_handle(cx).is_focused(w) {
-        w.focus(&root.focus_handle, cx);
+        let card = root
+            .task_card_input
+            .focused(w, cx)
+            .and_then(|id| root.task_card_input.handle(id))
+            .cloned();
+        w.focus(card.as_ref().unwrap_or(&root.focus_handle), cx);
     }
     cx.notify();
 }

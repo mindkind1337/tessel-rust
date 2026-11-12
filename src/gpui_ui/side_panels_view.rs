@@ -1228,7 +1228,7 @@ fn render_tasks_board_tab(
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
-    use super::task_card_input::{Drag, Ghost};
+    use super::task_card_input::{Control, Drag, Ghost, control, head_control};
     use crate::native_task_board::Command;
     let Some(scope) = sp.task_board.scope else {
         return render_empty_note(
@@ -1248,7 +1248,9 @@ fn render_tasks_board_tab(
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(px(8.));
+        .pt(px(6.))
+        .px(px(12.))
+        .pb(px(16.));
     for (column, en, fr, color) in [
         (0, "To do", "À faire", 0x8b93a1),
         (1, "Doing", "En cours", 0x6c9cff),
@@ -1261,82 +1263,86 @@ fn render_tasks_board_tab(
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(px(5.))
+            .gap(px(8.))
+            .pt(px(4.))
+            .px(px(2.))
+            .pb(px(8.))
             .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(accent))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(tokens.text_strong)
                     .child(if french { fr } else { en }),
             )
             .child(
                 div()
+                    .min_w(px(18.))
+                    .px(px(6.))
+                    .rounded(px(9.))
+                    .bg(tokens.surface_3)
+                    .line_height(px(17.))
+                    .text_center()
                     .text_size(px(10.5))
                     .text_color(tokens.text_dim)
                     .child(cards.len().to_string()),
             );
+        let mut tools = div().flex().flex_wrap().gap(px(4.)).ml_auto();
         if column == 3 && !cards.is_empty() {
-            header = header.child(render_chip(
-                "task-selection",
-                if sp.task_board.selecting {
-                    if french { "Annuler" } else { "Cancel" }
-                } else if french {
-                    "Sélectionner"
-                } else {
-                    "Select"
-                }
-                .into(),
-                false,
-                tokens,
-                action(Command::ToggleSelection),
-                cx,
-            ));
             if sp.task_board.selecting {
                 let all = cards.iter().all(|t| sp.task_board.picked.contains(&t.id));
-                header = header.child(render_chip(
-                    "task-all",
-                    if all {
-                        if french { "Aucun" } else { "None" }
-                    } else if french {
-                        "Tout"
-                    } else {
-                        "All"
-                    }
-                    .into(),
-                    all,
-                    tokens,
-                    action(Command::ToggleAll),
-                    cx,
-                ));
-                if !sp.task_board.picked.is_empty() {
-                    header = header.child(render_chip(
+                tools = tools
+                    .child(head_control(
+                        "task-all",
+                        if all {
+                            if french { "Aucun" } else { "None" }
+                        } else if french {
+                            "Tout"
+                        } else {
+                            "All"
+                        }
+                        .into(),
+                        Some(action(Command::ToggleAll)),
+                        false,
+                        tokens,
+                        cx,
+                    ))
+                    .child(head_control(
                         "task-delete-picked",
                         format!(
                             "{} ({})",
                             if french { "Supprimer" } else { "Delete" },
                             sp.task_board.picked.len()
                         ),
+                        (!sp.task_board.picked.is_empty()).then(|| action(Command::RequestDelete)),
+                        true,
+                        tokens,
+                        cx,
+                    ))
+                    .child(head_control(
+                        "task-selection",
+                        if french { "Annuler" } else { "Cancel" }.into(),
+                        Some(action(Command::ToggleSelection)),
                         false,
                         tokens,
-                        action(Command::RequestDelete),
                         cx,
                     ));
-                }
+            } else {
+                tools = tools.child(head_control(
+                    "task-selection",
+                    if french { "Sélectionner" } else { "Select" }.into(),
+                    Some(action(Command::ToggleSelection)),
+                    false,
+                    tokens,
+                    cx,
+                ));
             }
         }
-        let col = div()
-            .p(px(6.))
-            .rounded(px(tokens.radius_px))
-            .bg(tokens.surface)
-            .border_1()
-            .border_color(tokens.border)
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .child(header);
+        header = header.child(tools);
+        let col = div().pt(px(10.)).flex().flex_col().child(header);
         let mut body = div()
             .id(("task-drop", column))
+            .role(gpui::Role::List)
             .debug_selector(move || format!("task-drop-{column}"))
             .flex()
             .flex_col()
@@ -1364,10 +1370,18 @@ fn render_tasks_board_tab(
                 }
             }));
         if cards.is_empty() {
-            body = body.child(render_empty_note(
-                if french { "Aucune tâche" } else { "No tasks" },
-                tokens,
-            ));
+            body = body.child(
+                div()
+                    .p(px(10.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(tokens.border_strong)
+                    .rounded(px(tokens.radius_px))
+                    .text_color(gpui::rgb(0x5d6572))
+                    .text_size(px(11.5))
+                    .text_center()
+                    .child(if french { "Aucune tâche" } else { "No tasks" }),
+            );
         }
         for task in cards {
             let id = task.id;
@@ -1377,12 +1391,19 @@ fn render_tasks_board_tab(
                 .expect("board focus synchronized")
                 .clone();
             let click_focus = focus.clone();
+            let row_focus = focus.clone();
+            let selecting = column == 3 && sp.task_board.selecting;
+            let selected = selecting && sp.task_board.picked.contains(&id);
             let drag = Drag {
                 scope,
                 id,
                 title: task.title.clone(),
             };
             let ghost_tokens = *tokens;
+            let dragging = cx
+                .active_drag()
+                .and_then(|d| d.value.downcast_ref::<Drag>())
+                .is_some_and(|d| d.scope == scope && d.id == id);
             let title = if editing {
                 task_rename_input.render(french, tokens, cx)
             } else {
@@ -1391,7 +1412,9 @@ fn render_tasks_board_tab(
                     .debug_selector(move || format!("task-title-{id}"))
                     .flex_1()
                     .min_w_0()
-                    .text_size(px(11.5))
+                    .text_size(px(12.5))
+                    .line_height(px(17.5))
+                    .whitespace_normal()
                     .text_color(tokens.text_strong)
                     .on_click(cx.listener(move |root, event: &gpui::ClickEvent, w, cx| {
                         w.focus(&click_focus, cx);
@@ -1405,19 +1428,19 @@ fn render_tasks_board_tab(
                             );
                         }
                     }))
-                    .on_drag(drag, move |drag, _, _, cx| {
-                        cx.new(|_| Ghost {
-                            title: drag.title.clone(),
-                            tokens: ghost_tokens,
-                        })
-                    })
                     .child(task.title.clone())
                     .into_any_element()
             };
             let mut row = div()
                 .id(("task-card", id))
+                .role(gpui::Role::ListItem)
+                .aria_label(task.title.clone())
+                .aria_keyshortcuts("Alt+ArrowLeft Alt+ArrowRight")
+                .debug_selector(move || format!("task-card-{id}"))
                 .track_focus(&focus)
                 .tab_stop(!editing)
+                .flex_shrink_0()
+                .when(dragging, |r| r.opacity(0.45))
                 .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, w, cx| {
                     if !focus.is_focused(w) {
                         return;
@@ -1441,49 +1464,98 @@ fn render_tasks_board_tab(
                         }
                     }
                 }))
-                .pl(px(7.))
-                .pr(px(6.))
-                .py(px(5.))
-                .rounded(px(tokens.radius_px - 1.))
-                .bg(tokens.panel)
-                .border_l_2()
-                .border_color(accent)
+                .p(px(10.))
+                .rounded(px(tokens.radius_px))
+                .bg(if selected {
+                    tokens.accent_soft_bg
+                } else {
+                    tokens.surface_2
+                })
+                .border_1()
+                .border_color(if selected {
+                    tokens.accent
+                } else {
+                    tokens.border
+                })
+                .border_l(px(3.))
+                .relative()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(3.))
+                        .bg(accent),
+                )
                 .flex()
-                .items_center()
-                .gap(px(4.));
-            if column == 3 && sp.task_board.selecting {
-                row = row.child(render_chip(
-                    format!("task-pick-{id}"),
-                    if sp.task_board.picked.contains(&id) {
-                        "☑"
-                    } else {
-                        "☐"
+                .items_start()
+                .gap(px(6.))
+                .on_click(cx.listener(move |root, _, w, cx| {
+                    if !editing {
+                        w.focus(&row_focus, cx);
+                        if selecting {
+                            root.dispatch_action(
+                                GpuiAction::NativeTaskBoard {
+                                    scope,
+                                    command: Command::TogglePick(id),
+                                },
+                                cx,
+                            );
+                        }
                     }
-                    .into(),
-                    sp.task_board.picked.contains(&id),
-                    tokens,
+                }))
+                .when(!editing, |row| {
+                    row.cursor(gpui::CursorStyle::OpenHand)
+                        .on_drag(drag, move |drag, _, _, cx| {
+                            cx.new(|_| Ghost {
+                                title: drag.title.clone(),
+                                tokens: ghost_tokens,
+                            })
+                        })
+                });
+
+            if selecting {
+                row = row.child(control(
+                    format!("task-pick-{id}"),
+                    if french {
+                        "Sélectionner la tâche"
+                    } else {
+                        "Select task"
+                    },
+                    Control::Pick(selected),
                     action(Command::TogglePick(id)),
+                    tokens,
                     cx,
                 ));
             }
             row = row.child(title);
             if column == 0 && !editing {
-                row = row.child(render_chip(
+                row = row.child(control(
                     format!("task-rename-{id}"),
-                    if french { "Renommer" } else { "Rename" }.into(),
-                    false,
-                    tokens,
+                    if french {
+                        "Renommer la tâche"
+                    } else {
+                        "Rename task"
+                    },
+                    Control::Rename,
                     action(Command::BeginRename(id)),
+                    tokens,
                     cx,
                 ));
             }
-            if !editing {
-                row = row.child(render_chip(
+            if !selecting {
+                row = row.child(control(
                     format!("task-delete-{id}"),
-                    "×".into(),
-                    false,
-                    tokens,
+                    if french {
+                        "Supprimer la tâche"
+                    } else {
+                        "Delete task"
+                    },
+                    Control::Delete,
                     action(Command::RequestDeleteOne(id)),
+                    tokens,
                     cx,
                 ));
             }
@@ -1492,8 +1564,14 @@ fn render_tasks_board_tab(
         columns = columns.child(col.child(body));
     }
     div()
+        .id("native-task-board")
+        .track_focus(
+            task_card_input
+                .board_handle()
+                .expect("board focus synchronized"),
+        )
+        .tab_stop(false)
         .size_full()
-        .p(px(8.))
         .flex()
         .flex_col()
         .gap(px(6.))

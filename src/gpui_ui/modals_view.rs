@@ -39,6 +39,7 @@ pub(crate) fn render_active_modals_and_popovers(
     snapshot: &GpuiWorkspaceSnapshot,
     search_inputs: &super::search_inputs::Inputs,
     modal_query: &super::modal_query_input::Input,
+    task_card_input: &super::task_card_input::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -114,7 +115,18 @@ pub(crate) fn render_active_modals_and_popovers(
         layers.push(render_prompt_modal(pm, focus_input, french, tokens, cx));
     }
     if let Some(cm) = &m.confirm_modal {
-        layers.push(render_confirm_modal(cm, french, tokens, cx));
+        layers.push(render_confirm_modal(
+            cm,
+            snapshot
+                .side_panels
+                .task_board
+                .pending_delete
+                .as_ref()
+                .map(|_| task_card_input),
+            french,
+            tokens,
+            cx,
+        ));
     }
     if m.dev_update_open {
         layers.push(render_dev_update_modal(m, french, tokens, cx));
@@ -2649,16 +2661,30 @@ fn render_prompt_modal(
 
 fn render_confirm_modal(
     cm: &crate::app::gpui_bridge::GpuiConfirmModalSnapshot,
+    task_card_input: Option<&super::task_card_input::Inputs>,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    let button = |id, label, primary, action, cx: &mut Context<TesselGpuiRoot>| {
+        if let Some(handle) = task_card_input.and_then(|i| i.confirm_handle(usize::from(primary))) {
+            super::task_card_input::confirm_control(id, label, primary, handle, action, tokens, cx)
+        } else {
+            modal_btn(id, label, primary, tokens, action, cx)
+        }
+    };
     modal_backdrop(
         "gpui-confirm-backdrop",
         tokens,
         GpuiAction::CancelConfirmModal,
         div()
             .id("gpui-confirm-card")
+            .when(task_card_input.is_some(), |d| {
+                d.role(gpui::Role::AlertDialog)
+                    .aria_modal(true)
+                    .aria_label(cm.title.clone())
+                    .aria_description(cm.body.clone())
+            })
             .w(px(440.0))
             .p(px(14.0))
             .rounded(px(tokens.radius_px + 3.0))
@@ -2691,29 +2717,26 @@ fn render_confirm_modal(
                     .flex()
                     .justify_end()
                     .gap(px(6.0))
-                    .child(modal_btn(
+                    .child(button(
                         "gpui-confirm-cancel",
                         if french { "Annuler" } else { "Cancel" }.to_owned(),
                         false,
-                        tokens,
                         GpuiAction::CancelConfirmModal,
                         cx,
                     ))
                     .when_some(cm.secondary_label.clone(), |el, sec| {
-                        el.child(modal_btn(
+                        el.child(button(
                             "gpui-confirm-secondary",
                             sec,
                             false,
-                            tokens,
                             GpuiAction::ConfirmModalSecondary,
                             cx,
                         ))
                     })
-                    .child(modal_btn(
+                    .child(button(
                         "gpui-confirm-primary",
                         cm.confirm_label.clone(),
                         true,
-                        tokens,
                         GpuiAction::ConfirmModalPrimary,
                         cx,
                     )),
