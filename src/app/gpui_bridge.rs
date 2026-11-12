@@ -514,6 +514,18 @@ pub(crate) struct GpuiConfirmModalSnapshot {
     pub danger: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum NativeSearchKind {
+    Palette,
+    Finder,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeSearchScope {
+    pub kind: NativeSearchKind,
+    pub generation: u64,
+    pub project: Option<u64>,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiModalsSnapshot {
@@ -904,6 +916,21 @@ pub(crate) enum GpuiAction {
     ApplyDevUpdate,
     CopyGitPullCommand,
     // Modals, Popovers & Navigation
+    NativeSearchEdit {
+        scope: NativeSearchScope,
+        base: String,
+        text: String,
+    },
+    NativeSearchStep {
+        scope: NativeSearchScope,
+        delta: isize,
+    },
+    NativeSearchAccept {
+        scope: NativeSearchScope,
+        query: String,
+        choice: Option<String>,
+        insert: bool,
+    },
     ToggleCommandPalette,
     PaletteSetQuery(String),
     PaletteStep(isize),
@@ -1519,12 +1546,9 @@ impl Tessel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn gpui_is_palette_open(&self) -> bool {
         self.command_palette.open
-    }
-
-    pub(crate) fn gpui_is_finder_open(&self) -> bool {
-        self.finder.is_open()
     }
 
     pub(crate) fn gpui_escape_clears_modal_search(&mut self) -> bool {
@@ -1539,10 +1563,38 @@ impl Tessel {
         false
     }
 
+    pub(crate) fn gpui_native_search_input(&self) -> Option<(NativeSearchScope, &str)> {
+        if self.gpui_has_non_search_modal() {
+            return None;
+        }
+        let (kind, generation, text) = if let Some((generation, text)) = self.finder.native_input()
+        {
+            (NativeSearchKind::Finder, generation, text)
+        } else if self.command_palette.open {
+            (
+                NativeSearchKind::Palette,
+                self.command_palette.generation,
+                self.command_palette.query.as_str(),
+            )
+        } else {
+            return None;
+        };
+        Some((
+            NativeSearchScope {
+                kind,
+                generation,
+                project: self.state.active_project,
+            },
+            text,
+        ))
+    }
+
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
+        self.command_palette.open || self.finder.is_open() || self.gpui_has_non_search_modal()
+    }
+
+    fn gpui_has_non_search_modal(&self) -> bool {
         self.overlay.is_some()
-            || self.command_palette.open
-            || self.finder.is_open()
             || self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
@@ -1577,6 +1629,11 @@ impl Tessel {
     ) -> Option<crate::remote_panel::control::Snapshot> {
         (self.view == View::Remote && !self.gpui_has_open_modal())
             .then(|| self.remote.input_snapshot())
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_finder_input_fixture(&mut self, root: std::path::PathBuf) {
+        self.finder = crate::finder_panel::Finder::fixture(root);
     }
 
     #[cfg(all(test, feature = "visual-test"))]
@@ -2000,39 +2057,7 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::PaletteQuery => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::PaletteExecuteSelected);
-                    return true;
-                }
-                let mut cur = self.command_palette.query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::PaletteSetQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
-            GpuiFocusTarget::FinderQuery => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::FinderAccept {
-                        idx: None,
-                        insert: shift,
-                    });
-                    return true;
-                }
-                let mut cur = self
-                    .finder
-                    .gpui_snapshot()
-                    .map(|s| s.query)
-                    .unwrap_or_default();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::FinderSetQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
             GpuiFocusTarget::HelpQuery => {
                 let mut cur = self.gpui_extra.help_query.clone();
                 if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
@@ -5556,13 +5581,68 @@ impl Tessel {
                         "Copied \"git pull --ff-only\".".into()
                     });
             }
-            GpuiAction::ToggleCommandPalette => {
-                self.command_palette.open = !self.command_palette.open;
-                if self.command_palette.open {
-                    self.command_palette.query.clear();
-                    self.command_palette.index = 0;
+            GpuiAction::NativeSearchEdit { scope, base, text } => {
+                if self.gpui_native_search_input() == Some((scope, base.as_str()))
+                    && (scope.kind != NativeSearchKind::Finder
+                        || text.chars().take(257).count() <= 256)
+                {
+                    match scope.kind {
+                        NativeSearchKind::Palette => self.command_palette.set_query(text),
+                        NativeSearchKind::Finder => self.finder.gpui_set_query(text),
+                    }
                 }
             }
+            GpuiAction::NativeSearchStep { scope, delta } => {
+                if self.gpui_native_search_input().map(|v| v.0) == Some(scope) {
+                    self.apply_gpui_action(match scope.kind {
+                        NativeSearchKind::Palette => GpuiAction::PaletteStep(delta),
+                        NativeSearchKind::Finder => GpuiAction::FinderStep(delta),
+                    });
+                }
+            }
+            GpuiAction::NativeSearchAccept {
+                scope,
+                query,
+                choice,
+                insert,
+            } => {
+                if self.gpui_native_search_input() != Some((scope, query.as_str())) {
+                    return;
+                }
+                match scope.kind {
+                    NativeSearchKind::Palette => {
+                        if let Some(id) = choice {
+                            let commands = self.build_palette_commands(
+                                self.state.theme.unwrap_or(ThemeId::Classic),
+                            );
+                            if crate::palette::filter_palette_commands(&commands, &query)
+                                .iter()
+                                .any(|r| r.command.id == id)
+                            {
+                                self.apply_gpui_action(GpuiAction::PaletteExecute(id));
+                            }
+                        } else {
+                            self.apply_gpui_action(GpuiAction::PaletteExecuteSelected);
+                        }
+                    }
+                    NativeSearchKind::Finder => {
+                        let idx = if let Some(relative) = choice {
+                            let Some(snapshot) = self.finder.gpui_snapshot() else {
+                                return;
+                            };
+                            let Some(index) = snapshot.results.iter().position(|r| *r == relative)
+                            else {
+                                return;
+                            };
+                            Some(index)
+                        } else {
+                            None
+                        };
+                        self.apply_gpui_action(GpuiAction::FinderAccept { idx, insert });
+                    }
+                }
+            }
+            GpuiAction::ToggleCommandPalette => self.command_palette.toggle(),
             GpuiAction::PaletteSetQuery(q) => {
                 self.command_palette.query = q;
                 self.command_palette.index = 0;

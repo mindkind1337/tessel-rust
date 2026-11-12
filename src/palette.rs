@@ -101,6 +101,7 @@ pub fn filter_palette_commands(commands: &[PaletteCommand], query: &str) -> Vec<
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandPaletteState {
+    pub generation: u64,
     pub open: bool,
     pub query: String,
     pub index: usize,
@@ -110,6 +111,10 @@ impl CommandPaletteState {
     pub fn toggle(&mut self) {
         self.open = !self.open;
         if self.open {
+            self.generation = self
+                .generation
+                .checked_add(1)
+                .expect("palette generation exhausted");
             self.query.clear();
             self.index = 0;
         }

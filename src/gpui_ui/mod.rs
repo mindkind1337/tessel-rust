@@ -15,6 +15,7 @@ pub(crate) mod modals_view;
 mod question_inputs;
 pub(crate) mod remote_inputs;
 pub(crate) mod remote_view;
+mod search_inputs;
 pub(crate) mod settings_view;
 pub(crate) mod sheet_view;
 pub(crate) mod shell;
@@ -90,6 +91,7 @@ pub(crate) struct TesselGpuiRoot {
     remote_inputs: remote_inputs::Inputs,
     editor_input: editor_input::Input,
     chat_inputs: chat_inputs::Inputs,
+    search_inputs: search_inputs::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -119,6 +121,15 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new("enter", search_inputs::Accept, Some("TesselNativeSearch")),
+            gpui::KeyBinding::new(
+                "shift-enter",
+                search_inputs::Insert,
+                Some("TesselNativeSearch"),
+            ),
+            gpui::KeyBinding::new("up", search_inputs::Previous, Some("TesselNativeSearch")),
+            gpui::KeyBinding::new("down", search_inputs::Next, Some("TesselNativeSearch")),
+            gpui::KeyBinding::new("escape", search_inputs::Dismiss, Some("TesselNativeSearch")),
             gpui::KeyBinding::new(
                 "enter",
                 question_inputs::SubmitAnswers,
@@ -174,6 +185,7 @@ impl TesselGpuiRoot {
             remote_inputs: remote_inputs::Inputs::default(),
             editor_input: editor_input::Input::default(),
             chat_inputs: chat_inputs::Inputs::default(),
+            search_inputs: search_inputs::Inputs::default(),
             _poller_task: poller_task,
         }
     }
@@ -213,13 +225,11 @@ impl TesselGpuiRoot {
                     | crate::remote_panel::control::Command::RenameDraft(_)
             )
         );
+        let search_toggle = matches!(
+            &action,
+            GpuiAction::ToggleCommandPalette | GpuiAction::OpenFinder
+        );
         match &action {
-            GpuiAction::ToggleCommandPalette => {
-                self.focus_input = FocusInputTarget::PaletteQuery;
-            }
-            GpuiAction::OpenFinder => {
-                self.focus_input = FocusInputTarget::FinderQuery;
-            }
             GpuiAction::OpenHelp => {
                 self.focus_input = FocusInputTarget::HelpQuery;
             }
@@ -244,6 +254,19 @@ impl TesselGpuiRoot {
             _ => {}
         }
         self.app.apply_gpui_action(action);
+        if search_toggle {
+            self.focus_input =
+                self.app
+                    .gpui_native_search_input()
+                    .map_or(FocusInputTarget::None, |(scope, _)| match scope.kind {
+                        crate::app::gpui_bridge::NativeSearchKind::Palette => {
+                            FocusInputTarget::PaletteQuery
+                        }
+                        crate::app::gpui_bridge::NativeSearchKind::Finder => {
+                            FocusInputTarget::FinderQuery
+                        }
+                    });
+        }
         if remote_edit && let Some(snapshot) = self.app.gpui_remote_input_snapshot() {
             self.remote_inputs.acknowledge(&snapshot);
         }
@@ -266,8 +289,9 @@ impl TesselGpuiRoot {
         let alt = ks.modifiers.alt;
         let key = ks.key.as_str();
         let native_target = self
-            .chat_inputs
+            .search_inputs
             .focused(window, cx)
+            .or_else(|| self.chat_inputs.focused(window, cx))
             .or_else(|| self.remote_inputs.focused(window, cx))
             .or_else(|| {
                 self.editor_input
@@ -288,6 +312,14 @@ impl TesselGpuiRoot {
         if key == "f1" {
             self.dispatch(GpuiAction::OpenHelp, cx);
             return;
+        }
+        if key == "escape"
+            && matches!(
+                native_target,
+                Some(FocusInputTarget::PaletteQuery | FocusInputTarget::FinderQuery)
+            )
+        {
+            return; // The scoped native Dismiss action handles IME and closing.
         }
         if key == "escape" {
             if self.app.gpui_escape_clears_modal_search() {
@@ -452,58 +484,14 @@ impl TesselGpuiRoot {
             }
         }
 
-        if self.app.gpui_is_palette_open() {
-            match key {
-                "up" | "arrowup" => {
-                    self.dispatch(GpuiAction::PaletteStep(-1), cx);
-                    return;
-                }
-                "down" | "arrowdown" => {
-                    self.dispatch(GpuiAction::PaletteStep(1), cx);
-                    return;
-                }
-                "enter" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::PaletteExecuteSelected, cx);
-                    return;
-                }
-                _ => {}
+        if let Some((scope, _)) = self.app.gpui_native_search_input() {
+            if let Some(input) = self.search_inputs.get(scope.kind) {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
             }
+            return;
         }
-
-        if self.app.gpui_is_finder_open() {
-            match key {
-                "up" | "arrowup" => {
-                    self.dispatch(GpuiAction::FinderStep(-1), cx);
-                    return;
-                }
-                "down" | "arrowdown" => {
-                    self.dispatch(GpuiAction::FinderStep(1), cx);
-                    return;
-                }
-                "enter" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(
-                        GpuiAction::FinderAccept {
-                            idx: None,
-                            insert: shift,
-                        },
-                        cx,
-                    );
-                    return;
-                }
-                _ => {}
-            }
-        }
-
         if self.app.gpui_has_open_modal() {
-            let modal_target = if self.app.gpui_is_palette_open() {
-                FocusInputTarget::PaletteQuery
-            } else if self.app.gpui_is_finder_open() {
-                FocusInputTarget::FinderQuery
-            } else {
-                self.focus_input
-            };
+            let modal_target = self.focus_input;
             if !matches!(
                 modal_target,
                 FocusInputTarget::None | FocusInputTarget::Terminal(_)
@@ -776,6 +764,14 @@ impl Render for TesselGpuiRoot {
                 window.focus(&input.read(cx).focus_handle(cx), cx);
             }
         }
+        if let Some((scope, text)) = self.app.gpui_native_search_input() {
+            self.search_inputs.sync(scope, text, cx);
+            if let Some(input) = self.search_inputs.get(scope.kind) {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            }
+        } else if self.search_inputs.focused(window, cx).is_some() {
+            window.focus(&self.focus_handle, cx);
+        }
         let native_doc = snapshot.active_document.as_ref().filter(|doc| {
             snapshot.center_mode == GpuiCenterMode::DocumentEditor
                 && !doc.preview_mode
@@ -894,6 +890,7 @@ impl Render for TesselGpuiRoot {
             )
             .children(modals_view::render_active_modals_and_popovers(
                 &snapshot,
+                &self.search_inputs,
                 focus_input,
                 &tokens,
                 cx,

@@ -123,6 +123,7 @@ mod tests {
     fn filtered_catalog_selection_survives_shrinking_and_held_enter_cannot_run_again() {
         let ctx = egui::Context::default();
         let mut state = CommandPaletteState {
+            generation: 0,
             open: true,
             query: "backend".into(),
             index: 99,
@@ -191,6 +192,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let mut state = CommandPaletteState {
+            generation: 0,
             open: true,
             query: "  xyz-unmatched  ".into(),
             index: 0,

@@ -27,6 +27,7 @@ pub enum FinderAction {
 
 #[derive(Default)]
 pub struct Finder {
+    generation: u64,
     open: bool,
     focused: bool,
     root: PathBuf,
@@ -62,6 +63,10 @@ impl Finder {
             ..Default::default()
         }
     }
+    pub(crate) fn native_input(&self) -> Option<(u64, &str)> {
+        self.open.then_some((self.generation, self.state.query()))
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -77,6 +82,10 @@ impl Finder {
         self.error.clear();
         self.focused = false;
         self.open = true;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("finder generation exhausted");
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let worker_root = self.root.clone();

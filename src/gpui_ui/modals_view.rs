@@ -37,6 +37,7 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
 
 pub(crate) fn render_active_modals_and_popovers(
     snapshot: &GpuiWorkspaceSnapshot,
+    search_inputs: &super::search_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -64,10 +65,10 @@ pub(crate) fn render_active_modals_and_popovers(
         layers.push(render_status_popover(snapshot, item_id, tokens, cx));
     }
     if m.palette_open {
-        layers.push(render_command_palette(m, focus_input, french, tokens, cx));
+        layers.push(render_command_palette(m, search_inputs, french, tokens, cx));
     }
     if m.finder.is_some() {
-        layers.push(render_file_finder(m, focus_input, french, tokens, cx));
+        layers.push(render_file_finder(m, search_inputs, french, tokens, cx));
     }
     if m.help_open {
         layers.push(render_help_modal(m, focus_input, french, tokens, cx));
@@ -127,7 +128,7 @@ pub(crate) fn render_active_modals_and_popovers(
 
 fn render_command_palette(
     m: &GpuiModalsSnapshot,
-    focus_input: FocusInputTarget,
+    inputs: &super::search_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -154,6 +155,8 @@ fn render_command_palette(
         }
         let selected = idx == m.palette_selected;
         let cmd_id = row.command.id.clone();
+        let scope = inputs.scope(crate::app::gpui_bridge::NativeSearchKind::Palette);
+        let query = m.palette_query.clone();
         list = list.child(
             div()
                 .id(("gpui-palette-row", idx as u64))
@@ -171,7 +174,9 @@ fn render_command_palette(
                 .gap(px(8.0))
                 .hover(|s| s.bg(tokens.surface_2))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.dispatch_action(GpuiAction::PaletteExecute(cmd_id.clone()), cx);
+                    if let Some(scope) = scope {
+                        super::search_inputs::choose(this, scope, &query, &cmd_id, cx);
+                    }
                 }))
                 .child(
                     div()
@@ -214,16 +219,15 @@ fn render_command_palette(
             .flex_col()
             .gap(px(8.0))
             .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-            .child(render_focus_input_box(
-                "gpui-palette-input",
-                FocusInputTarget::PaletteQuery,
-                focus_input == FocusInputTarget::PaletteQuery,
+            .child(inputs.render(
+                crate::app::gpui_bridge::NativeSearchKind::Palette,
                 &m.palette_query,
                 if french {
                     "Rechercher un panneau, projet ou commande…"
                 } else {
                     "Type a command, pane, or workspace…"
                 },
+                french,
                 tokens,
                 cx,
             ))
@@ -239,7 +243,7 @@ fn render_command_palette(
 
 fn render_file_finder(
     m: &GpuiModalsSnapshot,
-    focus_input: FocusInputTarget,
+    inputs: &super::search_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -258,6 +262,9 @@ fn render_file_finder(
 
     for (idx, rel) in f.results.iter().enumerate() {
         let sel = idx == f.selected;
+        let scope = inputs.scope(crate::app::gpui_bridge::NativeSearchKind::Finder);
+        let query = f.query.clone();
+        let relative = rel.clone();
         list = list.child(
             div()
                 .id(("gpui-finder-row", idx as u64))
@@ -275,13 +282,9 @@ fn render_file_finder(
                 .truncate()
                 .hover(|s| s.bg(tokens.surface_2))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.dispatch_action(
-                        GpuiAction::FinderAccept {
-                            idx: Some(idx),
-                            insert: false,
-                        },
-                        cx,
-                    );
+                    if let Some(scope) = scope {
+                        super::search_inputs::choose(this, scope, &query, &relative, cx);
+                    }
                 }))
                 .child(SharedString::from(rel.clone())),
         );
@@ -303,16 +306,15 @@ fn render_file_finder(
             .flex_col()
             .gap(px(8.0))
             .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-            .child(render_focus_input_box(
-                "gpui-finder-input",
-                FocusInputTarget::FinderQuery,
-                focus_input == FocusInputTarget::FinderQuery,
+            .child(inputs.render(
+                crate::app::gpui_bridge::NativeSearchKind::Finder,
                 &f.query,
                 if french {
                     "Aller à un fichier du projet…"
                 } else {
                     "Jump to a project file…"
                 },
+                french,
                 tokens,
                 cx,
             ))
