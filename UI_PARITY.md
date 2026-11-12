@@ -369,3 +369,6 @@ capabilities. Removing a saved alias does not hide an active connection's discon
 control. Failure dismissals free retained entries. It does not claim that existing
 terminals, editors or file lists have moved to the native daemon. Native French screenshots at normal and compact sizes have been inspected using
 an isolated synthetic profile. Full gate 7B/7C integration remains pending.
+
+
+GPUI task-board follow-up: inline rename now uses native EditableText with selection, clipboard, undo, IME, Enter/blur save and Escape cancellation. Only To do cards may be renamed; concurrent title changes follow the reference last-write-wins rule while the card stays in To do. Done selection, All/None, Escape and confirmed bulk deletion use project/generation-scoped actions. Confirmation text is EN/FR reference text; current ids are rechecked and cards moved out of Done survive. This does not accept full board visual parity: the current reference stacks status sections at all widths (style.css:1483-1568); Compatibility still uses four columns when wide. That divergence, drag/drop and remaining keyboard/card presentation differences still require work.

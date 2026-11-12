@@ -59,6 +59,7 @@ pub(crate) struct GpuiExtraUiState {
     pub settings_search: String,
     pub scm_drafts: crate::scm_drafts::Drafts,
     pub new_task_title: String,
+    pub task_board: crate::native_task_board::State,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
     pub new_custom_agent_name: String,
@@ -99,6 +100,7 @@ impl Default for GpuiExtraUiState {
             settings_search: String::new(),
             scm_drafts: crate::scm_drafts::Drafts::default(),
             new_task_title: String::new(),
+            task_board: Default::default(),
             new_ssh_alias: String::new(),
             new_ssh_folder: String::new(),
             new_custom_agent_name: String::new(),
@@ -144,6 +146,7 @@ pub(crate) enum GpuiFocusTarget {
     ExplorerFilter,
     ScmCommitMessage,
     TaskNewTitle,
+    TaskRenameTitle,
     DashboardQuery,
     TaskHistoryQuery,
     SessionsQuery,
@@ -437,6 +440,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub commit_files: BTreeMap<String, Vec<crate::side_panels_model::CommitChangedFile>>,
     pub tasks: Vec<crate::workspace::Task>,
     pub new_task_title: String,
+    pub task_board: crate::native_task_board::State,
     pub history_window: crate::side_panels_model::TaskHistoryFilter,
     pub history_sort: crate::side_panels_model::TaskHistorySort,
     pub history_current_project_only: bool,
@@ -940,6 +944,10 @@ pub(crate) enum GpuiAction {
         base: String,
     },
     TasksBoard(crate::tasks_board_panel::TasksBoardAction),
+    NativeTaskBoard {
+        scope: crate::native_task_board::Scope,
+        command: crate::native_task_board::Command,
+    },
     SetTaskHistoryWindow(crate::side_panels_model::TaskHistoryFilter),
     SetTaskHistorySort(crate::side_panels_model::TaskHistorySort),
     ToggleTaskHistoryCurrentProject,
@@ -1895,6 +1903,7 @@ impl Tessel {
             || self.pending_scm_discard.is_some()
             || self.pending_delete_worktree.is_some()
             || self.pending_agent_install.is_some()
+            || self.gpui_extra.task_board.pending_delete.is_some()
             || self.pending_transcript_trash.is_some()
             || self.file_action.is_some()
             || self.dev_update_dialog_open
@@ -2299,7 +2308,7 @@ impl Tessel {
             GpuiFocusTarget::HelpQuery => false,
             GpuiFocusTarget::ExplorerFilter => false,
             GpuiFocusTarget::ScmCommitMessage => false,
-            GpuiFocusTarget::TaskNewTitle => false,
+            GpuiFocusTarget::TaskNewTitle | GpuiFocusTarget::TaskRenameTitle => false,
             GpuiFocusTarget::DashboardQuery
             | GpuiFocusTarget::TaskHistoryQuery
             | GpuiFocusTarget::SessionsQuery
@@ -2742,6 +2751,7 @@ impl Tessel {
         grid_room_h: f32,
         divider_px: f32,
     ) -> GpuiWorkspaceSnapshot {
+        self.reconcile_native_task_board();
         use crate::status_metrics::should_keep_awake;
         use crate::view_tabs_browser_model::{OpenTabLabelInput, base_tab_label};
 
@@ -3899,6 +3909,7 @@ impl Tessel {
             },
             tasks,
             new_task_title: self.gpui_extra.new_task_title.clone(),
+            task_board: self.gpui_extra.task_board.clone(),
             history_window: self.side_panels_ui.history_window,
             history_sort: self.side_panels_ui.history_sort,
             history_current_project_only: self.side_panels_ui.history_current_project_only,
@@ -4386,6 +4397,41 @@ impl Tessel {
                 secondary_label: None,
                 danger: true,
             })
+        } else if let Some((ids, group)) = &self.gpui_extra.task_board.pending_delete {
+            let title = if *group {
+                match (french, ids.len()) {
+                    (true, 1) => "Supprimer 1 tâche ?".into(),
+                    (true, n) => format!("Supprimer {n} tâches ?"),
+                    (false, 1) => "Delete 1 task?".into(),
+                    (false, n) => format!("Delete {n} tasks?"),
+                }
+            } else {
+                let name = self
+                    .state
+                    .tasks
+                    .iter()
+                    .find(|t| ids.contains(&t.id))
+                    .map(|t| t.title.as_str())
+                    .unwrap_or_default();
+                if french {
+                    format!("Supprimer « {name} » ?")
+                } else {
+                    format!("Delete \"{name}\"?")
+                }
+            };
+            Some(GpuiConfirmModalSnapshot {
+                title,
+                body: match (french, group) {
+                    (true, true) => "Les cartes sont retirées du tableau.",
+                    (true, false) => "La carte est retirée du tableau.",
+                    (false, true) => "The cards are removed from the board.",
+                    (false, false) => "The card is removed from the board.",
+                }
+                .into(),
+                confirm_label: if french { "Supprimer" } else { "Delete" }.into(),
+                secondary_label: None,
+                danger: false,
+            })
         } else if let Some(entry) = &self.pending_transcript_trash {
             Some(GpuiConfirmModalSnapshot {
                 title: tr("Move conversation to Recycle Bin?").into(),
@@ -4521,11 +4567,50 @@ impl Tessel {
         }
     }
 
+    fn reconcile_native_task_board(&mut self) {
+        let project = (self.state.panels.right_open
+            && self.state.panels.right_tab == SideTab::Tasks)
+            .then_some(self.state.active_project)
+            .flatten()
+            .filter(|id| self.state.projects.iter().any(|p| p.id == *id));
+        self.gpui_extra
+            .task_board
+            .reconcile(project, &self.state.tasks);
+    }
+    pub(crate) fn gpui_cancel_task_selection(&mut self) -> bool {
+        self.reconcile_native_task_board();
+        if self.gpui_has_open_modal() || !self.gpui_extra.task_board.selecting {
+            return false;
+        }
+        if let Some(scope) = self.gpui_extra.task_board.scope {
+            self.apply_gpui_action(GpuiAction::NativeTaskBoard {
+                scope,
+                command: crate::native_task_board::Command::ToggleSelection,
+            });
+            return true;
+        }
+        false
+    }
+    pub(crate) fn gpui_task_rename_input(
+        &self,
+    ) -> Option<(crate::native_task_board::Scope, u64, &str)> {
+        if self.gpui_has_open_modal() {
+            return None;
+        }
+        let board = &self.gpui_extra.task_board;
+        Some((
+            board.scope?,
+            board.edit.as_ref()?.serial,
+            &board.edit.as_ref()?.draft,
+        ))
+    }
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
+        self.reconcile_native_task_board();
         let overlay = self.overlay;
         let explorer = self.gpui_explorer_owner();
         let panel_query = self.gpui_panel_query_context();
         self.apply_gpui_action_inner(action);
+        self.reconcile_native_task_board();
         if panel_query != self.gpui_panel_query_context() {
             self.gpui_extra.panel_query_generation = self
                 .gpui_extra
@@ -5703,6 +5788,21 @@ impl Tessel {
                     }
                 }
             }
+            GpuiAction::NativeTaskBoard { scope, command } => {
+                if (!self.gpui_has_open_modal()
+                    || matches!(
+                        command,
+                        crate::native_task_board::Command::ConfirmDelete
+                            | crate::native_task_board::Command::CancelDelete
+                    ))
+                    && let Some(action) =
+                        self.gpui_extra
+                            .task_board
+                            .apply(scope, command, &self.state.tasks)
+                {
+                    self.apply_tasks_board_action(scope.project, action);
+                }
+            }
             GpuiAction::TasksBoard(tba) => {
                 if let Some(pid) = self.state.active_project {
                     self.apply_tasks_board_action(pid, tba);
@@ -6276,6 +6376,13 @@ impl Tessel {
                 self.open_settings_by_page_id(&page_id);
             }
             GpuiAction::CloseOverlays => {
+                if let Some(scope) = self.gpui_extra.task_board.scope {
+                    self.gpui_extra.task_board.apply(
+                        scope,
+                        crate::native_task_board::Command::CancelDelete,
+                        &self.state.tasks,
+                    );
+                }
                 self.command_palette.open = false;
                 self.finder.close();
                 self.gpui_extra.launch_menu_open = false;
@@ -6551,6 +6658,13 @@ impl Tessel {
                             vec![(wt_path, branch, true)],
                         );
                     }
+                } else if self.gpui_extra.task_board.pending_delete.is_some() {
+                    if let Some(scope) = self.gpui_extra.task_board.scope {
+                        self.apply_gpui_action(GpuiAction::NativeTaskBoard {
+                            scope,
+                            command: crate::native_task_board::Command::ConfirmDelete,
+                        });
+                    }
                 } else if self.pending_transcript_trash.is_some() {
                     self.confirm_transcript_trash();
                 } else if let Some(spec) = self.pending_agent_install.take() {
@@ -6570,6 +6684,13 @@ impl Tessel {
                 }
             }
             GpuiAction::CancelConfirmModal => {
+                if let Some(scope) = self.gpui_extra.task_board.scope {
+                    self.gpui_extra.task_board.apply(
+                        scope,
+                        crate::native_task_board::Command::CancelDelete,
+                        &self.state.tasks,
+                    );
+                }
                 self.pending_close = None;
                 self.pending_close_session = None;
                 self.pending_remove_project = None;
@@ -6677,6 +6798,61 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::ConfirmModalPrimary);
         assert!(!app.transcript_trash_busy && path.exists());
         assert!(app.error.contains("no longer available"));
+    }
+
+    #[test]
+    fn native_task_board_confirmation_is_scoped_and_preserves_moved_tasks() {
+        use crate::native_task_board::Command;
+        use crate::tasks_board_panel::TasksBoardAction;
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(temp.path().into()));
+        app.apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Tasks));
+        for title in ["A", "B"] {
+            app.apply_gpui_action(GpuiAction::TasksBoard(TasksBoardAction::Add(title.into())));
+        }
+        let snap = app.gpui_snapshot(960., 640., 4.);
+        let ids: Vec<_> = snap.side_panels.tasks.iter().map(|t| t.id).collect();
+        for id in &ids {
+            app.apply_gpui_action(GpuiAction::TasksBoard(TasksBoardAction::Move {
+                id: *id,
+                column: 3,
+            }));
+        }
+        let scope = app
+            .gpui_snapshot(960., 640., 4.)
+            .side_panels
+            .task_board
+            .scope
+            .unwrap();
+        let action = |command| GpuiAction::NativeTaskBoard { scope, command };
+        app.apply_gpui_action(action(Command::ToggleSelection));
+        app.apply_gpui_action(action(Command::ToggleAll));
+        app.apply_gpui_action(action(Command::RequestDelete));
+        let snap = app.gpui_snapshot(960., 640., 4.);
+        assert!(snap.modals.confirm_modal.unwrap().title.contains('2'));
+        assert_eq!(snap.side_panels.tasks.len(), 2);
+        app.apply_gpui_action(GpuiAction::CancelConfirmModal);
+        assert!(app.gpui_extra.task_board.selecting);
+        app.apply_gpui_action(action(Command::RequestDelete));
+        // An agent moves a task while the owner's confirmation is open.
+        app.apply_gpui_action(GpuiAction::TasksBoard(TasksBoardAction::Move {
+            id: ids[0],
+            column: 1,
+        }));
+        app.apply_gpui_action(GpuiAction::ConfirmModalPrimary);
+        let tasks = app.gpui_snapshot(960., 640., 4.).side_panels.tasks;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, ids[0]);
+        app.apply_gpui_action(GpuiAction::SelectSideTab(SideTab::History));
+        app.apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Tasks));
+        app.apply_gpui_action(action(Command::RequestDeleteOne(ids[0])));
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .modals
+                .confirm_modal
+                .is_none()
+        );
     }
 
     #[test]

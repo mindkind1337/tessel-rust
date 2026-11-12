@@ -27,6 +27,7 @@ pub(crate) mod sheet_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
+mod task_rename_input;
 mod terminal_find_inputs;
 pub(crate) mod terminal_view;
 pub mod theme;
@@ -106,6 +107,7 @@ pub(crate) struct TesselGpuiRoot {
     scm_input: scm_input::Input,
     explorer_input: explorer_input::Input,
     panel_query_inputs: panel_query_inputs::Inputs,
+    task_rename_input: task_rename_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -154,6 +156,12 @@ impl TesselGpuiRoot {
                 "enter",
                 panel_query_inputs::ConsumeEnter,
                 Some("TesselPanelQuery"),
+            ),
+            gpui::KeyBinding::new("enter", task_rename_input::Save, Some("TesselTaskRename")),
+            gpui::KeyBinding::new(
+                "escape",
+                task_rename_input::Cancel,
+                Some("TesselTaskRename"),
             ),
             gpui::KeyBinding::new("ctrl-enter", scm_input::Submit, Some("TesselScm")),
             gpui::KeyBinding::new("escape", scm_input::Dismiss, Some("TesselScm")),
@@ -278,11 +286,13 @@ impl TesselGpuiRoot {
             scm_input: scm_input::Input::default(),
             explorer_input: explorer_input::Input::default(),
             panel_query_inputs: panel_query_inputs::Inputs::default(),
+            task_rename_input: Default::default(),
             _poller_task: poller_task,
         }
     }
 
     fn poll_backend(&mut self, cx: &mut Context<Self>) -> bool {
+        task_rename_input::flush(self, cx);
         panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
         scm_input::flush(self, cx);
@@ -310,6 +320,7 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        task_rename_input::flush(self, cx);
         panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
         if !matches!(
@@ -342,6 +353,12 @@ impl TesselGpuiRoot {
             GpuiAction::ToggleCommandPalette | GpuiAction::OpenFinder
         );
         match &action {
+            GpuiAction::NativeTaskBoard {
+                command: crate::native_task_board::Command::BeginRename(_),
+                ..
+            } => {
+                self.focus_input = FocusInputTarget::TaskRenameTitle;
+            }
             GpuiAction::OpenHelp => {
                 self.focus_input = FocusInputTarget::HelpQuery;
             }
@@ -425,6 +442,11 @@ impl TesselGpuiRoot {
                     .focused(window, cx)
                     .then_some(FocusInputTarget::ExplorerFilter)
             })
+            .or_else(|| {
+                self.task_rename_input
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::TaskRenameTitle)
+            })
             .or_else(|| self.panel_query_inputs.focused(window, cx))
             .or_else(|| self.modal_query_input.focused(window, cx))
             .or_else(|| {
@@ -476,6 +498,10 @@ impl TesselGpuiRoot {
             self.dispatch(GpuiAction::OpenHelp, cx);
             return;
         }
+        if key == "escape" && native_target.is_none() && self.app.gpui_cancel_task_selection() {
+            cx.notify();
+            return;
+        }
         if key == "escape"
             && matches!(
                 native_target,
@@ -496,6 +522,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::SessionsQuery
                         | FocusInputTarget::ConversationsQuery
                         | FocusInputTarget::TaskNewTitle
+                        | FocusInputTarget::TaskRenameTitle
                 )
             )
         {
@@ -1106,6 +1133,16 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
+        let rename = self
+            .app
+            .gpui_task_rename_input()
+            .map(|(s, id, text)| (s, id, text.to_owned()));
+        let rename_was_focused = self.task_rename_input.focused(window, cx);
+        let rename_ended = rename.is_none();
+        self.task_rename_input.sync(rename, window, cx);
+        if rename_ended && rename_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         let panel_query_was_focused = self.panel_query_inputs.focused(window, cx).is_some();
         if let Some((scope, text)) = self
             .app
@@ -1282,6 +1319,7 @@ impl Render for TesselGpuiRoot {
                 &self.scm_input,
                 &self.explorer_input,
                 &self.panel_query_inputs,
+                &self.task_rename_input,
                 focus_input,
                 &tokens,
                 self.left_width,

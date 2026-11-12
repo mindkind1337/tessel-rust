@@ -53,6 +53,7 @@ pub fn apply(
                 .tasks
                 .iter_mut()
                 .find(|task| task.id == id && task.project == project)
+                && task.column == 0
                 && task.title != title
             {
                 task.title = title;
@@ -144,7 +145,7 @@ mod tests {
                 id: 10,
                 project: 1,
                 title: "Alpha".into(),
-                column: 3,
+                column: 0,
             },
             Task {
                 id: 11,

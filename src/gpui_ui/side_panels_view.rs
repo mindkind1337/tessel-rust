@@ -21,7 +21,6 @@ use crate::{
         format_duration_compact, format_thread_as_text, history_csv,
     },
     side_panels_ui::SidePanelsAction,
-    tasks_board_panel::TasksBoardAction,
     workspace::SideTab,
 };
 use gpui::{
@@ -39,6 +38,7 @@ pub(crate) fn render_side_panel_tab_body(
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
+    task_rename_input: &super::task_rename_input::Input,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -48,7 +48,14 @@ pub(crate) fn render_side_panel_tab_body(
         SideTab::Dashboard => render_dashboard_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Files => render_explorer_tab(sp, explorer_input, french, tokens, cx),
         SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
-        SideTab::Tasks => render_tasks_board_tab(sp, panel_query_inputs, french, tokens, cx),
+        SideTab::Tasks => render_tasks_board_tab(
+            sp,
+            panel_query_inputs,
+            task_rename_input,
+            french,
+            tokens,
+            cx,
+        ),
         SideTab::TaskHistory => render_task_history_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::History => render_sessions_history_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Conversations => {
@@ -1212,19 +1219,23 @@ fn render_scm_commits_dock(
 fn render_tasks_board_tab(
     sp: &GpuiSidePanelsSnapshot,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
+    task_rename_input: &super::task_rename_input::Input,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
-    const COL_SPECS: [(usize, &str, &str, u32); 4] = [
-        (0, "Todo", "À faire", 0x8b93a1),
-        (1, "Doing", "En cours", 0x6c9cff),
-        (2, "Review", "En revue", 0xf5a524),
-        (3, "Done", "Terminé", 0x3ddc84),
-    ];
-
-    let add_bar = panel_query_inputs.render(FocusInputTarget::TaskNewTitle, french, tokens, cx);
-
+    use crate::native_task_board::Command;
+    let Some(scope) = sp.task_board.scope else {
+        return render_empty_note(
+            if french {
+                "Sélectionnez d’abord un projet."
+            } else {
+                "Select a project first."
+            },
+            tokens,
+        );
+    };
+    let action = |command| GpuiAction::NativeTaskBoard { scope, command };
     let mut columns = div()
         .id("gpui-tasks-scroll")
         .flex_1()
@@ -1232,153 +1243,209 @@ fn render_tasks_board_tab(
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(px(8.0));
-
-    for (col_idx, en_lbl, fr_lbl, hex) in COL_SPECS {
-        let accent = gpui::rgb(hex);
-        let cards: Vec<_> = sp.tasks.iter().filter(|t| t.column == col_idx).collect();
-
-        let mut col_box = div()
-            .p(px(6.0))
+        .gap(px(8.));
+    for (column, en, fr, color) in [
+        (0, "To do", "À faire", 0x8b93a1),
+        (1, "Doing", "En cours", 0x6c9cff),
+        (2, "Review", "À examiner", 0xf5a524),
+        (3, "Done", "Terminé", 0x3ddc84),
+    ] {
+        let accent = gpui::rgb(color);
+        let cards: Vec<_> = sp.tasks.iter().filter(|t| t.column == column).collect();
+        let mut header = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(5.))
+            .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(accent))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(tokens.text_strong)
+                    .child(if french { fr } else { en }),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(tokens.text_dim)
+                    .child(cards.len().to_string()),
+            );
+        if column == 3 && !cards.is_empty() {
+            header = header.child(render_chip(
+                "task-selection",
+                if sp.task_board.selecting {
+                    if french { "Annuler" } else { "Cancel" }
+                } else if french {
+                    "Sélectionner"
+                } else {
+                    "Select"
+                }
+                .into(),
+                false,
+                tokens,
+                action(Command::ToggleSelection),
+                cx,
+            ));
+            if sp.task_board.selecting {
+                let all = cards.iter().all(|t| sp.task_board.picked.contains(&t.id));
+                header = header.child(render_chip(
+                    "task-all",
+                    if all {
+                        if french { "Aucun" } else { "None" }
+                    } else if french {
+                        "Tout"
+                    } else {
+                        "All"
+                    }
+                    .into(),
+                    all,
+                    tokens,
+                    action(Command::ToggleAll),
+                    cx,
+                ));
+                if !sp.task_board.picked.is_empty() {
+                    header = header.child(render_chip(
+                        "task-delete-picked",
+                        format!(
+                            "{} ({})",
+                            if french { "Supprimer" } else { "Delete" },
+                            sp.task_board.picked.len()
+                        ),
+                        false,
+                        tokens,
+                        action(Command::RequestDelete),
+                        cx,
+                    ));
+                }
+            }
+        }
+        let mut col = div()
+            .p(px(6.))
             .rounded(px(tokens.radius_px))
             .bg(tokens.surface)
             .border_1()
             .border_color(tokens.border)
             .flex()
             .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(5.0))
-                            .child(div().w(px(7.0)).h(px(7.0)).rounded(px(3.5)).bg(accent))
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(tokens.text_strong)
-                                    .child(if french { fr_lbl } else { en_lbl }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .font_family(mono_font_family())
-                            .text_size(px(10.5))
-                            .text_color(tokens.text_dim)
-                            .child(SharedString::from(cards.len().to_string())),
-                    ),
-            );
-
-        for task in cards {
-            let tid = task.id;
-            let cur_col = task.column;
-            col_box = col_box.child(
-                div()
-                    .pl(px(7.0))
-                    .pr(px(6.0))
-                    .py(px(5.0))
-                    .rounded(px(tokens.radius_px - 1.0))
-                    .bg(tokens.panel)
-                    .border_l_2()
-                    .border_color(accent)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(px(11.5))
-                            .text_color(tokens.text_strong)
-                            .child(SharedString::from(task.title.clone())),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(3.0))
-                            .when(cur_col > 0, |el| {
-                                el.child(
-                                    div()
-                                        .id(("gpui-task-left", tid))
-                                        .px(px(4.0))
-                                        .py(px(1.0))
-                                        .rounded(px(3.0))
-                                        .bg(tokens.surface_2)
-                                        .text_size(px(10.0))
-                                        .text_color(tokens.text_strong)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.dispatch_action(
-                                                GpuiAction::TasksBoard(TasksBoardAction::Move {
-                                                    id: tid,
-                                                    column: cur_col - 1,
-                                                }),
-                                                cx,
-                                            );
-                                        }))
-                                        .child("←"),
-                                )
-                            })
-                            .when(cur_col < 3, |el| {
-                                el.child(
-                                    div()
-                                        .id(("gpui-task-right", tid))
-                                        .px(px(4.0))
-                                        .py(px(1.0))
-                                        .rounded(px(3.0))
-                                        .bg(tokens.surface_2)
-                                        .text_size(px(10.0))
-                                        .text_color(tokens.text_strong)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.dispatch_action(
-                                                GpuiAction::TasksBoard(TasksBoardAction::Move {
-                                                    id: tid,
-                                                    column: cur_col + 1,
-                                                }),
-                                                cx,
-                                            );
-                                        }))
-                                        .child("→"),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id(("gpui-task-del", tid))
-                                    .px(px(4.0))
-                                    .py(px(1.0))
-                                    .rounded(px(3.0))
-                                    .text_size(px(10.0))
-                                    .text_color(tokens.danger)
-                                    .hover(|s| s.bg(tokens.surface_2))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.dispatch_action(
-                                            GpuiAction::TasksBoard(TasksBoardAction::Delete(tid)),
-                                            cx,
-                                        );
-                                    }))
-                                    .child("×"),
-                            ),
-                    ),
-            );
+            .gap(px(4.))
+            .child(header);
+        if cards.is_empty() {
+            col = col.child(render_empty_note(
+                if french { "Aucune tâche" } else { "No tasks" },
+                tokens,
+            ));
         }
-
-        columns = columns.child(col_box);
+        for task in cards {
+            let id = task.id;
+            let editing = sp.task_board.edit.as_ref().is_some_and(|e| e.id == id);
+            let title = if editing {
+                task_rename_input.render(french, tokens, cx)
+            } else {
+                div()
+                    .id(("task-title", id))
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(11.5))
+                    .text_color(tokens.text_strong)
+                    .on_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
+                        if column == 0 && event.click_count() == 2 {
+                            root.dispatch_action(
+                                GpuiAction::NativeTaskBoard {
+                                    scope,
+                                    command: Command::BeginRename(id),
+                                },
+                                cx,
+                            );
+                        }
+                    }))
+                    .child(task.title.clone())
+                    .into_any_element()
+            };
+            let mut row = div()
+                .pl(px(7.))
+                .pr(px(6.))
+                .py(px(5.))
+                .rounded(px(tokens.radius_px - 1.))
+                .bg(tokens.panel)
+                .border_l_2()
+                .border_color(accent)
+                .flex()
+                .items_center()
+                .gap(px(4.));
+            if column == 3 && sp.task_board.selecting {
+                row = row.child(render_chip(
+                    format!("task-pick-{id}"),
+                    if sp.task_board.picked.contains(&id) {
+                        "☑"
+                    } else {
+                        "☐"
+                    }
+                    .into(),
+                    sp.task_board.picked.contains(&id),
+                    tokens,
+                    action(Command::TogglePick(id)),
+                    cx,
+                ));
+            }
+            row = row.child(title);
+            if column == 0 && !editing {
+                row = row.child(render_chip(
+                    format!("task-rename-{id}"),
+                    if french { "Renommer" } else { "Rename" }.into(),
+                    false,
+                    tokens,
+                    action(Command::BeginRename(id)),
+                    cx,
+                ));
+            }
+            if !editing {
+                if column > 0 {
+                    row = row.child(render_chip(
+                        format!("task-left-{id}"),
+                        "←".into(),
+                        false,
+                        tokens,
+                        action(Command::Move {
+                            id,
+                            column: column - 1,
+                        }),
+                        cx,
+                    ));
+                }
+                if column < 3 {
+                    row = row.child(render_chip(
+                        format!("task-right-{id}"),
+                        "→".into(),
+                        false,
+                        tokens,
+                        action(Command::Move {
+                            id,
+                            column: column + 1,
+                        }),
+                        cx,
+                    ));
+                }
+                row = row.child(render_chip(
+                    format!("task-delete-{id}"),
+                    "×".into(),
+                    false,
+                    tokens,
+                    action(Command::RequestDeleteOne(id)),
+                    cx,
+                ));
+            }
+            col = col.child(row);
+        }
+        columns = columns.child(col);
     }
-
     div()
         .size_full()
-        .p(px(8.0))
+        .p(px(8.))
         .flex()
         .flex_col()
-        .gap(px(6.0))
-        .child(add_bar)
+        .gap(px(6.))
+        .child(panel_query_inputs.render(FocusInputTarget::TaskNewTitle, french, tokens, cx))
         .child(columns)
         .into_any_element()
 }

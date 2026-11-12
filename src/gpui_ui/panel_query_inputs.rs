@@ -256,6 +256,13 @@ fn clear(
     {
         return;
     }
+    if escape
+        && token.0.target == FocusInputTarget::TaskNewTitle
+        && root.app.gpui_cancel_task_selection()
+    {
+        cx.notify();
+        return;
+    }
     flush(root, cx);
     if token.1.read(cx).as_str().is_empty()
         || (escape && token.0.target == FocusInputTarget::TaskNewTitle)
