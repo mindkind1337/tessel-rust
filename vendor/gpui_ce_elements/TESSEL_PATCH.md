@@ -1,4 +1,4 @@
-# Tessel patch: native editor styling
+# Tessel patch: native editor styling and undo boundaries
 
 Upstream: `gpui_ce_elements` 0.3.0, downloaded from crates.io, Apache-2.0.
 Registry archive SHA-256: `c74a09e0d1e27d0d5d22be1c9764d4576b11c7a60fe1e13f2ca88873714423de`.
@@ -7,7 +7,7 @@ The source package did not include a LICENSE or NOTICE file. `LICENSE.md` is the
 Apache-2.0 text from the upstream project's public license file, matching the
 package manifest. No upstream source copyright headers were removed.
 
-Changes are confined to `src/editable_text/element.rs` and `layout.rs`:
+Styling changes are in `src/editable_text/element.rs` and `layout.rs`; undo-boundary changes are in `src/editable_text/history.rs` and `state.rs`:
 
 - Add optional `styled_runs(source, Arc<[TextRun]>)` to the existing element.
 - Reject incomplete, overflowing and non-character-aligned UTF-8 coverage with
@@ -18,8 +18,9 @@ Changes are confined to `src/editable_text/element.rs` and `layout.rs`:
   do not reuse a stale shaped document and unchanged frames compare in O(1).
   Callers should cache and reuse the Arc;
   this API does not run a tokenizer during input or layout.
-- Leave caret, selection, clipboard, undo, IME, accessibility and the default
-  unstyled element paths intact.
+- Styling leaves caret, selection, clipboard, undo, IME, accessibility and the
+  default unstyled element paths intact. The separate undo extension below
+  controls explicit command boundaries.
 
 Public API and headless rendering regression tests live in Tessel's
 `src/gpui_ui/styled_input_tests.rs`, alongside the existing remote-input tests.
@@ -27,7 +28,10 @@ The published upstream crate's own test sources reference an unpublished
 `gpui-ce-fonts` development package; they are preserved but are not represented
 as executed by Tessel's focused validation.
 
-On upgrade, compare these two files with the new registry source, reapply only
-the additive API/cache changes if still needed, update this checksum, and run
+On upgrade, compare all four modified files with the new registry source, reapply only
+the additive API/cache and undo-boundary changes if still needed, update this checksum, and run
 the style and native-input regression tests. Remove the patch when an upstream
 API supplies the same behavior.
+
+The editable-text state and history also expose `push_undo_stop()`. It separates the next recorded edit from the preceding group without adding empty entries, so explicit editor replacement commands do not merge with surrounding typing or adjacent replacements. Preserve this API and its native replacement regression tests when upgrading.
+Undo and redo also end the current edit group, so typing after history navigation cannot merge into an earlier command. Native GPUI regressions cover adjacent replacements, subsequent typing and a new edit after undo.

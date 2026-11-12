@@ -321,7 +321,9 @@ pub(crate) fn run(
         {
             return;
         }
-        edits.push((f, base.to_owned(), state.read(cx).as_str().to_owned()));
+        if !matches!(command, Command::Close(_)) {
+            edits.push((f, base.to_owned(), state.read(cx).as_str().to_owned()));
+        }
     }
     if let Command::Close(f) = command {
         root.dispatch(
@@ -362,45 +364,124 @@ pub(crate) fn run(
                 root.focus_input = FocusInputTarget::EditorBody;
             }
         }
-        Command::Replace(all) => {
-            let Some(doc) = root.app.gpui_editor_document() else {
-                return;
-            };
-            if doc.instance_id() != id || doc.media {
-                return;
-            }
-            let Some(state) = root.editor_input.get(id).cloned() else {
-                return;
-            };
-            if state.read(cx).as_str() != doc.text {
-                return;
-            }
-            let plan = plan_replacement(
-                &doc.text,
-                &doc.tools.find_query,
-                &doc.tools.replace_text,
-                doc.tools.match_index,
-                all,
-            );
-            match plan {
-                Ok(Some((range, replacement))) => state.update(cx, |s, cx| {
-                    if s.marked_text_range(window, cx).is_some() {
-                        return;
-                    }
-                    let range = s.as_str()[..range.start].encode_utf16().count()
-                        ..s.as_str()[..range.end].encode_utf16().count();
-                    s.replace_text_in_range(Some(range), &replacement, window, cx);
-                }),
-                Err(()) => {
-                    root.editor_input.tools.replacement_too_large = Some(id);
-                    cx.notify();
-                }
-                Ok(None) => {}
-            }
-        }
+        Command::Replace(all) => replace(root, id, all, window, cx),
         Command::Close(_) => {}
     }
 }
+fn apply_pending_selection(root: &mut TesselGpuiRoot, id: u64, cx: &mut Context<TesselGpuiRoot>) {
+    if let Some((start, end)) = root.app.gpui_take_editor_selection(id)
+        && let Some(state) = root.editor_input.get(id).cloned()
+    {
+        state.update(cx, |s, cx| {
+            s.move_to(start, cx);
+            s.select_to(end, cx);
+        });
+    }
+}
+fn select_match(
+    root: &mut TesselGpuiRoot,
+    id: u64,
+    from_char: usize,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    let Some(doc) = root.app.gpui_editor_document() else {
+        return;
+    };
+    if doc.instance_id() != id {
+        return;
+    }
+    root.dispatch(
+        GpuiAction::SelectNativeEditorMatch {
+            instance_id: id,
+            base: doc.text.clone(),
+            query: doc.tools.find_query.clone(),
+            from_char,
+        },
+        cx,
+    );
+    apply_pending_selection(root, id, cx);
+}
+fn utf16_to_char(source: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (index, ch) in source.chars().enumerate() {
+        if units >= offset {
+            return index;
+        }
+        units += ch.len_utf16();
+    }
+    source.chars().count()
+}
+fn replace(
+    root: &mut TesselGpuiRoot,
+    id: u64,
+    all: bool,
+    window: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    let Some(state) = root.editor_input.get(id).cloned() else {
+        return;
+    };
+    if state.update(cx, |s, cx| s.marked_text_range(window, cx).is_some())
+        || !super::editor_input::flush(root, id, cx)
+    {
+        return;
+    }
+    apply_pending_selection(root, id, cx);
+    let Some(doc) = root.app.gpui_editor_document() else {
+        return;
+    };
+    if doc.instance_id() != id || doc.media {
+        return;
+    }
+    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+    if hits.is_empty() {
+        return;
+    }
+    let mut index = doc.tools.match_index;
+    if !all {
+        let Some(selection) = state.update(cx, |s, cx| s.selected_text_range(false, window, cx))
+        else {
+            return;
+        };
+        let start = utf16_to_char(&doc.text, selection.range.start);
+        let end = utf16_to_char(&doc.text, selection.range.end);
+        index = hits.iter().position(|h| h.0 >= start).unwrap_or(0);
+        if hits[index].0 != start || hits[index].1 != end {
+            select_match(root, id, start, cx);
+            return;
+        }
+    }
+    let plan = plan_replacement(
+        &doc.text,
+        &doc.tools.find_query,
+        &doc.tools.replace_text,
+        index,
+        all,
+    );
+    root.editor_input.tools.replacement_too_large = None;
+    match plan {
+        Ok(Some((range, replacement))) => {
+            let from = state.read(cx).as_str()[..range.start].chars().count()
+                + replacement.chars().count();
+            state.update(cx, |s, cx| {
+                let range = s.as_str()[..range.start].encode_utf16().count()
+                    ..s.as_str()[..range.end].encode_utf16().count();
+                s.push_undo_stop();
+                s.replace_text_in_range(Some(range), &replacement, window, cx);
+                s.push_undo_stop();
+            });
+            if super::editor_input::flush(root, id, cx) && !all {
+                select_match(root, id, from, cx);
+            }
+        }
+        Err(()) => {
+            root.editor_input.tools.replacement_too_large = Some(id);
+            cx.notify();
+        }
+        Ok(None) => {}
+    }
+}
+
 fn plan_replacement(
     source: &str,
     query: &str,
@@ -674,6 +755,145 @@ mod tests {
         cx.refresh().unwrap();
         view.update(cx, |root, window, cx| {
             assert!(root.editor_input.tools.focused(window, cx).is_none())
+        })
+        .unwrap();
+    }
+    #[gpui::test]
+    fn native_single_replace_selects_then_advances_and_keeps_separate_undo(
+        cx: &mut TestAppContext,
+    ) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("single.txt");
+        std::fs::write(&path, "aa").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.app.apply_gpui_action(GpuiAction::ToggleEditorFind);
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorFindQuery("a".into()));
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorReplaceText("b".into()));
+            root.focus_input = FocusInputTarget::EditorReplace;
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            let state = root.editor_input.get(id).unwrap().clone();
+            state.update(cx, |s, cx| s.move_to(0, cx));
+            run(root, id, Command::Replace(false), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "aa");
+            assert_eq!(
+                state
+                    .update(cx, |s, cx| s
+                        .selected_text_range(false, window, cx)
+                        .unwrap())
+                    .range,
+                0..1
+            );
+            run(root, id, Command::Replace(false), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "ba");
+            assert_eq!(
+                state
+                    .update(cx, |s, cx| s
+                        .selected_text_range(false, window, cx)
+                        .unwrap())
+                    .range,
+                1..2
+            );
+            // No repaint or queued event between clicks: native text and model must stay aligned.
+            run(root, id, Command::Replace(false), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "bb");
+            run(root, id, Command::Close(EditorToolField::Find), window, cx);
+            state.update(cx, |s, cx| {
+                s.replace_text_in_range(Some(2..2), "c", window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        for expected in ["bb", "ba", "aa", "aa"] {
+            cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+            cx.run_until_parked();
+            view.update(cx, |root, _, _| {
+                assert_eq!(root.app.gpui_editor_document().unwrap().text, expected)
+            })
+            .unwrap();
+        }
+        for expected in ["ba", "bb", "bbc"] {
+            cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Redo);
+            cx.run_until_parked();
+            view.update(cx, |root, _, _| {
+                assert_eq!(root.app.gpui_editor_document().unwrap().text, expected)
+            })
+            .unwrap();
+        }
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        cx.simulate_keystrokes(view.into(), "d");
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "bbd")
+        })
+        .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "bb")
+        })
+        .unwrap();
+    }
+    #[gpui::test]
+    fn native_single_replace_skips_inserted_matches_and_wraps_unicode(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unicode.txt");
+        std::fs::write(&path, "😀a 😀a").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.app.apply_gpui_action(GpuiAction::ToggleEditorFind);
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorFindQuery("😀a".into()));
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorReplaceText("😀aX".into()));
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            let state = root.editor_input.get(id).unwrap().clone();
+            run(root, id, Command::Replace(false), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "😀aX 😀a");
+            assert_eq!(
+                state
+                    .update(cx, |s, cx| s
+                        .selected_text_range(false, window, cx)
+                        .unwrap())
+                    .range,
+                5..8
+            );
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().tools.match_index,
+                1
+            );
+            run(root, id, Command::Replace(false), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "😀aX 😀aX");
+            assert_eq!(
+                state
+                    .update(cx, |s, cx| s
+                        .selected_text_range(false, window, cx)
+                        .unwrap())
+                    .range,
+                0..3
+            );
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().tools.match_index,
+                0
+            );
         })
         .unwrap();
     }

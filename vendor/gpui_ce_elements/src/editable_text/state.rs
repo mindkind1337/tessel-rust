@@ -1,3 +1,4 @@
+// Modified by Tessel, 2026-11-12: expose undo stops and separate edits after undo/redo.
 use crate::editable_text::{
     StringStorage, TextBoundary, UnicodeTextStorage, actions::EditableTextActionHandler,
     caret::CaretNotify, history::EditableTextHistory, layout::EditableTextLayoutResult,
@@ -929,6 +930,13 @@ impl EditableTextState {
         self.history.as_ref()
     }
 
+    /// Separates programmatic edits from surrounding typing and command edits.
+    pub fn push_undo_stop(&mut self) {
+        if let Some(history) = self.history.as_mut() {
+            history.push_undo_stop();
+        }
+    }
+
     fn record_history(&mut self, range: Range<usize>, new_text_len: usize) {
         // Don't record during IME composition
         if self.marked_range.is_some() {
@@ -970,6 +978,8 @@ impl EditableTextState {
             .as_mut()
             .expect("history was available when the entry was taken")
             .push(dst, inverse);
+        // Typing after undo/redo must start a new edit group.
+        self.push_undo_stop();
         self.set_selection(selection);
 
         self.scroll_to_caret();

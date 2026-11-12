@@ -14,6 +14,44 @@ struct Binding {
 
 gpui::actions!(tessel_local_editor, [Indent, Outdent]);
 
+pub(crate) fn flush(root: &mut TesselGpuiRoot, id: u64, cx: &mut Context<TesselGpuiRoot>) -> bool {
+    let Some(doc) = root.app.gpui_editor_document() else {
+        return false;
+    };
+    if doc.instance_id() != id || doc.media {
+        return false;
+    }
+    let Some(binding) = root.editor_input.bindings.get(&id) else {
+        return false;
+    };
+    if binding.synced != doc.text {
+        return false;
+    }
+    let text = binding.state.read(cx).as_str().to_owned();
+    let base = binding.synced.clone();
+    if text != base {
+        root.dispatch(
+            GpuiAction::ApplyNativeDocumentEdit {
+                instance_id: id,
+                base,
+                text: text.clone(),
+            },
+            cx,
+        );
+    }
+    if root
+        .app
+        .gpui_editor_document()
+        .is_some_and(|d| d.instance_id() == id && d.text == text)
+    {
+        if let Some(b) = root.editor_input.bindings.get_mut(&id) {
+            b.synced = text;
+        }
+        return true;
+    }
+    false
+}
+
 fn apply_indent(
     root: &mut TesselGpuiRoot,
     outdent: bool,

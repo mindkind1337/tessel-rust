@@ -777,6 +777,12 @@ pub(crate) enum GpuiAction {
         line_idx: usize,
         new_line: String,
     },
+    SelectNativeEditorMatch {
+        instance_id: u64,
+        base: String,
+        query: String,
+        from_char: usize,
+    },
     ApplyNativeEditorToolEdit {
         instance_id: u64,
         field: EditorToolField,
@@ -4870,6 +4876,30 @@ impl Tessel {
                         doc.sheet_cache = None;
                         doc.preview = None;
                         doc.last_edited_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            GpuiAction::SelectNativeEditorMatch {
+                instance_id,
+                base,
+                query,
+                from_char,
+            } => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == instance_id
+                    && doc.text == base
+                    && doc.tools.find_open
+                    && doc.tools.find_query == query
+                {
+                    let hits = crate::files::find_char_matches(&doc.text, &query);
+                    doc.tools.match_index = hits.iter().position(|h| h.0 >= from_char).unwrap_or(0);
+                    doc.tools.pending_char_range = None;
+                    doc.tools.pending_scroll_line = None;
+                    if let Some(hit) = hits.get(doc.tools.match_index) {
+                        doc.tools.pending_char_range = Some((hit.0, hit.1));
+                        doc.tools.pending_scroll_line = Some(hit.2);
                     }
                 }
             }

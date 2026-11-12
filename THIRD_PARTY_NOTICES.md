@@ -41,7 +41,8 @@ SOFTWARE.
 `vendor/gpui_ce_elements` contains the crates.io 0.3.0 source package under
 Apache-2.0, reproduced in `vendor/gpui_ce_elements/LICENSE.md`. Tessel adds
 optional source-bound styled text runs and matching layout invalidation for
-native editor syntax highlighting. The modified files, source checksum and
+native editor syntax highlighting, plus explicit undo-group boundaries for
+editor replacement commands. The modified files, source checksum and
 upgrade requirements are recorded in `vendor/gpui_ce_elements/TESSEL_PATCH.md`.
 
 ## portable-pty

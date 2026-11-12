@@ -1,3 +1,4 @@
+// Modified by Tessel, 2026-11-12: explicit undo-group boundaries without empty history entries.
 use gpui::CaretSelection;
 use std::{ops::Range, time::Duration};
 use web_time::Instant;
@@ -14,6 +15,7 @@ pub const DEFAULT_GROUP_INTERVAL: Duration = Duration::from_millis(300);
 pub struct EditableTextHistory {
     /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
     grouping_interval: Duration,
+    force_new_group: bool,
     /// Stack of previous states for undo.
     undo_stack: Vec<HistoryEntry>,
     /// Stack of undone states for redo.
@@ -23,6 +25,7 @@ impl Default for EditableTextHistory {
     fn default() -> Self {
         Self {
             grouping_interval: DEFAULT_GROUP_INTERVAL,
+            force_new_group: false,
             undo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
             redo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
         }
@@ -56,6 +59,11 @@ pub enum HistoryKind {
 }
 
 impl EditableTextHistory {
+    /// Separates the next edit from the current undo group without adding an entry.
+    pub fn push_undo_stop(&mut self) {
+        self.force_new_group = true;
+    }
+
     /// Sets how long after an edit's first change later edits still join it.
     pub fn set_grouping_interval(&mut self, interval: Duration) {
         self.grouping_interval = interval;
@@ -80,7 +88,9 @@ impl EditableTextHistory {
         self.redo_stack.clear();
 
         // Check if we should group with the last entry
-        if let Some(last) = self.undo_stack.last_mut()
+        let force_new_group = std::mem::take(&mut self.force_new_group);
+        if !force_new_group
+            && let Some(last) = self.undo_stack.last_mut()
             && now.duration_since(last.timestamp) < self.grouping_interval
         {
             // The change was triggered within group interval timing.
