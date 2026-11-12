@@ -114,16 +114,22 @@ fn sample_tasks() -> Vec<TaskCard> {
             id: 1,
             title: "Audit reference CSS".into(),
             column: 0,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 2,
             title: "Build native TasksBoard".into(),
             column: 1,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 3,
             title: "Verify Clippy zero warnings".into(),
             column: 2,
+            timing: String::new(),
+            timing_title: String::new(),
         },
     ]
 }
@@ -385,11 +391,15 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
             id: 10,
             title: "First todo card".into(),
             column: 0,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 40,
             title: "Corrupt column card".into(),
-            column: 99, // clamped to column 3 (Done)
+            column: 99,
+            timing: String::new(),
+            timing_title: String::new(), // clamped to column 3 (Done)
         },
     ];
 
@@ -899,11 +909,15 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
             id: 1,
             title: "super_long_unbroken_rust_identifier_that_must_wrap_cleanly_inside_a_280px_side_panel_without_forcing_880px_width".into(),
             column: 0,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 2,
             title: "Vérifier le rendu étroit en français sans débordement horizontal".into(),
             column: 2,
+            timing: String::new(),
+            timing_title: String::new(),
         },
     ];
 
@@ -996,4 +1010,47 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
         done_r.min.y > todo_r.max.y && (done_r.min.x - todo_r.min.x).abs() <= 2.0,
         "wide layout must preserve stacked status sections: todo={todo_r:?}, done={done_r:?}"
     );
+}
+
+#[test]
+fn card_dates_wrap_inside_narrow_cards_without_hiding_controls() {
+    let ctx = egui::Context::default();
+    let mut board = TasksBoard::new();
+    let mut tasks = sample_tasks();
+    tasks.truncate(1);
+    tasks[0].timing = "Commencée 12 nov. 14 h 05 · terminée 13 nov. 15 h 06 · 1 j 1 h".into();
+    tasks[0].timing_title = "Ajoutée 12 novembre 2026\nTerminée 13 novembre 2026".into();
+    let mut out = None;
+    for _ in 0..2 {
+        out = Some(ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(280., 800.))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(
+                        board
+                            .show(
+                                ui,
+                                TasksBoardInput {
+                                    tasks: &tasks,
+                                    french: true,
+                                    project_selected: true
+                                }
+                            )
+                            .is_none()
+                    );
+                });
+            },
+        ));
+    }
+    let texts = painted_texts(&out.unwrap().shapes);
+    let (_, rect, clip, rows) = texts
+        .iter()
+        .find(|(text, _, _, _)| text == &tasks[0].timing)
+        .expect("date label is painted");
+    assert!(*rows >= 2);
+    assert!(rect.min.x >= clip.min.x && rect.max.x <= clip.max.x + 1.0);
+    assert!(rect.max.y <= clip.max.y + 1.0);
 }

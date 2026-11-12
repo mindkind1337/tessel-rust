@@ -39,12 +39,10 @@ pub fn local(timestamp: f64, french: bool) -> Option<String> {
     if !timestamp.is_finite() || timestamp.abs() > 8.64e15 {
         return None;
     }
-    static PREFERRED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    let preferred = PREFERRED.get_or_init(system_languages);
     let date = chrono::DateTime::from_timestamp_millis(timestamp as i64)?;
     format(
         &date.with_timezone(&chrono::Local),
-        locale(french, preferred),
+        preferred_locale(french),
     )
 }
 
@@ -100,4 +98,9 @@ fn system_languages() -> Vec<String> {
         .filter(|s| !s.is_empty() && s.len() <= 128)
         .take(32)
         .collect()
+}
+
+pub fn preferred_locale(french: bool) -> &'static str {
+    static PREFERRED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    locale(french, PREFERRED.get_or_init(system_languages))
 }

@@ -150,6 +150,7 @@ pub mod syntax;
 mod system_fonts;
 mod system_identity;
 mod task_actions;
+pub mod task_card_timing;
 mod task_history;
 pub mod task_timeline;
 pub mod tasks_board_panel;

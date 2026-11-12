@@ -35,6 +35,8 @@ pub struct TaskCard {
     pub id: u64,
     pub title: String,
     pub column: usize,
+    pub timing: String,
+    pub timing_title: String,
 }
 
 /// Frame input for [`TasksBoard::show`].
@@ -1544,8 +1546,17 @@ impl TasksBoard {
         let title_galley = layout_card_title(ui, &card.title, text_wrap_w, fg);
 
         let title_h = title_galley.size().y.max(16.0_f32);
+        let timing_galley = (!card.timing.is_empty()).then(|| {
+            ui.painter().layout(
+                card.timing.clone(),
+                FontId::proportional(10.5),
+                ui.visuals().weak_text_color(),
+                text_wrap_w,
+            )
+        });
+        let timing_h = timing_galley.as_ref().map_or(0.0, |g| g.size().y + 6.0);
         let foot_h = 24.0_f32;
-        let card_h = 10.0_f32 + title_h + 8.0_f32 + foot_h + 8.0_f32;
+        let card_h = 10.0_f32 + title_h + timing_h + 8.0_f32 + foot_h + 8.0_f32;
         let (_, card_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
 
         let foot_y = card_rect.max.y - 8.0_f32 - foot_h;
@@ -1718,6 +1729,21 @@ impl TasksBoard {
                 fg
             },
         );
+
+        if let Some(galley) = timing_galley {
+            let pos = Pos2::new(
+                card_rect.min.x + left_text_pad,
+                card_rect.min.y + 10.0 + title_h + 6.0,
+            );
+            let rect = Rect::from_min_size(pos, galley.size());
+            cp.galley(pos, galley, ui.visuals().weak_text_color());
+            ui.interact(
+                rect,
+                board_id.with(("task-timing", card.id)),
+                Sense::hover(),
+            )
+            .on_hover_text(&card.timing_title);
+        }
 
         let show_del_icon =
             can_del && (card_resp.hovered() || del_resp.hovered() || is_key_focused);

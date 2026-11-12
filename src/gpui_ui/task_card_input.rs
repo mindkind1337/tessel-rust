@@ -382,6 +382,17 @@ mod tests {
             })
             .unwrap();
         cx.refresh().unwrap();
+        {
+            let selector: &'static str = Box::leak(format!("task-timing-{id}").into_boxed_str());
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let timing = visual
+                .debug_bounds(selector)
+                .expect("new card date is rendered");
+            let card_selector: &'static str = Box::leak(format!("task-card-{id}").into_boxed_str());
+            let card = visual.debug_bounds(card_selector).unwrap();
+            assert!(timing.origin.x >= card.origin.x && timing.right() <= card.right());
+            assert!(timing.bottom() <= card.bottom());
+        }
         for key in ["right", "shift-alt-right", "ctrl-alt-right", "alt-left"] {
             keys(cx, view.into(), key);
             view.update(cx, |root, _, _| {

@@ -6876,10 +6876,19 @@ impl Tessel {
             .tasks
             .iter()
             .filter(|task| Some(task.project) == project)
-            .map(|task| TaskCard {
-                id: task.id,
-                title: task.title.clone(),
-                column: task.column,
+            .map(|task| {
+                let timing = crate::task_card_timing::cached(
+                    &task.timeline,
+                    task.column,
+                    self.state.language == crate::i18n::Language::French,
+                );
+                TaskCard {
+                    id: task.id,
+                    title: task.title.clone(),
+                    column: task.column,
+                    timing: timing.text,
+                    timing_title: timing.tooltip,
+                }
             })
             .collect();
         if project.is_some() {

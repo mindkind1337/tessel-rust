@@ -1530,7 +1530,35 @@ fn render_tasks_board_tab(
                     cx,
                 ));
             }
-            row = row.child(title);
+            let timing = crate::task_card_timing::cached(&task.timeline, column, french);
+            let mut content = div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(title);
+            if !timing.text.is_empty() {
+                let tooltip = timing.tooltip;
+                let theme = *tokens;
+                content = content.child(
+                    div()
+                        .id(("task-timing", id))
+                        .debug_selector(move || format!("task-timing-{id}"))
+                        .text_size(px(10.5))
+                        .text_color(tokens.text_dim)
+                        .whitespace_normal()
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| TaskTimingTooltip {
+                                text: tooltip.clone(),
+                                tokens: theme,
+                            })
+                            .into()
+                        })
+                        .child(timing.text),
+                );
+            }
+            row = row.child(content);
             if column == 0 && !editing {
                 row = row.child(control(
                     format!("task-rename-{id}"),
@@ -2223,4 +2251,21 @@ fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
         .text_color(tokens.text_dim)
         .child(SharedString::from(text.to_owned()))
         .into_any_element()
+}
+
+struct TaskTimingTooltip {
+    text: String,
+    tokens: GpuiThemeTokens,
+}
+impl gpui::Render for TaskTimingTooltip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .p(px(8.))
+            .rounded(px(5.))
+            .bg(self.tokens.surface_3)
+            .text_color(self.tokens.text)
+            .text_size(px(11.))
+            .whitespace_normal()
+            .child(self.text.clone())
+    }
 }
