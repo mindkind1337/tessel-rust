@@ -271,6 +271,15 @@ pub(crate) fn head_control(
             if let Some(action) = &action {
                 root.task_card_input.remember_delete(action, w, cx);
                 root.dispatch_action(action.clone(), cx);
+                if let GpuiAction::NativeTaskBoard {
+                    scope,
+                    command: Command::ShowAgent { id, pane },
+                } = action
+                    && let Some(target) = root.app.gpui_task_agent_focus(*scope, *id, *pane)
+                {
+                    root.focus_input = target;
+                    w.focus(&root.focus_handle, cx);
+                }
             }
         }))
         .child(label)

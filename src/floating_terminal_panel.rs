@@ -229,6 +229,11 @@ impl FloatingTerminalState {
         self.set_height(base + delta)
     }
 
+    /// Give focus to another pane without hiding or restarting this terminal.
+    pub fn yield_keyboard(&mut self) {
+        self.keyboard = false;
+        self.pending_focus_terminal = false;
+    }
     pub fn set_keyboard(&mut self, has_keyboard: bool) {
         self.keyboard = has_keyboard;
     }

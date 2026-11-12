@@ -1,8 +1,8 @@
 //! Native `egui` 4-column Kanban Task Board (`TaskBoard.vue` + `TaskCard.vue` parity).
 //!
 //! Pure UI component with zero filesystem, process, network, or persistence side effects:
-//! - Renders ONLY the real native task fields (`id`, `title`, `column` in `0..=3`) without
-//!   invented assignee, priority, cost, or orchestration controls.
+//! - Renders native task titles, columns, timing and scoped agent assignment;
+//!   no invented priority, cost, or orchestration controls.
 //! - Matches `TaskBoard.vue`, `TaskCard.vue`, `style.css:1373-1708`, and `tasks.json`:
 //!   - Top `.task-board-add` bar (`32px` input bounded to [`MAX_TASK_TITLE_CHARS`] = `1000` chars
 //!     + `"Add"` / `"Ajouter"` submit button refusing empty/whitespace-only titles).
@@ -35,6 +35,7 @@ pub struct TaskCard {
     pub id: u64,
     pub title: String,
     pub column: usize,
+    pub pane: Option<u64>,
     pub timing: String,
     pub timing_title: String,
 }
@@ -43,6 +44,7 @@ pub struct TaskCard {
 #[derive(Debug, Clone, Copy)]
 pub struct TasksBoardInput<'a> {
     pub tasks: &'a [TaskCard],
+    pub agents: &'a [(u64, String)],
     pub french: bool,
     pub project_selected: bool,
 }
@@ -54,6 +56,7 @@ pub enum TasksBoardAction {
     Add(String),
     Move { id: u64, column: usize },
     Assign { id: u64, pane: Option<u64> },
+    ShowAgent { id: u64, pane: u64 },
     Rename { id: u64, title: String },
     Delete(u64),
     DeleteMany(Vec<u64>),
@@ -791,6 +794,7 @@ impl TasksBoard {
                                 col_idx,
                                 &buckets[col_idx],
                                 input.french,
+                                input.agents,
                                 active_focused_id,
                                 scroll_to_focused,
                                 pointer_pos,
@@ -1063,6 +1067,7 @@ impl TasksBoard {
         col_idx: usize,
         cards: &[&TaskCard],
         french: bool,
+        agents: &[(u64, String)],
         active_focused_id: Option<u64>,
         scroll_to_focused: bool,
         pointer_pos: Option<Pos2>,
@@ -1280,6 +1285,7 @@ impl TasksBoard {
                         col_color,
                         card,
                         french,
+                        agents,
                         active_focused_id == Some(card.id),
                         scroll_to_focused,
                         interaction_blocked,
@@ -1472,6 +1478,7 @@ impl TasksBoard {
         col_color: Color32,
         card: &TaskCard,
         french: bool,
+        agents: &[(u64, String)],
         is_key_focused: bool,
         scroll_to_focused: bool,
         interaction_blocked: bool,
@@ -1556,9 +1563,16 @@ impl TasksBoard {
         });
         let timing_h = timing_galley.as_ref().map_or(0.0, |g| g.size().y + 6.0);
         let foot_h = 24.0_f32;
-        let card_h = 10.0_f32 + title_h + timing_h + 8.0_f32 + foot_h + 8.0_f32;
+        let card_h = 10.0_f32 + title_h + 28.0 + timing_h + 8.0_f32 + foot_h + 8.0_f32;
         let (_, card_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
 
+        let agent_rect = Rect::from_min_size(
+            Pos2::new(
+                card_rect.min.x + left_text_pad,
+                card_rect.min.y + 10.0 + title_h + 4.0,
+            ),
+            Vec2::new(text_wrap_w, 24.0),
+        );
         let foot_y = card_rect.max.y - 8.0_f32 - foot_h;
         let right_btn_rect = Rect::from_min_size(
             Pos2::new(card_rect.max.x - 8.0_f32 - 26.0_f32, foot_y),
@@ -1661,9 +1675,14 @@ impl TasksBoard {
         if !interaction_blocked
             && !in_done_select
             && card_resp.drag_started()
-            && !del_resp.hovered()
-            && !left_resp.hovered()
-            && !right_resp.hovered()
+            && ui.input(|i| {
+                i.pointer.press_origin().is_some_and(|p| {
+                    card_rect.contains(p)
+                        && ![agent_rect, del_btn_rect, left_btn_rect, right_btn_rect]
+                            .iter()
+                            .any(|control| control.contains(p))
+                })
+            })
         {
             self.dragging_task_id = Some(card.id);
             self.focused_task_id = Some(card.id);
@@ -1733,7 +1752,7 @@ impl TasksBoard {
         if let Some(galley) = timing_galley {
             let pos = Pos2::new(
                 card_rect.min.x + left_text_pad,
-                card_rect.min.y + 10.0 + title_h + 6.0,
+                card_rect.min.y + 10.0 + title_h + 28.0 + 6.0,
             );
             let rect = Rect::from_min_size(pos, galley.size());
             cp.galley(pos, galley, ui.visuals().weak_text_color());
@@ -1773,6 +1792,78 @@ impl TasksBoard {
             right_resp.hovered(),
             false,
         );
+
+        let mut agent_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(agent_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        agent_ui.set_clip_rect(ui.clip_rect().intersect(agent_rect));
+        let assigned = agents.iter().find(|(id, _)| Some(*id) == card.pane);
+        if col_idx <= 1 {
+            let mut pane = card.pane;
+            let label = assigned
+                .map(|(_, name)| name.as_str())
+                .unwrap_or(if pane.is_some() {
+                    " "
+                } else if french {
+                    "Non assignée"
+                } else {
+                    "Unassigned"
+                });
+            egui::ComboBox::from_id_salt(board_id.with(("task-agent", card.id)))
+                .width((agent_rect.width() - 90.0).max(50.0))
+                .truncate()
+                .selected_text(label)
+                .show_ui(&mut agent_ui, |ui| {
+                    ui.selectable_value(
+                        &mut pane,
+                        None,
+                        if french {
+                            "Non assignée"
+                        } else {
+                            "Unassigned"
+                        },
+                    );
+                    for (id, label) in agents {
+                        ui.selectable_value(&mut pane, Some(*id), label);
+                    }
+                })
+                .response
+                .on_hover_text(if french {
+                    "L'agent qui fait cette tâche"
+                } else {
+                    "The agent doing this task"
+                });
+            if pane != card.pane {
+                return Some(TasksBoardAction::Assign { id: card.id, pane });
+            }
+        } else {
+            agent_ui.label(
+                egui::RichText::new(
+                    assigned
+                        .map(|(_, name)| name.as_str())
+                        .unwrap_or(if french { "Aucun agent" } else { "No agent" }),
+                )
+                .size(11.0),
+            );
+        }
+        if matches!(col_idx, 1 | 2)
+            && let Some((pane, _)) = assigned
+            && agent_ui
+                .small_button(if french { "Voir l'agent" } else { "Show agent" })
+                .on_hover_text(if french {
+                    "Aller à l'agent qui fait cette tâche"
+                } else {
+                    "Go to the agent doing this task"
+                })
+                .clicked()
+        {
+            return Some(TasksBoardAction::ShowAgent {
+                id: card.id,
+                pane: *pane,
+            });
+        }
 
         let del_clicked = !interaction_blocked && can_del && del_resp.clicked();
         let left_clicked = !interaction_blocked && can_left && left_resp.clicked();

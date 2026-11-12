@@ -114,6 +114,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             id: 1,
             title: "Audit reference CSS".into(),
             column: 0,
+            pane: None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -121,6 +122,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             id: 2,
             title: "Build native TasksBoard".into(),
             column: 1,
+            pane: None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -128,6 +130,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             id: 3,
             title: "Verify Clippy zero warnings".into(),
             column: 2,
+            pane: None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -161,6 +164,7 @@ fn renders_four_columns_exact_colors_counts_empty_placeholders_and_no_invented_f
                         action = board.show(
                             ui,
                             TasksBoardInput {
+                                agents: &[],
                                 tasks: &tasks,
                                 french,
                                 project_selected: false,
@@ -191,6 +195,7 @@ fn renders_four_columns_exact_colors_counts_empty_placeholders_and_no_invented_f
                     let _ = board.show(
                         ui,
                         TasksBoardInput {
+                            agents: &[],
                             tasks: &tasks,
                             french: false,
                             project_selected: true,
@@ -207,8 +212,8 @@ fn renders_four_columns_exact_colors_counts_empty_placeholders_and_no_invented_f
             "missing EN label `{heading}`"
         );
     }
-    // Zero ASCII arrow glyphs (`←` / `→`) and zero invented fields (`Unassigned`, `Priority`, etc.).
-    for forbidden in ["←", "→", "Unassigned", "No agent", "Priority", "New task…"] {
+    // Zero ASCII arrow glyphs (`←` / `→`) and no unsupported priority fields.
+    for forbidden in ["←", "→", "Priority", "New task…"] {
         assert!(
             !has_painted_text(&out_en.shapes, forbidden),
             "unexpected forbidden/invented text `{forbidden}`"
@@ -258,6 +263,7 @@ fn renders_four_columns_exact_colors_counts_empty_placeholders_and_no_invented_f
                     let _ = board.show(
                         ui,
                         TasksBoardInput {
+                            agents: &[],
                             tasks: &tasks,
                             french: true,
                             project_selected: true,
@@ -305,6 +311,7 @@ fn adding_tasks_trims_whitespace_refuses_blank_clamps_to_1000_chars_and_clears_d
                         action = board.show(
                             ui,
                             TasksBoardInput {
+                                agents: &[],
                                 tasks: &tasks,
                                 french: false,
                                 project_selected: true,
@@ -391,6 +398,7 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
             id: 10,
             title: "First todo card".into(),
             column: 0,
+            pane: None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -398,6 +406,7 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
             id: 40,
             title: "Corrupt column card".into(),
             column: 99,
+            pane: None,
             timing: String::new(),
             timing_title: String::new(), // clamped to column 3 (Done)
         },
@@ -429,6 +438,7 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
                         action = board.show(
                             ui,
                             TasksBoardInput {
+                                agents: &[],
                                 tasks: &tasks,
                                 french: false,
                                 project_selected: true,
@@ -455,9 +465,9 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
     let done_title = find_painted_text_rect(&shapes, "Corrupt column card").expect("done card");
 
     // Card layout: right button center is near `x = 280 - 12 - 8 - 13 = 247`, left is `x - 30 = 217`,
-    // `y` is ~26px below the single-line title top.
-    let todo_btn_y = todo_title.max.y + 20.0;
-    let done_btn_y = done_title.max.y + 20.0;
+    // `y` includes the 28px assignee row below the title.
+    let todo_btn_y = todo_title.max.y + 48.0;
+    let done_btn_y = done_title.max.y + 48.0;
     let right_btn_x = 247.0;
     let left_btn_x = 217.0;
 
@@ -519,6 +529,42 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
         }],
     );
     assert_eq!(act_drop, Some(TasksBoardAction::Move { id: 10, column: 2 }));
+
+    // Controls own their press even if the pointer subsequently crosses the card body.
+    for start in [
+        Pos2::new(left_btn_x, todo_btn_y),
+        Pos2::new(right_btn_x, todo_btn_y),
+        Pos2::new(253.0, todo_title.center().y),
+        Pos2::new(65.0, todo_title.max.y + 15.0),
+    ] {
+        let _ = run_frame(
+            &mut board,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        let _ = run_frame(&mut board, vec![egui::Event::PointerMoved(drag_start)]);
+        let _ = run_frame(&mut board, vec![egui::Event::PointerMoved(review_drop_pos)]);
+        let (action, _) = run_frame(
+            &mut board,
+            vec![egui::Event::PointerButton {
+                pos: review_drop_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            action, None,
+            "control press {start:?} must not move the card"
+        );
+    }
 
     // Opening a `Popup` between drag press and release MUST cancel the drag and emit `None`!
     let _ = run_frame(
@@ -642,6 +688,7 @@ fn keyboard_navigation_is_strictly_focus_scoped_and_respects_disabled_popup_and_
                             action = board.show(
                                 ui,
                                 TasksBoardInput {
+                                    agents: &[],
                                     tasks: cur_tasks,
                                     french: false,
                                     project_selected: true,
@@ -828,6 +875,7 @@ fn dynamic_catalog_mutation_deleted_focused_card_and_reset_stay_consistent() {
                         action = board.show(
                             ui,
                             TasksBoardInput {
+                                agents: &[],
                                 tasks: cur,
                                 french: false,
                                 project_selected: true,
@@ -909,6 +957,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
             id: 1,
             title: "super_long_unbroken_rust_identifier_that_must_wrap_cleanly_inside_a_280px_side_panel_without_forcing_880px_width".into(),
             column: 0,
+            pane:None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -916,6 +965,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
             id: 2,
             title: "Vérifier le rendu étroit en français sans débordement horizontal".into(),
             column: 2,
+            pane:None,
             timing: String::new(),
             timing_title: String::new(),
         },
@@ -938,6 +988,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
                     let _ = board.show(
                         ui,
                         TasksBoardInput {
+                            agents: &[],
                             tasks: &tasks,
                             french: true,
                             project_selected: true,
@@ -996,6 +1047,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
                 let _ = board.show(
                     ui,
                     TasksBoardInput {
+                        agents: &[],
                         tasks: &tasks,
                         french: false,
                         project_selected: true,
@@ -1034,6 +1086,7 @@ fn card_dates_wrap_inside_narrow_cards_without_hiding_controls() {
                             .show(
                                 ui,
                                 TasksBoardInput {
+                                    agents: &[],
                                     tasks: &tasks,
                                     french: true,
                                     project_selected: true
@@ -1053,4 +1106,71 @@ fn card_dates_wrap_inside_narrow_cards_without_hiding_controls() {
     assert!(*rows >= 2);
     assert!(rect.min.x >= clip.min.x && rect.max.x <= clip.max.x + 1.0);
     assert!(rect.max.y <= clip.max.y + 1.0);
+}
+
+#[test]
+fn assignment_menu_emits_choice_and_review_only_offers_show_agent() {
+    fn frame(
+        ctx: &egui::Context,
+        board: &mut TasksBoard,
+        tasks: &[TaskCard],
+        agents: &[(u64, String)],
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, Option<TasksBoardAction>) {
+        let mut action = None;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(420., 800.))),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    action = board.show(
+                        ui,
+                        TasksBoardInput {
+                            tasks,
+                            agents,
+                            french: false,
+                            project_selected: true,
+                        },
+                    );
+                });
+            },
+        );
+        (output, action)
+    }
+    let ctx = egui::Context::default();
+    let mut board = TasksBoard::new();
+    let mut tasks = sample_tasks();
+    tasks.truncate(1);
+    let agents = vec![(7, "Ada".into()), (8, "Bohr".into())];
+    frame(&ctx, &mut board, &tasks, &agents, vec![]);
+    let (out, _) = frame(&ctx, &mut board, &tasks, &agents, vec![]);
+    let button = find_painted_text_rect(&out.shapes, "Unassigned")
+        .unwrap()
+        .center();
+    frame(&ctx, &mut board, &tasks, &agents, click_events(button));
+    let (out, _) = frame(&ctx, &mut board, &tasks, &agents, vec![]);
+    let option = find_painted_text_rect(&out.shapes, "Ada").unwrap().center();
+    let (_, action) = frame(&ctx, &mut board, &tasks, &agents, click_events(option));
+    assert_eq!(
+        action,
+        Some(TasksBoardAction::Assign {
+            id: 1,
+            pane: Some(7)
+        })
+    );
+    tasks[0].pane = Some(7);
+    tasks[0].column = 2;
+    frame(&ctx, &mut board, &tasks, &agents, vec![]);
+    let (out, _) = frame(&ctx, &mut board, &tasks, &agents, vec![]);
+    assert!(has_painted_text(&out.shapes, "Ada"));
+    assert!(!has_painted_text(&out.shapes, "Unassigned"));
+    let button = find_painted_text_rect(&out.shapes, "Show agent")
+        .unwrap()
+        .center();
+    let (_, action) = frame(&ctx, &mut board, &tasks, &agents, click_events(button));
+    assert_eq!(action, Some(TasksBoardAction::ShowAgent { id: 1, pane: 7 }));
 }

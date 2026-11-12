@@ -41,6 +41,7 @@ pub(crate) fn render_side_panel_tab_body(
     panel_query_inputs: &super::panel_query_inputs::Inputs,
     task_rename_input: &super::task_rename_input::Input,
     task_card_input: &super::task_card_input::Inputs,
+    task_agent_inputs: &super::task_agent_input::Inputs,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -55,6 +56,7 @@ pub(crate) fn render_side_panel_tab_body(
             panel_query_inputs,
             task_rename_input,
             task_card_input,
+            task_agent_inputs,
             french,
             tokens,
             cx,
@@ -1219,11 +1221,13 @@ fn render_scm_commits_dock(
 // 4. `SideTab::Tasks` (`TaskBoard.vue` stacked status sections)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn render_tasks_board_tab(
     sp: &GpuiSidePanelsSnapshot,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
     task_rename_input: &super::task_rename_input::Input,
     task_card_input: &super::task_card_input::Inputs,
+    task_agent_inputs: &super::task_agent_input::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1240,6 +1244,7 @@ fn render_tasks_board_tab(
             tokens,
         );
     };
+    let agents = std::sync::Arc::new(sp.task_agents.clone());
     let action = |command| GpuiAction::NativeTaskBoard { scope, command };
     let mut columns = div()
         .id("gpui-tasks-scroll")
@@ -1538,6 +1543,38 @@ fn render_tasks_board_tab(
                 .flex_col()
                 .gap(px(6.))
                 .child(title);
+            if !editing {
+                content = content.child(super::task_agent_input::render(
+                    task_agent_inputs,
+                    scope,
+                    task,
+                    agents.clone(),
+                    french,
+                    tokens,
+                    cx,
+                ));
+                if matches!(column, 1 | 2)
+                    && let Some(pane) = task.timeline.pane_id
+                    && agents.iter().any(|p| p.id == pane)
+                {
+                    content = content.child(
+                        div()
+                            .id(("task-show-boundary", id))
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .child(head_control(
+                                "task-show-agent",
+                                if french { "Voir l'agent" } else { "Show agent" }.into(),
+                                Some(action(Command::ShowAgent { id, pane })),
+                                false,
+                                tokens,
+                                cx,
+                            )),
+                    );
+                }
+            }
             if !timing.text.is_empty() {
                 let tooltip = timing.tooltip;
                 let theme = *tokens;

@@ -442,6 +442,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub expanded_commits: BTreeSet<String>,
     pub commit_files: BTreeMap<String, Vec<crate::side_panels_model::CommitChangedFile>>,
     pub tasks: Vec<crate::workspace::Task>,
+    pub task_agents: Vec<crate::task_agents_model::Choice>,
     pub new_task_title: String,
     pub task_board: crate::native_task_board::State,
     pub history_window: crate::side_panels_model::TaskHistoryFilter,
@@ -2216,6 +2217,28 @@ impl Tessel {
         Some((offset, offset))
     }
 
+    pub(crate) fn gpui_task_agent_focus(
+        &self,
+        scope: crate::native_task_board::Scope,
+        id: u64,
+        pane: u64,
+    ) -> Option<GpuiFocusTarget> {
+        (self.gpui_extra.task_board.scope == Some(scope)
+            && self.active_session == Some(pane)
+            && crate::task_agents_model::can_focus(&self.state, scope.project, id, pane))
+        .then(|| {
+            if self
+                .sessions
+                .iter()
+                .find(|s| s.id == pane)
+                .is_some_and(|s| s.launch.native_chat().is_some())
+            {
+                GpuiFocusTarget::ChatComposer(pane)
+            } else {
+                GpuiFocusTarget::Terminal(Some(pane))
+            }
+        })
+    }
     pub(crate) fn gpui_default_focus_target(&self) -> GpuiFocusTarget {
         if self.floating.ui.is_open() {
             return GpuiFocusTarget::Terminal(None);
@@ -3915,6 +3938,9 @@ impl Tessel {
             },
             tasks,
             new_task_title: self.gpui_extra.new_task_title.clone(),
+            task_agents: active_pid
+                .map(|p| self.task_agent_choices(p))
+                .unwrap_or_default(),
             task_board: self.gpui_extra.task_board.clone(),
             history_window: self.side_panels_ui.history_window,
             history_sort: self.side_panels_ui.history_sort,
@@ -6859,6 +6885,49 @@ mod panel_snapshot_tests {
                 .confirm_modal
                 .is_none()
         );
+    }
+
+    #[test]
+    fn task_agent_show_targets_exact_pane_and_preserves_floating_terminal_on_refusal() {
+        use crate::tasks_board_panel::TasksBoardAction;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("state");
+        let (store, mut state) = crate::workspace::Store::open(&data).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state.projects[0].path.clone();
+        state.sessions.push(serde_json::from_value(serde_json::json!({"id":7,"project":project,"title":"Synthetic agent","launch":{"Agent":"codex"},"cwd":cwd})).unwrap());
+        state.next_pane = 8;
+        store.save(&state).unwrap();
+        drop(store);
+        let mut app = Tessel::new_for_gpui_in_dir(Some(data), false, || {});
+        app.apply_gpui_action(GpuiAction::SelectSideTab(crate::workspace::SideTab::Tasks));
+        assert!(app.apply_tasks_board_action(project, TasksBoardAction::Add("Focus".into())));
+        let id = app.state.tasks[0].id;
+        assert!(
+            app.apply_tasks_board_action(project, TasksBoardAction::Assign { id, pane: Some(7) })
+        );
+        assert!(app.apply_tasks_board_action(project, TasksBoardAction::Move { id, column: 1 }));
+        let scope = app
+            .gpui_snapshot(960., 640., 4.)
+            .side_panels
+            .task_board
+            .scope
+            .unwrap();
+        app.floating.ui.show();
+        assert!(app.apply_tasks_board_action(project, TasksBoardAction::ShowAgent { id, pane: 7 }));
+        assert!(app.floating.ui.is_open());
+        assert!(!app.floating.ui.has_keyboard());
+        assert_eq!(
+            app.gpui_task_agent_focus(scope, id, 7),
+            Some(GpuiFocusTarget::Terminal(Some(7)))
+        );
+        assert!(app.apply_tasks_board_action(project, TasksBoardAction::Move { id, column: 3 }));
+        app.floating.ui.show();
+        assert!(
+            !app.apply_tasks_board_action(project, TasksBoardAction::ShowAgent { id, pane: 7 })
+        );
+        assert!(app.floating.ui.has_keyboard());
+        assert_eq!(app.gpui_task_agent_focus(scope, id, 7), None);
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub(crate) mod sheet_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
+mod task_agent_input;
 mod task_card_input;
 mod task_rename_input;
 mod terminal_find_inputs;
@@ -110,6 +111,7 @@ pub(crate) struct TesselGpuiRoot {
     panel_query_inputs: panel_query_inputs::Inputs,
     task_rename_input: task_rename_input::Input,
     task_card_input: task_card_input::Inputs,
+    task_agent_inputs: task_agent_input::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -290,6 +292,7 @@ impl TesselGpuiRoot {
             panel_query_inputs: panel_query_inputs::Inputs::default(),
             task_rename_input: Default::default(),
             task_card_input: Default::default(),
+            task_agent_inputs: Default::default(),
             _poller_task: poller_task,
         }
     }
@@ -1218,6 +1221,14 @@ impl Render for TesselGpuiRoot {
         }
         let card_was_focused = self.task_card_input.contains_focus(window, cx)
             || self.task_card_input.confirm_focused(window);
+        self.task_agent_inputs.sync(
+            snapshot.side_panels.task_board.scope,
+            &snapshot.side_panels.tasks,
+            self.app.gpui_has_open_modal()
+                || !window.is_window_active()
+                || snapshot.side_panels.task_board.edit.is_some(),
+            cx,
+        );
         self.task_card_input.sync(
             snapshot.side_panels.task_board.scope,
             &snapshot.side_panels.tasks,
@@ -1423,6 +1434,7 @@ impl Render for TesselGpuiRoot {
                 &self.panel_query_inputs,
                 &self.task_rename_input,
                 &self.task_card_input,
+                &self.task_agent_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,

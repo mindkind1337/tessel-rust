@@ -27,6 +27,14 @@ pub struct State {
 }
 #[derive(Clone, Debug)]
 pub enum Command {
+    Assign {
+        id: u64,
+        pane: Option<u64>,
+    },
+    ShowAgent {
+        id: u64,
+        pane: u64,
+    },
     BeginRename(u64),
     Edit {
         serial: u64,
@@ -119,6 +127,18 @@ impl State {
             return None;
         }
         match command {
+            Command::Assign { id, pane } => {
+                if find(id).is_some_and(|t| t.column <= 1) && self.edit.is_none() {
+                    return Some(TasksBoardAction::Assign { id, pane });
+                }
+            }
+            Command::ShowAgent { id, pane } => {
+                if find(id)
+                    .is_some_and(|t| matches!(t.column, 1 | 2) && t.timeline.pane_id == Some(pane))
+                {
+                    return Some(TasksBoardAction::ShowAgent { id, pane });
+                }
+            }
             Command::BeginRename(id) => {
                 if let Some(t) = find(id).filter(|t| t.column == 0) {
                     self.serial = self.serial.checked_add(1).expect("edit identity exhausted");

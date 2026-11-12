@@ -6859,6 +6859,20 @@ impl Tessel {
         self.overlay = None;
         self.view = View::Files;
     }
+    fn task_agent_choices(&self, project: u64) -> Vec<crate::task_agents_model::Choice> {
+        crate::task_agents_model::from_sessions(
+            project,
+            self.sessions.iter().map(|s| {
+                (
+                    s.id,
+                    s.project,
+                    &s.launch,
+                    s.pane_name.as_deref(),
+                    s.title.as_str(),
+                )
+            }),
+        )
+    }
     fn tasks(&mut self, ui: &mut egui::Ui) {
         use crate::tasks_board_panel::{TaskCard, TasksBoardInput};
         let project = self.state.active_project.filter(|id| {
@@ -6886,6 +6900,7 @@ impl Tessel {
                     id: task.id,
                     title: task.title.clone(),
                     column: task.column,
+                    pane: task.timeline.pane_id,
                     timing: timing.text,
                     timing_title: timing.tooltip,
                 }
@@ -6902,10 +6917,17 @@ impl Tessel {
             });
             ui.add_space(2.0_f32);
         }
+        let agents: Vec<_> = project
+            .map(|p| self.task_agent_choices(p))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (p.id, p.label))
+            .collect();
         let action = self.tasks_board.show(
             ui,
             TasksBoardInput {
                 tasks: &cards,
+                agents: &agents,
                 french: self.state.language == crate::i18n::Language::French,
                 project_selected: project.is_some(),
             },
@@ -6914,7 +6936,17 @@ impl Tessel {
             return;
         };
         if let Some(action) = action {
-            self.apply_tasks_board_action(project, action);
+            let showing = matches!(
+                action,
+                crate::tasks_board_panel::TasksBoardAction::ShowAgent { .. }
+            );
+            if self.apply_tasks_board_action(project, action) && showing {
+                ui.memory_mut(|m| {
+                    if let Some(id) = m.focused() {
+                        m.surrender_focus(id);
+                    }
+                });
+            }
         }
     }
 
@@ -6924,6 +6956,15 @@ impl Tessel {
         action: crate::tasks_board_panel::TasksBoardAction,
     ) -> bool {
         self.capture_runtime_state();
+        if let crate::tasks_board_panel::TasksBoardAction::ShowAgent { id, pane } = action {
+            if crate::task_agents_model::can_focus(&self.state, project, id, pane) {
+                self.active_session = Some(pane);
+                self.view = View::Work;
+                self.floating.ui.yield_keyboard();
+                return true;
+            }
+            return false;
+        }
         match crate::task_actions::commit(&mut self.state, self.store.as_ref(), project, action) {
             Ok(true) => true,
             Ok(false) => false,
