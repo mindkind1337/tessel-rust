@@ -605,6 +605,63 @@ fn render_explorer_tab(
         }
     }
 
+    let searching = !ex.filter_query.trim().is_empty();
+    let count = if ex.content_search_mode && searching {
+        ex.content_hits.len()
+    } else {
+        ex.rows.len()
+    };
+    if ex.truncated {
+        let message = if !searching {
+            if french {
+                "Certains fichiers ne sont pas affichés : limite atteinte.".to_owned()
+            } else {
+                "Some files are not shown: limit reached.".to_owned()
+            }
+        } else if count == 0 {
+            if french {
+                "La recherche s'est arrêtée avant la fin : limite atteinte.".to_owned()
+            } else {
+                "The search stopped early: limit reached.".to_owned()
+            }
+        } else if french {
+            if count == 1 {
+                "Seul le premier résultat est affiché. Précisez la recherche.".to_owned()
+            } else {
+                format!(
+                    "Seuls les {count} premiers résultats sont affichés. Précisez la recherche."
+                )
+            }
+        } else if count == 1 {
+            "Only the first result is shown. Type more to narrow the search.".to_owned()
+        } else {
+            format!("Only the first {count} results are shown. Type more to narrow the search.")
+        };
+        scroll = scroll.child(
+            div()
+                .px(px(6.))
+                .py(px(3.))
+                .text_size(px(11.))
+                .text_color(tokens.warn)
+                .child(message),
+        );
+    }
+    if ex.loading && count == 0 {
+        scroll = scroll.child(
+            div()
+                .px(px(6.))
+                .py(px(3.))
+                .text_size(px(11.))
+                .text_color(tokens.text_dim)
+                .child(match (searching, french) {
+                    (true, true) => "Recherche…",
+                    (true, false) => "Searching…",
+                    (false, true) => "Chargement…",
+                    (false, false) => "Loading…",
+                }),
+        );
+    }
+
     div()
         .size_full()
         .p(px(8.0))

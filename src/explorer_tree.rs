@@ -17,6 +17,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write as _,
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
@@ -282,7 +283,7 @@ struct ContentMatch {
 struct ContentSearchTask {
     query_key: String,
     cancel: Arc<AtomicBool>,
-    rx: Receiver<Vec<ContentMatch>>,
+    rx: Receiver<ContentSearchResult>,
 }
 
 impl Drop for ContentSearchTask {
@@ -291,50 +292,115 @@ impl Drop for ContentSearchTask {
     }
 }
 
-fn search_project_contents(root: &Path, query: &str, cancel: &AtomicBool) -> Vec<ContentMatch> {
-    const MAX_MATCHES: usize = 200;
-    const MAX_FILES_EXAMINED: usize = 4_000;
-    const MAX_FILE_BYTES: u64 = 512 * 1024;
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return Vec::new();
+#[derive(Default)]
+struct ContentSearchResult {
+    hits: Vec<ContentMatch>,
+    limited: bool,
+}
+#[derive(Clone, Copy)]
+struct ContentSearchLimits {
+    entries: usize,
+    files: usize,
+    matches: usize,
+    bytes: u64,
+    duration: Duration,
+}
+impl Default for ContentSearchLimits {
+    fn default() -> Self {
+        Self {
+            entries: 10_000,
+            files: 4_000,
+            matches: 200,
+            bytes: 512 * 1024,
+            duration: Duration::from_secs(3),
+        }
     }
+}
+fn read_search_bytes(reader: impl Read, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
+}
+fn search_project_contents(root: &Path, query: &str, cancel: &AtomicBool) -> ContentSearchResult {
+    search_contents_with_limits(root, query, cancel, ContentSearchLimits::default())
+}
+fn search_contents_with_limits(
+    root: &Path,
+    query: &str,
+    cancel: &AtomicBool,
+    limits: ContentSearchLimits,
+) -> ContentSearchResult {
+    let needle = query.trim().to_lowercase();
+    let mut result = ContentSearchResult::default();
+    if needle.is_empty() || cancel.load(Ordering::Relaxed) {
+        return result;
+    }
+    let deadline = Instant::now() + limits.duration;
     let Ok(canonical_root) = root.canonicalize() else {
-        return Vec::new();
+        return result;
     };
-    let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0_usize)];
-    let mut files_seen = 0_usize;
-    let deadline = Instant::now() + Duration::from_secs(3);
-
+    let mut entries_seen = 0;
+    let mut files_seen = 0;
     while let Some((dir, depth)) = stack.pop() {
-        if cancel.load(Ordering::Relaxed)
-            || Instant::now() >= deadline
-            || out.len() >= MAX_MATCHES
-            || files_seen >= MAX_FILES_EXAMINED
+        if cancel.load(Ordering::Relaxed) {
+            return result;
+        }
+        if Instant::now() >= deadline
+            || entries_seen >= limits.entries
+            || files_seen >= limits.files
         {
+            result.limited = true;
             break;
         }
         let Ok(read_dir) = fs::read_dir(&dir) else {
             continue;
         };
-        let mut entries: Vec<fs::DirEntry> = read_dir.filter_map(Result::ok).collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries.into_iter().rev() {
-            if cancel.load(Ordering::Relaxed) || out.len() >= MAX_MATCHES {
+        // Bound raw entries before collection/sorting, including skipped entries and errors.
+        let mut entries = Vec::new();
+        for entry in read_dir {
+            if cancel.load(Ordering::Relaxed) {
+                return result;
+            }
+            if Instant::now() >= deadline || entries_seen >= limits.entries {
+                result.limited = true;
                 break;
             }
+            entries_seen += 1;
+            if let Ok(entry) = entry {
+                entries.push(entry);
+            }
+        }
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries.into_iter().rev() {
+            if cancel.load(Ordering::Relaxed) {
+                return result;
+            }
+            if Instant::now() >= deadline || files_seen >= limits.files {
+                result.limited = true;
+                return result;
+            }
             let name = entry.file_name();
-            let name_lossy = name.to_string_lossy();
             if matches!(
-                name_lossy.as_ref(),
+                name.to_string_lossy().as_ref(),
                 ".git" | "node_modules" | "target" | "dist" | ".next"
             ) {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
+            if meta.is_file() && meta.len() > limits.bytes {
+                continue;
+            }
             let path = entry.path();
             if is_path_symlink_or_reparse(&path) {
                 continue;
@@ -348,10 +414,16 @@ fn search_project_contents(root: &Path, query: &str, cancel: &AtomicBool) -> Vec
             if meta.is_dir() {
                 if depth < 16 {
                     stack.push((path, depth + 1));
+                } else {
+                    result.limited = true;
                 }
-            } else if meta.is_file() && meta.len() <= MAX_FILE_BYTES {
+            } else if meta.is_file() {
                 files_seen += 1;
-                let Ok(bytes) = fs::read(&path) else {
+                let Ok(file) = fs::File::open(&path) else {
+                    continue;
+                };
+                // Metadata is only a prefilter: growth before/during reading cannot exceed this cap.
+                let Ok(Some(bytes)) = read_search_bytes(file, limits.bytes) else {
                     continue;
                 };
                 if bytes.iter().take(4096).any(|&b| b == 0) {
@@ -364,23 +436,30 @@ fn search_project_contents(root: &Path, query: &str, cancel: &AtomicBool) -> Vec
                     .to_string_lossy()
                     .replace('\\', "/");
                 for (idx, line) in text.lines().enumerate() {
+                    if cancel.load(Ordering::Relaxed) {
+                        return result;
+                    }
+                    if Instant::now() >= deadline {
+                        result.limited = true;
+                        return result;
+                    }
                     if line.to_lowercase().contains(&needle) {
-                        let trimmed: String = line.trim().chars().take(120).collect();
-                        out.push(ContentMatch {
+                        if result.hits.len() >= limits.matches {
+                            result.limited = true;
+                            return result;
+                        }
+                        result.hits.push(ContentMatch {
                             path: path.clone(),
                             rel_display: rel_display.clone(),
                             line: idx + 1,
-                            preview: trimmed,
+                            preview: line.trim().chars().take(120).collect(),
                         });
-                        if out.len() >= MAX_MATCHES {
-                            break;
-                        }
                     }
                 }
             }
         }
     }
-    out
+    result
 }
 
 fn git_badge_color(ch: char) -> egui::Color32 {
@@ -430,6 +509,7 @@ pub struct ExplorerTree {
     gpui_filter_due: Option<Instant>,
     content_search_mode: bool,
     content_search_hits: Vec<ContentMatch>,
+    content_search_limited: bool,
     content_search_last_key: String,
     content_search_task: Option<ContentSearchTask>,
     git_badges: HashMap<String, char>,
@@ -478,6 +558,7 @@ impl ExplorerTree {
             gpui_filter_due: None,
             content_search_mode: false,
             content_search_hits: Vec::new(),
+            content_search_limited: false,
             content_search_last_key: String::new(),
             content_search_task: None,
             git_badges: HashMap::new(),
@@ -743,6 +824,7 @@ impl ExplorerTree {
         self.selected_key = None;
         self.last_row_rects.clear();
         self.content_search_hits.clear();
+        self.content_search_limited = false;
         self.content_search_last_key.clear();
         self.content_search_task = None;
         self.gpui_applied_filter = self.filter_query.trim().to_owned();
@@ -762,6 +844,10 @@ impl ExplorerTree {
         let Some(root) = self.project_root.clone() else {
             return;
         };
+        self.content_search_task = None;
+        self.content_search_last_key.clear();
+        self.gpui_applied_filter = self.filter_query.trim().to_owned();
+        self.gpui_filter_due = None;
         let preserved = self.effective_expanded_for_save();
         self.generation = self.generation.wrapping_add(1);
         if let Some(task) = &self.in_flight {
@@ -1072,6 +1158,7 @@ impl ExplorerTree {
             if !self.filter_query.is_empty() && ui.small_button("×").clicked() {
                 self.filter_query.clear();
                 self.content_search_hits.clear();
+                self.content_search_limited = false;
                 self.content_search_last_key.clear();
                 self.content_search_task = None;
             }
@@ -1081,7 +1168,8 @@ impl ExplorerTree {
             match task.rx.try_recv() {
                 Ok(hits) => {
                     if task.query_key == self.content_search_last_key {
-                        self.content_search_hits = hits;
+                        self.content_search_hits = hits.hits;
+                        self.content_search_limited = hits.limited;
                     }
                     self.content_search_task = None;
                 }
@@ -1116,6 +1204,9 @@ impl ExplorerTree {
                 ui.ctx().request_repaint_after(Duration::from_millis(60));
             }
             self.last_row_rects.clear();
+            if self.content_search_limited {
+                ui.small(tr("Search limit reached; some files are not listed."));
+            }
             if self.content_search_hits.is_empty() {
                 if self.content_search_task.is_some() {
                     ui.label(tr("Working…"));
@@ -1467,6 +1558,7 @@ impl ExplorerTree {
         self.content_search_last_key.clear();
         if self.filter_query.trim().is_empty() {
             self.content_search_hits.clear();
+            self.content_search_limited = false;
             self.gpui_applied_filter.clear();
             self.gpui_filter_due = None;
         } else {
@@ -1558,7 +1650,8 @@ impl ExplorerTree {
             match task.rx.try_recv() {
                 Ok(hits) => {
                     if task.query_key == self.content_search_last_key {
-                        self.content_search_hits = hits;
+                        self.content_search_hits = hits.hits;
+                        self.content_search_limited = hits.limited;
                     }
                     self.content_search_task = None;
                 }
@@ -1621,7 +1714,7 @@ impl ExplorerTree {
                 show_dotfiles: self.show_dotfiles,
                 compact_folders: self.compact_folders,
                 loading: self.gpui_needs_frame(),
-                truncated: self.truncated,
+                truncated: self.truncated || self.content_search_limited,
                 error: self.error.clone(),
                 rows: Vec::new(),
                 content_hits,
@@ -1630,7 +1723,7 @@ impl ExplorerTree {
 
         let active_key = active.map(norm_tree_key);
         let filter_lc = trimmed_query.to_lowercase();
-        let rows = self
+        let mut rows: Vec<_> = self
             .cached_tree
             .rows
             .iter()
@@ -1639,7 +1732,7 @@ impl ExplorerTree {
                     || r.name.to_lowercase().contains(&filter_lc)
                     || r.path.to_lowercase().contains(&filter_lc)
             })
-            .take(500)
+            .take(501)
             .map(|row| {
                 let row_path = self
                     .path_by_key
@@ -1669,6 +1762,9 @@ impl ExplorerTree {
             })
             .collect();
 
+        let rows_limited = rows.len() > 500;
+        rows.truncate(500);
+
         ExplorerGpuiSnapshot {
             has_root: true,
             root_path,
@@ -1679,7 +1775,7 @@ impl ExplorerTree {
             show_dotfiles: self.show_dotfiles,
             compact_folders: self.compact_folders,
             loading: self.gpui_needs_frame(),
-            truncated: self.truncated,
+            truncated: self.truncated || rows_limited,
             error: self.error.clone(),
             rows,
             content_hits: Vec::new(),
@@ -1751,6 +1847,136 @@ mod native_filter_tests {
             )],
             vec![],
         )
+    }
+    #[test]
+    fn native_filter_content_budgets_bound_entries_files_hits_and_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..8 {
+            std::fs::write(dir.path().join(format!("{n}.txt")), "needle\n").unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        for (entries, files, matches, expected) in [(3, 10, 10, 3), (10, 2, 10, 2), (10, 10, 1, 1)]
+        {
+            let result = search_contents_with_limits(
+                dir.path(),
+                "needle",
+                &cancel,
+                ContentSearchLimits {
+                    entries,
+                    files,
+                    matches,
+                    ..Default::default()
+                },
+            );
+            assert!(result.limited);
+            assert_eq!(result.hits.len(), expected);
+        }
+        let complete = search_project_contents(dir.path(), "needle", &cancel);
+        assert_eq!(complete.hits.len(), 8);
+        assert!(!complete.limited);
+        let exact = search_contents_with_limits(
+            dir.path(),
+            "needle",
+            &cancel,
+            ContentSearchLimits {
+                matches: 8,
+                ..Default::default()
+            },
+        );
+        assert_eq!(exact.hits.len(), 8);
+        assert!(
+            !exact.limited,
+            "exact hit limit is complete unless another match exists"
+        );
+        let expired = search_contents_with_limits(
+            dir.path(),
+            "needle",
+            &cancel,
+            ContentSearchLimits {
+                duration: Duration::ZERO,
+                ..Default::default()
+            },
+        );
+        assert!(expired.limited && expired.hits.is_empty());
+        cancel.store(true, Ordering::Relaxed);
+        assert!(
+            search_project_contents(dir.path(), "needle", &cancel)
+                .hits
+                .is_empty()
+        );
+    }
+    #[test]
+    fn native_filter_visible_row_cap_is_reported_and_filtered_results_can_be_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries = (0..501)
+            .map(|n| {
+                let name = format!("entry{n:03}.txt");
+                TreeDirEntry {
+                    path: dir.path().join(&name),
+                    name,
+                    directory: false,
+                }
+            })
+            .collect();
+        let mut tree = ExplorerTree::fixture(
+            dir.path().to_path_buf(),
+            vec![(dir.path().to_path_buf(), entries)],
+            vec![],
+        );
+        let capped = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert_eq!(capped.rows.len(), 500);
+        assert!(capped.truncated);
+        tree.set_filter_query("entry500.txt");
+        let narrowed = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert_eq!(narrowed.rows.len(), 1);
+        assert!(!narrowed.truncated);
+    }
+    #[test]
+    fn native_filter_reader_caps_growth_and_keeps_exact_limit_bytes() {
+        let mut growing = std::io::Cursor::new(vec![b'x'; 128]);
+        assert!(read_search_bytes(&mut growing, 16).unwrap().is_none());
+        assert_eq!(growing.position(), 17);
+        assert_eq!(
+            read_search_bytes(std::io::Cursor::new(vec![b'x'; 16]), 16)
+                .unwrap()
+                .unwrap()
+                .len(),
+            16
+        );
+    }
+    #[test]
+    fn native_filter_refresh_rechecks_changed_file_without_changing_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alpha.txt");
+        std::fs::write(&path, "needle\n").unwrap();
+        let mut tree = fixture(dir.path());
+        tree.gpui_toggle_search_mode();
+        tree.gpui_set_filter_query("needle".into());
+        tree.gpui_advance_filter(Instant::now() + Duration::from_secs(1));
+        fn finish(tree: &mut ExplorerTree, root: &Path) -> ExplorerGpuiSnapshot {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let snapshot = tree.gpui_rows_snapshot(Some(root), None);
+                if !snapshot.loading {
+                    return snapshot;
+                }
+                assert!(Instant::now() < deadline, "search fixture did not finish");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let initial = finish(&mut tree, dir.path());
+        assert_eq!(initial.content_hits.len(), 1);
+        std::fs::write(&path, "changed\n").unwrap();
+        tree.refresh();
+        assert_eq!(
+            tree.content_search_hits.len(),
+            1,
+            "keep old hits visible while refreshing"
+        );
+        let updated = finish(&mut tree, dir.path());
+        assert!(updated.content_hits.is_empty());
+        assert_eq!(updated.filter_query, "needle");
+        assert!(!updated.truncated);
     }
     #[test]
     fn native_filter_debounce_coalesces_names_and_clear_is_immediate() {
