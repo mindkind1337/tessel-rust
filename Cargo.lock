@@ -8530,6 +8530,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml 0.42.0",
  "rcgen",
+ "regex",
  "reqwest",
  "rfd",
  "ring",

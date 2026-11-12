@@ -7,3 +7,4 @@
 - Preserve private host credentials and permissions when implementing Live Share. Guests must not inherit host secrets or authority.
 - Run formatting, focused tests and clippy before pushing. Limit compilation to two jobs on the shared workstation.
 - Report the commit and build count after pushing. Do not claim feature parity until tested.
+- Before every push, compile every test target (`cargo check --all-targets --all-features` or strict Clippy with those flags), even when only focused tests are executed. This catches stale standalone fixtures outside the current change.

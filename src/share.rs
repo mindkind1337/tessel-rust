@@ -1105,6 +1105,9 @@ pub struct SharedProject {
     pub path: PathBuf,
 }
 
+#[path = "share/guest_text.rs"]
+pub(crate) mod guest_text;
+
 #[path = "share/task_board.rs"]
 mod task_board;
 pub use task_board::{GuestTaskCommand, GuestTaskOp, SharedTask};
@@ -1527,6 +1530,9 @@ impl Host {
             }
             for slot in &mut guard.guests {
                 slot.guest.projects.retain(|id| new_ids.contains(id));
+            }
+            if !task_board::same_roots(&guard.shared_projects, &canon_projects) {
+                guard.task_board.invalidate();
             }
             guard.shared_projects = canon_projects;
         }

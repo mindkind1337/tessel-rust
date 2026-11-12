@@ -600,7 +600,7 @@ pub fn mask_transcript_secrets(input: &str) -> String {
             || (lower.starts_with("ghp_") && token.len() >= 16)
             || (lower.starts_with("github_pat_") && token.len() >= 20)
             || (lower.starts_with("xoxb-") && token.len() >= 16)
-            || (lower.starts_with("aiZa") && token.len() >= 20);
+            || (lower.starts_with("aiza") && token.len() >= 20);
         if looks_secret {
             let prefix: String = token.chars().take(4).collect();
             out.push_str(&prefix);

@@ -384,3 +384,14 @@ Card timing labels and timestamp tooltips are now connected in GPUI and Compatib
 Local assignee controls and Show agent are wired to the shared mutation/focus guards in both renderers. Menu options come from current project runtime panes, with native keyboard and pointer handling. Brand icons/accents, closed-pane display improvements, guest metadata/controls and pixel acceptance still require work.
 
 Local Review/Done assignees now share fifty embedded brand images across GPUI and Compatibility (including PNG-only brands and Ollama), preserving full color, source framing and DPI-aware caches. Unknown IDs fall back to the current-color terminal glyph; the reference card has no accent swatch. Native visual acceptance and the guest-card metadata/control follow-up remain open.
+
+
+## Guest task-board integration audit (2026-11-12)
+
+This audit supersedes any suggestion that the existing host task-card renderer also covers guest tasks. `share_panel.rs::render_joined_guest_workspace` currently renders guest tasks only in the Compatibility join dialog: synchronous Refresh/Add RPCs, plain column/title labels, no move/rename/delete controls. `gpui_ui/modals_view.rs::render_share_modal` exposes join/follow/leave/status but no guest workspace or task board. `GpuiSidePanelsSnapshot` still carries only local workspace cards.
+
+Required next boundary: a renderer-independent guest-board controller scoped by session generation and authorized project ID, nonblocking requests with explicit pending/error states, stale-reply rejection after selection/session/rights changes, and draft preservation until matching successful acknowledgements. Never use a host pane ID to focus a local session. Until explicit visible-pane mapping exists, do not export assignment IDs, agent labels or work periods. Render guest cards through the shared board surfaces only after this controller and authorization boundary are tested. Native guest visual acceptance remains pending.
+
+The current Compatibility cache is an unscoped `Vec<Value>`; following a new project does not clear it. The guest project selector is also missing from the joined view. These are remaining implementation gaps, not accepted parity.
+
+Native visual access was rechecked on 2026-11-12: the Computer Use inventory reports an unavailable native pipe (OS error 2) and browser access host. No active application was restarted or used for acceptance; visual parity remains unverified.

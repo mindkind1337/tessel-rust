@@ -4,6 +4,13 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;
 
+#[path = "task_text_cache.rs"]
+mod text_cache;
+use text_cache::CachedTaskText;
+#[cfg(test)]
+#[path = "task_text_cache_tests.rs"]
+mod text_cache_tests;
+
 const COLUMNS: [&str; 4] = ["todo", "doing", "review", "done"];
 const WAIT: Duration = Duration::from_secs(2);
 const MAX_QUEUED: usize = 32;
@@ -42,22 +49,39 @@ pub struct GuestTaskCommand {
 #[derive(Default)]
 pub(super) struct TaskBoard {
     ready: bool,
-    limited: bool,
+    text_cache: HashMap<String, Arc<CachedTaskText>>,
+    limited: std::collections::HashSet<u64>,
     cards: Vec<SharedTask>,
     rates: HashMap<String, (Instant, usize)>,
 }
 
+pub(super) fn same_roots(left: &[SharedProject], right: &[SharedProject]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.id == b.id && a.path == b.path)
+}
+
 impl TaskBoard {
+    pub(super) fn invalidate(&mut self) {
+        self.ready = false;
+        self.text_cache.clear();
+        self.limited.clear();
+        self.cards.clear();
+    }
     fn publish(&mut self, cards: Vec<SharedTask>, projects: &[SharedProject]) {
         self.ready = true;
-        self.limited = false;
+        self.limited.clear();
         self.cards.clear();
+        let previous_cache = std::mem::take(&mut self.text_cache);
         let mut bytes = 0;
         let mut ids = std::collections::HashSet::new();
-        for card in cards {
-            if !projects.iter().any(|p| p.id == card.project_id) {
+        let mut per_project = HashMap::<u64, usize>::new();
+        for mut card in cards.into_iter().rev() {
+            let Some(project) = projects.iter().find(|p| p.id == card.project_id) else {
                 continue;
-            }
+            };
             if card.id.parse::<u64>().is_err()
                 || !ids.insert(card.id.clone())
                 || card.title.len() > 4096
@@ -67,20 +91,40 @@ impl TaskBoard {
                     .as_ref()
                     .is_some_and(|s| s.chars().count() > 40)
             {
-                self.limited = true;
+                self.limited.insert(card.project_id);
                 continue;
             }
+            let count = per_project.entry(card.project_id).or_default();
+            if *count >= 500 {
+                self.limited.insert(card.project_id);
+                continue;
+            }
+            *count += 1;
+            if self.cards.len() >= 10_000 {
+                self.limited.insert(card.project_id);
+                continue;
+            }
+            let text = previous_cache
+                .get(&card.id)
+                .filter(|cached| cached.matches(&card, &project.path))
+                .cloned()
+                .unwrap_or_else(|| Arc::new(CachedTaskText::new(&card, &project.path)));
+            card.title.clone_from(&text.title);
+            card.guest_by.clone_from(&text.guest_by);
             // JSON may encode each control byte as six ASCII bytes. This upper
             // bound avoids repeated serialization under the authority mutex.
-            bytes += 128
+            let card_bytes = 128
                 + card.id.len()
                 + 6 * (card.title.len() + card.guest_by.as_ref().map_or(0, String::len));
-            if bytes > 8 * 1024 * 1024 || self.cards.len() >= 10_000 {
-                self.limited = true;
-                break;
+            if bytes + card_bytes > 8 * 1024 * 1024 || self.cards.len() >= 10_000 {
+                self.limited.insert(card.project_id);
+                continue;
             }
+            bytes += card_bytes;
+            self.text_cache.insert(card.id.clone(), text);
             self.cards.push(card);
         }
+        self.cards.reverse();
     }
 
     fn snapshot(&self, project: u64) -> Result<Value> {
@@ -88,7 +132,7 @@ impl TaskBoard {
             return Err("The host task board is not ready yet.".into());
         }
         Ok(
-            json!({"tasks": self.cards.iter().filter(|c| c.project_id == project).collect::<Vec<_>>(), "limited": self.limited}),
+            json!({"tasks": self.cards.iter().filter(|c| c.project_id == project).collect::<Vec<_>>(), "limited": self.limited.contains(&project)}),
         )
     }
 }
@@ -141,11 +185,8 @@ fn parse(req: &Value) -> Result<GuestTaskOp> {
         return Err("Unsupported task fields.".into());
     }
     let title = || -> Result<String> {
-        let title = req["title"].as_str().ok_or("Missing task title.")?.trim();
-        if title.is_empty() || title.chars().count() > 300 {
-            return Err("Task titles must contain 1 to 300 characters.".into());
-        }
-        Ok(title.into())
+        guest_text::clean_task_input(req["title"].as_str().ok_or("Missing task title.")?)
+            .ok_or_else(|| "Task titles must contain 1 to 300 plain-text characters.".into())
     };
     let id = || -> Result<u64> {
         req["id"]
@@ -253,24 +294,41 @@ pub(super) fn dispatch(inner: &Arc<Mutex<HostInner>>, guest: &str, req: &Value) 
 impl Host {
     pub fn task_scope(&self) -> (Vec<u8>, Vec<u64>) {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // This opaque local cache identity is never serialized to a guest.
+        let mut identity = (guard.cert_der.len() as u64).to_le_bytes().to_vec();
+        identity.extend_from_slice(&guard.cert_der);
+        for project in &guard.shared_projects {
+            identity.extend_from_slice(&project.id.to_le_bytes());
+            let path = project.path.as_os_str().as_encoded_bytes();
+            identity.extend_from_slice(&(path.len() as u64).to_le_bytes());
+            identity.extend_from_slice(path);
+        }
         (
-            guard.cert_der.clone(),
+            identity,
             guard.shared_projects.iter().map(|p| p.id).collect(),
         )
     }
     pub fn publish_tasks(&self, cards: Vec<SharedTask>) {
-        let projects = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .shared_projects
-            .clone();
-        let mut prepared = TaskBoard::default();
+        let (projects, text_cache) = {
+            let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                guard.shared_projects.clone(),
+                guard.task_board.text_cache.clone(),
+            )
+        };
+        let mut prepared = TaskBoard {
+            text_cache,
+            ..TaskBoard::default()
+        };
         prepared.publish(cards, &projects);
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !same_roots(&projects, &guard.shared_projects) {
+            return; // The next UI tick has a different task_scope and republishes.
+        }
         guard.task_board.ready = prepared.ready;
         guard.task_board.limited = prepared.limited;
         guard.task_board.cards = prepared.cards;
+        guard.task_board.text_cache = prepared.text_cache;
     }
 
     /// The callback commits to host storage before returning success. Revocation
@@ -554,12 +612,120 @@ mod tests {
         );
     }
     #[test]
+    fn shared_board_redacts_list_and_mutation_replies_without_editing_host_titles() {
+        let (dir, host) = fixture();
+        let mut raw = card(1, 20);
+        raw.title = format!(
+            "token=synthetic_password read C:\\Users\\fixture\\private.txt and {}",
+            dir.path().join("src/a.rs").display()
+        );
+        raw.guest_by = Some("password=synthetic_pw".into());
+        host.publish_tasks(vec![raw.clone()]);
+        let result = dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"tasks.list","projectId":1}),
+        );
+        assert_eq!(
+            result["result"]["tasks"][0]["title"],
+            "token=•••• read … and src/a.rs"
+        );
+        assert_eq!(result["result"]["tasks"][0]["guestBy"], "password=••••");
+        let (command, reply) = queued(&host);
+        host.complete_task(command, |_, _, _| Ok((true, vec![raw.clone()])));
+        let result = reply.recv().unwrap().unwrap();
+        assert_eq!(
+            result["tasks"][0]["title"],
+            "token=•••• read … and src/a.rs"
+        );
+        assert!(!result.to_string().contains("synthetic_password"));
+        assert!(raw.title.contains("synthetic_password"));
+    }
+
+    #[test]
+    fn shared_board_root_rebinding_invalidates_cached_paths_and_scope() {
+        let (dir, host) = fixture();
+        let scope = host.task_scope();
+        host.publish_tasks(vec![card(1, 20)]);
+        let replacement = tempfile::Builder::new()
+            .prefix("shared-rebind-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        host.sync_workspace_state(
+            vec![SharedProject {
+                id: 1,
+                name: "Shared".into(),
+                path: replacement.path().into(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Some(1),
+            None,
+        );
+        assert_ne!(scope, host.task_scope());
+        assert!(
+            dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"tasks.list","projectId":1})
+            )["error"]
+                .is_string()
+        );
+        let mut raw = card(1, 21);
+        raw.title = format!(
+            "{} and {}",
+            dir.path().join("private.txt").display(),
+            replacement.path().join("src/new.rs").display()
+        );
+        host.publish_tasks(vec![raw]);
+        let result = dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"tasks.list","projectId":1}),
+        );
+        assert_eq!(result["result"]["tasks"][0]["title"], "… and src/new.rs");
+    }
+
+    #[test]
+    fn shared_board_partial_notice_is_project_scoped() {
+        let (dir, _host) = fixture();
+        let projects = vec![
+            SharedProject {
+                id: 1,
+                name: "A".into(),
+                path: dir.path().into(),
+            },
+            SharedProject {
+                id: 2,
+                name: "B".into(),
+                path: dir.path().into(),
+            },
+        ];
+        let mut board = TaskBoard::default();
+        let mut cards = vec![card(1, 1)];
+        cards.extend((2..503).map(|id| card(2, id)));
+        board.publish(cards, &projects);
+        assert_eq!(board.snapshot(1).unwrap()["limited"], false);
+        assert_eq!(board.snapshot(2).unwrap()["limited"], true);
+    }
+    #[test]
+    fn shared_board_guest_input_rejects_markup_only_and_cleans_before_length_check() {
+        let title = "\u{202e}\x1b[31mhello\x1b[0m\nworld\u{feff}\u{2028}";
+        let op = parse(&json!({"action":"add", "title":title})).unwrap();
+        assert!(matches!(op, GuestTaskOp::Add { title, .. } if title == "hello world"));
+        assert!(parse(&json!({"action":"add", "title":"\x1b[31m\u{202e}"})).is_err());
+        let title = format!("{}{}", "\u{202e}".repeat(100), "a".repeat(300));
+        assert!(parse(&json!({"action":"add", "title":title})).is_ok());
+    }
+    #[test]
     fn shared_board_snapshots_bound_count_and_encoded_bytes() {
         let (_dir, host) = fixture();
         host.publish_tasks((0..10_001).map(|n| card(1, n)).collect());
         let guard = host.inner.lock().unwrap();
-        assert_eq!(guard.task_board.cards.len(), 10_000);
-        assert!(guard.task_board.limited);
+        assert_eq!(guard.task_board.cards.len(), 500);
+        assert_eq!(guard.task_board.cards.first().unwrap().id, "9501");
+        assert_eq!(guard.task_board.cards.last().unwrap().id, "10000");
+        assert!(guard.task_board.limited.contains(&1));
         drop(guard);
         host.publish_tasks(
             (0..10_000)
@@ -572,7 +738,7 @@ mod tests {
         );
         let guard = host.inner.lock().unwrap();
         assert!(guard.task_board.cards.len() < 1000);
-        assert!(guard.task_board.limited);
+        assert!(guard.task_board.limited.contains(&1));
         assert!(
             serde_json::to_vec(&guard.task_board.snapshot(1).unwrap())
                 .unwrap()

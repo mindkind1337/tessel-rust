@@ -252,6 +252,9 @@ fn session_history_opt_in_transcript_search_masks_secrets() {
     assert!(snippet.contains("needle_token"));
     assert!(!snippet.contains("sk-1234567890abcdef"));
     assert!(mask_transcript_secrets("key sk-1234567890abcdefghij").contains("••••••••"));
+    assert!(
+        !mask_transcript_secrets("AIza0123456789abcdefghijklmnopqrstuv").contains("0123456789")
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

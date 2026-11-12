@@ -1,0 +1,590 @@
+{
+  "sourceSha256": "e5d1745704576ab77da437d1915590103c2ca748ba9bb168e18ee65637670fc1",
+  "cases": [
+    {
+      "input": "open C:\\Proj\\app\\src\\a.js and C:\\Users\\private\\key.pem",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "open src/a.js and …"
+    },
+    {
+      "input": "C:\\Users\\jean claude\\secret\\key.pem and more",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… and more"
+    },
+    {
+      "input": "open \"C:\\Users\\jean claude\\secret\\key.pem\" now",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "open \"…\" now"
+    },
+    {
+      "input": "scp user@host:/home/jean/.ssh/id_rsa .",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "scp ••••:… ."
+    },
+    {
+      "input": "ssh deploy@prod.example.com ls",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "ssh •••• ls"
+    },
+    {
+      "input": "gcc -I/home/jean/include",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "gcc -I…"
+    },
+    {
+      "input": "cl -IC:\\Users\\x\\inc",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "cl -I…"
+    },
+    {
+      "input": "configure --prefix=/opt/secret/x",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "configure --prefix=…"
+    },
+    {
+      "input": "\u001b[31m/home/jean/secret/x\u001b[0m",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "…"
+    },
+    {
+      "input": "\\\\?\\C:\\Users\\jean\\x | \\\\?\\UNC\\srv\\share\\x | //server/share/f.txt | \\\\server\\share\\f.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… | … | … | …"
+    },
+    {
+      "input": "C%3A%5CUsers%5Cprivate%5Csecret.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "…"
+    },
+    {
+      "input": "C%25253A%25255CUsers%25255Cprivate%25255Csecret.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "…"
+    },
+    {
+      "input": "C:\\Proj\\app\\..\\..\\Users\\private\\x and C:\\Proj\\app\\src\\..\\lib\\a.js",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… and lib/a.js"
+    },
+    {
+      "input": "C:\\Proj\\app2\\secret.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "…"
+    },
+    {
+      "input": "c:\\PROJ\\APP\\src\\a.js",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "src/a.js"
+    },
+    {
+      "input": "../../secret/x and /home/ada/proj/../other/y and ~/notes.txt and ssh://host/home/x",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… and … and … and …"
+    },
+    {
+      "input": "// a comment, https://example.com/a/b, http://h:8080/x/y, /compact, src/a.js",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "// a comment, https://example.com/a/b, http://h:8080/x/y, /compact, src/a.js"
+    },
+    {
+      "input": "10/15/2026 mkdir -p build /help /compact",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "10/15/2026 mkdir -p build /help /compact"
+    },
+    {
+      "input": "$HOME/.ssh/key ${HOME}/private/x %APPDATA%\\keys\\a ~bob/x",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "…"
+    },
+    {
+      "input": "file:///C:/Users/private/key.txt and file:///home/ada/proj/src/a.rs",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… and src/a.rs"
+    },
+    {
+      "input": "/etc /root /home /var /proc /sys /usr /opt /srv",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "… … … … … … … … …"
+    },
+    {
+      "input": "Error:C:\\Users\\private\\key.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "Error:…"
+    },
+    {
+      "input": "password=hunter22 Bearer abcdefghijklmnop1234 postgres://u:pw1234@db/x",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "password=•••• Bearer •••• postgres://••••@db/x"
+    },
+    {
+      "input": "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=abc+def/ghi==;EndpointSuffix=y",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=••••;EndpointSuffix=y"
+    },
+    {
+      "input": "password: hunter and secret=abc and token=\"hello world\" and api_key: 'qwerty'",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "password: •••• and secret=•••• and token=\"••••\" and api_key: '••••'"
+    },
+    {
+      "input": "export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 && npm test",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "export GITHUB_TOKEN=•••• && npm test"
+    },
+    {
+      "input": "mysql -uroot -pSyntheticPassword database",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "mysql -uroot -p•••• database"
+    },
+    {
+      "input": "commit 3f2a9c8e1b7d6f5a4c3b2a1908f7e6d5c4b3a291",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "commit 3f2a9c8e1b7d6f5a4c3b2a1908f7e6d5c4b3a291"
+    },
+    {
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nsynthetic data\n-----END RSA PRIVATE KEY-----",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "••••"
+    },
+    {
+      "input": "aBcDeFgHiJkLmNoPqRsTuVwXyZ01234567890123456789",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "••••"
+    },
+    {
+      "input": "Un titre français — vérifier été et œuvre.",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "Un titre français — vérifier été et œuvre."
+    },
+    {
+      "input": "é/home/jean/.ssh/id_rsa",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "é…"
+    },
+    {
+      "input": "éC:/Users/jean/secret.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "é…"
+    },
+    {
+      "input": "ésk-ant-abcdefghijklmnopqrstuvwxyz123456",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "é••••"
+    },
+    {
+      "input": "àghp_abcdefghijklmnopqrstuvwxyz123456",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "à••••"
+    },
+    {
+      "input": "éaBcDeFgHiJkLmNoPqRsTuVwXyZ01234567890123456789",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "é••••"
+    },
+    {
+      "input": "x1://C:\\Users\\jean\\.ssh\\id_rsa",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "x1://…"
+    },
+    {
+      "input": "x1:///C:\\Users\\jean\\.ssh\\id_rsa",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "x1:///…"
+    },
+    {
+      "input": "vscode://file/C:\\Users\\jean\\secret.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "vscode://file/…"
+    },
+    {
+      "input": "x1://C:\\Proj\\app\\src\\a.js",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "x1://src/a.js"
+    },
+    {
+      "input": "x1://\\\\srv\\share\\f",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "x1://…"
+    },
+    {
+      "input": "http://host/C:\\Users\\private\\key.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "http://host/…"
+    },
+    {
+      "input": "vscode://file/C:/Users/private/key.txt",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "vscode://file/C:…"
+    },
+    {
+      "input": "https://user:hello%20world@host/page",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "https://••••@host/page"
+    },
+    {
+      "input": "https://user:p%40ss@host/page",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "https://••••@host/page"
+    },
+    {
+      "input": "https://user%3Ap%2540ss@host/page",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "https://••••@host/page"
+    },
+    {
+      "input": "password=%22hello world%22",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "password=\"••••\""
+    },
+    {
+      "input": "use npm_abcdefghijklmnopqrstuvwxyz0123 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use sk_live_abcdefghijklmnop here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use sk_test_abcdefghijklmnop here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use rk_live_abcdefghijklmnop here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use hf_abcdefghijklmnopqrstuvwxyz here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use ya29.a0AfH6SMBxyz123 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use xoxb-12345-abcdef here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use xoxp-12345-abcdef here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use glpat-abcdefghij1234 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use AKIAIOSFODNN7EXAMPLE here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use ASIAIOSFODNN7EXAMPLE here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use AIza0123456789abcdefghijklmnopqrstuv here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use github_pat_abcdefghijklmnopqrstuvwxyz0123 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use xai-abcdefghijklmnopqrstuvwxyz0123 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "use dop_v1_abcdefghijklmnopqrstuvwxyz0123 here",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 500,
+      "expected": "use •••• here"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa sk-proj-abcdefghijklmnopqrstuvwxyz1234567890 tail",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 300,
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa •••• tail"
+    },
+    {
+      "input": "short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short ",
+      "roots": [
+        "C:\\Proj\\app",
+        "/home/ada/proj"
+      ],
+      "max": 300,
+      "expected": "short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short short…"
+    }
+  ]
+}

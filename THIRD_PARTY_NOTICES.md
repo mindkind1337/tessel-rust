@@ -313,3 +313,7 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 The desktop now installs `resources/host/v0.1.1/`, from tag `v0.1.1` (commit `3c459afab6d200035865fbf1e3a803d209fcd79b`). Its unmodified x86_64/aarch64 binaries and MIT LICENSE are accompanied by verified manifest, SHA256SUMS and SOURCE.json. The older 0.1.0 provenance remains recorded above.
 
 The embedded task-card artwork catalog (`src/agent_brand_assets.json`), its shared renderer (`src/agent_brand_assets.rs`) and snapshot generator (`scripts/generate_agent_brand_assets.py`) adapt Tessel's `BrandIcon.vue`, `brandSvgs.js` and bundled `assets/agent-icons/*.png`. The bundled PNG artwork and applicable vector designs originate in Orca's `src/shared/agent-icons` and `agent-icon-glyphs.tsx`, copyright (c) 2026 Lovecast Inc., under the MIT license reproduced above. The Grok mark also retains the LobeHub attribution above. Source-file SHA256 values are recorded in the catalog; no external artwork is fetched at runtime.
+
+## Guest-facing task text
+
+`src/share/guest_text.rs` adapts Tessel `src/main/liveShare/shareChat.js` under the existing MIT attribution above. `scripts/extract_guest_text_reference.mjs` records the source SHA256 and synthetic comparison vectors only; no live profile, account, transcript or credential is included. The Rust task-title boundary additionally scrubs the complete bounded title before final clipping, masks encoded URI user information before decoding, and handles mixed quotation marks in paths.
