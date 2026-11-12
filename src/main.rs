@@ -113,6 +113,7 @@ mod regional_date;
 mod remote;
 pub mod remote_agent_tools;
 mod remote_panel;
+mod remote_tree_watch;
 pub mod rich_previews;
 pub mod scm_changes_panel;
 mod scm_state;

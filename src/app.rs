@@ -1788,6 +1788,8 @@ impl Tessel {
         self.poll_worktrees();
         self.explorer_tree.poll();
         self.remote.poll();
+        self.remote
+            .poll_native_tree(&mut self.native_hosts, &self.state.hosts);
         self.finder.poll();
         #[cfg(windows)]
         {

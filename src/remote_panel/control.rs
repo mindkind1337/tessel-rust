@@ -33,6 +33,7 @@ pub(crate) struct Snapshot {
     pub path: String,
     pub can_parent: bool,
     pub busy: bool,
+    pub live: bool,
     pub dirty: bool,
     pub error: String,
     pub entries: Vec<(String, String, bool, u64)>,
@@ -67,6 +68,7 @@ impl RemotePanel {
     }
     pub(crate) fn gpui_needs_frame(&self) -> bool {
         self.busy()
+            || self.tree_watch.has_update()
             || self
                 .document
                 .as_ref()
@@ -133,6 +135,7 @@ impl RemotePanel {
             path: self.path.clone(),
             can_parent: !self.path.is_empty() && self.path != self.root,
             busy: self.busy(),
+            live: self.tree_live,
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             error: self.error.clone(),
             entries: self
@@ -247,6 +250,8 @@ impl RemotePanel {
             _ if self.rename.is_some() || self.delete.is_some() => {}
             Command::Connect(index) => {
                 if let Some(host) = hosts.get(index) {
+                    self.tree_attempted_alias = None;
+                    self.tree_alignment_attempted = false;
                     self.selected = index;
                     self.host = Some(host.clone());
                     self.root.clear();
@@ -263,7 +268,10 @@ impl RemotePanel {
                 self.entries.clear();
                 self.document = None;
             }
-            Command::Refresh => self.request(Action::List(self.path.clone())),
+            Command::Refresh => {
+                self.tree_alignment_attempted = false;
+                self.request(Action::List(self.path.clone()));
+            }
             Command::Parent if !self.path.is_empty() && self.path != self.root => {
                 let parent = self.path.rsplit_once('/').map(|p| p.0).unwrap_or("");
                 self.request(Action::List(if parent.is_empty() {
@@ -333,6 +341,61 @@ impl RemotePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_tree_never_starts_for_disabled_removed_or_busy_hosts() {
+        let host = Host {
+            alias: "fixture-no-network".into(),
+            host_daemon: false,
+            ..Default::default()
+        };
+        let mut panel = RemotePanel {
+            host: Some(host.clone()),
+            root: "/project".into(),
+            path: "/project".into(),
+            ..Default::default()
+        };
+        let mut manager = crate::native_host_manager::Manager::default();
+        panel.poll_native_tree(&mut manager, std::slice::from_ref(&host));
+        panel.poll_native_tree(&mut manager, &[]);
+        let enabled = Host {
+            host_daemon: true,
+            ..host
+        };
+        let (_sender, receiver) = mpsc::channel();
+        panel.pending = Some(receiver);
+        panel.poll_native_tree(&mut manager, &[enabled]);
+        assert_eq!(manager.aliases().count(), 0);
+        assert!(!panel.tree_live);
+    }
+
+    #[test]
+    fn native_tree_must_match_sftp_before_it_can_replace_post_write_results() {
+        use crate::remote_tree_watch::Update;
+        let entry = |size| Entry {
+            name: "data".into(),
+            path: "/project/data".into(),
+            directory: false,
+            size,
+        };
+        let mut panel = RemotePanel {
+            entries: vec![entry(10)],
+            ..Default::default()
+        };
+        panel.apply_tree_update(Update::Listing(vec![entry(5)]));
+        assert_eq!(panel.entries[0].size, 10);
+        assert!(!panel.tree_live);
+        panel.apply_tree_update(Update::Listing(vec![entry(10)]));
+        assert!(panel.tree_live);
+        panel.apply_tree_update(Update::Listing(vec![entry(20)]));
+        assert_eq!(panel.entries[0].size, 20);
+        panel.apply_tree_update(Update::Fallback);
+        assert!(!panel.tree_live);
+        assert_eq!(panel.entries[0].size, 20);
+        // A new epoch's full listing is accepted only for an already aligned watch.
+        panel.apply_tree_update(Update::Listing(vec![]));
+        assert!(panel.entries.is_empty());
+    }
 
     #[test]
     fn remote_media_keeps_original_bytes_and_caches_native_pixels() {

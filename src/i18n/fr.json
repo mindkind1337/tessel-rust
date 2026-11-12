@@ -153,6 +153,7 @@
   "Agent access enabled for this project · isolated session · downloads require preparation": "Accès de l’agent activé pour ce projet · session isolée · téléchargements à préparer",
   "Enable a separate browser for this project's native chat agent. The agent can read pages, click and fill text fields. Sign in manually here if needed. Owner-browser cookies and the password vault are never copied. Access is off again after closing this app.": "Activez un navigateur séparé pour l’agent de ce projet. Il pourra lire les pages, cliquer et remplir les champs de texte. Connectez-vous manuellement ici au besoin. Les témoins du navigateur personnel et le coffre ne sont jamais copiés. L’accès est désactivé à la fermeture de l’application.",
   "Remote files · SFTP": "Fichiers distants · SFTP",
+  "Live file updates": "Mises à jour des fichiers en direct",
   "Uses OpenSSH config and existing key/agent authentication. Unknown host keys are refused. Connect from a terminal first when trust or authentication needs setup.": "Utilise la configuration OpenSSH et l’authentification existante par clé ou agent. Les clés d’hôte inconnues sont refusées. Connectez-vous d’abord depuis un terminal pour configurer la confiance ou l’authentification.",
   "Add an SSH host in Settings first.": "Ajoutez d’abord un hôte SSH dans les paramètres.",
   "Connect / change host": "Connecter / changer d’hôte",

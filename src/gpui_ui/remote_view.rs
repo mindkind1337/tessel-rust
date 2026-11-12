@@ -121,6 +121,13 @@ pub(crate) fn render(
     body = body.child(hosts);
     if let Some(host) = &remote.connected {
         body = body.child(SharedString::from(format!("{host}:{}", remote.path)));
+        if remote.live {
+            body = body.child(if fr {
+                "Mises à jour des fichiers en direct"
+            } else {
+                "Live file updates"
+            });
+        }
     }
     body = body.child(
         div()

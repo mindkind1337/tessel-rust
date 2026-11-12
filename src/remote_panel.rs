@@ -61,6 +61,11 @@ pub struct RemotePanel {
     submitted: Option<Vec<u8>>,
     document: Option<RemoteDocument>,
     error: String,
+    tree_watch: crate::remote_tree_watch::Watch,
+    tree_attempted_alias: Option<String>,
+    tree_live: bool,
+    tree_trusted: bool,
+    tree_alignment_attempted: bool,
 }
 impl RemotePanel {
     pub fn terminal_host(&self, hosts: &[Host]) -> Option<Host> {
@@ -119,6 +124,16 @@ impl RemotePanel {
         let Some(mut host) = self.host.clone() else {
             return;
         };
+        // A replacement watcher must agree with the authoritative SFTP listing
+        // before its deltas can update the displayed directory.
+        if !matches!(action, Action::Read(_)) {
+            self.tree_watch.invalidate();
+            self.tree_live = false;
+            self.tree_trusted = false;
+            if !matches!(action, Action::List(_)) {
+                self.tree_alignment_attempted = false;
+            }
+        }
         if !self.root.is_empty() {
             host.folder = self.root.clone();
         }
@@ -157,6 +172,9 @@ impl RemotePanel {
                     entries,
                 }) => {
                     self.root = root;
+                    if self.path != path {
+                        self.tree_alignment_attempted = false;
+                    }
                     self.path = path;
                     self.entries = entries;
                 }
@@ -217,6 +235,75 @@ impl RemotePanel {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
+
+    pub(crate) fn poll_native_tree(
+        &mut self,
+        manager: &mut crate::native_host_manager::Manager,
+        hosts: &[Host],
+    ) {
+        #[cfg(feature = "visual-test")]
+        if self.fixture_mode {
+            return;
+        }
+        manager.poll();
+        let enabled = self.host.as_ref().and_then(|host| {
+            hosts
+                .iter()
+                .find(|saved| saved.alias == host.alias && saved.host_daemon)
+                .cloned()
+        });
+        let Some(host) = enabled else {
+            self.tree_watch.poll(None, None);
+            self.tree_live = false;
+            self.tree_trusted = false;
+            return;
+        };
+        // Read-only file loads keep the current subscription; destructive/list
+        // requests have already invalidated it in request().
+        if self.busy() || self.path.is_empty() {
+            return;
+        }
+        if self.tree_attempted_alias.as_deref() != Some(&host.alias) {
+            self.tree_attempted_alias = Some(host.alias.clone());
+            // Reuse a shared connection if one exists; errors retain SFTP and
+            // never create a per-frame retry loop.
+            let _ = manager.start_background_if_enabled(&host);
+        }
+        let client = manager
+            .connection(&host.alias)
+            .map(|connection| connection.client().clone());
+        let key = crate::remote_tree_watch::Key {
+            alias: host.alias,
+            root: self.root.clone(),
+            path: self.path.clone(),
+        };
+        if let Some(update) = self.tree_watch.poll(Some(key), client) {
+            self.apply_tree_update(update);
+        }
+    }
+
+    fn apply_tree_update(&mut self, update: crate::remote_tree_watch::Update) {
+        match update {
+            crate::remote_tree_watch::Update::Listing(entries) => {
+                let agrees = self.entries.len() == entries.len()
+                    && self.entries.iter().zip(&entries).all(|(a, b)| {
+                        a.path == b.path
+                            && a.name == b.name
+                            && a.directory == b.directory
+                            && a.size == b.size
+                    });
+                if self.tree_trusted || agrees {
+                    self.entries = entries;
+                    self.tree_live = true;
+                    self.tree_trusted = true;
+                } else if !self.tree_alignment_attempted {
+                    self.tree_alignment_attempted = true;
+                    self.request(Action::List(self.path.clone()));
+                }
+            }
+            crate::remote_tree_watch::Update::Fallback => self.tree_live = false,
+        }
+    }
     pub fn show(&mut self, ui: &mut egui::Ui, hosts: &[Host]) {
         self.poll();
         ui.heading(tr("Remote files · SFTP"));
@@ -241,6 +328,8 @@ impl RemotePanel {
                                 }
                             });
                         if ui.button(tr("Connect / change host")).clicked() {
+                            self.tree_attempted_alias = None;
+                            self.tree_alignment_attempted = false;
                             self.host = Some(hosts[self.selected].clone());
                             self.root.clear();
                             self.path.clear();
@@ -260,6 +349,9 @@ impl RemotePanel {
         }
         if let Some(host) = &self.host {
             ui.strong(format!("{}:{}", host.alias, self.path));
+            if self.tree_live {
+                ui.small(tr("Live file updates"));
+            }
         }
         if busy {
             ui.spinner();
@@ -279,6 +371,7 @@ impl RemotePanel {
             |ui| {
                 ui.horizontal(|ui| {
                     if self.host.is_some() && ui.button(tr("Refresh")).clicked() {
+                        self.tree_alignment_attempted = false;
                         action = Some(Action::List(self.path.clone()));
                     }
                     if self.path != self.root
