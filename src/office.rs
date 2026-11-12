@@ -205,16 +205,27 @@ pub struct OfficeSummary {
 }
 
 impl OfficeView {
-    pub fn gpui_poll_summary(&mut self) -> OfficeSummary {
-        if let Some(rx) = &self.pending
-            && let Ok(result) = rx.try_recv()
-        {
-            self.pending = None;
-            match result {
-                Ok(book) => self.book = Some(book),
-                Err(e) => self.error = e,
+    pub(crate) fn is_rendering(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn poll_completed(&mut self) {
+        let result = match self.pending.as_ref().map(Receiver::try_recv) {
+            Some(Ok(result)) => result,
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                Err("Office renderer stopped without returning a preview.".into())
             }
+            _ => return,
+        };
+        self.pending = None;
+        match result {
+            Ok(book) => self.book = Some(book),
+            Err(error) => self.error = error,
         }
+    }
+
+    pub fn gpui_poll_summary(&mut self) -> OfficeSummary {
+        self.poll_completed();
         if self.book.is_none() && self.error.is_empty() && self.pending.is_none() {
             let (tx, rx) = mpsc::channel();
             self.pending = Some(rx);
@@ -288,15 +299,7 @@ impl OfficeView {
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.small(tr("Read-only content preview · macros and formulas are not executed · formatting may differ"));
-        if let Some(rx) = &self.pending
-            && let Ok(result) = rx.try_recv()
-        {
-            self.pending = None;
-            match result {
-                Ok(book) => self.book = Some(book),
-                Err(e) => self.error = e,
-            }
-        }
+        self.poll_completed();
         if let Some(book) = &self.book {
             if book.truncated {
                 ui.colored_label(

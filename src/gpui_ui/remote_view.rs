@@ -437,6 +437,10 @@ pub(crate) fn render(
                         cx,
                     )),
             );
+        } else if let Some(office) = &remote.office {
+            body = body.child(super::editor_view::render_office_summary(
+                office, fr, tokens, cx, true,
+            ));
         } else if remote.pdf.is_some() || remote.pixels.is_some() {
             if let Some((page, pages, scale, busy, _, error)) = &remote.pdf {
                 body = body.child(

@@ -1357,11 +1357,15 @@ impl Tessel {
         let refresh = (self.view == View::Remote && self.remote.gpui_needs_frame())
             || !self.document_pending.is_empty()
             || (self.view == View::Files
-                && self
-                    .documents
-                    .get(self.active_document)
-                    .and_then(|doc| doc.pdf.as_ref())
-                    .is_some_and(crate::pdf::PdfView::is_rendering));
+                && self.documents.get(self.active_document).is_some_and(|doc| {
+                    doc.pdf
+                        .as_ref()
+                        .is_some_and(crate::pdf::PdfView::is_rendering)
+                        || doc
+                            .office
+                            .as_ref()
+                            .is_some_and(crate::office::OfficeView::is_rendering)
+                }));
         self.native_hosts.poll();
         self.poll();
         self.floating.poll();

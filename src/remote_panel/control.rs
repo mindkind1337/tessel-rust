@@ -22,6 +22,7 @@ pub(crate) enum Command {
     Download,
     PdfPage(isize),
     PdfZoom(f32),
+    OfficeSection(usize),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +42,7 @@ pub(crate) struct Snapshot {
     pub document: Option<(String, Option<String>, usize)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub pdf: Option<crate::pdf::PdfSummaryTuple>,
+    pub office: Option<crate::office::OfficeSummary>,
     pub preview_error: String,
 }
 
@@ -69,8 +71,15 @@ impl RemotePanel {
                 .document
                 .as_ref()
                 .and_then(|doc| doc.preview.as_ref())
-                .and_then(|doc| doc.pdf.as_ref())
-                .is_some_and(crate::pdf::PdfView::is_rendering)
+                .is_some_and(|doc| {
+                    doc.pdf
+                        .as_ref()
+                        .is_some_and(crate::pdf::PdfView::is_rendering)
+                        || doc
+                            .office
+                            .as_ref()
+                            .is_some_and(crate::office::OfficeView::is_rendering)
+                })
     }
 
     #[cfg(feature = "visual-test")]
@@ -90,7 +99,12 @@ impl RemotePanel {
     pub(crate) fn snapshot(&mut self, hosts: &[Host]) -> Snapshot {
         let mut pdf = None;
         let mut pixels = None;
+        let mut office = None;
         if let Some(preview) = self.document.as_mut().and_then(|doc| doc.preview.as_mut()) {
+            office = preview
+                .office
+                .as_mut()
+                .map(crate::office::OfficeView::gpui_poll_summary);
             if let Some(view) = &mut preview.pdf {
                 pdf = Some(view.gpui_poll_summary());
                 pixels = view.gpui_image();
@@ -105,6 +119,7 @@ impl RemotePanel {
             }
         }
         Snapshot {
+            office,
             pdf,
             pixels,
             preview_error: self
@@ -146,6 +161,16 @@ impl RemotePanel {
         }
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         match command {
+            Command::OfficeSection(index) => {
+                if let Some(office) = self
+                    .document
+                    .as_mut()
+                    .and_then(|doc| doc.preview.as_mut())
+                    .and_then(|doc| doc.office.as_mut())
+                {
+                    office.select_section(index);
+                }
+            }
             Command::PdfPage(delta) => {
                 if let Some(pdf) = self
                     .document

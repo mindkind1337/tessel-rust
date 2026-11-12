@@ -1,4 +1,71 @@
 use super::{fixtures::*, *};
+
+fn pending_view() -> (OfficeView, mpsc::Sender<Result<Book, String>>) {
+    let (sender, receiver) = mpsc::channel();
+    (
+        OfficeView {
+            bytes: Arc::new(document()),
+            extension: "docx".into(),
+            book: None,
+            pending: Some(receiver),
+            cancel: Arc::new(AtomicBool::new(false)),
+            selected: 0,
+            error: String::new(),
+        },
+        sender,
+    )
+}
+
+#[test]
+fn gpui_office_worker_completion_preserves_original_and_stops_repainting() {
+    let (mut view, sender) = pending_view();
+    let original = view.bytes.clone();
+    assert!(view.is_rendering());
+    assert!(view.gpui_poll_summary().busy);
+    sender
+        .send(Ok(parse::parse(&document(), "docx").unwrap()))
+        .unwrap();
+    view.select_section(usize::MAX);
+    let ready = view.gpui_poll_summary();
+    assert!(!ready.busy && !view.is_rendering());
+    assert_eq!(ready.selected, 0);
+    assert_eq!(ready.paragraphs[1].1, "A & B");
+    assert!(ready.error.is_empty());
+    assert!(Arc::ptr_eq(&original, &view.bytes));
+}
+
+#[test]
+fn disconnected_office_worker_reports_error_without_restarting_forever() {
+    let (mut view, sender) = pending_view();
+    drop(sender);
+    let failed = view.gpui_poll_summary();
+    assert!(!failed.busy && !view.is_rendering());
+    assert!(failed.error.contains("stopped"));
+    assert_eq!(view.gpui_poll_summary().error, failed.error);
+    assert!(!view.is_rendering());
+}
+
+#[test]
+fn gpui_office_sections_and_truncation_survive_worker_delivery() {
+    let (mut view, sender) = pending_view();
+    let mut book = parse::parse(&spreadsheet(), "xlsx").unwrap();
+    let second = parse::parse(&document(), "docx")
+        .unwrap()
+        .sections
+        .remove(0);
+    book.sections.push(second);
+    book.truncated = true;
+    sender.send(Ok(book)).unwrap();
+    let sheet = view.gpui_poll_summary();
+    assert!(sheet.truncated);
+    assert_eq!(sheet.sheet.unwrap().rows[0][0], "Original value");
+    view.select_section(1);
+    let document = view.gpui_poll_summary();
+    assert_eq!(document.selected, 1);
+    assert!(document.sheet.is_none());
+    assert_eq!(document.paragraphs[1].1, "A & B");
+}
+
 #[test]
 fn document_entities_headings_and_empty_runs() {
     let book = parse::parse(&document(), "docx").unwrap();

@@ -1497,6 +1497,16 @@ fn render_office_stage(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let summary = doc.office_summary.clone().unwrap_or_default();
+    render_office_summary(&summary, french, tokens, cx, false)
+}
+
+pub(crate) fn render_office_summary(
+    summary: &crate::office::OfficeSummary,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &Context<TesselGpuiRoot>,
+    remote: bool,
+) -> gpui::Div {
     let mut tabs = div()
         .px(px(10.0))
         .py(px(5.0))
@@ -1526,7 +1536,16 @@ fn render_office_stage(
                 .text_color(tokens.text_strong)
                 .cursor_pointer()
                 .on_click(cx.listener(move |root, _, _, cx| {
-                    root.dispatch(GpuiAction::SelectOfficeSection(idx), cx);
+                    root.dispatch(
+                        if remote {
+                            GpuiAction::Remote(
+                                crate::remote_panel::control::Command::OfficeSection(idx),
+                            )
+                        } else {
+                            GpuiAction::SelectOfficeSection(idx)
+                        },
+                        cx,
+                    );
                 }))
                 .child(SharedString::from(title.clone())),
         );
@@ -1564,7 +1583,16 @@ fn render_office_stage(
         p_col.into_any_element()
     };
 
-    div().size_full().flex().flex_col().child(tabs).child(body)
+    div().size_full().flex().flex_col()
+        .child(if french {
+            "Aperçu en lecture seule · macros et formules non exécutées · mise en forme approximative"
+        } else {
+            "Read-only preview · macros and formulas are not executed · formatting may differ"
+        })
+        .when(summary.busy, |el| el.child(if french { "Chargement du document…" } else { "Loading document…" }))
+        .when(!summary.error.is_empty(), |el| el.child(SharedString::from(summary.error.clone())))
+        .when(summary.truncated, |el| el.child(if french { "Aperçu tronqué aux limites du document." } else { "Preview truncated at the document limits." }))
+        .child(tabs).child(body)
 }
 
 fn render_image_stage(
