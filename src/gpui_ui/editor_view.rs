@@ -206,6 +206,7 @@ pub fn layout_mermaid_sequence(
 
 pub(crate) fn render_document_editor_stage(
     snapshot: &GpuiWorkspaceSnapshot,
+    editor_input: &super::editor_input::Input,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
@@ -233,6 +234,8 @@ pub(crate) fn render_document_editor_stage(
         } else {
             render_readable_html_stage(doc, tokens, cx).into_any_element()
         }
+    } else if let Some(native) = editor_input.render(doc, snapshot.font_size, tokens, cx) {
+        native
     } else {
         render_code_or_diff_surface(
             doc,

@@ -3,6 +3,14 @@
 Tessel Rust includes or adapts the third-party material identified below. The original
 copyright and permission notices are reproduced in full.
 
+## gpui_ce_elements
+
+`vendor/gpui_ce_elements` contains the crates.io 0.3.0 source package under
+Apache-2.0, reproduced in `vendor/gpui_ce_elements/LICENSE.md`. Tessel adds
+optional source-bound styled text runs and matching layout invalidation for
+native editor syntax highlighting. The modified files, source checksum and
+upgrade requirements are recorded in `vendor/gpui_ce_elements/TESSEL_PATCH.md`.
+
 ## portable-pty
 
 `vendor/portable-pty` contains portable-pty 0.9.0 by Wez Furlong, under the MIT

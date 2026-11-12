@@ -260,6 +260,7 @@ pub fn changed_line_hunks(original: &str, current: &str) -> Vec<(usize, usize)> 
 }
 
 pub struct Document {
+    instance_id: u64,
     pub root: PathBuf,
     pub path: PathBuf,
     pub text: String,
@@ -283,6 +284,40 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
+    fn next_instance_id() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.try_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |id| id.checked_add(1),
+        )
+        .expect("document instance identifiers exhausted")
+    }
+
+    pub(crate) fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// Apply a native editor event only to the exact document and base text it edited.
+    /// A closed/reopened file or external reload must not receive queued stale edits.
+    pub(crate) fn apply_native_edit(&mut self, instance_id: u64, base: &str, text: String) -> bool {
+        if self.instance_id != instance_id
+            || self.media
+            || self.text != base
+            || text.len() > MAX_TEXT
+        {
+            return false;
+        }
+        if self.text != text {
+            self.text = text;
+            self.unpinned_preview = false;
+            self.sheet_cache = None;
+            self.preview = None;
+            self.last_edited_at = Some(std::time::Instant::now());
+        }
+        true
+    }
+
     pub fn from_diff(
         root: &Path,
         path: PathBuf,
@@ -291,6 +326,7 @@ impl Document {
         unpinned_preview: bool,
     ) -> Self {
         Self {
+            instance_id: Self::next_instance_id(),
             root: root.to_owned(),
             path,
             text: diff_text,
@@ -324,6 +360,7 @@ impl Document {
     ) -> Self {
         let preview = markdown.then(|| crate::preview::Preview::parse(&text, true));
         Self {
+            instance_id: Self::next_instance_id(),
             root,
             path,
             text,
@@ -358,6 +395,7 @@ impl Document {
         if crate::office::supported(&extension) {
             let office = crate::office::OfficeView::open(&path)?;
             return Ok(Self {
+                instance_id: Self::next_instance_id(),
                 root: root.to_owned(),
                 path,
                 text: String::new(),
@@ -384,6 +422,7 @@ impl Document {
         if extension == "pdf" {
             let pdf = crate::pdf::PdfView::open(&path)?;
             return Ok(Self {
+                instance_id: Self::next_instance_id(),
                 root: root.to_owned(),
                 path,
                 text: String::new(),
@@ -434,6 +473,7 @@ impl Document {
                 decoded.as_raw(),
             );
             return Ok(Self {
+                instance_id: Self::next_instance_id(),
                 root: root.to_owned(),
                 path,
                 text: String::new(),
@@ -470,6 +510,7 @@ impl Document {
                 crate::rich_previews::MarkdownSizeDecision::SourceOnly { .. }
             );
         Ok(Self {
+            instance_id: Self::next_instance_id(),
             root: root.to_owned(),
             path,
             text,
@@ -526,6 +567,34 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_editor_edits_reject_stale_reopened_readonly_and_oversized_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        std::fs::write(&path, "aé😀z\r\n").unwrap();
+        let mut doc = super::Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        doc.unpinned_preview = true;
+        assert!(doc.apply_native_edit(id, "aé😀z\r\n", "aÉ😀z\r\n".into()));
+        assert!(doc.dirty());
+        assert!(!doc.unpinned_preview);
+        assert!(doc.last_edited_at.is_some());
+        assert!(!doc.apply_native_edit(id, "aé😀z\r\n", "stale".into()));
+        assert!(!doc.apply_native_edit(id, "aÉ😀z\r\n", "x".repeat(super::MAX_TEXT + 1)));
+        let mut reopened = super::Document::open(dir.path(), &path).unwrap();
+        assert_ne!(reopened.instance_id(), id);
+        assert!(!reopened.apply_native_edit(id, "aé😀z\r\n", "queued".into()));
+        let mut readonly = super::Document::from_readonly_text(
+            dir.path().into(),
+            path,
+            "readonly".into(),
+            "fixed".into(),
+            false,
+        );
+        assert!(!readonly.apply_native_edit(readonly.instance_id(), "fixed", "edited".into()));
+        assert_eq!(readonly.text, "fixed");
+        assert_eq!(doc.text, "aÉ😀z\r\n");
+    }
     use super::*;
     #[test]
     fn editor_preserves_external_changes_and_line_endings() {

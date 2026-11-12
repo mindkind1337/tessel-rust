@@ -319,6 +319,9 @@ pub(crate) struct GpuiStatusBarSnapshot {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiActiveDocumentSummary {
+    pub instance_id: u64,
+    pub line_numbers: bool,
+    pub syntax_highlighting: bool,
     pub doc_index: usize,
     pub title: String,
     pub path_display: String,
@@ -744,8 +747,11 @@ pub(crate) enum GpuiAction {
         line_idx: usize,
         new_line: String,
     },
-    AppendActiveDocumentText(String),
-    BackspaceActiveDocument,
+    ApplyNativeDocumentEdit {
+        instance_id: u64,
+        base: String,
+        text: String,
+    },
     StepPdfPage(isize),
     StepPdfZoom(f32),
     SelectOfficeSection(usize),
@@ -1569,6 +1575,27 @@ impl Tessel {
     }
 
     #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_editor_input_fixture(
+        &mut self,
+        documents: Vec<crate::files::Document>,
+        active: usize,
+    ) {
+        self.view = View::Files;
+        self.documents = documents;
+        self.active_document = active;
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn set_floating_input_fixture(&mut self, open: bool) {
+        // Exercise focus routing without starting a shell on the shared workstation.
+        if open {
+            self.floating.ui.show();
+        } else {
+            self.floating.ui.hide();
+        }
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn hold_remote_input_fixture(&mut self) -> impl FnOnce() + use<> {
         self.remote.hold_input_fixture()
     }
@@ -1579,6 +1606,44 @@ impl Tessel {
         if let Some(chat) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
             chat.process_protocol_frame_for_test(frame);
         }
+    }
+
+    pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
+        (self.view == View::Files && !self.gpui_has_open_modal())
+            .then(|| self.documents.get(self.active_document))
+            .flatten()
+            .filter(|doc| !doc.preview_mode)
+    }
+
+    pub(crate) fn gpui_document_ids(&self) -> Vec<u64> {
+        self.documents
+            .iter()
+            .map(crate::files::Document::instance_id)
+            .collect()
+    }
+
+    pub(crate) fn gpui_take_editor_selection(
+        &mut self,
+        instance_id: u64,
+    ) -> Option<(usize, usize)> {
+        if self.gpui_editor_document()?.instance_id() != instance_id {
+            return None;
+        }
+        let doc = self.documents.get_mut(self.active_document)?;
+        if let Some((start, end)) = doc.tools.pending_char_range.take() {
+            doc.tools.pending_scroll_line = None;
+            return Some(crate::files::char_range_to_byte_range(
+                &doc.text, start, end,
+            ));
+        }
+        let line = doc.tools.pending_scroll_line.take()?;
+        let offset = doc
+            .text
+            .split_inclusive('\n')
+            .take(line)
+            .map(str::len)
+            .sum::<usize>();
+        Some((offset, offset))
     }
 
     pub(crate) fn gpui_default_focus_target(&self) -> GpuiFocusTarget {
@@ -1883,26 +1948,8 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::EditorBody => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText("\n".into()));
-                    true
-                } else if lower == "tab" {
-                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText("    ".into()));
-                    true
-                } else if let Some(p) = pasted {
-                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText(p));
-                    true
-                } else if lower == "backspace" {
-                    self.apply_gpui_action(GpuiAction::BackspaceActiveDocument);
-                    true
-                } else if let Some(txt) = printable {
-                    self.apply_gpui_action(GpuiAction::AppendActiveDocumentText(txt.to_owned()));
-                    true
-                } else {
-                    false
-                }
-            }
+            // Only the native entity may edit document text; root focus must never append.
+            GpuiFocusTarget::EditorBody => false,
             GpuiFocusTarget::BrowserUrl => {
                 if lower == "enter" {
                     self.apply_gpui_action(GpuiAction::BrowserNavigate);
@@ -2813,9 +2860,9 @@ impl Tessel {
 
         let active_doc_idx = self.active_document;
         let active_document = if self.view == View::Files {
-            self.documents
-                .get_mut(active_doc_idx)
-                .map(|doc| Self::build_document_summary(active_doc_idx, doc))
+            self.documents.get_mut(active_doc_idx).map(|doc| {
+                Self::build_document_summary(active_doc_idx, doc, self.state.editor_prefs)
+            })
         } else {
             None
         };
@@ -3025,6 +3072,7 @@ impl Tessel {
     fn build_document_summary(
         doc_index: usize,
         doc: &mut crate::files::Document,
+        preferences: crate::workspace::EditorPreferences,
     ) -> GpuiActiveDocumentSummary {
         let title = doc
             .diff_title
@@ -3093,7 +3141,7 @@ impl Tessel {
         } else {
             Vec::new()
         };
-        let scroll_to_line = doc.tools.pending_scroll_line.take();
+        let scroll_to_line = doc.tools.pending_scroll_line;
 
         let sheet = if doc.preview_mode && matches!(extension.as_str(), "csv" | "tsv") {
             if doc.sheet_cache.is_none() {
@@ -3146,6 +3194,9 @@ impl Tessel {
             .or_else(|| doc.gpui_image.clone());
 
         GpuiActiveDocumentSummary {
+            instance_id: doc.instance_id(),
+            line_numbers: preferences.line_numbers,
+            syntax_highlighting: preferences.syntax_highlighting,
             doc_index,
             title,
             path_display: doc.path.to_string_lossy().into_owned(),
@@ -4598,8 +4649,11 @@ impl Tessel {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
                     doc.tools.find_query = q;
                     doc.tools.match_index = 0;
+                    doc.tools.pending_char_range = None;
+                    doc.tools.pending_scroll_line = None;
                     let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
                     if let Some(first) = hits.first() {
+                        doc.tools.pending_char_range = Some((first.0, first.1));
                         doc.tools.pending_scroll_line = Some(first.2);
                     }
                 }
@@ -4620,6 +4674,8 @@ impl Tessel {
                             (doc.tools.match_index + len - 1) % len
                         };
                         doc.tools.pending_scroll_line = Some(hits[doc.tools.match_index].2);
+                        let hit = hits[doc.tools.match_index];
+                        doc.tools.pending_char_range = Some((hit.0, hit.1));
                     }
                 }
             }
@@ -4667,9 +4723,10 @@ impl Tessel {
             }
             GpuiAction::ApplyEditorGoto => {
                 if let Some(doc) = self.documents.get_mut(self.active_document)
-                    && let Some((_, line)) =
+                    && let Some((offset, line)) =
                         crate::files::goto_line_char_offset(&doc.text, &doc.tools.goto_line)
                 {
+                    doc.tools.pending_char_range = Some((offset, offset));
                     doc.tools.pending_scroll_line = Some(line);
                     doc.tools.goto_open = false;
                 }
@@ -4695,27 +4752,17 @@ impl Tessel {
                     }
                 }
             }
-            GpuiAction::AppendActiveDocumentText(chunk) => {
-                if let Some(doc) = self.documents.get_mut(self.active_document)
-                    && !doc.media
-                    && doc.text.len() + chunk.len() <= crate::files::MAX_TEXT
+            GpuiAction::ApplyNativeDocumentEdit {
+                instance_id,
+                base,
+                text,
+            } => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && !doc.preview_mode
                 {
-                    doc.text.push_str(&chunk);
-                    doc.unpinned_preview = false;
-                    doc.sheet_cache = None;
-                    doc.preview = None;
-                    doc.last_edited_at = Some(std::time::Instant::now());
-                }
-            }
-            GpuiAction::BackspaceActiveDocument => {
-                if let Some(doc) = self.documents.get_mut(self.active_document)
-                    && !doc.media
-                {
-                    let _ = doc.text.pop();
-                    doc.unpinned_preview = false;
-                    doc.sheet_cache = None;
-                    doc.preview = None;
-                    doc.last_edited_at = Some(std::time::Instant::now());
+                    doc.apply_native_edit(instance_id, &base, text);
                 }
             }
             GpuiAction::StepPdfPage(delta) => {

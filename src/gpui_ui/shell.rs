@@ -29,6 +29,7 @@ use gpui::{
 pub(crate) fn render_workspace_body(
     snapshot: &GpuiWorkspaceSnapshot,
     remote_inputs: &super::remote_inputs::Inputs,
+    editor_input: &super::editor_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -56,6 +57,7 @@ pub(crate) fn render_workspace_body(
             el.child(render_center_column(
                 snapshot,
                 remote_inputs,
+                editor_input,
                 focus_input,
                 tokens,
                 stage_height_px,
@@ -74,9 +76,11 @@ pub(crate) fn render_workspace_body(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_center_column(
     snapshot: &GpuiWorkspaceSnapshot,
     remote_inputs: &super::remote_inputs::Inputs,
+    editor_input: &super::editor_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     stage_height_px: f32,
@@ -112,10 +116,13 @@ fn render_center_column(
                     GpuiCenterMode::WorkGrid => {
                         render_work_grid(snapshot, tokens, cx).into_any_element()
                     }
-                    GpuiCenterMode::DocumentEditor => {
-                        editor_view::render_document_editor_stage(snapshot, tokens, cx)
-                            .into_any_element()
-                    }
+                    GpuiCenterMode::DocumentEditor => editor_view::render_document_editor_stage(
+                        snapshot,
+                        editor_input,
+                        tokens,
+                        cx,
+                    )
+                    .into_any_element(),
                     GpuiCenterMode::BrowserTab => {
                         editor_view::render_browser_stage(snapshot, tokens, window, cx)
                             .into_any_element()

@@ -5,6 +5,8 @@
 
 pub(crate) mod chat_view;
 pub(crate) mod chrome;
+pub(crate) mod editor_input;
+mod editor_syntax;
 pub mod editor_view;
 pub mod icons;
 pub(crate) mod modals_view;
@@ -18,6 +20,8 @@ pub(crate) mod sidebar_view;
 pub(crate) mod terminal_view;
 pub mod theme;
 
+#[cfg(test)]
+mod styled_input_tests;
 #[cfg(test)]
 mod tests;
 
@@ -81,6 +85,7 @@ pub(crate) struct TesselGpuiRoot {
     repaint_flag: Arc<AtomicBool>,
     presented_images: crate::gpui_pixels::PresentedImages,
     remote_inputs: remote_inputs::Inputs,
+    editor_input: editor_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -139,6 +144,7 @@ impl TesselGpuiRoot {
             repaint_flag,
             presented_images: crate::gpui_pixels::PresentedImages::default(),
             remote_inputs: remote_inputs::Inputs::default(),
+            editor_input: editor_input::Input::default(),
             _poller_task: poller_task,
         }
     }
@@ -230,7 +236,11 @@ impl TesselGpuiRoot {
         let shift = ks.modifiers.shift;
         let alt = ks.modifiers.alt;
         let key = ks.key.as_str();
-        let native_target = self.remote_inputs.focused(window, cx);
+        let native_target = self.remote_inputs.focused(window, cx).or_else(|| {
+            self.editor_input
+                .focused(window, cx)
+                .then_some(FocusInputTarget::EditorBody)
+        });
         if let Some(target) = native_target {
             self.focus_input = target;
             if !ctrl && !alt && key == "enter" && target == FocusInputTarget::RemoteRename {
@@ -491,11 +501,15 @@ impl TesselGpuiRoot {
         if native_target.is_some() {
             return;
         }
-        let target = if self.focus_input == FocusInputTarget::None {
-            self.app.gpui_default_focus_target()
-        } else {
-            self.focus_input
-        };
+        let target = self.effective_focus_target();
+        if target == FocusInputTarget::EditorBody {
+            if let Some(doc) = self.app.gpui_editor_document()
+                && let Some(input) = self.editor_input.get(doc.instance_id())
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            }
+            return;
+        }
 
         if let FocusInputTarget::Terminal(sid) = target {
             if ctrl && shift && !alt && key == "f" {
@@ -542,6 +556,14 @@ impl TesselGpuiRoot {
                 cx.write_to_clipboard(ClipboardItem::new_string(copied));
             }
             cx.notify();
+        }
+    }
+
+    fn effective_focus_target(&self) -> FocusInputTarget {
+        if self.focus_input == FocusInputTarget::None {
+            self.app.gpui_default_focus_target()
+        } else {
+            self.focus_input
         }
     }
 
@@ -673,6 +695,41 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        let native_doc = snapshot.active_document.as_ref().filter(|doc| {
+            snapshot.center_mode == GpuiCenterMode::DocumentEditor
+                && !doc.preview_mode
+                && doc.pdf_summary.is_none()
+                && doc.office_summary.is_none()
+                && doc.image_dims.is_none()
+        });
+        if (native_doc.is_none()
+            || self.app.gpui_has_open_modal()
+            || self.effective_focus_target() != FocusInputTarget::EditorBody)
+            && self.editor_input.focused(window, cx)
+        {
+            window.focus(&self.focus_handle, cx);
+        }
+        if !self.app.gpui_has_open_modal() {
+            self.editor_input
+                .sync(native_doc, &self.app.gpui_document_ids(), window, cx);
+            if let Some(doc) = native_doc {
+                self.editor_input
+                    .prepare_styles(doc, snapshot.theme, snapshot.dark);
+                if self.effective_focus_target() == FocusInputTarget::EditorBody
+                    && let Some(input) = self.editor_input.get(doc.instance_id)
+                {
+                    window.focus(&input.read(cx).focus_handle(cx), cx);
+                }
+                if let Some(selection) = self.app.gpui_take_editor_selection(doc.instance_id)
+                    && let Some(input) = self.editor_input.get(doc.instance_id)
+                {
+                    input.update(cx, |state, cx| {
+                        state.move_to(selection.0, cx);
+                        state.select_to(selection.1, cx);
+                    });
+                }
+            }
+        }
         if (snapshot.center_mode != GpuiCenterMode::RemoteSftp || self.app.gpui_has_open_modal())
             && self.remote_inputs.focused(window, cx).is_some()
         {
@@ -740,6 +797,7 @@ impl Render for TesselGpuiRoot {
             .child(shell::render_workspace_body(
                 &snapshot,
                 &self.remote_inputs,
+                &self.editor_input,
                 focus_input,
                 &tokens,
                 self.left_width,

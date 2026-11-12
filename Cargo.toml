@@ -17,6 +17,7 @@ visual-test = ["eframe/__screenshot"]
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 vt100 = { path = "vendor/vt100" }
+gpui_ce_elements = { path = "vendor/gpui_ce_elements" }
 
 [dependencies]
 tessel-host-protocol = { git = "https://github.com/mindkind1337/tessel-host", rev = "78db68d61556bfa59a058080cf9270a8f47301b0" }
