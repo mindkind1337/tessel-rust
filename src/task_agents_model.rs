@@ -63,8 +63,10 @@ mod tests {
     use super::*;
     #[test]
     fn task_agent_choices_and_focus_never_escape_current_project_or_assignment() {
-        let mut state = Workspace::default();
-        state.active_project = Some(1);
+        let mut state = Workspace {
+            active_project: Some(1),
+            ..Workspace::default()
+        };
         for (id, project, launch, title) in [
             (7, 1, "CodexChat", "Worker"),
             (8, 2, "ClaudeChat", "Other"),

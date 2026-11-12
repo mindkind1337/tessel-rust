@@ -1249,3 +1249,30 @@ fn renders_across_all_seven_themes_both_languages_and_narrow_viewports_without_o
         }
     }
 }
+
+#[test]
+fn yielding_keyboard_keeps_panel_visible_and_does_not_reclaim_external_focus() {
+    let ctx = egui::Context::default();
+    let mut state = FloatingTerminalState::new();
+    let cfg = StepConfig::default();
+    let initial = run_step(&ctx, &mut state, &cfg, 0.0, Vec::new());
+    state.show();
+    let opened = run_open_settled(&ctx, &mut state, &cfg, 0.1, 0.2);
+    assert_eq!(ctx.memory(|m| m.focused()), Some(opened.content_id));
+    // A programmatic navigation may supersede a queued terminal focus request.
+    state.show();
+    state.yield_keyboard();
+    ctx.memory_mut(|m| m.request_focus(initial.outside_id));
+    for time in [0.3, 0.4] {
+        let step = run_step(&ctx, &mut state, &cfg, time, Vec::new());
+        assert!(state.is_open());
+        assert!(!state.has_keyboard());
+        assert_eq!(ctx.memory(|m| m.focused()), Some(initial.outside_id));
+        assert!(
+            !step
+                .panel_out
+                .actions
+                .contains(&FloatingTerminalAction::FocusTerminal)
+        );
+    }
+}

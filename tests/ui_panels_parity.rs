@@ -342,16 +342,25 @@ fn tasks_board_inline_rename_and_done_bulk_selection() {
             id: 10,
             title: "Original Card".into(),
             column: 0,
+            pane: None,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 30,
             title: "Done A".into(),
             column: 3,
+            pane: None,
+            timing: String::new(),
+            timing_title: String::new(),
         },
         TaskCard {
             id: 31,
             title: "Done B".into(),
             column: 3,
+            pane: None,
+            timing: String::new(),
+            timing_title: String::new(),
         },
     ];
 
@@ -369,6 +378,7 @@ fn tasks_board_inline_rename_and_done_bulk_selection() {
                     action = board.show(
                         ui,
                         TasksBoardInput {
+                            agents: &[],
                             tasks: &tasks,
                             french: false,
                             project_selected: true,

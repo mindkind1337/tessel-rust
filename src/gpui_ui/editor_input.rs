@@ -150,7 +150,8 @@ mod tests {
         cx.refresh().unwrap();
         view.update(cx, |root, window, cx| {
             root.editor_input.get(id).unwrap().update(cx, |state, cx| {
-                state.set_selected_text_range(8..0, window, cx)
+                // Anchor after cursor: this is a backward selection, not an iterator.
+                state.set_selected_text_range(std::ops::Range { start: 8, end: 0 }, window, cx)
             })
         })
         .unwrap();
