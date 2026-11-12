@@ -5,6 +5,7 @@
 
 pub(crate) mod chat_view;
 pub(crate) mod chrome;
+mod editor_indent;
 pub(crate) mod editor_input;
 mod editor_syntax;
 pub mod editor_view;
@@ -114,6 +115,14 @@ impl TesselGpuiRoot {
     }
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
+        cx.bind_keys([
+            gpui::KeyBinding::new("tab", editor_input::Indent, Some("TesselLocalEditor")),
+            gpui::KeyBinding::new(
+                "shift-tab",
+                editor_input::Outdent,
+                Some("TesselLocalEditor"),
+            ),
+        ]);
         let focus_handle = cx.focus_handle();
         let poll_flag = Arc::clone(&repaint_flag);
         let poller_task = cx.spawn(async move |this, cx| {

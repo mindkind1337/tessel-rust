@@ -80,6 +80,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 - The GPUI local source editor uses native caret movement, selection, clipboard operations and per-document undo/redo instead of appending keystrokes to the end. Source text remains complete up to the 2 MiB limit, with cached syntax colors, line numbers, modified-line markers, word wrapping and Unicode-aware Find/Go-to-line navigation. Closed/reopened documents, external changes and read-only previews reject stale edits. Native Windows visual acceptance and full Monaco editing parity remain pending.
 
+- In the native local editor, Tab advances to the next detected indentation stop or indents a selected block; Shift+Tab outdents the affected lines. File indentation is detected on opening (spaces of 2–8 columns or tabs, with a four-column default). Reversed selections, CRLF text and undo/redo are preserved. Language-specific automatic indentation remains unfinished.
+
 ### Remote files
 
 - The GPUI remote-file panel uses the shared SFTP operations for host selection, directory navigation, file/folder creation, confirmed deletion, rename, original downloads and basic UTF-8 editing. Unsaved changes and active operations guard navigation. Remote image and PDF previews use the original bytes, with PDF page and zoom controls.

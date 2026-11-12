@@ -8545,6 +8545,7 @@ dependencies = [
  "tessel-host-client",
  "tessel-host-protocol",
  "tokio",
+ "unicode-segmentation",
  "url",
  "vt100",
  "webbrowser",

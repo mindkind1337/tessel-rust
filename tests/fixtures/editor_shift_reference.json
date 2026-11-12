@@ -1,0 +1,5153 @@
+{
+  "monacoVersion": "0.57.0",
+  "vectors": [
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "  a\n  b",
+      "selection": [
+        0,
+        7
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n    b",
+      "selection": [
+        0,
+        11
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b",
+      "selection": [
+        0,
+        19
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "  a\nb",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\nb",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\nb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\nb",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 2,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "  a\n  b",
+      "selection": [
+        3,
+        7
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n    b",
+      "selection": [
+        5,
+        11
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b",
+      "selection": [
+        9,
+        19
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "  a\n  b",
+      "selection": [
+        3,
+        7
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n    b",
+      "selection": [
+        5,
+        11
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb",
+      "selection": [
+        2,
+        5
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b",
+      "selection": [
+        9,
+        19
+      ]
+    },
+    {
+      "text": "a\nb",
+      "start": 1,
+      "end": 3,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb",
+      "selection": [
+        1,
+        3
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb\n\tlast",
+      "selection": [
+        0,
+        14
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n\tb\nlast",
+      "selection": [
+        0,
+        9
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b\n  last",
+      "selection": [
+        0,
+        20
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n  b\nlast",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\t\tb\n\tlast",
+      "selection": [
+        0,
+        12
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n        b\n    last",
+      "selection": [
+        0,
+        24
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb\n\tlast",
+      "selection": [
+        0,
+        11
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b\n        last",
+      "selection": [
+        0,
+        32
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n    b\nlast",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n    b\nlast",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n    b\nlast",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n    b\nlast",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n    b\nlast",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n    b\nlast",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n    b\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb\n\tlast",
+      "selection": [
+        1,
+        14
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n\tb\nlast",
+      "selection": [
+        0,
+        9
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b\n  last",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n  b\nlast",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\t\tb\n\tlast",
+      "selection": [
+        1,
+        12
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n        b\n    last",
+      "selection": [
+        1,
+        24
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb\n\tlast",
+      "selection": [
+        1,
+        11
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b\n        last",
+      "selection": [
+        1,
+        32
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb\n\tlast",
+      "selection": [
+        1,
+        14
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\n\tb\nlast",
+      "selection": [
+        0,
+        9
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b\n  last",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\n  b\nlast",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\t\tb\n\tlast",
+      "selection": [
+        1,
+        12
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n        b\n    last",
+      "selection": [
+        1,
+        24
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\ta\n\tb\n\tlast",
+      "selection": [
+        1,
+        11
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n        b\n        last",
+      "selection": [
+        1,
+        32
+      ]
+    },
+    {
+      "text": "  a\n    b\nlast",
+      "start": 1,
+      "end": 14,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "a\nb\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b",
+      "selection": [
+        0,
+        13
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n  b",
+      "selection": [
+        0,
+        7
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n            b",
+      "selection": [
+        0,
+        23
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n    b",
+      "selection": [
+        0,
+        11
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                a\n                        b",
+      "selection": [
+        0,
+        43
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n        b",
+      "selection": [
+        0,
+        19
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\tb",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n\t\tb",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n\t\tb",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\tb",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n\t\tb",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n\t\tb",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\tb",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                a\n\t\tb",
+      "selection": [
+        0,
+        18
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n\t\tb",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n\t\tb",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n\t\tb",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b",
+      "selection": [
+        1,
+        13
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n  b",
+      "selection": [
+        1,
+        7
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n            b",
+      "selection": [
+        1,
+        23
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n    b",
+      "selection": [
+        1,
+        11
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                a\n                        b",
+      "selection": [
+        1,
+        43
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n        b",
+      "selection": [
+        1,
+        19
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    a\n      b",
+      "selection": [
+        1,
+        13
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  a\n  b",
+      "selection": [
+        1,
+        7
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        a\n            b",
+      "selection": [
+        1,
+        23
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    a\n    b",
+      "selection": [
+        1,
+        11
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\ta\n\t\t\tb",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\ta\n\tb",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                a\n                        b",
+      "selection": [
+        1,
+        43
+      ]
+    },
+    {
+      "text": "\t a\n\t\tb",
+      "start": 1,
+      "end": 7,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        a\n        b",
+      "selection": [
+        1,
+        19
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\té😀\r\n\r\n\t\tz\r\n\tlast",
+      "selection": [
+        0,
+        22
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n\tz\r\nlast",
+      "selection": [
+        0,
+        18
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n  last",
+      "selection": [
+        0,
+        27
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n  z\r\nlast",
+      "selection": [
+        0,
+        19
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        0,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n    last",
+      "selection": [
+        0,
+        29
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        0,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        é😀\r\n\r\n        z\r\n        last",
+      "selection": [
+        0,
+        41
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\té😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        12
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        9
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        12
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        9
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        16
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 10,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n   z\r\nlast",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\té😀\r\n\r\n\t\tz\r\n\tlast",
+      "selection": [
+        1,
+        22
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n\tz\r\nlast",
+      "selection": [
+        0,
+        18
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n  last",
+      "selection": [
+        1,
+        27
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n  z\r\nlast",
+      "selection": [
+        0,
+        19
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n    last",
+      "selection": [
+        1,
+        29
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        é😀\r\n\r\n        z\r\n        last",
+      "selection": [
+        1,
+        41
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\té😀\r\n\r\n\t\tz\r\n\tlast",
+      "selection": [
+        1,
+        22
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n\tz\r\nlast",
+      "selection": [
+        0,
+        18
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n  last",
+      "selection": [
+        1,
+        27
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\n  z\r\nlast",
+      "selection": [
+        0,
+        19
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "    é😀\r\n\r\n    z\r\n    last",
+      "selection": [
+        1,
+        29
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\té😀\r\n\r\n\tz\r\n\tlast",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        é😀\r\n\r\n        z\r\n        last",
+      "selection": [
+        1,
+        41
+      ]
+    },
+    {
+      "text": "  é😀\r\n\r\n   z\r\nlast",
+      "start": 1,
+      "end": 22,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "é😀\r\n\r\nz\r\nlast",
+      "selection": [
+        0,
+        17
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\tx\n\n\t\t\ty",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      x\n\n      y",
+      "selection": [
+        0,
+        16
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n  y",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\tx\n\n\t\ty",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        0,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        0,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\tx\n\n    y",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n    y",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      x\n\n    y",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n    y",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\tx\n\n    y",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n    y",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\tx\n\n    y",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n    y",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 6,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n    y",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n    y",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\n    y",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\tx\n\n\t\t\ty",
+      "selection": [
+        1,
+        10
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      x\n\n      y",
+      "selection": [
+        1,
+        16
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n  y",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\tx\n\n\t\ty",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\tx\n\n\t\t\ty",
+      "selection": [
+        1,
+        10
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      x\n\n      y",
+      "selection": [
+        1,
+        16
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  x\n\n  y",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\tx\n\n\t\ty",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\tx\n\n\ty",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        x\n\n        y",
+      "selection": [
+        1,
+        20
+      ]
+    },
+    {
+      "text": "    x\n\n    y",
+      "start": 1,
+      "end": 12,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "x\n\ny",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\t",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t",
+      "selection": [
+        0,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      ",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  ",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t",
+      "selection": [
+        0,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        ",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t",
+      "selection": [
+        0,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        ",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  ",
+      "selection": [
+        2,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  ",
+      "selection": [
+        2,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  ",
+      "selection": [
+        1,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  ",
+      "selection": [
+        1,
+        2
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "    ",
+      "start": 1,
+      "end": 4,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "",
+      "selection": [
+        0,
+        0
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\t\r\n\t\tx",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      \r\n    x",
+      "selection": [
+        0,
+        13
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\nx",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        \r\n    x",
+      "selection": [
+        0,
+        15
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\nx",
+      "selection": [
+        0,
+        7
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                \r\n        x",
+      "selection": [
+        0,
+        27
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\nx",
+      "selection": [
+        0,
+        11
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\t\r\n  x",
+      "selection": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      \r\n  x",
+      "selection": [
+        0,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\n  x",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n  x",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        \r\n  x",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\n  x",
+      "selection": [
+        0,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n  x",
+      "selection": [
+        0,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        0,
+        3
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                \r\n  x",
+      "selection": [
+        0,
+        18
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 5,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\n  x",
+      "selection": [
+        0,
+        10
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\n  x",
+      "selection": [
+        2,
+        2
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\n  x",
+      "selection": [
+        4,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 0,
+      "end": 0,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\n  x",
+      "selection": [
+        8,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\n  x",
+      "selection": [
+        2,
+        2
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\n  x",
+      "selection": [
+        4,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\n  x",
+      "selection": [
+        1,
+        1
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 1,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\n  x",
+      "selection": [
+        8,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\t\r\n\t\tx",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      \r\n    x",
+      "selection": [
+        1,
+        13
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\nx",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        \r\n    x",
+      "selection": [
+        1,
+        15
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\nx",
+      "selection": [
+        1,
+        7
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                \r\n        x",
+      "selection": [
+        1,
+        27
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\nx",
+      "selection": [
+        1,
+        11
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\t\r\n\t\tx",
+      "selection": [
+        1,
+        8
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": false,
+      "expected": "      \r\n    x",
+      "selection": [
+        1,
+        13
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 2,
+      "spaces": true,
+      "outdent": true,
+      "expected": "  \r\nx",
+      "selection": [
+        1,
+        5
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": false,
+      "expected": "        \r\n    x",
+      "selection": [
+        1,
+        15
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 4,
+      "spaces": true,
+      "outdent": true,
+      "expected": "    \r\nx",
+      "selection": [
+        1,
+        7
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": false,
+      "expected": "\t\t\r\n\tx",
+      "selection": [
+        1,
+        6
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": false,
+      "outdent": true,
+      "expected": "\t\r\nx",
+      "selection": [
+        1,
+        4
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": false,
+      "expected": "                \r\n        x",
+      "selection": [
+        1,
+        27
+      ]
+    },
+    {
+      "text": "\t  \r\n  x",
+      "start": 1,
+      "end": 8,
+      "size": 8,
+      "spaces": true,
+      "outdent": true,
+      "expected": "        \r\nx",
+      "selection": [
+        1,
+        11
+      ]
+    }
+  ]
+}

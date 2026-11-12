@@ -1,0 +1,855 @@
+{
+  "monacoVersion": "0.57.0",
+  "vectors": [
+    {
+      "text": "",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "plain\ntext",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "a\n  b\n    c\n  d",
+      "insertSpaces": true,
+      "tabSize": 2
+    },
+    {
+      "text": "a\n    b\n        c",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "\ta\n\t\tb",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    a\n\tb",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "const a = 1,\n      b = 2;",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "a\r\n   é😀\r\n      z\r\n",
+      "insertSpaces": true,
+      "tabSize": 3
+    },
+    {
+      "text": " \n\t\n   \n",
+      "insertSpaces": true,
+      "tabSize": 4
+    },
+    {
+      "text": "\t  a\n    b\n\t c",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n        value8\r\n  \tvalue9,\r\n\t  value10,\r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3,\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\n    \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\n      value4\n  \tvalue5\n\t  value6,\n\tvalue7\n    value8\n  \tvalue9\n\t  value10,\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \r\n  \tvalue1\r\n\t  value2\r\n\t\r\n  \r\n  \tvalue5\r\n\t  value6\r\n\t\r\n        value8\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1\n\t  value2\n\tvalue3\n        value4\n  \tvalue5,\n\t  \n\tvalue7\n  value8\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \t\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1,\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5,\n\t  value6\n\tvalue7,\n        value8\n  \tvalue9\n\t  \n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n  \r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \tvalue1\n\t  value2\n\tvalue3\n      value4\n  \tvalue5\n\t  value6,\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n    \r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7,\r\n\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3,\r\n      value4\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \tvalue1\n\t  \n\tvalue3,\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\n      value8\n  \tvalue9,\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3,\r\n        value4\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1,\n\t  value2\n\tvalue3\n      value4\n  \tvalue5,\n\t  value6,\n\tvalue7\n    value8\n  \tvalue9,\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n        value8\r\n  \t\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5,\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9,\n\t  value10,\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\t\n        value4\n  \tvalue5\n\t  value6,\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n    \n  \tvalue5\n\t  \n\tvalue7\n        value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  \r\n  \tvalue1\r\n\t  value2\r\n\t\r\nvalue4,\r\n  \t\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \t\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3\n    \n  \t\n\t  value6\n\tvalue7\nvalue8,\n  \t\n\t  \n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3\n  value4\n  \t\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1,\r\n\t  value2,\r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\t\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\n\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1,\r\n\t  \r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7,\r\n      value8\r\n  \t\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \t\n\t  value2\n\tvalue3,\n      value4\n  \tvalue5\n\t  value6,\n\tvalue7,\n\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \t\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n        value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \t\n\t  value2\n\tvalue3\n    \n  \tvalue5\n\t  value6\n\t\n  value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  \n  \tvalue1\n\t  value2\n\tvalue3\n  value4\n  \tvalue5\n\t  value6,\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n    value4\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\t\n    value4\n  \tvalue5,\n\t  value6\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6,\r\n\t\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \t\n\t  value2\n\tvalue3\n      value4\n  \t\n\t  value6\n\tvalue7\n        value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \t\r\n\t  value6\r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n  value4\n  \tvalue5,\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  \r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n\n  \t\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10,\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3,\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n      value8\r\n  \tvalue9,\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2,\n\tvalue3\n  value4\n  \tvalue5,\n\t  value6,\n\tvalue7\n  value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\t\r\nvalue4,\r\n  \t\r\n\t  \r\n\t\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3\n    value4\n  \tvalue5,\n\t  value6\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \t\n\t  value2\n\t\n      value4\n  \tvalue5\n\t  value6\n\t\n      value8\n  \tvalue9,\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n      \r\n  \t\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3\n  \n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \t\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n  \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\t\n      \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \t\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3\n  \n  \tvalue5\n\t  \n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9,\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1,\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \t\r\n\t  value2,\r\n\t\r\n      value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3,\r\n    value4\r\n  \tvalue5,\r\n\t  value6\r\n\t\r\n      value8\r\n  \tvalue9,\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      \n  \tvalue1\n\t  value2\n\t\n  value4\n  \t\n\t  value6\n\tvalue7\n    value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9,\r\n\t  \r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\n  value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n  value4\r\n  \tvalue5,\r\n\t  value6,\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1,\n\t  \n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6,\n\tvalue7,\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n  value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  \n  \tvalue1\n\t  value2\n\tvalue3\n      value4\n  \tvalue5\n\t  value6\n\tvalue7,\n        value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\t\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1,\n\t  \n\tvalue3\n      \n  \tvalue5\n\t  value6\n\tvalue7\n\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1,\r\n\t  value2\r\n\t\r\n    \r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1,\n\t  value2\n\tvalue3\n  value4\n  \t\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n      value4\r\n  \t\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9,\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \tvalue1,\n\t  value2\n\tvalue3\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n  \r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n        \n  \tvalue5\n\t  \n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      \r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n  value8\r\n  \t\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2,\n\tvalue3\n      value4\n  \tvalue5\n\t  value6\n\tvalue7\n    \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3,\r\n    \r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\n  value8\r\n  \t\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1,\n\t  value2\n\tvalue3\n    value4\n  \t\n\t  value6,\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\n        value4\n  \tvalue5,\n\t  value6,\n\tvalue7,\n    \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        \r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\n      value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \t\n\t  value2\n\tvalue3,\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \t\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n  value8\r\n  \tvalue9\r\n\t  \r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  \n\tvalue3\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \tvalue9,\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3,\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2,\n\tvalue3\nvalue4,\n  \tvalue5\n\t  \n\tvalue7\n  value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2,\r\n\t\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      \r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3,\n        \n  \tvalue5\n\t  value6,\n\t\n    \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\t\r\n        \r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3\n      value4\n  \tvalue5,\n\t  \n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3,\r\n      value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \t\n\t  \n\t\n      value4\n  \tvalue5,\n\t  value6,\n\tvalue7,\n      value8\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \t\r\n\t  value2\r\n\t\r\n  value4\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n        \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\t\n      value4\n  \tvalue5\n\t  value6,\n\tvalue7\nvalue8,\n  \tvalue9,\n\t  value10,\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      \r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1\n\t  value2\n\tvalue3\n      value4\n  \t\n\t  value6\n\tvalue7\n        value8\n  \tvalue9\n\t  value10,\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  \r\n\t\r\n\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n        \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\t\nvalue4,\n  \t\n\t  value6,\n\tvalue7\n      value8\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    \r\n  \t\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1,\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\nvalue4,\r\n  \tvalue5,\r\n\t  value6\r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n        value4\n  \t\n\t  value6\n\tvalue7\n  \n  \tvalue9\n\t  value10,\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n    \r\n  \t\r\n\t  value6\r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2\n\tvalue3\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\n  value8\n  \tvalue9\n\t  value10\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \t\r\n\t  \r\n\tvalue3\r\n\r\n  \tvalue5\r\n\t  value6\r\n\t\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \t\n\t  value2,\n\tvalue3\n      value4\n  \tvalue5\n\t  \n\tvalue7\n  value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2\r\n\t\r\n      value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \t\r\n\t  \r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3,\n  value4\n  \tvalue5\n\t  value6\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \t\r\n\t  value6\r\n\tvalue7,\r\n        value8\r\n  \tvalue9\r\n\t  value10,\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3,\nvalue4,\n  \tvalue5\n\t  value6,\n\tvalue7\nvalue8,\n  \tvalue9,\n\t  value10,\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \t\r\n\t  \r\n\tvalue3,\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \t\n\t  value2\n\tvalue3\n      value4\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1,\r\n\t  value2,\r\n\tvalue3,\r\nvalue4,\r\n  \t\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9\r\n\t  value10\r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1,\n\t  value2\n\t\n      value4\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \t\n\t  \n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n  value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10,\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1,\n\t  value2,\n\tvalue3\nvalue4,\n  \t\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3,\r\n        value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n    value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        \n  \tvalue1,\n\t  value2,\n\tvalue3\n    \n  \tvalue5\n\t  value6\n\t\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7,\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \tvalue1\n\t  value2\n\tvalue3\n        value4\n  \tvalue5,\n\t  value6\n\tvalue7\n\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3,\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\nvalue8,\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \t\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5,\n\t  value6\n\tvalue7\n  value8\n  \tvalue9,\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3\r\n    value4\r\n  \tvalue5,\r\n\t  value6,\r\n\t\r\n    value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5,\n\t  value6\n\tvalue7,\n    value8\n  \tvalue9,\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \t\r\n\t  \r\n\tvalue3\r\n  value4\r\n  \t\r\n\t  value6,\r\n\t\r\n    value8\r\n  \tvalue9\r\n\t  \r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "\n  \tvalue1\n\t  \n\tvalue3,\n      value4\n  \tvalue5\n\t  value6,\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    \n  \tvalue1,\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7,\n  value8\n  \tvalue9\n\t  value10\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1,\r\n\t  value2\r\n\t\r\n  \r\n  \t\r\n\t  value6\r\n\tvalue7\r\n      \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1,\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6,\n\tvalue7,\n      value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\r\n  \tvalue1,\r\n\t  value2\r\n\t\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\t\r\n  value8\r\n  \tvalue9,\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \t\n\t  \n\tvalue3\n      \n  \tvalue5\n\t  value6,\n\t\n    \n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2,\r\n\tvalue3,\r\n        value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \tvalue1\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\n        value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\n        value8\r\n  \tvalue9\r\n\t  \r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2,\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n    value8\n  \tvalue9\n\t  value10\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  \r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  \r\n\t",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  value2,\n\tvalue3,\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\n      value8\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  \r\n\tvalue3\r\n    \r\n  \t\r\n\t  value6\r\n\tvalue7\r\n  \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \t\n\t  value2\n\tvalue3\n      value4\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3,\r\n      value4\r\n  \t\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        \n  \tvalue1\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6,\n\tvalue7\n  value8\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1,\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\n    value8\r\n  \t\r\n\t  value10,\r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \t\n\t  value2\n\tvalue3\nvalue4,\n  \tvalue5\n\t  value6\n\tvalue7\n      value8\n  \t\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \t\r\n\t  value2\r\n\tvalue3\r\n    \r\n  \t\r\n\t  value6\r\n\tvalue7\r\n\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "  value0\n  \tvalue1\n\t  value2,\n\tvalue3\n        value4\n  \t\n\t  \n\tvalue7,\n    value8\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n    value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n        \r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "        value0\n  \tvalue1\n\t  value2,\n\tvalue3\n    \n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\t\r\n  value4\r\n  \tvalue5\r\n\t  value6\r\n\tvalue7\r\n      value8\r\n  \tvalue9\r\n\t  value10,\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "    value0\n  \tvalue1\n\t  \n\tvalue3\n    value4\n  \tvalue5\n\t  value6\n\tvalue7\nvalue8,\n  \tvalue9\n\t  value10\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5\r\n\t  value6\r\n\t\r\n  value8\r\n  \t\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\n  \t\n\t  value2\n\tvalue3\n    value4\n  \tvalue5\n\t  \n\tvalue7\n        value8\n  \tvalue9\n\t  \n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "      value0\r\n  \tvalue1\r\n\t  value2\r\n\tvalue3\r\n      value4\r\n  \tvalue5\r\n\t  value6,\r\n\tvalue7\r\n  value8\r\n  \tvalue9\r\n\t  value10\r\n\tvalue11",
+      "insertSpaces": false,
+      "tabSize": 4
+    },
+    {
+      "text": "value0,\n  \tvalue1\n\t  \n\tvalue3,\n    value4\n  \tvalue5,\n\t  value6,\n\t\n    value8\n  \tvalue9\n\t  value10\n\tvalue11,",
+      "insertSpaces": false,
+      "tabSize": 4
+    }
+  ]
+}

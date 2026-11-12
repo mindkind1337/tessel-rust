@@ -27,6 +27,7 @@ eframe = "=0.33.0"
 gpui = { package = "gpui-ce", version = "0.3" }
 gpui_platform = { package = "gpui_ce_platform", version = "0.3" }
 gpui_ce_elements = "=0.3.0"
+unicode-segmentation = "=1.13.3"
 portable-pty = "=0.9.0"
 vt100 = "=0.15.2"
 serde = { version = "1", features = ["derive"] }

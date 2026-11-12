@@ -1,5 +1,5 @@
 //! Native editor entities are retained per open document, never per filename or tab index.
-use super::{TesselGpuiRoot, editor_syntax};
+use super::{TesselGpuiRoot, editor_indent, editor_syntax};
 use crate::app::gpui_bridge::{GpuiAction, GpuiActiveDocumentSummary};
 use gpui::{App, AppContext, Context, Entity, Focusable, Subscription, Window};
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
@@ -9,6 +9,80 @@ struct Binding {
     state: Entity<EditableTextState>,
     synced: String,
     _changed: Subscription,
+    indentation: editor_indent::Options,
+}
+
+gpui::actions!(tessel_local_editor, [Indent, Outdent]);
+
+fn apply_indent(
+    root: &mut TesselGpuiRoot,
+    outdent: bool,
+    window: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    use gpui::EntityInputHandler;
+    if root.effective_focus_target() != super::FocusInputTarget::EditorBody {
+        return;
+    }
+    let Some(doc) = root.app.gpui_editor_document() else {
+        return;
+    };
+    if doc.media {
+        return;
+    }
+    let Some(binding) = root.editor_input.bindings.get(&doc.instance_id()) else {
+        return;
+    };
+    let state = binding.state.clone();
+    if state.read(cx).as_str() != doc.text {
+        return;
+    }
+    let options = binding.indentation;
+    state.update(cx, |state, cx| {
+        if state.marked_text_range(window, cx).is_some() {
+            return;
+        }
+        let Some(selected) = state.selected_text_range(false, window, cx) else {
+            return;
+        };
+        let source = state.as_str();
+        let to_byte = |offset: usize| {
+            let mut count = 0;
+            for (byte, ch) in source.char_indices() {
+                if count >= offset {
+                    return byte;
+                }
+                count += ch.len_utf16();
+            }
+            source.len()
+        };
+        let Some(edit) = editor_indent::plan(
+            source,
+            to_byte(selected.range.start)..to_byte(selected.range.end),
+            outdent,
+            options,
+        ) else {
+            return;
+        };
+        if source.len() - edit.range.len() + edit.replacement.len() > crate::files::MAX_TEXT {
+            return;
+        }
+        let range = source[..edit.range.start].encode_utf16().count()
+            ..source[..edit.range.end].encode_utf16().count();
+        state.replace_text_in_range(Some(range), &edit.replacement, window, cx);
+        let source = state.as_str();
+        let start = source[..edit.selection.start].encode_utf16().count();
+        let end = source[..edit.selection.end].encode_utf16().count();
+        state.set_selected_text_range(
+            if selected.reversed {
+                end..start
+            } else {
+                start..end
+            },
+            window,
+            cx,
+        );
+    });
 }
 
 #[cfg(all(test, feature = "visual-test"))]
@@ -16,6 +90,66 @@ mod tests {
     use super::*;
     use crate::files::Document;
     use gpui::{EntityInputHandler, TestAppContext};
+
+    #[gpui::test]
+    fn native_indent_shortcuts_preserve_selection_and_undo(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            use gpui_ce_elements::editable_text::actions::{
+                DEFAULT_INPUT_CONTEXT, default_bindings,
+            };
+            cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("indent.txt");
+        std::fs::write(&path, "é😀\r\nz\r\n").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                state.set_selected_text_range(8..0, window, cx)
+            })
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "tab");
+        view.update(cx, |root, window, cx| {
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().text,
+                "    é😀\r\n    z\r\n"
+            );
+            root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                let selection = state.selected_text_range(false, window, cx).unwrap();
+                assert_eq!(selection.range, 0..16);
+                assert!(selection.reversed);
+            });
+        })
+        .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().text,
+                "é😀\r\nz\r\n"
+            )
+        })
+        .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Redo);
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(view.into(), "shift-tab");
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().text,
+                "é😀\r\nz\r\n"
+            )
+        })
+        .unwrap();
+    }
 
     #[gpui::test]
     fn native_editor_restores_focus_without_append_fallback(cx: &mut TestAppContext) {
@@ -384,6 +518,13 @@ impl Input {
             .styled_runs(styled.source, styled.runs)
             .unwrap_or_else(|_| build())
             .accepts_input(!doc.media)
+            .key_context("EditableText TesselLocalEditor")
+            .on_action(
+                cx.listener(|root, _: &Indent, window, cx| apply_indent(root, false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|root, _: &Outdent, window, cx| apply_indent(root, true, window, cx)),
+            )
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|root, _, _, _| root.focus_input = super::FocusInputTarget::EditorBody),
@@ -574,6 +715,7 @@ impl Input {
                 state,
                 synced: doc.text.clone(),
                 _changed: changed,
+                indentation: editor_indent::Options::detect(&doc.text),
             },
         );
     }
