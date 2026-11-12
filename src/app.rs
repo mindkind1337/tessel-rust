@@ -10754,6 +10754,7 @@ impl Tessel {
     }
 
     fn refresh_past_sessions(&mut self) {
+        self.gpui_extra.session_query.invalidate();
         let live: Vec<crate::side_panels_model::SessionHistoryEntry> = self
             .sessions
             .iter()

@@ -1633,7 +1633,7 @@ fn render_sessions_history_tab(
         .flex_col()
         .gap(px(4.0));
 
-    if sp.past_sessions.is_empty() {
+    if sp.past_sessions.is_empty() && !sp.sessions_loading && !sp.sessions_limited {
         list = list.child(render_empty_note(
             if french {
                 "Aucune session passée trouvée."
@@ -1724,6 +1724,19 @@ fn render_sessions_history_tab(
         }
     }
 
+    if sp.sessions_loading {
+        list = list.child(render_empty_note(
+            if french {
+                "Recherche dans les conversations…"
+            } else {
+                "Searching conversations…"
+            },
+            tokens,
+        ));
+    }
+    if sp.sessions_limited {
+        list = list.child(render_empty_note(if french { "Recherche partielle : certains transcripts n’ont pas pu être lus ou la limite a été atteinte." } else { "Partial search: some transcripts could not be read or the search limit was reached." }, tokens));
+    }
     div()
         .size_full()
         .p(px(8.0))
@@ -1731,6 +1744,19 @@ fn render_sessions_history_tab(
         .flex_col()
         .gap(px(6.0))
         .child(panel_query_inputs.render(FocusInputTarget::SessionsQuery, french, tokens, cx))
+        .child(render_chip(
+            "gpui-sh-transcripts",
+            if french {
+                "Chercher aussi dans les transcripts"
+            } else {
+                "Search transcript contents too"
+            }
+            .to_owned(),
+            sp.sessions_include_transcripts,
+            tokens,
+            GpuiAction::ToggleSessionsTranscripts,
+            cx,
+        ))
         .child(scope_bar)
         .child(group_bar)
         .child(list)

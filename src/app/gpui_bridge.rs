@@ -51,6 +51,7 @@ pub(crate) struct GpuiExtraUiState {
     pub modal_input_generation: u64,
     pub explorer_input_generation: u64,
     pub panel_query_generation: u64,
+    pub session_query: crate::session_query::Search,
     pub help_query: String,
     pub settings_search: String,
     pub scm_drafts: crate::scm_drafts::Drafts,
@@ -87,6 +88,7 @@ impl Default for GpuiExtraUiState {
             modal_input_generation: 1,
             explorer_input_generation: 1,
             panel_query_generation: 1,
+            session_query: crate::session_query::Search::default(),
             help_query: String::new(),
             settings_search: String::new(),
             scm_drafts: crate::scm_drafts::Drafts::default(),
@@ -437,6 +439,9 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub sessions_scope: crate::side_panels_model::SessionHistoryScope,
     pub sessions_group: crate::side_panels_model::SessionHistoryGroupBy,
     pub sessions_query: String,
+    pub sessions_loading: bool,
+    pub sessions_include_transcripts: bool,
+    pub sessions_limited: bool,
     pub past_sessions: Vec<crate::side_panels_model::SessionHistoryEntry>,
     pub conv_window: crate::side_panels_model::ConversationWindow,
     pub conv_query: String,
@@ -930,6 +935,7 @@ pub(crate) enum GpuiAction {
     SetSessionsScope(crate::side_panels_model::SessionHistoryScope),
     SetSessionsGroup(crate::side_panels_model::SessionHistoryGroupBy),
     SetSessionsQuery(String),
+    ToggleSessionsTranscripts,
     SetConversationsWindow(crate::side_panels_model::ConversationWindow),
     SetConversationsQuery(String),
     SelectConversationThread(Option<String>),
@@ -1493,6 +1499,9 @@ impl Tessel {
         let refresh = (self.state.panels.right_open
             && self.state.panels.right_tab == SideTab::Files
             && self.explorer_tree.gpui_needs_frame())
+            || (self.state.panels.right_open
+                && self.state.panels.right_tab == SideTab::History
+                && self.gpui_extra.session_query.pending())
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -3616,20 +3625,30 @@ impl Tessel {
     }
 
     fn build_side_panels_snapshot(&mut self, french: bool) -> GpuiSidePanelsSnapshot {
-        self.sync_git_project();
+        let visible = self
+            .state
+            .panels
+            .right_open
+            .then_some(self.state.panels.right_tab);
+        if visible == Some(SideTab::Changes) {
+            self.sync_git_project();
+        }
         use crate::side_panels_model::{
-            build_conversation_threads, build_dashboard, filter_and_sort_task_history,
-            filter_sessions, now_unix_ms,
+            build_conversation_threads, build_dashboard, filter_and_sort_task_history, now_unix_ms,
         };
 
-        let dash_items = self.build_dashboard_items();
-        let dashboard_vm = build_dashboard(
-            &dash_items,
-            self.side_panels_ui.dashboard_group,
-            self.side_panels_ui.dashboard_filter,
-            &self.side_panels_ui.dashboard_query,
-            french,
-        );
+        let dashboard_vm = if visible == Some(SideTab::Dashboard) {
+            let dash_items = self.build_dashboard_items();
+            build_dashboard(
+                &dash_items,
+                self.side_panels_ui.dashboard_group,
+                self.side_panels_ui.dashboard_filter,
+                &self.side_panels_ui.dashboard_query,
+                french,
+            )
+        } else {
+            Default::default()
+        };
 
         let active_root = self.state.active().map(|p| p.path.clone());
         let active_doc_path = (self.view == View::Files)
@@ -3639,9 +3658,12 @@ impl Tessel {
                     .map(|d| d.path.clone())
             })
             .flatten();
-        let explorer = self
-            .explorer_tree
-            .gpui_rows_snapshot(active_root.as_deref(), active_doc_path.as_deref());
+        let explorer = if visible == Some(SideTab::Files) {
+            self.explorer_tree
+                .gpui_rows_snapshot(active_root.as_deref(), active_doc_path.as_deref())
+        } else {
+            Default::default()
+        };
 
         let (scm_branch, scm_ahead, scm_behind, scm_entries, scm_error) =
             match &self.scm_state.result {
@@ -3649,7 +3671,11 @@ impl Tessel {
                     parsed.branch.clone(),
                     parsed.ahead,
                     parsed.behind,
-                    parsed.entries.clone(),
+                    if visible == Some(SideTab::Changes) {
+                        parsed.entries.clone()
+                    } else {
+                        Vec::new()
+                    },
                     None,
                 ),
                 Some(Err(err)) => (None, 0, 0, Vec::new(), Some(err.clone())),
@@ -3658,6 +3684,7 @@ impl Tessel {
 
         let active_pid = self.state.active_project;
         let tasks: Vec<crate::workspace::Task> = active_pid
+            .filter(|_| visible == Some(SideTab::Tasks))
             .map(|pid| {
                 self.state
                     .tasks
@@ -3673,37 +3700,61 @@ impl Tessel {
         } else {
             None
         };
-        let (task_history_rows, _) = filter_and_sort_task_history(
-            &self.task_history_store.records,
-            proj_filter,
-            self.side_panels_ui.history_window,
-            self.side_panels_ui.history_sort,
-            &self.side_panels_ui.history_query,
-            now_unix_ms(),
-        );
+        let task_history_rows = if visible == Some(SideTab::TaskHistory) {
+            filter_and_sort_task_history(
+                &self.task_history_store.records,
+                proj_filter,
+                self.side_panels_ui.history_window,
+                self.side_panels_ui.history_sort,
+                &self.side_panels_ui.history_query,
+                now_unix_ms(),
+            )
+            .0
+        } else {
+            Vec::new()
+        };
 
         let workspace_roots: Vec<PathBuf> =
             self.state.projects.iter().map(|p| p.path.clone()).collect();
         let agent_filter = (!self.side_panels_ui.sessions_agent_filter.is_empty())
             .then_some(self.side_panels_ui.sessions_agent_filter.as_str());
-        let past_sessions = filter_sessions(
-            &self.past_sessions_cache,
-            self.side_panels_ui.sessions_scope,
-            active_root.as_deref(),
-            &workspace_roots,
-            agent_filter,
-            &self.side_panels_ui.sessions_query,
-            self.side_panels_ui.sessions_include_transcripts,
-        );
+        let past_sessions = if visible == Some(SideTab::History) {
+            self.gpui_extra
+                .session_query
+                .update(
+                    crate::session_query::Key {
+                        entries: self.past_sessions_cache.clone(),
+                        scope: self.side_panels_ui.sessions_scope,
+                        active: active_root,
+                        roots: workspace_roots,
+                        agent: agent_filter.map(str::to_owned),
+                        query: self.side_panels_ui.sessions_query.clone(),
+                        transcripts: self.side_panels_ui.sessions_include_transcripts,
+                    },
+                    std::time::Instant::now(),
+                )
+                .entries
+                .clone()
+        } else {
+            self.gpui_extra.session_query.pause();
+            Vec::new()
+        };
+        let sessions_loading = self.gpui_extra.session_query.pending();
+        let sessions_limited =
+            visible == Some(SideTab::History) && self.gpui_extra.session_query.limited();
 
-        let conv_messages = self.merged_conversation_messages();
-        let threads = build_conversation_threads(
-            &conv_messages,
-            self.side_panels_ui.conv_window,
-            self.side_panels_ui.conv_media,
-            &self.side_panels_ui.conv_query,
-            now_unix_ms(),
-        );
+        let threads = if visible == Some(SideTab::Conversations) {
+            let conv_messages = self.merged_conversation_messages();
+            build_conversation_threads(
+                &conv_messages,
+                self.side_panels_ui.conv_window,
+                self.side_panels_ui.conv_media,
+                &self.side_panels_ui.conv_query,
+                now_unix_ms(),
+            )
+        } else {
+            Vec::new()
+        };
 
         GpuiSidePanelsSnapshot {
             dashboard_vm,
@@ -3724,9 +3775,17 @@ impl Tessel {
             scm_entries,
             scm_error,
             commits_open: self.side_panels_ui.commits_open,
-            commits: self.scm_commits_cache.clone(),
+            commits: if visible == Some(SideTab::Changes) {
+                self.scm_commits_cache.clone()
+            } else {
+                Vec::new()
+            },
             expanded_commits: self.side_panels_ui.expanded_commits.clone(),
-            commit_files: self.side_panels_ui.commit_files_cache.clone(),
+            commit_files: if visible == Some(SideTab::Changes) {
+                self.side_panels_ui.commit_files_cache.clone()
+            } else {
+                BTreeMap::new()
+            },
             tasks,
             new_task_title: self.gpui_extra.new_task_title.clone(),
             history_window: self.side_panels_ui.history_window,
@@ -3738,6 +3797,9 @@ impl Tessel {
             sessions_group: self.side_panels_ui.sessions_group,
             sessions_query: self.side_panels_ui.sessions_query.clone(),
             past_sessions,
+            sessions_loading,
+            sessions_include_transcripts: self.side_panels_ui.sessions_include_transcripts,
+            sessions_limited,
             conv_window: self.side_panels_ui.conv_window,
             conv_query: self.side_panels_ui.conv_query.clone(),
             selected_thread_key: self.side_panels_ui.selected_thread_key.clone(),
@@ -5538,6 +5600,10 @@ impl Tessel {
             GpuiAction::SetSessionsGroup(g) => {
                 self.side_panels_ui.sessions_group = g;
             }
+            GpuiAction::ToggleSessionsTranscripts => {
+                self.side_panels_ui.sessions_include_transcripts =
+                    !self.side_panels_ui.sessions_include_transcripts;
+            }
             GpuiAction::SetSessionsQuery(q) => {
                 self.side_panels_ui.sessions_query = q;
             }
@@ -6424,5 +6490,58 @@ impl Tessel {
                 self.error.clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod panel_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_panels_do_not_read_transcripts_or_collect_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().to_path_buf()), false, || {});
+        app.past_sessions_cache
+            .push(crate::side_panels_model::SessionHistoryEntry {
+                id: "fixture".into(),
+                agent_id: "test".into(),
+                title: "Fixture".into(),
+                folder: dir.path().to_path_buf(),
+                updated_at_ms: 0,
+                file_path: None,
+                open_pane_id: None,
+                transcript_snippet: None,
+            });
+        for tab in [
+            SideTab::Files,
+            SideTab::Changes,
+            SideTab::Tasks,
+            SideTab::TaskHistory,
+            SideTab::Dashboard,
+        ] {
+            app.state.panels.right_open = true;
+            app.state.panels.right_tab = tab;
+            let snap = app.build_side_panels_snapshot(false);
+            assert!(snap.past_sessions.is_empty());
+            assert!(snap.threads.is_empty());
+            assert!(
+                app.claude_conv_cache.is_none(),
+                "hidden conversation scan for {tab:?}"
+            );
+        }
+        app.state.panels.right_tab = SideTab::History;
+        assert_eq!(app.build_side_panels_snapshot(false).past_sessions.len(), 1);
+        app.state.panels.right_open = false;
+        assert!(
+            app.build_side_panels_snapshot(false)
+                .past_sessions
+                .is_empty()
+        );
+        app.state.panels.right_tab = SideTab::Conversations;
+        app.build_side_panels_snapshot(false);
+        assert!(app.claude_conv_cache.is_none());
+        app.state.panels.right_open = true;
+        app.build_side_panels_snapshot(false);
+        assert!(app.claude_conv_cache.is_some());
     }
 }

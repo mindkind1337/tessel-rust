@@ -119,6 +119,7 @@ pub mod scm_changes_panel;
 mod scm_drafts;
 mod scm_state;
 pub mod session_option_picker_ui;
+mod session_query;
 pub mod settings_extra_model;
 pub mod settings_extra_panel;
 pub mod settings_model;
