@@ -11,8 +11,8 @@ use crate::{
     app::gpui_bridge::{GpuiAction, GpuiActiveDocumentSummary, GpuiWorkspaceSnapshot},
     rich_previews::{
         FlowDirection, FlowEdge, FlowNode, MarkdownSegment, MarkdownSizeDecision, MermaidDiagram,
-        SequenceMessage, SequenceParticipant, SheetTable, classify_markdown_size,
-        extract_markdown_segments, parse_mermaid_diagram, sheet_col_letter,
+        SequenceMessage, SequenceParticipant, classify_markdown_size, extract_markdown_segments,
+        parse_mermaid_diagram,
     },
     syntax::{SyntaxPalette, tokenize_spans},
     theme_palettes::ThemeId,
@@ -225,7 +225,7 @@ pub(crate) fn render_document_editor_stage(
         render_image_stage(doc, dims, french, tokens).into_any_element()
     } else if doc.preview_mode {
         if let Some(sheet) = &doc.sheet {
-            render_sheet_stage(sheet, french, tokens).into_any_element()
+            super::sheet_view::render(sheet, french, tokens, cx).into_any_element()
         } else if let Some(json_prev) = &doc.json_preview {
             render_json_tree_stage(json_prev, french, tokens).into_any_element()
         } else if matches!(doc.extension.as_str(), "md" | "markdown") {
@@ -1142,125 +1142,6 @@ fn render_readable_html_stage(
 // Rich Previews: Sticky-Header `SheetView` & JSON/JSONC/JSONL Tree
 // ---------------------------------------------------------------------------
 
-fn render_sheet_stage(
-    sheet: &SheetTable,
-    french: bool,
-    tokens: &GpuiThemeTokens,
-) -> impl IntoElement {
-    let total_cols = sheet.rows.iter().map(Vec::len).max().unwrap_or(0).min(32);
-
-    let mut col_header = div()
-        .flex()
-        .items_center()
-        .bg(tokens.surface_2)
-        .border_b_1()
-        .border_color(tokens.border)
-        .child(
-            div()
-                .w(px(52.0))
-                .px(px(6.0))
-                .py(px(4.0))
-                .font_family(mono_font_family())
-                .text_size(px(11.0))
-                .text_color(tokens.text_dim)
-                .child("#"),
-        );
-
-    for c in 0..total_cols {
-        col_header = col_header.child(
-            div()
-                .w(px(128.0))
-                .px(px(6.0))
-                .py(px(4.0))
-                .border_l_1()
-                .border_color(tokens.border)
-                .font_family(mono_font_family())
-                .text_size(px(11.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens.text_strong)
-                .child(SharedString::from(sheet_col_letter(sheet.start_col + c))),
-        );
-    }
-
-    let mut body = div()
-        .id("gpui-sheet-rows")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .flex()
-        .flex_col();
-
-    for (r_idx, row) in sheet.rows.iter().take(400).enumerate() {
-        let mut r_div = div()
-            .flex()
-            .items_center()
-            .bg(if r_idx % 2 == 0 {
-                tokens.term
-            } else {
-                tokens.surface
-            })
-            .border_b_1()
-            .border_color(tokens.border)
-            .child(
-                div()
-                    .w(px(52.0))
-                    .px(px(6.0))
-                    .py(px(3.0))
-                    .font_family(mono_font_family())
-                    .text_size(px(11.0))
-                    .text_color(tokens.text_dim)
-                    .child(SharedString::from(
-                        (sheet.start_row + r_idx + 1).to_string(),
-                    )),
-            );
-
-        for c in 0..total_cols {
-            let val = row.get(c).cloned().unwrap_or_default();
-            r_div = r_div.child(
-                div()
-                    .w(px(128.0))
-                    .px(px(6.0))
-                    .py(px(3.0))
-                    .border_l_1()
-                    .border_color(tokens.border)
-                    .text_size(px(11.5))
-                    .text_color(tokens.text)
-                    .truncate()
-                    .child(SharedString::from(val)),
-            );
-        }
-        body = body.child(r_div);
-    }
-
-    let meta = format!(
-        "{} · {} {} × {} {}",
-        sheet.delimiter_label,
-        sheet.rows.len(),
-        if french { "lignes" } else { "rows" },
-        total_cols,
-        if french { "colonnes" } else { "cols" }
-    );
-
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .child(
-            div()
-                .px(px(12.0))
-                .py(px(5.0))
-                .bg(tokens.chrome)
-                .border_b_1()
-                .border_color(tokens.border)
-                .text_size(px(11.0))
-                .text_color(tokens.text_dim)
-                .child(SharedString::from(meta)),
-        )
-        .child(col_header)
-        .child(body)
-}
-
 fn render_json_tree_stage(
     json_prev: &crate::rich_previews::JsonDocumentPreview,
     french: bool,
@@ -1552,7 +1433,7 @@ pub(crate) fn render_office_summary(
     }
 
     let body = if let Some(sheet) = &summary.sheet {
-        render_sheet_stage(sheet, french, tokens).into_any_element()
+        super::sheet_view::render(sheet, french, tokens, cx).into_any_element()
     } else {
         let mut p_col = div()
             .id("office-paragraphs")

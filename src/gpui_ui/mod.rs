@@ -10,6 +10,7 @@ pub mod icons;
 pub(crate) mod modals_view;
 pub(crate) mod remote_view;
 pub(crate) mod settings_view;
+pub(crate) mod sheet_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
