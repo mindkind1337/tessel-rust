@@ -547,6 +547,8 @@ impl SessionHistoryGroupBy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionHistoryEntry {
+    pub profile_label: String,
+    pub profile_binding: Option<crate::session_profile_identity::Binding>,
     pub id: String,
     pub agent_id: String,
     pub title: String,
@@ -555,6 +557,29 @@ pub struct SessionHistoryEntry {
     pub file_path: Option<PathBuf>,
     pub open_pane_id: Option<u64>,
     pub transcript_snippet: Option<String>,
+}
+
+pub fn session_profile_label(entry: &SessionHistoryEntry, french: bool) -> String {
+    use crate::session_profile_identity::Binding;
+    if !entry.profile_label.is_empty() {
+        return entry.profile_label.clone();
+    }
+    match &entry.profile_binding {
+        Some(Binding::Default) => if french {
+            "Profil par défaut"
+        } else {
+            "Default profile"
+        }
+        .into(),
+        Some(Binding::Configured { .. }) => if french {
+            "Profil configuré"
+        } else {
+            "Configured profile"
+        }
+        .into(),
+        Some(Binding::Managed { account_id }) => account_id.clone(),
+        None => String::new(),
+    }
 }
 
 #[must_use]
@@ -728,11 +753,35 @@ fn summarize_codex_session(path: &Path) -> Option<(String, String, Option<PathBu
     Some((id, title, cwd))
 }
 
+#[derive(Clone, Debug)]
+pub struct SessionSource {
+    pub label: String,
+    pub agent_id: String,
+    pub root: PathBuf,
+    pub binding: crate::session_profile_identity::Binding,
+}
+pub fn default_session_sources(home: Option<&Path>) -> Vec<SessionSource> {
+    home.map(|home| {
+        ["claude", "codex"]
+            .into_iter()
+            .map(|agent| SessionSource {
+                label: String::new(),
+                agent_id: agent.into(),
+                root: home.join(format!(".{agent}")),
+                binding: crate::session_profile_identity::Binding::Default,
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 #[derive(Eq, PartialEq, Ord, PartialOrd)]
 struct SessionCandidate {
     updated_at_ms: u64,
+    label: String,
     path: PathBuf,
     agent_id: String,
+    binding: crate::session_profile_identity::Binding,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -743,7 +792,13 @@ fn collect_session_files(
     max_depth: usize,
     limit: usize,
     out: &mut BinaryHeap<Reverse<SessionCandidate>>,
-    seen: &BTreeSet<(String, String)>,
+    seen: &BTreeSet<(
+        String,
+        String,
+        Option<crate::session_profile_identity::Binding>,
+    )>,
+    binding: &crate::session_profile_identity::Binding,
+    label: &str,
     budget: &mut DiscoveryBudget,
 ) {
     if !budget.available() || depth > max_depth {
@@ -787,13 +842,15 @@ fn collect_session_files(
                 limit,
                 out,
                 seen,
+                binding,
+                label,
                 budget,
             );
         } else if ft.is_file() {
             let Some(id) = candidate_session_id(&path, agent_id, depth) else {
                 continue;
             };
-            if seen.contains(&(agent_id.to_owned(), id.to_owned())) {
+            if seen.contains(&(agent_id.to_owned(), id.to_owned(), Some(binding.clone()))) {
                 continue;
             }
             let modified = match entry.metadata().and_then(|m| m.modified()) {
@@ -807,6 +864,8 @@ fn collect_session_files(
                 }
             };
             let candidate = SessionCandidate {
+                label: label.to_owned(),
+                binding: binding.clone(),
                 updated_at_ms: modified,
                 path,
                 agent_id: agent_id.to_owned(),
@@ -842,6 +901,19 @@ pub fn scan_past_sessions_cancellable(
     limit: usize,
     cancel: &AtomicBool,
 ) -> SessionDiscoveryResult {
+    scan_past_session_sources(
+        &default_session_sources(home_dir),
+        live_entries,
+        limit,
+        cancel,
+    )
+}
+pub fn scan_past_session_sources(
+    sources: &[SessionSource],
+    live_entries: &[SessionHistoryEntry],
+    limit: usize,
+    cancel: &AtomicBool,
+) -> SessionDiscoveryResult {
     let mut budget = DiscoveryBudget {
         cancel,
         deadline: std::time::Instant::now() + std::time::Duration::from_secs(3),
@@ -849,7 +921,7 @@ pub fn scan_past_sessions_cancellable(
         max_entries: 10_000,
         limited: false,
     };
-    discover_with_budget(home_dir, live_entries, limit, &mut budget)
+    discover_sources_with_budget(sources, live_entries, limit, &mut budget)
 }
 
 struct DiscoveryBudget<'a> {
@@ -869,41 +941,59 @@ impl DiscoveryBudget<'_> {
         }
     }
 }
+#[cfg(test)]
 fn discover_with_budget(
     home_dir: Option<&Path>,
     live_entries: &[SessionHistoryEntry],
     limit: usize,
     budget: &mut DiscoveryBudget,
 ) -> SessionDiscoveryResult {
+    discover_sources_with_budget(
+        &default_session_sources(home_dir),
+        live_entries,
+        limit,
+        budget,
+    )
+}
+fn discover_sources_with_budget(
+    sources: &[SessionSource],
+    live_entries: &[SessionHistoryEntry],
+    limit: usize,
+    budget: &mut DiscoveryBudget,
+) -> SessionDiscoveryResult {
     let cap = limit.clamp(1, 500);
     let mut out: Vec<SessionHistoryEntry> = live_entries.to_vec();
-    let mut seen_ids: BTreeSet<(String, String)> = out
+    let mut seen_ids: BTreeSet<(
+        String,
+        String,
+        Option<crate::session_profile_identity::Binding>,
+    )> = out
         .iter()
-        .map(|e| (e.agent_id.clone(), e.id.clone()))
+        .map(|e| (e.agent_id.clone(), e.id.clone(), e.profile_binding.clone()))
         .collect();
 
-    if let Some(home) = home_dir {
+    {
         let mut disk = BinaryHeap::new();
-        collect_session_files(
-            &home.join(".claude").join("projects"),
-            "claude",
-            0,
-            1,
-            cap,
-            &mut disk,
-            &seen_ids,
-            budget,
-        );
-        collect_session_files(
-            &home.join(".codex").join("sessions"),
-            "codex",
-            0,
-            4,
-            cap,
-            &mut disk,
-            &seen_ids,
-            budget,
-        );
+        for source in sources.iter().take(100) {
+            let codex = source.agent_id == "codex";
+            collect_session_files(
+                &source
+                    .root
+                    .join(if codex { "sessions" } else { "projects" }),
+                &source.agent_id,
+                0,
+                if codex { 4 } else { 1 },
+                cap,
+                &mut disk,
+                &seen_ids,
+                &source.binding,
+                &source.label,
+                budget,
+            );
+        }
+        if sources.len() > 100 {
+            budget.limited = true;
+        }
         let mut disk: Vec<_> = disk.into_iter().map(|item| item.0).collect();
         disk.sort_by(|a, b| b.cmp(a));
         for item in disk {
@@ -929,12 +1019,18 @@ fn discover_with_budget(
                 budget.limited = true;
                 continue;
             };
-            if !seen_ids.insert((item.agent_id.clone(), id.clone())) {
+            if !seen_ids.insert((
+                item.agent_id.clone(),
+                id.clone(),
+                Some(item.binding.clone()),
+            )) {
                 continue;
             }
             let folder =
                 cwd.unwrap_or_else(|| item.path.parent().unwrap_or(Path::new("")).to_path_buf());
             out.push(SessionHistoryEntry {
+                profile_label: item.label,
+                profile_binding: Some(item.binding),
                 id,
                 agent_id: item.agent_id,
                 title: mask_transcript_secrets(&title),
@@ -2052,5 +2148,43 @@ mod discovery_tests {
         assert!(result.limited);
         assert_eq!(budget.visited, 3);
         assert!(summarize_session_file(&root.join("missing.jsonl")).is_none());
+    }
+    #[test]
+    fn discovery_keeps_same_uuid_in_different_profiles_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = "12345678-1234-1234-1234-123456789abc";
+        let mut sources = Vec::new();
+        for account in ["one", "two"] {
+            let root = temp.path().join(account);
+            fs::create_dir_all(root.join("projects/synthetic")).unwrap();
+            fs::write(root.join("projects/synthetic").join(format!("{id}.jsonl")),format!("{}\n",serde_json::json!({"type":"user","cwd":temp.path(),"message":{"content":"synthetic prompt"}}))).unwrap();
+            sources.push(SessionSource {
+                root,
+                agent_id: "claude".into(),
+                label: account.into(),
+                binding: crate::session_profile_identity::Binding::Managed {
+                    account_id: account.into(),
+                },
+            });
+        }
+        let result = scan_past_session_sources(&sources, &[], 50, &AtomicBool::new(false));
+        assert_eq!(result.entries.len(), 2);
+        assert_ne!(
+            result.entries[0].profile_binding,
+            result.entries[1].profile_binding
+        );
+        assert_ne!(
+            result.entries[0].profile_label,
+            result.entries[1].profile_label
+        );
+        let mut live = result.entries[0].clone();
+        live.open_pane_id = Some(42);
+        live.file_path = None;
+        assert_eq!(
+            scan_past_session_sources(&sources, &[live], 50, &AtomicBool::new(false))
+                .entries
+                .len(),
+            2
+        );
     }
 }

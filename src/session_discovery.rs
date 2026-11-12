@@ -1,18 +1,15 @@
 //! Single-flight discovery; repeated refreshes replace pending work, never spawn a fan-out.
 use crate::side_panels_model::{
-    SessionDiscoveryResult, SessionHistoryEntry, scan_past_sessions_cancellable,
+    SessionDiscoveryResult, SessionHistoryEntry, SessionSource, scan_past_session_sources,
 };
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 
 struct Request {
-    home: Option<PathBuf>,
+    sources: Vec<SessionSource>,
     live: Vec<SessionHistoryEntry>,
     limit: usize,
 }
@@ -44,9 +41,22 @@ impl Discovery {
     pub(crate) fn busy(&self) -> bool {
         self.pending.is_some() || self.job.is_some()
     }
+    #[cfg(test)]
     pub(crate) fn request(
         &mut self,
-        home: Option<PathBuf>,
+        home: Option<std::path::PathBuf>,
+        live: Vec<SessionHistoryEntry>,
+        limit: usize,
+    ) {
+        self.request_sources(
+            crate::side_panels_model::default_session_sources(home.as_deref()),
+            live,
+            limit,
+        );
+    }
+    pub(crate) fn request_sources(
+        &mut self,
+        sources: Vec<SessionSource>,
         live: Vec<SessionHistoryEntry>,
         limit: usize,
     ) {
@@ -55,7 +65,11 @@ impl Discovery {
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }
-        self.pending = Some(Request { home, live, limit });
+        self.pending = Some(Request {
+            sources,
+            live,
+            limit,
+        });
     }
     pub(crate) fn poll(&mut self) -> Option<Vec<SessionHistoryEntry>> {
         let mut completed = None;
@@ -86,8 +100,8 @@ impl Discovery {
             let spawn = std::thread::Builder::new()
                 .name("session-discovery".into())
                 .spawn(move || {
-                    let result = scan_past_sessions_cancellable(
-                        request.home.as_deref(),
+                    let result = scan_past_session_sources(
+                        &request.sources,
                         &request.live,
                         request.limit,
                         &flag,

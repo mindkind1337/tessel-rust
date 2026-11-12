@@ -34,6 +34,11 @@ struct Session {
     codex_discovery: Option<crate::codex_terminal::Discovery>,
     restarting: Option<Restart>,
     conversation_id: Option<String>,
+    profile_binding: Option<crate::session_profile_identity::Binding>,
+    profile_data_dir: Option<PathBuf>,
+    profile_root: Option<PathBuf>,
+    profile_migration: Option<crate::session_profile_migration::Migration>,
+    resume_required: bool,
     settings_changed: bool,
     launch_fingerprint: Option<String>,
     session_options: Option<serde_json::Value>,
@@ -66,6 +71,7 @@ impl Session {
     }
     fn can_pick_model(&self) -> bool {
         self.loading.is_none()
+            && self.profile_migration.is_none()
             && self.restarting.is_none()
             && self.codex_restore.is_none()
             && self.has_model_choice()
@@ -161,6 +167,7 @@ impl Session {
     fn launch_stale(&self, current: Option<&crate::agent_preferences::Preferences>) -> bool {
         if self.restarting.is_some()
             || self.loading.is_some()
+            || self.profile_migration.is_some()
             || self.terminal.as_ref().is_none_or(Terminal::exited)
         {
             return false;
@@ -170,7 +177,12 @@ impl Session {
         else {
             return false;
         };
-        crate::launch_fingerprint::for_agent(id, current).is_some_and(|now| now != *before)
+        let bound = self
+            .profile_root
+            .as_deref()
+            .and_then(|root| crate::session_profile::with_root(id, current, root).ok());
+        crate::launch_fingerprint::for_agent(id, bound.as_ref().unwrap_or(current))
+            .is_some_and(|now| now != *before)
     }
     fn label(&self) -> &str {
         self.pane_name.as_deref().unwrap_or(&self.title)
@@ -185,9 +197,42 @@ impl Session {
     ) {
         self.start_with_trust(prefs, preferred_shell, None);
     }
+    fn bind_profile(
+        &mut self,
+        agent: &str,
+        prefs: &crate::agent_preferences::Preferences,
+    ) -> Result<crate::agent_preferences::Preferences, String> {
+        let home = directories::BaseDirs::new().ok_or("Cannot locate the local home folder.")?;
+        let roster = self
+            .profile_data_dir
+            .as_deref()
+            .map(|dir| crate::settings_extra_model::load_managed_accounts(dir, agent))
+            .unwrap_or_default();
+        let inherited = std::env::var(crate::session_profile::env_key(agent)?).ok();
+        let context = crate::session_profile::Context {
+            agent,
+            prefs,
+            cwd: &self.cwd,
+            home: home.home_dir(),
+            data_dir: self.profile_data_dir.as_deref(),
+            roster: &roster,
+            inherited: inherited.as_deref(),
+        };
+        let binding = match &self.profile_binding {
+            Some(binding) => binding.clone(),
+            None if self.resume_required => return Err("This older pane has no saved profile identity; resume it from Past conversations in its original account.".into()),
+            None => context.capture()?,
+        };
+        let root = context.resolve(&binding)?;
+        let prefs = crate::session_profile::with_root(agent, prefs, &root)?;
+        self.profile_binding = Some(binding);
+        self.profile_root = Some(root);
+        Ok(prefs)
+    }
+
     fn start_with_trust(
         &mut self,
-        prefs: Option<crate::agent_preferences::Preferences>,
+        mut prefs: Option<crate::agent_preferences::Preferences>,
         preferred_shell: Option<String>,
         trust_home: Option<PathBuf>,
     ) {
@@ -197,10 +242,51 @@ impl Session {
             || self.launch.native_chat().is_some()
             || self.terminal.is_some()
             || self.loading.is_some()
+            || self.profile_migration.is_some()
         {
             return;
         }
         let launch = self.launch.clone();
+        if let (Launch::Agent(agent), Some(current)) = (&launch, &prefs)
+            && (crate::claude_terminal::managed(agent, current)
+                || crate::codex_terminal::managed(agent, current))
+        {
+            if self.resume_required && self.profile_binding.is_none() {
+                let Some(id) = self.conversation_id.clone() else {
+                    self.error = "Saved conversation identity is missing.".into();
+                    return;
+                };
+                let Some(home) = directories::BaseDirs::new() else {
+                    self.error = "Cannot locate the local home folder.".into();
+                    return;
+                };
+                match crate::session_profile_migration::Migration::start(
+                    agent.clone(),
+                    id,
+                    self.cwd.clone(),
+                    self.profile_data_dir.clone(),
+                    home.home_dir().to_path_buf(),
+                    current.clone(),
+                    preferred_shell,
+                    trust_home,
+                ) {
+                    Ok(migration) => {
+                        self.profile_migration = Some(migration);
+                        self.error.clear();
+                    }
+                    Err(error) => self.error = error,
+                }
+                return;
+            }
+            match self.bind_profile(agent, current) {
+                Ok(bound) => prefs = Some(bound),
+                Err(error) => {
+                    self.error = error;
+                    return;
+                }
+            }
+        }
+
         let managed = match (&launch, &prefs) {
             (Launch::Agent(agent), Some(prefs)) => crate::claude_terminal::managed(agent, prefs),
             _ => false,
@@ -268,17 +354,31 @@ impl Session {
         let (sender, receiver) = mpsc::channel();
         self.loading = Some(receiver);
         self.error.clear();
+        let require_existing = self.resume_required;
+        let profile_binding = self.profile_binding.clone();
+        let profile_data_dir = self.profile_data_dir.clone();
         thread::spawn(move || {
             let effective = match (&launch, &prefs, conversation) {
                 (Launch::Agent(agent), Some(prefs), Some(id)) if agent == "codex" => {
                     crate::codex_terminal::prepare(prefs, &cwd, &id).map(Some)
                 }
                 (Launch::Agent(agent), Some(prefs), Some(id)) => {
-                    crate::claude_terminal::prepare(agent, prefs, &cwd, &id).map(Some)
+                    crate::claude_terminal::prepare_with_existing(
+                        agent,
+                        prefs,
+                        &cwd,
+                        &id,
+                        require_existing,
+                    )
+                    .map(Some)
                 }
                 _ => Ok(prefs),
             };
             let result = effective.and_then(|prefs| {
+                if require_existing && !cwd.is_dir() { return Err("The saved conversation folder no longer exists; no replacement session was started.".into()); }
+                if let (Some(binding), Launch::Agent(agent)) = (&profile_binding,&launch) {
+                    crate::session_profile::check_account_available(binding,agent,profile_data_dir.as_deref())?;
+                }
                 let command = launch::command_with_shell(
                     &launch,
                     &cwd,
@@ -315,6 +415,26 @@ impl Session {
     }
     fn poll(&mut self) -> bool {
         let mut changed = false;
+        if let Some(result) = self
+            .profile_migration
+            .as_ref()
+            .and_then(|migration| migration.poll())
+        {
+            let migration = self.profile_migration.take().expect("pending migration");
+            changed = true;
+            match result {
+                Ok(binding) => {
+                    self.profile_binding = Some(binding);
+                    self.start_with_trust(
+                        Some(migration.prefs.clone()),
+                        migration.preferred_shell.clone(),
+                        migration.trust_home.clone(),
+                    );
+                }
+                Err(error) => self.error = error,
+            }
+        }
+
         let stopped = match self
             .restarting
             .as_ref()
@@ -356,6 +476,7 @@ impl Session {
             self.loading = None;
             match result {
                 Ok(t) => {
+                    self.resume_required = self.conversation_id.is_some();
                     self.error.clear();
                     self.terminal = Some(t);
                 }
@@ -832,6 +953,10 @@ impl Tessel {
             for saved in &app.state.sessions {
                 app.next_session = app.next_session.max(saved.id + 1);
                 app.sessions.push(Session {
+                    profile_data_dir: app.store.as_ref().map(|store| store.directory().to_owned()),
+                    profile_root: None,
+                    profile_migration: None,
+                    resume_required: saved.conversation_id.is_some(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
                     codex_discovery: None,
@@ -842,6 +967,7 @@ impl Tessel {
                     settings_changed: false,
                     codex_seed: saved.codex_seed.clone(),
                     conversation_id: saved.conversation_id.clone(),
+                    profile_binding: saved.profile_binding.clone(),
                     launch_fingerprint: saved.launch_fingerprint.clone(),
                     session_options: if saved.launch.native_chat().is_some() {
                         saved.native_options.clone()
@@ -1037,6 +1163,13 @@ impl Tessel {
                     let id = app.next_session;
                     app.next_session += 1;
                     app.sessions.push(Session {
+                        profile_data_dir: app
+                            .store
+                            .as_ref()
+                            .map(|store| store.directory().to_owned()),
+                        profile_root: None,
+                        profile_migration: None,
+                        resume_required: false,
                         native_host: None,
                         restarting: None,
                         codex_discovery: None,
@@ -1047,6 +1180,7 @@ impl Tessel {
                         settings_changed: false,
                         codex_seed: None,
                         conversation_id: None,
+                        profile_binding: None,
                         launch_fingerprint: None,
                         session_options: None,
                         worktree: None,
@@ -1127,6 +1261,10 @@ impl Tessel {
                 let id = app.next_session;
                 app.next_session += 1;
                 app.sessions.push(Session {
+                    profile_data_dir: app.store.as_ref().map(|store| store.directory().to_owned()),
+                    profile_root: None,
+                    profile_migration: None,
+                    resume_required: false,
                     native_host: None,
                     restarting: None,
                     codex_discovery: None,
@@ -1137,6 +1275,7 @@ impl Tessel {
                     settings_changed: false,
                     codex_seed: None,
                     conversation_id: None,
+                    profile_binding: None,
                     launch_fingerprint: None,
                     session_options: None,
                     worktree: None,
@@ -1212,6 +1351,7 @@ impl Tessel {
                 last_model: s.last_model.clone(),
                 codex_seed: s.codex_seed.clone(),
                 conversation_id: s.conversation_id.clone(),
+                profile_binding: s.profile_binding.clone(),
                 launch_fingerprint: s.launch_fingerprint.clone(),
                 session_options: if s.launch.native_chat().is_some() {
                     None
@@ -2119,6 +2259,10 @@ impl Tessel {
             .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project)
             .map(|s| s.id);
         let mut s = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -2129,6 +2273,7 @@ impl Tessel {
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,
@@ -2260,6 +2405,17 @@ impl Tessel {
         before: bool,
         worktree: Option<workspace::SavedWorktree>,
     ) {
+        self.new_session_with_history(project_id, launch, split, before, worktree, None);
+    }
+    fn new_session_with_history(
+        &mut self,
+        project_id: Option<u64>,
+        launch: Launch,
+        split: Option<(u64, crate::pane_grid::SplitDir)>,
+        before: bool,
+        worktree: Option<workspace::SavedWorktree>,
+        resume: Option<&crate::side_panels_model::SessionHistoryEntry>,
+    ) {
         if launch.native_chat().is_some() && project_id.is_none() {
             self.error = tr("Select a project for native chat.").into();
             return;
@@ -2281,9 +2437,9 @@ impl Tessel {
         } else {
             None
         };
-        let cwd = worktree
-            .as_ref()
-            .map(|wt| wt.path.clone())
+        let cwd = resume
+            .map(|entry| entry.folder.clone())
+            .or_else(|| worktree.as_ref().map(|wt| wt.path.clone()))
             .or_else(|| {
                 project_id.and_then(|pid| {
                     self.state
@@ -2317,6 +2473,10 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: resume.is_some(),
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -2326,7 +2486,8 @@ impl Tessel {
             model_save_attempt: None,
             settings_changed: false,
             codex_seed: None,
-            conversation_id: None,
+            conversation_id: resume.map(|entry| entry.id.clone()),
+            profile_binding: resume.and_then(|entry| entry.profile_binding.clone()),
             launch_fingerprint: None,
             session_options: None,
             worktree,
@@ -2350,20 +2511,15 @@ impl Tessel {
                     self.model_discovery.as_ref().and_then(|d| d.models(id)),
                     s.session_options.as_ref(),
                 );
-                if matches!(id.as_str(), "claude" | "codex")
+                if resume.is_none()
+                    && matches!(id.as_str(), "claude" | "codex")
                     && let Some(store) = &self.store
                     && let Some(env_line) =
                         crate::settings_extra_model::active_managed_env_line(store.directory(), id)
                 {
-                    let key_prefix = if id == "claude" {
-                        "CLAUDE_CONFIG_DIR="
-                    } else {
-                        "CODEX_HOME="
-                    };
-                    if !prefs
-                        .env
-                        .lines()
-                        .any(|line| line.trim_start().starts_with(key_prefix))
+                    let key = crate::session_profile::env_key(id).expect("supported provider");
+                    if crate::agent_env::parse(&prefs.env)
+                        .is_ok_and(|env| crate::agent_env::effective_value(&env, key).is_none())
                     {
                         if !prefs.env.trim().is_empty() && !prefs.env.ends_with('\n') {
                             prefs.env.push('\n');
@@ -2378,6 +2534,10 @@ impl Tessel {
         let preferred_shell = matches!(s.launch, Launch::Shell)
             .then(|| self.state.launcher_prefs.preferred_shell.clone())
             .flatten();
+        s.profile_data_dir = self
+            .store
+            .as_ref()
+            .map(|store| store.directory().to_owned());
         s.start_with_trust(prefs, preferred_shell, trust_home);
         self.sessions.push(s);
         if let Some((target, dir)) = split {
@@ -2411,7 +2571,7 @@ impl Tessel {
         };
         match &sess.launch {
             Launch::Agent(_) => {
-                sess.loading.is_some()
+                (sess.loading.is_some() || sess.profile_migration.is_some())
                     || sess.restarting.is_some()
                     || sess.terminal.as_ref().is_some_and(|t| !t.exited())
             }
@@ -3768,6 +3928,7 @@ impl Tessel {
             } else {
                 session.terminal.is_none()
                     && session.loading.is_none()
+                    && session.profile_migration.is_none()
                     && session.restarting.is_none()
             }
         };
@@ -4707,6 +4868,10 @@ impl Tessel {
             };
             self.next_session = next;
             let mut s = Session {
+                profile_data_dir: None,
+                profile_root: None,
+                profile_migration: None,
+                resume_required: false,
                 native_host: None,
                 restarting: None,
                 codex_discovery: None,
@@ -4717,6 +4882,7 @@ impl Tessel {
                 settings_changed: false,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 worktree: None,
@@ -5190,6 +5356,7 @@ impl Tessel {
                                     });
                                 let can_switch_chat_mode = session.native_host.is_none()
                                     && session.loading.is_none()
+                                    && session.profile_migration.is_none()
                                     && session.restarting.is_none()
                                     && allowed_native_cwd
                                     && (chat_view_open
@@ -5234,6 +5401,7 @@ impl Tessel {
                                     is_agent: is_agent_pane,
                                     sleeping: session.terminal.is_none()
                                         && session.loading.is_none()
+                                    && session.profile_migration.is_none()
                                         && session.restarting.is_none()
                                         && session.launch.native_chat().is_none(),
                                     exited: session
@@ -5745,7 +5913,7 @@ impl Tessel {
                             } else if session.codex_restore.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Finding the previous conversation…"));
-                            } else if session.loading.is_some() {
+                            } else if session.loading.is_some() || session.profile_migration.is_some() {
                                 ui.spinner();
                                 ui.label(tr("Starting…"));
                             } else if !session.error.is_empty() {
@@ -6400,6 +6568,14 @@ impl Tessel {
     }
 
     fn switch_session_chat_mode(&mut self, pane_id: u64) {
+        if self.sessions.iter().any(|session| {
+            session.id == pane_id
+                && (session.profile_binding.is_some() || session.profile_migration.is_some())
+        }) {
+            self.error = "Switching an account-bound terminal to native chat is not available yet; the original session was kept.".into();
+            return;
+        }
+
         // Capture any active native-chat thread ID before tearing down its runtime view:
         let live_chat_thread = self
             .chats
@@ -6445,6 +6621,9 @@ impl Tessel {
                     session.last_model = saved.last_model;
                     session.launch_fingerprint = saved.launch_fingerprint;
                     session.conversation_id = saved.conversation_id;
+                    session.profile_binding = saved.profile_binding;
+                    session.profile_root = None;
+                    session.resume_required = session.conversation_id.is_some();
                     session.session_options = if saved.launch.native_chat().is_some() {
                         saved.native_options
                     } else {
@@ -6663,7 +6842,7 @@ impl Tessel {
             && !self.file_action_pending
             && !self.sessions.iter().any(|s| {
                 s.terminal.is_some()
-                    || s.loading.is_some()
+                    || (s.loading.is_some() || s.profile_migration.is_some())
                     || s.restarting.is_some()
                     || s.codex_restore.is_some()
             })
@@ -6736,6 +6915,13 @@ impl Tessel {
         for saved in &self.state.sessions {
             self.next_session = self.next_session.max(saved.id + 1);
             self.sessions.push(Session {
+                profile_data_dir: self
+                    .store
+                    .as_ref()
+                    .map(|store| store.directory().to_owned()),
+                profile_root: None,
+                profile_migration: None,
+                resume_required: saved.conversation_id.is_some(),
                 native_host: saved.native_host.clone(),
                 restarting: None,
                 codex_discovery: None,
@@ -6746,6 +6932,7 @@ impl Tessel {
                 settings_changed: false,
                 codex_seed: saved.codex_seed.clone(),
                 conversation_id: saved.conversation_id.clone(),
+                profile_binding: saved.profile_binding.clone(),
                 launch_fingerprint: saved.launch_fingerprint.clone(),
                 session_options: if saved.launch.native_chat().is_some() {
                     saved.native_options.clone()
@@ -7316,6 +7503,7 @@ impl Tessel {
                     .any(|c| c.pane == s.id && c.working()),
                 Launch::Agent(_) => {
                     s.loading.is_some()
+                        || s.profile_migration.is_some()
                         || s.restarting.is_some()
                         || s.terminal.as_ref().is_some_and(|t| {
                             !t.exited() && t.active_within(Duration::from_millis(2500))
@@ -8878,6 +9066,10 @@ impl Tessel {
         };
         self.next_session = next;
         let mut s = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -8888,6 +9080,7 @@ impl Tessel {
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,
@@ -10683,8 +10876,10 @@ impl Tessel {
                     ("Claude Chat".to_owned(), st)
                 }
                 Launch::Agent(agent) => {
-                    let sleeping =
-                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let sleeping = s.terminal.is_none()
+                        && s.loading.is_none()
+                        && s.profile_migration.is_none()
+                        && s.restarting.is_none();
                     let st = if sleeping {
                         DashboardState::Sleeping
                     } else if s.terminal.as_ref().is_some_and(Terminal::exited) {
@@ -10695,8 +10890,10 @@ impl Tessel {
                     (agent.clone(), st)
                 }
                 Launch::Shell => {
-                    let sleeping =
-                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let sleeping = s.terminal.is_none()
+                        && s.loading.is_none()
+                        && s.profile_migration.is_none()
+                        && s.restarting.is_none();
                     let st = if sleeping {
                         DashboardState::Sleeping
                     } else if s.terminal.as_ref().is_some_and(Terminal::exited) {
@@ -10707,8 +10904,10 @@ impl Tessel {
                     ("Terminal".to_owned(), st)
                 }
                 Launch::Ssh(host) => {
-                    let sleeping =
-                        s.terminal.is_none() && s.loading.is_none() && s.restarting.is_none();
+                    let sleeping = s.terminal.is_none()
+                        && s.loading.is_none()
+                        && s.profile_migration.is_none()
+                        && s.restarting.is_none();
                     let st = if sleeping {
                         DashboardState::Sleeping
                     } else {
@@ -10763,6 +10962,95 @@ impl Tessel {
         }
     }
 
+    fn session_history_sources(&self) -> Vec<crate::side_panels_model::SessionSource> {
+        use crate::session_profile::{Binding, Context};
+        let Some(home) = directories::BaseDirs::new() else {
+            return Vec::new();
+        };
+        let data_dir = self.store.as_ref().map(|store| store.directory());
+        let mut sources = Vec::new();
+        for agent in ["claude", "codex"] {
+            let prefs = self
+                .state
+                .agent_prefs
+                .get(agent)
+                .cloned()
+                .unwrap_or_default();
+            let roster = if agent == "claude" {
+                &self.claude_managed_accounts
+            } else {
+                &self.codex_managed_accounts
+            };
+            let inherited =
+                std::env::var(crate::session_profile::env_key(agent).expect("provider")).ok();
+            let cwd = self
+                .state
+                .active()
+                .map(|project| project.path.as_path())
+                .unwrap_or(home.home_dir());
+            let context = Context {
+                agent,
+                prefs: &prefs,
+                cwd,
+                home: home.home_dir(),
+                data_dir,
+                roster,
+                inherited: inherited.as_deref(),
+            };
+            let explicit = crate::agent_env::parse(&prefs.env).ok().is_some_and(|env| {
+                crate::agent_env::effective_value(
+                    &env,
+                    crate::session_profile::env_key(agent).expect("provider"),
+                )
+                .is_some()
+            });
+            let current = if !explicit && let Some(account_id) = &roster.selected_id {
+                Binding::Managed {
+                    account_id: account_id.clone(),
+                }
+            } else {
+                match context.capture() {
+                    Ok(binding) => binding,
+                    Err(_) => continue,
+                }
+            };
+            let mut bindings = vec![current];
+            if agent == "codex" {
+                bindings.push(Binding::Default);
+                bindings.extend(
+                    roster
+                        .accounts
+                        .iter()
+                        .take(100)
+                        .map(|account| Binding::Managed {
+                            account_id: account.id.clone(),
+                        }),
+                );
+            }
+            bindings.sort();
+            bindings.dedup();
+            for binding in bindings {
+                if let Ok(root) = context.resolve(&binding) {
+                    sources.push(crate::side_panels_model::SessionSource {
+                        label: match &binding {
+                            Binding::Managed { account_id } => roster
+                                .accounts
+                                .iter()
+                                .find(|account| &account.id == account_id)
+                                .map(|account| account.label.clone())
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        },
+                        agent_id: agent.into(),
+                        root,
+                        binding,
+                    });
+                }
+            }
+        }
+        sources
+    }
+
     fn refresh_past_sessions(&mut self) {
         self.gpui_extra.session_query.invalidate();
         let live: Vec<crate::side_panels_model::SessionHistoryEntry> = self
@@ -10776,6 +11064,8 @@ impl Tessel {
                     _ => return None,
                 };
                 Some(crate::side_panels_model::SessionHistoryEntry {
+                    profile_label: String::new(),
+                    profile_binding: s.profile_binding.clone(),
                     id: s
                         .conversation_id
                         .clone()
@@ -10790,10 +11080,12 @@ impl Tessel {
                 })
             })
             .collect();
-        let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
-        self.gpui_extra
-            .session_discovery
-            .request(home, live, self.side_panels_ui.sessions_limit);
+        let sources = self.session_history_sources();
+        self.gpui_extra.session_discovery.request_sources(
+            sources,
+            live,
+            self.side_panels_ui.sessions_limit,
+        );
         self.side_panels_ui.sessions_loading = true;
     }
 
@@ -10836,14 +11128,24 @@ impl Tessel {
                     .get(agent_id)
                     .cloned()
                     .unwrap_or_default();
-                inputs.push(crate::conversation_loader::Input {
-                    root: crate::claude_terminal::root(
-                        agent_id,
-                        &prefs,
-                        &session.cwd,
+                let root = session.profile_root.clone().or_else(|| {
+                    let binding = session.profile_binding.as_ref()?;
+                    let context = crate::session_profile::Context {
+                        agent: agent_id,
+                        prefs: &prefs,
+                        cwd: &session.cwd,
                         home,
-                        inherited_cfg.as_deref(),
-                    ),
+                        data_dir: session.profile_data_dir.as_deref(),
+                        roster: &self.claude_managed_accounts,
+                        inherited: inherited_cfg.as_deref(),
+                    };
+                    context.resolve(binding).ok()
+                });
+                let Some(root) = root else {
+                    continue;
+                };
+                inputs.push(crate::conversation_loader::Input {
+                    root,
                     conversation: conversation.clone(),
                     pane: session.id,
                     title: session.label().to_owned(),
@@ -10995,6 +11297,8 @@ impl Tessel {
                     if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id)
                         && sess.launch.native_chat().is_none()
                     {
+                        sess.profile_migration = None;
+                        sess.loading = None;
                         sess.terminal = None;
                     }
                 }
@@ -11040,24 +11344,41 @@ impl Tessel {
                 agent_id,
                 session_id,
                 folder,
+                profile_binding,
             } => {
-                self.side_panels_ui.sessions_modal_open = false;
-                if let Some(proj) = self
-                    .state
-                    .projects
+                let entry = self
+                    .past_sessions_cache
                     .iter()
-                    .find(|p| folder.starts_with(&p.path))
-                {
-                    self.state.active_project = Some(proj.id);
-                }
-                let before = self.sessions.len();
-                self.new_session(Launch::Agent(agent_id));
-                if self.sessions.len() > before
-                    && let Some(sess) = self.sessions.last_mut()
-                {
-                    sess.conversation_id = Some(session_id);
-                }
-                self.save();
+                    .find(|entry| {
+                        entry.agent_id == agent_id
+                            && entry.id == session_id
+                            && entry.folder == folder
+                            && entry.profile_binding == profile_binding
+                            && entry.file_path.is_some()
+                            && entry.open_pane_id.is_none()
+                    })
+                    .cloned();
+                let Some(entry) = entry.filter(|entry| {
+                    entry.profile_binding.is_some()
+                        && crate::claude::valid_uuid(&entry.id)
+                        && entry.folder.is_absolute()
+                }) else {
+                    self.error = "This saved conversation is no longer available; refresh the history before resuming.".into();
+                    return;
+                };
+                let Some(project) = self.state.active_project else {
+                    self.error = "Select a project before resuming a saved conversation.".into();
+                    return;
+                };
+                self.side_panels_ui.sessions_modal_open = false;
+                self.new_session_with_history(
+                    Some(project),
+                    Launch::Agent(agent_id),
+                    None,
+                    false,
+                    None,
+                    Some(&entry),
+                );
             }
             SidePanelsAction::DeleteSession(entry) => {
                 if let Err(e) = crate::side_panels_model::delete_session_file(&entry) {
@@ -13416,6 +13737,10 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             ..Default::default()
         };
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -13426,6 +13751,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,
@@ -13498,6 +13824,10 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
         let terminal = Terminal::spawn().unwrap();
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: Some(Restart {
                 result: receiver,
@@ -13510,6 +13840,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             model_save_attempt: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -13578,6 +13909,10 @@ $lock.Dispose()
             ..Default::default()
         };
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -13587,6 +13922,7 @@ $lock.Dispose()
             model_save_attempt: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -13765,6 +14101,10 @@ $lock.Dispose()
     fn restart_status_requires_a_running_known_launch_and_tracks_effective_changes() {
         let prefs = crate::agent_preferences::Preferences::default();
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -13775,6 +14115,7 @@ $lock.Dispose()
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: crate::launch_fingerprint::for_agent("codex", &prefs),
             session_options: None,
             worktree: None,
@@ -13823,6 +14164,10 @@ $lock.Dispose()
             ),
         ] {
             let mut session = Session {
+                profile_data_dir: None,
+                profile_root: None,
+                profile_migration: None,
+                resume_required: false,
                 native_host,
                 restarting: None,
                 codex_discovery: None,
@@ -13833,6 +14178,7 @@ $lock.Dispose()
                 settings_changed: false,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 worktree: None,
@@ -13882,6 +14228,10 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             ..Default::default()
         };
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             codex_discovery: None,
             codex_restore: None,
@@ -13891,6 +14241,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             restarting: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             settings_changed: false,
             launch_fingerprint: None,
             session_options: None,
@@ -13968,14 +14319,22 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             dir.path().display()
         );
         session.start(Some(prefs.clone()));
-        while session.loading.is_some() {
+        while session.loading.is_some() || session.profile_migration.is_some() {
             session.poll();
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(session.error.contains("not found in this profile"));
+        assert!(
+            session
+                .error
+                .contains("configured session profile has changed")
+        );
         assert!(session.terminal.is_none());
         assert_eq!(session.conversation_id.as_deref(), Some(id));
+        // The following seed checks exercise a separate new-pane profile context.
+        session.profile_binding = None;
+        session.profile_root = None;
+        session.resume_required = false;
         session.conversation_id = None;
         session.codex_seed = Some(seed);
         session.start(Some(prefs.clone()));
@@ -14025,9 +14384,14 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             ..Default::default()
         };
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             restarting: None,
             codex_discovery: None,
             codex_restore: None,
@@ -14081,6 +14445,10 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
     fn disconnected_terminal_startup_releases_loading_and_can_receive_a_retry_result() {
         let (sender, receiver) = mpsc::channel();
         let mut session = Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -14091,6 +14459,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,
@@ -14107,7 +14476,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             error: String::new(),
         };
         session.poll();
-        assert!(session.loading.is_some());
+        assert!((session.loading.is_some() || session.profile_migration.is_some()));
         assert!(session.error.is_empty());
         drop(sender);
         session.poll();
@@ -14124,6 +14493,10 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
     #[test]
     fn names_are_stable_distinct_and_keep_provider_titles_separate() {
         let make = |id, launch| Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -14134,6 +14507,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,
@@ -14178,6 +14552,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,

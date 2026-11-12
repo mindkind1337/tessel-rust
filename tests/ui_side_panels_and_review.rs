@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/session_profile_identity.rs"]
+mod session_profile_identity;
+#[allow(dead_code)]
 mod git {
     use std::io::Write;
     use std::path::Path;
@@ -204,6 +207,8 @@ fn session_history_opt_in_transcript_search_masks_secrets() {
     .expect("write jsonl");
 
     let entries = vec![SessionHistoryEntry {
+        profile_label: String::new(),
+        profile_binding: None,
         id: "sess-1".into(),
         agent_id: "claude".into(),
         title: "Deploy worker".into(),

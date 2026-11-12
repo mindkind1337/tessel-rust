@@ -543,6 +543,10 @@ impl Tessel {
         }
         self.next_session = next;
         self.sessions.push(Session {
+            profile_data_dir: None,
+            profile_root: None,
+            profile_migration: None,
+            resume_required: false,
             native_host: Some(workspace::SavedHostTerminal { identity }),
             restarting: None,
             codex_discovery: None,
@@ -553,6 +557,7 @@ impl Tessel {
             settings_changed: false,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             worktree: None,

@@ -98,11 +98,22 @@ pub fn with_session(prefs: &Preferences, id: &str, exists: bool) -> Result<Prefe
     Ok(effective)
 }
 
+#[allow(dead_code)]
 pub fn prepare(
     agent: &str,
     prefs: &Preferences,
     cwd: &Path,
     id: &str,
+) -> Result<Preferences, String> {
+    prepare_with_existing(agent, prefs, cwd, id, false)
+}
+
+pub fn prepare_with_existing(
+    agent: &str,
+    prefs: &Preferences,
+    cwd: &Path,
+    id: &str,
+    require_existing: bool,
 ) -> Result<Preferences, String> {
     if !managed(agent, prefs) {
         return Err("Conversation is managed by explicit agent arguments.".into());
@@ -110,7 +121,14 @@ pub fn prepare(
     let dirs = directories::BaseDirs::new().ok_or("Cannot locate the agent's home directory.")?;
     let inherited = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let root = root(agent, prefs, cwd, dirs.home_dir(), inherited.as_deref());
-    with_session(prefs, id, exists(&root, id)?)
+    let found = exists(&root, id)?;
+    if require_existing && (!found || !cwd.is_dir()) {
+        return Err(
+            "Saved conversation or folder is unavailable; no replacement conversation was started."
+                .into(),
+        );
+    }
+    with_session(prefs, id, found)
 }
 
 #[cfg(test)]
@@ -166,6 +184,27 @@ mod tests {
         assert_eq!(
             root("claude", &prefs, dir.path(), dir.path(), Some("inherited")),
             dir.path().join("inherited")
+        );
+    }
+    #[test]
+    fn required_resume_never_creates_a_replacement_conversation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("profile");
+        let prefs = Preferences {
+            env: format!("CLAUDE_CONFIG_DIR={}", root.display()),
+            ..Default::default()
+        };
+        let id = "12345678-1234-1234-1234-123456789abc";
+        assert!(prepare_with_existing("claude", &prefs, temp.path(), id, true).is_err());
+        let project = root.join("projects/synthetic");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        let resumed = prepare_with_existing("claude", &prefs, temp.path(), id, true).unwrap();
+        assert_eq!(resumed.args, format!("--resume {id}"));
+        assert!(!resumed.args.contains("--session-id"));
+        assert!(
+            prepare_with_existing("claude", &prefs, &temp.path().join("missing"), id, true)
+                .is_err()
         );
     }
 }

@@ -194,6 +194,7 @@ mod tests {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,

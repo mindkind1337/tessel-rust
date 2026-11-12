@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/session_profile_identity.rs"]
+mod session_profile_identity;
+#[allow(dead_code)]
 mod git {
     use std::path::Path;
     pub fn run(_root: &Path, _args: &[&str], _input: Option<&[u8]>) -> Result<String, String> {

@@ -272,6 +272,8 @@ mod tests {
         std::fs::write(&path, "ordinary line\nneedle sk-12345678901234567890\n").unwrap();
         Key {
             entries: vec![SessionHistoryEntry {
+                profile_label: String::new(),
+                profile_binding: None,
                 id: "one".into(),
                 agent_id: "test".into(),
                 title: "Fixture".into(),

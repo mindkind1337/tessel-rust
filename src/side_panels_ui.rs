@@ -35,6 +35,7 @@ pub enum SidePanelsAction {
     ClearTaskHistory,
     RefreshSessions,
     ResumeSession {
+        profile_binding: Option<crate::session_profile_identity::Binding>,
         agent_id: String,
         session_id: String,
         folder: PathBuf,
@@ -741,6 +742,9 @@ pub fn show_session_history_panel(
                                     },
                                 );
                             });
+                            ui.label(crate::side_panels_model::session_profile_label(
+                                entry, french,
+                            ));
                             if let Some(snippet) = &entry.transcript_snippet {
                                 ui.label(
                                     RichText::new(format!("…{snippet}…"))
@@ -766,6 +770,7 @@ pub fn show_session_history_panel(
                                     .clicked()
                                 {
                                     out = Some(SidePanelsAction::ResumeSession {
+                                        profile_binding: entry.profile_binding.clone(),
                                         agent_id: entry.agent_id.clone(),
                                         session_id: entry.id.clone(),
                                         folder: entry.folder.clone(),

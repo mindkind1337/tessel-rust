@@ -34,6 +34,7 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
             native.identity = None;
         }
         pane.codex_seed = None;
+        pane.profile_binding = None;
         pane.launch_fingerprint = None;
     }
     let bytes = serde_json::to_vec_pretty(&Backup {
@@ -92,6 +93,7 @@ pub fn import(path: &Path) -> Result<Workspace> {
             native.identity = None;
         }
         pane.codex_seed = None;
+        pane.profile_binding = None;
         pane.launch_fingerprint = None;
     }
     backup.workspace.validate()?;
@@ -199,6 +201,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
@@ -242,6 +245,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: Some("a".repeat(64)),
             session_options: Some(serde_json::json!({"model":"gpt-5.6-sol","effort":"high"})),
             native_options: None,
@@ -254,6 +258,10 @@ mod tests {
             launch: crate::launch::Launch::Agent("codex".into()),
             cwd: dir.path().to_owned(),
         });
+        state.sessions[0].profile_binding =
+            Some(crate::session_profile_identity::Binding::Managed {
+                account_id: "synthetic".into(),
+            });
         state.sessions[0].codex_seed = Some(
             crate::codex_terminal::Discovery::new(
                 &crate::agent_preferences::Preferences {
@@ -282,6 +290,7 @@ mod tests {
             imported.sessions[0].last_model,
             state.sessions[0].last_model
         );
+        assert!(imported.sessions[0].profile_binding.is_none());
         assert!(imported.sessions[0].codex_seed.is_none());
         assert!(imported.sessions[0].launch_fingerprint.is_none());
         assert!(

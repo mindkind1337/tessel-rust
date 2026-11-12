@@ -1459,6 +1459,10 @@ impl Tessel {
             for saved in &app.state.sessions {
                 app.next_session = app.next_session.max(saved.id + 1);
                 app.sessions.push(Session {
+                    profile_data_dir: app.store.as_ref().map(|store| store.directory().to_owned()),
+                    profile_root: None,
+                    profile_migration: None,
+                    resume_required: saved.conversation_id.is_some(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
                     codex_discovery: None,
@@ -1469,6 +1473,7 @@ impl Tessel {
                     settings_changed: false,
                     codex_seed: saved.codex_seed.clone(),
                     conversation_id: saved.conversation_id.clone(),
+                    profile_binding: saved.profile_binding.clone(),
                     launch_fingerprint: saved.launch_fingerprint.clone(),
                     session_options: if saved.launch.native_chat().is_some() {
                         saved.native_options.clone()
@@ -1520,6 +1525,10 @@ impl Tessel {
                         .gpui_extra
                         .conversation_model
                         .needs_frame(crate::side_panels_model::now_unix_ms())))
+            || self
+                .sessions
+                .iter()
+                .any(|session| session.profile_migration.is_some())
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -3444,6 +3453,7 @@ impl Tessel {
         let dormant = !is_native_chat
             && sess.terminal.is_none()
             && sess.loading.is_none()
+            && sess.profile_migration.is_none()
             && sess.restarting.is_none();
         let kind_label = match &sess.launch {
             Launch::Shell => "Shell".into(),
@@ -3494,7 +3504,7 @@ impl Tessel {
             let all: Vec<&str> = out.lines().collect();
             let start = all.len().saturating_sub(24);
             all[start..].iter().map(|s| (*s).to_owned()).collect()
-        } else if sess.loading.is_some() {
+        } else if sess.loading.is_some() || sess.profile_migration.is_some() {
             vec![tr("Starting session…").into()]
         } else {
             Vec::new()
@@ -3538,7 +3548,8 @@ impl Tessel {
             active: self.active_session == Some(sess.id),
             maximized,
             broadcast: sess.broadcast,
-            loading: sess.loading.is_some() || sess.restarting.is_some(),
+            loading: (sess.loading.is_some() || sess.profile_migration.is_some())
+                || sess.restarting.is_some(),
             exited: sess.terminal.as_ref().is_some_and(|t| t.exited()),
             model_chip,
             account_chip,
@@ -3561,6 +3572,7 @@ impl Tessel {
         !is_native_chat
             && sess.terminal.is_none()
             && sess.loading.is_none()
+            && sess.profile_migration.is_none()
             && sess.restarting.is_none()
     }
 
@@ -6528,6 +6540,190 @@ mod panel_snapshot_tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
+    fn legacy_profile_worker_resumes_original_account_and_persists_binding() {
+        use crate::settings_extra_model::{ManagedAccount, ManagedAccountsRoster};
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("state");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let (store, mut state) = Store::open(&data).unwrap();
+        let project = state.add_project(temp.path()).unwrap();
+        state.general_prefs.restore_workspaces = true;
+        let id = "12345678-1234-4234-8234-123456789abc";
+        state.sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "project": project, "title": "Legacy synthetic",
+                "launch": Launch::Agent("claude".into()), "cwd": temp.path(),
+                "conversation_id": id
+            }))
+            .unwrap(),
+        );
+        store.save(&state).unwrap();
+        drop(store);
+        let roster = ManagedAccountsRoster {
+            accounts: ["original", "selected"]
+                .map(|id| ManagedAccount {
+                    id: id.into(),
+                    label: id.into(),
+                    email: String::new(),
+                    plan: String::new(),
+                    added_at: 0,
+                })
+                .to_vec(),
+            selected_id: Some("selected".into()),
+        };
+        crate::settings_extra_model::save_managed_accounts(&data, "claude", &roster).unwrap();
+        let root =
+            crate::settings_extra_model::managed_account_profile_dir(&data, "claude", "original")
+                .unwrap();
+        let transcripts = root.join("projects/synthetic");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        std::fs::write(transcripts.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        let script = temp.path().join("synthetic.ps1");
+        let marker = temp.path().join("spawn.json");
+        std::fs::write(&script, r#"
+[IO.File]::WriteAllText((Join-Path $env:SYNTHETIC_ROOT 'spawn.json'), (@{args=@($args);root=$env:CLAUDE_CONFIG_DIR} | ConvertTo-Json -Compress))
+"#).unwrap();
+        let prefs = crate::agent_preferences::Preferences {
+            command: format!("& '{}'", script.display().to_string().replace('\'', "''")),
+            env: format!(
+                "CLAUDE_CONFIG_DIR={}\nSYNTHETIC_ROOT={}",
+                home.join(".claude").display(),
+                temp.path().display()
+            ),
+            ..Default::default()
+        };
+        let mut app = Tessel::new_for_gpui_in_dir(Some(data.clone()), false, || {});
+        assert!(app.sessions[0].profile_binding.is_none());
+        assert!(app.sessions[0].terminal.is_none());
+        app.sessions[0].profile_migration = Some(
+            crate::session_profile_migration::Migration::start(
+                "claude".into(),
+                id.into(),
+                temp.path().into(),
+                Some(data.clone()),
+                home.clone(),
+                prefs.clone(),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        assert!(!marker.exists());
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !app.sessions[0]
+            .terminal
+            .as_ref()
+            .is_some_and(crate::terminal::Terminal::exited)
+        {
+            app.poll_for_gpui();
+            assert!(
+                app.sessions[0].error.is_empty(),
+                "{}",
+                app.sessions[0].error
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "migration/start timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let result: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        assert_eq!(result["args"], serde_json::json!(["--resume", id]));
+        assert_eq!(result["root"], root.to_string_lossy().as_ref());
+        let binding = Some(crate::session_profile::Binding::Managed {
+            account_id: "original".into(),
+        });
+        assert_eq!(app.sessions[0].profile_binding, binding);
+        app.save();
+        let saved: Workspace =
+            serde_json::from_slice(&std::fs::read(data.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(saved.sessions[0].profile_binding, binding);
+        assert_eq!(saved.sessions[0].conversation_id.as_deref(), Some(id));
+        // A second matching profile must leave the old pane dormant and unbound.
+        app.sessions[0].terminal = None;
+        app.sessions[0].profile_binding = None;
+        app.sessions[0].profile_root = None;
+        std::fs::remove_file(&marker).unwrap();
+        let duplicate = home.join(".claude/projects/synthetic");
+        std::fs::create_dir_all(&duplicate).unwrap();
+        std::fs::write(duplicate.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        app.sessions[0].profile_migration = Some(
+            crate::session_profile_migration::Migration::start(
+                "claude".into(),
+                id.into(),
+                temp.path().into(),
+                Some(data.clone()),
+                home,
+                prefs,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        while app.sessions[0].profile_migration.is_some() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.sessions[0].error.contains("multiple profiles"));
+        assert!(app.sessions[0].terminal.is_none() && app.sessions[0].loading.is_none());
+        assert!(app.sessions[0].profile_binding.is_none());
+        assert!(!marker.exists());
+        app.save();
+        let saved: Workspace =
+            serde_json::from_slice(&std::fs::read(data.join("workspace.json")).unwrap()).unwrap();
+        assert!(saved.sessions[0].profile_binding.is_none());
+    }
+
+    #[test]
+    fn history_resume_sets_identity_before_start_and_deleted_account_cannot_spawn() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let visible = temp.path().join("visible-project");
+        std::fs::create_dir_all(&visible).unwrap();
+        let project = app.state.add_project(&visible).unwrap();
+        let cwd = temp.path().join("original-folder");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let binding = crate::session_profile_identity::Binding::Managed {
+            account_id: "removed".into(),
+        };
+        let id = "12345678-1234-1234-1234-123456789abc".to_owned();
+        app.past_sessions_cache
+            .push(crate::side_panels_model::SessionHistoryEntry {
+                profile_binding: Some(binding.clone()),
+                profile_label: "Removed account".into(),
+                id: id.clone(),
+                agent_id: "claude".into(),
+                title: "Synthetic".into(),
+                folder: cwd.clone(),
+                updated_at_ms: 0,
+                file_path: Some(temp.path().join("synthetic.jsonl")),
+                open_pane_id: None,
+                transcript_snippet: None,
+            });
+        app.apply_gpui_action(GpuiAction::SidePanels(
+            crate::side_panels_ui::SidePanelsAction::ResumeSession {
+                agent_id: "claude".into(),
+                session_id: id.clone(),
+                folder: cwd.clone(),
+                profile_binding: Some(binding.clone()),
+            },
+        ));
+        let session = app.sessions.last().unwrap();
+        assert_eq!(session.conversation_id.as_deref(), Some(id.as_str()));
+        assert_eq!(session.cwd, cwd);
+        assert_eq!(session.project, Some(project));
+        assert_eq!(app.state.active_project, Some(project));
+        assert_eq!(session.profile_binding, Some(binding));
+        assert!(session.resume_required);
+        assert!(session.loading.is_none() && session.terminal.is_none());
+        assert!(session.error.contains("no longer available"));
+    }
+
+    #[test]
     fn session_discovery_keeps_cache_until_completion_and_does_not_retry_empty_result() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
@@ -6535,6 +6731,8 @@ mod panel_snapshot_tests {
         app.state.panels.right_tab = SideTab::History;
         app.past_sessions_cache
             .push(crate::side_panels_model::SessionHistoryEntry {
+                profile_label: String::new(),
+                profile_binding: None,
                 id: "old".into(),
                 agent_id: "test".into(),
                 title: "Previous".into(),
@@ -6590,6 +6788,8 @@ mod panel_snapshot_tests {
         let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().to_path_buf()), false, || {});
         app.past_sessions_cache
             .push(crate::side_panels_model::SessionHistoryEntry {
+                profile_label: String::new(),
+                profile_binding: None,
                 id: "fixture".into(),
                 agent_id: "test".into(),
                 title: "Fixture".into(),

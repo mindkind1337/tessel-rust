@@ -512,6 +512,7 @@ pub fn sanitize_workspace_json_for_sync(mut raw: Value) -> Value {
                     sobj.remove("native_host");
                     sobj.remove("codex_seed");
                     sobj.remove("conversation_id");
+                    sobj.remove("profile_binding");
                 }
             }
         }
@@ -880,10 +881,11 @@ mod tests {
         let sanitized = sanitize_workspace_json_for_sync(json!({
             "projects": [{"id": 1, "name": "Demo"}],
             "native_threads": {"1": "secret"},
-            "sessions": [{"id": 1, "conversation_id": "strip-me", "title": "Shell"}]
+            "sessions": [{"id": 1, "conversation_id": "strip-me", "profile_binding":{"kind":"managed","account_id":"local"}, "title": "Shell"}]
         }));
         assert!(sanitized.get("native_threads").is_none());
         assert!(sanitized["sessions"][0].get("conversation_id").is_none());
+        assert!(sanitized["sessions"][0].get("profile_binding").is_none());
 
         let env = build_rust_sync_envelope(5, "Desktop-PC", 1_700_000_000_000, sanitized);
         let wire = encrypt_sync_envelope(&key, "user-42", &env).unwrap();

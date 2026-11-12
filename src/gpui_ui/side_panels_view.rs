@@ -1613,6 +1613,7 @@ fn render_sessions_history_tab(
                 GpuiAction::SidePanels(SidePanelsAction::FocusPane(pid))
             } else {
                 GpuiAction::SidePanels(SidePanelsAction::ResumeSession {
+                    profile_binding: entry.profile_binding.clone(),
                     agent_id: entry.agent_id.clone(),
                     session_id: entry.id.clone(),
                     folder: entry.folder.clone(),
@@ -1658,8 +1659,11 @@ fn render_sessions_history_tab(
                                     .text_color(tokens.text_dim)
                                     .truncate()
                                     .child(SharedString::from(format!(
-                                        "{} · {}",
+                                        "{} · {} · {}",
                                         entry.agent_id,
+                                        crate::side_panels_model::session_profile_label(
+                                            entry, french
+                                        ),
                                         entry.folder.display()
                                     ))),
                             ),

@@ -612,6 +612,8 @@ pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_binding: Option<crate::session_profile_identity::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_options: Option<serde_json::Value>,
@@ -931,6 +933,12 @@ impl Workspace {
             {
                 return Err("Invalid Codex recovery metadata.".into());
             }
+            if let Some(binding) = &session.profile_binding
+                && (!binding.valid()
+                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex"))
+            {
+                return Err("Invalid local session profile identity.".into());
+            }
             if let Some(id) = &session.conversation_id
                 && (!crate::claude::valid_uuid(id)
                     || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex"))
@@ -1222,6 +1230,7 @@ impl Workspace {
                     )
                 };
                 let conv = self.sessions[idx].conversation_id.take();
+                self.sessions[idx].profile_binding = None;
                 let prev_opts = self.sessions[idx].session_options.take();
                 let mut native_opts =
                     crate::native_chat_options::Options::from_value(prev_opts.as_ref());
@@ -1457,6 +1466,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: Some(id.clone()),
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
@@ -1534,6 +1544,7 @@ mod tests {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: Some(options),
                 native_options: None,
@@ -1709,6 +1720,7 @@ mod tests {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: Some(serde_json::json!({"effort":"high"})),
@@ -1771,6 +1783,7 @@ mod tests {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
@@ -1811,6 +1824,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
@@ -1841,6 +1855,7 @@ mod tests {
                 last_model: None,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
@@ -1859,6 +1874,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
@@ -1927,6 +1943,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: None,
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: None,
             native_options: None,
@@ -1965,6 +1982,7 @@ mod tests {
                 id,
                 codex_seed: None,
                 conversation_id: None,
+                profile_binding: None,
                 launch_fingerprint: None,
                 session_options: None,
                 native_options: None,
@@ -2040,6 +2058,7 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: Some(uuid.to_owned()),
+            profile_binding: None,
             launch_fingerprint: None,
             session_options: Some(serde_json::json!({"model": "claude-sonnet-4-6"})),
             native_options: None,
