@@ -17,6 +17,7 @@ pub use questions::QuestionView;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeChatApprovalView {
+    pub instance_id: u64,
     pub title: String,
     pub details_json: String,
     pub can_accept: bool,
@@ -44,11 +45,11 @@ pub struct NativeChatViewSnapshot {
     pub questions_can_submit: bool,
 }
 
-pub(crate) fn next_composer_id() -> u64 {
+pub(crate) fn next_input_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-        .expect("chat composer identity exhausted")
+        .expect("chat input identity exhausted")
 }
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
@@ -159,6 +160,7 @@ impl Drop for Rpc {
 
 #[derive(Clone)]
 struct Approval {
+    instance_id: u64,
     id: Value,
     method: String,
     params: Value,
@@ -251,7 +253,7 @@ impl Chat {
             error: String::new(),
             #[cfg(all(test, feature = "visual-test"))]
             test_outgoing: None,
-            composer_id: crate::chat::next_composer_id(),
+            composer_id: crate::chat::next_input_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
             history: VecDeque::new(),
@@ -557,6 +559,7 @@ impl Chat {
                     && self.approvals.len() < 16
                 {
                     self.approvals.push_back(Approval {
+                        instance_id: crate::chat::next_input_id(),
                         id: id.clone(),
                         method: method.into(),
                         params: p,
@@ -1031,6 +1034,7 @@ impl Chat {
                 .and_then(|id| self.items.get(id));
             let details = json!({"request": a.params, "item": item});
             NativeChatApprovalView {
+                instance_id: a.instance_id,
                 title: a.method.clone(),
                 details_json: serde_json::to_string_pretty(&details).unwrap_or_default(),
                 can_accept: self.approval_has_details(a),
@@ -1118,7 +1122,7 @@ impl Chat {
         let had_draft = !self.composer.is_empty();
         self.send_message();
         if had_draft && self.composer.is_empty() {
-            self.composer_id = next_composer_id();
+            self.composer_id = next_input_id();
         }
     }
 
@@ -1130,6 +1134,19 @@ impl Chat {
     pub fn gpui_set_effort(&mut self, effort: String) {
         self.options.effort = effort;
         self.commit_options();
+    }
+
+    pub(crate) fn approval_instance_id(&self) -> Option<u64> {
+        self.approvals.front().map(|a| a.instance_id)
+    }
+
+    pub(crate) fn question_instance_id(&self) -> Option<u64> {
+        self.questions.front().map(|q| q.instance_id())
+    }
+
+    pub(crate) fn question_state(&self, index: usize) -> Option<(u64, &str)> {
+        let q = self.questions.front()?;
+        Some((q.instance_id(), q.text(index)?))
     }
 
     pub fn gpui_respond_approval(&mut self, allow: bool) {
@@ -1318,6 +1335,7 @@ mod tests {
     fn incomplete_approval_cannot_be_accepted() {
         let chat = Chat::new(1, PathBuf::from("."));
         let mut approval = Approval {
+            instance_id: crate::chat::next_input_id(),
             id: json!(1),
             method: "item/commandExecution/requestApproval".into(),
             params: json!({"command":"echo fixture"}),

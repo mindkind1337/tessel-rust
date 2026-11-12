@@ -4,7 +4,7 @@
 //! question cards, model/effort selectors, `Switch to terminal`, and multi-line composer.
 
 use super::{
-    FocusInputTarget, TesselGpuiRoot,
+    TesselGpuiRoot,
     icons::GpuiIcon,
     theme::{GpuiThemeTokens, mono_font_family, rgba_with_alpha},
 };
@@ -136,6 +136,7 @@ pub(crate) fn render_native_chat_pane_body(
         transcript_list = transcript_list.child(render_questions_card(
             pane_id,
             &chat.questions,
+            &chat_inputs.questions,
             chat.questions_can_submit,
             french,
             tokens,
@@ -464,6 +465,7 @@ fn render_approval_card(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let can_accept = approval.can_accept;
+    let request_instance_id = approval.instance_id;
     div()
         .p(px(10.0))
         .rounded(px(tokens.radius_px))
@@ -535,6 +537,7 @@ fn render_approval_card(
                                 root.dispatch(
                                     GpuiAction::ChatRespondApproval {
                                         pane_id,
+                                        request_instance_id,
                                         allow: true,
                                     },
                                     cx,
@@ -563,6 +566,7 @@ fn render_approval_card(
                             root.dispatch(
                                 GpuiAction::ChatRespondApproval {
                                     pane_id,
+                                    request_instance_id,
                                     allow: false,
                                 },
                                 cx,
@@ -576,11 +580,16 @@ fn render_approval_card(
 fn render_questions_card(
     pane_id: u64,
     questions: &[QuestionView],
+    inputs: &super::question_inputs::Inputs,
     can_submit: bool,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
+    let request_instance_id = questions
+        .first()
+        .map(|q| q.request_instance_id)
+        .unwrap_or(0);
     let mut card = div()
         .p(px(10.0))
         .rounded(px(tokens.radius_px))
@@ -657,6 +666,7 @@ fn render_questions_card(
                         root.dispatch(
                             GpuiAction::ChatSelectQuestionOption {
                                 pane_id,
+                                request_instance_id,
                                 q_idx,
                                 opt_idx,
                             },
@@ -681,36 +691,13 @@ fn render_questions_card(
         }
 
         if q.options.is_empty() || q.is_other {
-            let txt_disp = if q.text.is_empty() {
-                if french {
-                    "Votre réponse libre…".into()
-                } else {
-                    "Type your answer…".into()
-                }
-            } else {
-                q.text.clone()
-            };
             q_box = q_box.child(
                 div()
-                    .id(("chat-q-free", (pane_id as usize) * 32 + q_idx))
-                    .px(px(7.0))
-                    .py(px(4.0))
-                    .rounded(px(4.0))
+                    .rounded(px(4.))
                     .bg(tokens.term)
                     .border_1()
                     .border_color(tokens.border_strong)
-                    .text_size(px(11.0))
-                    .text_color(if q.text.is_empty() {
-                        tokens.text_dim
-                    } else {
-                        tokens.text_strong
-                    })
-                    .cursor_text()
-                    .on_click(cx.listener(move |root, _, _, cx| {
-                        root.focus_input = FocusInputTarget::ChatQuestion { pane_id, q_idx };
-                        cx.notify();
-                    }))
-                    .child(SharedString::from(txt_disp)),
+                    .child(inputs.render(pane_id, q_idx, french, tokens, cx)),
             );
         }
 
@@ -741,16 +728,15 @@ fn render_questions_card(
                         tokens.text_dim
                     })
                     .cursor_pointer()
-                    .on_click(cx.listener(move |root, _, _, cx| {
-                        if can_submit {
-                            root.dispatch(
-                                GpuiAction::ChatSubmitQuestions {
-                                    pane_id,
-                                    skip: false,
-                                },
-                                cx,
-                            );
-                        }
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        super::question_inputs::submit(
+                            root,
+                            pane_id,
+                            request_instance_id,
+                            false,
+                            window,
+                            cx,
+                        );
                     }))
                     .child(if french {
                         "Envoyer les réponses"
@@ -768,12 +754,13 @@ fn render_questions_card(
                     .text_size(px(11.5))
                     .text_color(tokens.text)
                     .cursor_pointer()
-                    .on_click(cx.listener(move |root, _, _, cx| {
-                        root.dispatch(
-                            GpuiAction::ChatSubmitQuestions {
-                                pane_id,
-                                skip: true,
-                            },
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        super::question_inputs::submit(
+                            root,
+                            pane_id,
+                            request_instance_id,
+                            true,
+                            window,
                             cx,
                         );
                     }))

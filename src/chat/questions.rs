@@ -24,11 +24,13 @@ struct Question {
     text: String,
 }
 pub struct Request {
+    instance_id: u64,
     pub id: Value,
     questions: Vec<Question>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionView {
+    pub request_instance_id: u64,
     pub id: String,
     pub header: String,
     pub question: String,
@@ -39,10 +41,19 @@ pub struct QuestionView {
 }
 
 impl Request {
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    pub fn text(&self, index: usize) -> Option<&str> {
+        self.questions.get(index).map(|q| q.text.as_str())
+    }
+
     pub fn views(&self) -> Vec<QuestionView> {
         self.questions
             .iter()
             .map(|q| QuestionView {
+                request_instance_id: self.instance_id,
                 id: q.id.clone(),
                 header: q.header.clone(),
                 question: q.question.clone(),
@@ -128,7 +139,11 @@ impl Request {
                 return Err("Invalid agent question options".into());
             }
         }
-        Ok(Self { id, questions })
+        Ok(Self {
+            instance_id: crate::chat::next_input_id(),
+            id,
+            questions,
+        })
     }
     fn answers(&self) -> Option<Value> {
         let mut answers = serde_json::Map::new();

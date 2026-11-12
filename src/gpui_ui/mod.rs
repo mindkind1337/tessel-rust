@@ -12,6 +12,7 @@ mod editor_syntax;
 pub mod editor_view;
 pub mod icons;
 pub(crate) mod modals_view;
+mod question_inputs;
 pub(crate) mod remote_inputs;
 pub(crate) mod remote_view;
 pub(crate) mod settings_view;
@@ -118,6 +119,16 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "enter",
+                question_inputs::SubmitAnswers,
+                Some("TesselChatQuestion"),
+            ),
+            gpui::KeyBinding::new(
+                "shift-enter",
+                gpui_ce_elements::editable_text::actions::Enter,
+                Some("TesselChatQuestion"),
+            ),
             gpui::KeyBinding::new("enter", chat_inputs::Submit, Some("TesselChatComposer")),
             gpui::KeyBinding::new(
                 "shift-enter",
@@ -524,8 +535,11 @@ impl TesselGpuiRoot {
             return;
         }
         let target = self.effective_focus_target();
-        if let FocusInputTarget::ChatComposer(pane) = target {
-            if let Some(input) = self.chat_inputs.get(pane) {
+        if matches!(
+            target,
+            FocusInputTarget::ChatComposer(_) | FocusInputTarget::ChatQuestion { .. }
+        ) {
+            if let Some(input) = self.chat_inputs.input_for_target(target) {
                 window.focus(&input.read(cx).focus_handle(cx), cx);
             }
             return;
@@ -723,30 +737,41 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
-        let chat_target = match self.effective_focus_target() {
-            FocusInputTarget::ChatComposer(pane)
-                if snapshot.center_mode == GpuiCenterMode::WorkGrid
+        if let FocusInputTarget::ChatQuestion { pane_id, q_idx } = self.focus_input
+            && self.app.gpui_chat_question_state(pane_id, q_idx).is_none()
+        {
+            self.focus_input = FocusInputTarget::None;
+        }
+        let target = self.effective_focus_target();
+        let target_pane = match target {
+            FocusInputTarget::ChatComposer(pane) => Some(pane),
+            FocusInputTarget::ChatQuestion { pane_id, .. } => Some(pane_id),
+            _ => None,
+        };
+        let chat_target = target_pane
+            .filter(|pane| {
+                snapshot.center_mode == GpuiCenterMode::WorkGrid
                     && !self.app.gpui_has_open_modal()
                     && snapshot
                         .tiles
                         .iter()
-                        .any(|t| t.session_id == pane && t.native_chat.is_some()) =>
-            {
-                Some(pane)
-            }
-            _ => None,
-        };
+                        .any(|t| t.session_id == *pane && t.native_chat.is_some())
+            })
+            .map(|_| target);
         if self.chat_inputs.focused(window, cx).is_some()
-            && self.chat_inputs.focused(window, cx)
-                != chat_target.map(FocusInputTarget::ChatComposer)
+            && self.chat_inputs.focused(window, cx) != chat_target
         {
             window.focus(&self.focus_handle, cx);
         }
         if !self.app.gpui_has_open_modal() {
-            self.chat_inputs
-                .sync(&snapshot, &self.app.gpui_chat_composer_ids(), cx);
-            if let Some(pane) = chat_target
-                && let Some(input) = self.chat_inputs.get(pane)
+            self.chat_inputs.sync(
+                &snapshot,
+                &self.app.gpui_chat_composer_ids(),
+                &self.app.gpui_chat_question_ids(),
+                cx,
+            );
+            if let Some(target) = chat_target
+                && let Some(input) = self.chat_inputs.input_for_target(target)
             {
                 window.focus(&input.read(cx).focus_handle(cx), cx);
             }

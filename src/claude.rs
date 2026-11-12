@@ -12,6 +12,7 @@ mod transport;
 const TEXT_LIMIT: usize = 128 * 1024;
 #[derive(Clone)]
 struct Approval {
+    instance_id: u64,
     id: String,
     tool: String,
     input: Value,
@@ -93,6 +94,7 @@ impl Chat {
             "Je vais créer le fichier demandé. Voici l’action à approuver.",
         );
         chat.approvals.push_back(Approval {
+            instance_id: crate::chat::next_input_id(),
             id: "fixture-only".into(),
             tool: "Write".into(),
             input: json!({"file_path":"exemple.txt","content":"Bonjour Québec"}),
@@ -123,7 +125,7 @@ impl Chat {
             options_commit: false,
             #[cfg(all(test, feature = "visual-test"))]
             test_outgoing: None,
-            composer_id: crate::chat::next_composer_id(),
+            composer_id: crate::chat::next_input_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
             approvals: VecDeque::new(),
@@ -178,6 +180,7 @@ impl Chat {
             .approvals
             .front()
             .map(|a| crate::chat::NativeChatApprovalView {
+                instance_id: a.instance_id,
                 title: a.tool.clone(),
                 details_json: serde_json::to_string_pretty(&a.input).unwrap_or_default(),
                 can_accept: true,
@@ -226,7 +229,7 @@ impl Chat {
 
     pub fn gpui_new_conversation(&mut self) {
         if self.transport.is_none() {
-            self.composer_id = crate::chat::next_composer_id();
+            self.composer_id = crate::chat::next_input_id();
             self.saved_session = None;
             self.resume.clear();
             self.transcript.clear();
@@ -270,7 +273,7 @@ impl Chat {
         if let Err(e) = self.begin() {
             self.error = e;
         } else {
-            self.composer_id = crate::chat::next_composer_id();
+            self.composer_id = crate::chat::next_input_id();
         }
     }
 
@@ -292,6 +295,19 @@ impl Chat {
         if self.transport.is_none() {
             self.resume = resume;
         }
+    }
+
+    pub(crate) fn approval_instance_id(&self) -> Option<u64> {
+        self.approvals.front().map(|a| a.instance_id)
+    }
+
+    pub(crate) fn question_instance_id(&self) -> Option<u64> {
+        self.questions.as_ref().map(|q| q.instance_id())
+    }
+
+    pub(crate) fn question_state(&self, index: usize) -> Option<(u64, &str)> {
+        let q = self.questions.as_ref()?;
+        Some((q.instance_id(), q.text(index)?))
     }
 
     pub fn gpui_respond_approval(&mut self, allow: bool) {
@@ -534,6 +550,7 @@ impl Chat {
                     return;
                 }
                 self.approvals.push_back(Approval {
+                    instance_id: crate::chat::next_input_id(),
                     id: id.into(),
                     tool: request["tool_name"].as_str().unwrap().into(),
                     input: request["input"].clone(),

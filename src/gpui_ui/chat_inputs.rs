@@ -17,19 +17,30 @@ struct Binding {
 
 #[derive(Default)]
 pub(crate) struct Inputs {
+    pub questions: super::question_inputs::Inputs,
     bindings: HashMap<u64, Binding>,
 }
 
 impl Inputs {
     pub fn focused(&self, window: &Window, cx: &App) -> Option<FocusInputTarget> {
-        self.bindings.iter().find_map(|(pane, binding)| {
-            binding
-                .state
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-                .then_some(FocusInputTarget::ChatComposer(*pane))
+        self.questions.focused(window, cx).or_else(|| {
+            self.bindings.iter().find_map(|(pane, binding)| {
+                binding
+                    .state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+                    .then_some(FocusInputTarget::ChatComposer(*pane))
+            })
         })
+    }
+
+    pub fn input_for_target(&self, target: FocusInputTarget) -> Option<&Entity<EditableTextState>> {
+        match target {
+            FocusInputTarget::ChatComposer(pane) => self.get(pane),
+            FocusInputTarget::ChatQuestion { pane_id, q_idx } => self.questions.get(pane_id, q_idx),
+            _ => None,
+        }
     }
 
     pub fn get(&self, pane: u64) -> Option<&Entity<EditableTextState>> {
@@ -40,8 +51,10 @@ impl Inputs {
         &mut self,
         snapshot: &GpuiWorkspaceSnapshot,
         open: &[(u64, u64)],
+        questions: &[(u64, u64)],
         cx: &mut Context<TesselGpuiRoot>,
     ) {
+        self.questions.sync(snapshot, questions, cx);
         self.bindings
             .retain(|pane, b| open.contains(&(*pane, b.id)));
         for tile in &snapshot.tiles {

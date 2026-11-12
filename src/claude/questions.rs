@@ -25,16 +25,26 @@ struct Question {
     other: String,
 }
 pub(super) struct Questions {
+    instance_id: u64,
     pub id: String,
     original: Value,
     questions: Vec<Question>,
 }
 impl Questions {
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    pub fn text(&self, index: usize) -> Option<&str> {
+        self.questions.get(index).map(|q| q.other.as_str())
+    }
+
     pub fn views(&self) -> Vec<crate::chat::QuestionView> {
         self.questions
             .iter()
             .enumerate()
             .map(|(idx, q)| crate::chat::QuestionView {
+                request_instance_id: self.instance_id,
                 id: format!("claude-q-{idx}"),
                 header: q.header.clone(),
                 question: q.question.clone(),
@@ -108,6 +118,7 @@ impl Questions {
             }
         }
         Some(Self {
+            instance_id: crate::chat::next_input_id(),
             id: id.into(),
             original: input.clone(),
             questions,

@@ -717,20 +717,25 @@ pub(crate) enum GpuiAction {
     },
     ChatRespondApproval {
         pane_id: u64,
+        request_instance_id: u64,
         allow: bool,
     },
     ChatSelectQuestionOption {
         pane_id: u64,
+        request_instance_id: u64,
         q_idx: usize,
         opt_idx: usize,
     },
-    ChatSetQuestionText {
+    ApplyNativeQuestionEdit {
         pane_id: u64,
+        request_instance_id: u64,
         q_idx: usize,
+        base: String,
         text: String,
     },
     ChatSubmitQuestions {
         pane_id: u64,
+        request_instance_id: u64,
         skip: bool,
     },
     // Document / Diff / Rich Preview actions
@@ -1606,6 +1611,16 @@ impl Tessel {
         self.remote.hold_input_fixture()
     }
 
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn inject_codex_frame_for_test(&mut self, pane: u64, frame: serde_json::Value) {
+        self.ensure_native_chat_instances();
+        self.chats
+            .iter_mut()
+            .find(|c| c.pane == pane)
+            .unwrap()
+            .process_protocol_frame_for_test(frame);
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_claude_frame_for_test(&mut self, pane_id: u64, frame: serde_json::Value) {
         self.ensure_native_chat_instances();
@@ -1649,6 +1664,46 @@ impl Tessel {
         }
     }
 
+    pub(crate) fn gpui_chat_request_id(&self, pane: u64, approval: bool) -> Option<u64> {
+        let session = self.sessions.iter().find(|s| s.id == pane)?;
+        match session.launch {
+            Launch::CodexChat => {
+                let c = self.chats.iter().find(|c| c.pane == pane)?;
+                if approval {
+                    c.approval_instance_id()
+                } else {
+                    c.question_instance_id()
+                }
+            }
+            Launch::ClaudeChat => {
+                let c = self.claude_chats.iter().find(|c| c.pane == pane)?;
+                if approval {
+                    c.approval_instance_id()
+                } else {
+                    c.question_instance_id()
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn gpui_chat_question_state(&self, pane: u64, index: usize) -> Option<(u64, &str)> {
+        let session = self.sessions.iter().find(|s| s.id == pane)?;
+        match session.launch {
+            Launch::CodexChat => self
+                .chats
+                .iter()
+                .find(|c| c.pane == pane)?
+                .question_state(index),
+            Launch::ClaudeChat => self
+                .claude_chats
+                .iter()
+                .find(|c| c.pane == pane)?
+                .question_state(index),
+            _ => None,
+        }
+    }
+
     pub(crate) fn gpui_chat_input_allowed(&self, pane_id: u64) -> bool {
         self.view == View::Work
             && !self.gpui_has_open_modal()
@@ -1656,6 +1711,13 @@ impl Tessel {
                 .sessions
                 .iter()
                 .any(|s| s.id == pane_id && s.project == self.state.active_project)
+    }
+
+    pub(crate) fn gpui_chat_question_ids(&self) -> Vec<(u64, u64)> {
+        self.sessions
+            .iter()
+            .filter_map(|s| self.gpui_chat_request_id(s.id, false).map(|id| (s.id, id)))
+            .collect()
     }
 
     pub(crate) fn gpui_chat_composer_ids(&self) -> Vec<(u64, u64)> {
@@ -1832,64 +1894,7 @@ impl Tessel {
                 }
             }
             GpuiFocusTarget::ChatComposer(_) => false,
-            GpuiFocusTarget::ChatQuestion { pane_id, q_idx } => {
-                let mut cur = self
-                    .chats
-                    .iter()
-                    .find(|c| c.pane == pane_id)
-                    .and_then(|c| {
-                        c.gpui_snapshot()
-                            .questions
-                            .get(q_idx)
-                            .map(|q| q.text.clone())
-                    })
-                    .or_else(|| {
-                        self.claude_chats
-                            .iter()
-                            .find(|c| c.pane == pane_id)
-                            .and_then(|c| {
-                                c.gpui_snapshot()
-                                    .questions
-                                    .get(q_idx)
-                                    .map(|q| q.text.clone())
-                            })
-                    })
-                    .unwrap_or_default();
-                if lower == "enter" && !shift {
-                    self.apply_gpui_action(GpuiAction::ChatSubmitQuestions {
-                        pane_id,
-                        skip: false,
-                    });
-                    return true;
-                }
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
-                        pane_id,
-                        q_idx,
-                        text: cur,
-                    });
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
-                        pane_id,
-                        q_idx,
-                        text: cur,
-                    });
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::ChatSetQuestionText {
-                        pane_id,
-                        q_idx,
-                        text: cur,
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::ChatQuestion { .. } => false,
             GpuiFocusTarget::EditorFind => {
                 if lower == "enter" {
                     self.apply_gpui_action(GpuiAction::StepEditorFind(if shift { -1 } else { 1 }));
@@ -4597,39 +4602,89 @@ impl Tessel {
                     c.gpui_set_resume(resume);
                 }
             }
-            GpuiAction::ChatRespondApproval { pane_id, allow } => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+            GpuiAction::ChatRespondApproval {
+                pane_id,
+                request_instance_id,
+                allow,
+            } => {
+                if !self.gpui_chat_input_allowed(pane_id)
+                    || self.gpui_chat_request_id(pane_id, true) != Some(request_instance_id)
+                {
+                    return;
+                }
+                if let Some(c) = self.chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.approval_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_respond_approval(allow);
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.approval_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_respond_approval(allow);
                 }
             }
             GpuiAction::ChatSelectQuestionOption {
                 pane_id,
+                request_instance_id,
                 q_idx,
                 opt_idx,
             } => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                if !self.gpui_chat_input_allowed(pane_id)
+                    || self.gpui_chat_request_id(pane_id, false) != Some(request_instance_id)
+                {
+                    return;
+                }
+                if let Some(c) = self.chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_select_question_option(q_idx, opt_idx);
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_select_question_option(q_idx, opt_idx);
                 }
             }
-            GpuiAction::ChatSetQuestionText {
+            GpuiAction::ApplyNativeQuestionEdit {
                 pane_id,
+                request_instance_id,
                 q_idx,
+                base,
                 text,
             } => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                if text == base
+                    || !self.gpui_chat_input_allowed(pane_id)
+                    || text.chars().take(4097).count() > 4096
+                    || self.gpui_chat_question_state(pane_id, q_idx)
+                        != Some((request_instance_id, base.as_str()))
+                {
+                    return;
+                }
+                if let Some(c) = self.chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_set_question_text(q_idx, text);
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_set_question_text(q_idx, text);
                 }
             }
-            GpuiAction::ChatSubmitQuestions { pane_id, skip } => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+            GpuiAction::ChatSubmitQuestions {
+                pane_id,
+                request_instance_id,
+                skip,
+            } => {
+                if !self.gpui_chat_input_allowed(pane_id)
+                    || self.gpui_chat_request_id(pane_id, false) != Some(request_instance_id)
+                {
+                    return;
+                }
+                if let Some(c) = self.chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_submit_questions(skip);
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
+                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| {
+                    c.pane == pane_id && c.question_instance_id() == Some(request_instance_id)
+                }) {
                     c.gpui_submit_questions(skip);
                 }
             }

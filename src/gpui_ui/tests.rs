@@ -285,15 +285,18 @@ fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
 
     app.apply_gpui_action(GpuiAction::ChatSelectQuestionOption {
         pane_id,
+        request_instance_id: chat3.questions[0].request_instance_id,
         q_idx: 0,
         opt_idx: 0,
     });
     app.apply_gpui_action(GpuiAction::ChatSubmitQuestions {
         pane_id,
+        request_instance_id: chat3.questions[0].request_instance_id,
         skip: false,
     });
     app.apply_gpui_action(GpuiAction::ChatRespondApproval {
         pane_id,
+        request_instance_id: chat3.approval.as_ref().unwrap().instance_id,
         allow: false,
     });
     let snap4 = app.gpui_snapshot(960.0, 640.0, 4.0);
@@ -834,4 +837,48 @@ fn gpui_native_chat_draft_guards_scope_size_and_stale_events() {
         text: "hidden".into(),
     });
     assert_eq!(app.gpui_chat_composer(pane), Some((id, "draft")));
+}
+
+#[test]
+fn gpui_native_approval_delayed_click_cannot_resolve_the_next_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+    app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+    app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+    let pane = app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+    for id in ["first", "second"] {
+        app.inject_claude_frame_for_test(pane,json!({"type":"control_request","request_id":id,"request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"synthetic command; never executed"}}}));
+    }
+    let first = app.gpui_chat_request_id(pane, true).unwrap();
+    app.apply_gpui_action(GpuiAction::ChatRespondApproval {
+        pane_id: pane,
+        request_instance_id: first,
+        allow: false,
+    });
+    let second = app.gpui_chat_request_id(pane, true).unwrap();
+    assert_ne!(first, second);
+    for allow in [true, false] {
+        app.apply_gpui_action(GpuiAction::ChatRespondApproval {
+            pane_id: pane,
+            request_instance_id: first,
+            allow,
+        });
+        assert_eq!(app.gpui_chat_request_id(pane, true), Some(second));
+    }
+    app.apply_gpui_action(GpuiAction::OpenHelp);
+    app.apply_gpui_action(GpuiAction::ChatRespondApproval {
+        pane_id: pane,
+        request_instance_id: second,
+        allow: true,
+    });
+    assert_eq!(app.gpui_chat_request_id(pane, true), Some(second));
+    app.apply_gpui_action(GpuiAction::CloseOverlays);
+    app.apply_gpui_action(GpuiAction::ChatRespondApproval {
+        pane_id: pane,
+        request_instance_id: second,
+        allow: false,
+    });
+    assert!(app.gpui_chat_request_id(pane, true).is_none());
 }
