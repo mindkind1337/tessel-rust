@@ -52,6 +52,7 @@ pub(crate) struct GpuiExtraUiState {
     pub explorer_input_generation: u64,
     pub panel_query_generation: u64,
     pub session_query: crate::session_query::Search,
+    pub session_discovery: crate::session_discovery::Discovery,
     pub help_query: String,
     pub settings_search: String,
     pub scm_drafts: crate::scm_drafts::Drafts,
@@ -89,6 +90,7 @@ impl Default for GpuiExtraUiState {
             explorer_input_generation: 1,
             panel_query_generation: 1,
             session_query: crate::session_query::Search::default(),
+            session_discovery: crate::session_discovery::Discovery::default(),
             help_query: String::new(),
             settings_search: String::new(),
             scm_drafts: crate::scm_drafts::Drafts::default(),
@@ -1507,6 +1509,7 @@ impl Tessel {
                 && self.state.panels.right_tab == SideTab::History
                 && self.gpui_extra.session_query.pending())
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
+            || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
                 && self.documents.get(self.active_document).is_some_and(|doc| {
@@ -2681,6 +2684,7 @@ impl Tessel {
                 self.refresh_scm_commits();
             } else if self.state.panels.right_tab == SideTab::History
                 && self.past_sessions_cache.is_empty()
+                && !self.gpui_extra.session_discovery.requested()
                 && self.store.is_some()
             {
                 self.refresh_past_sessions();
@@ -3733,9 +3737,10 @@ impl Tessel {
             self.gpui_extra.session_query.pause();
             Vec::new()
         };
-        let sessions_loading = self.gpui_extra.session_query.pending();
-        let sessions_limited =
-            visible == Some(SideTab::History) && self.gpui_extra.session_query.limited();
+        let sessions_loading =
+            self.gpui_extra.session_query.pending() || self.side_panels_ui.sessions_loading;
+        let sessions_limited = visible == Some(SideTab::History)
+            && (self.gpui_extra.session_query.limited() || self.side_panels_ui.sessions_limited);
 
         let threads = if visible == Some(SideTab::Conversations) {
             let conv_messages = self.merged_conversation_messages();
@@ -6506,6 +6511,40 @@ impl Tessel {
 #[cfg(test)]
 mod panel_snapshot_tests {
     use super::*;
+
+    #[test]
+    fn session_discovery_keeps_cache_until_completion_and_does_not_retry_empty_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.state.panels.right_open = true;
+        app.state.panels.right_tab = SideTab::History;
+        app.past_sessions_cache
+            .push(crate::side_panels_model::SessionHistoryEntry {
+                id: "old".into(),
+                agent_id: "test".into(),
+                title: "Previous".into(),
+                folder: dir.path().to_path_buf(),
+                updated_at_ms: 0,
+                file_path: None,
+                open_pane_id: None,
+                transcript_snippet: None,
+            });
+        app.gpui_extra.session_discovery.request(None, vec![], 50);
+        assert_eq!(app.past_sessions_cache.len(), 1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.gpui_extra.session_discovery.busy() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll_for_gpui();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(app.past_sessions_cache.is_empty());
+        for _ in 0..4 {
+            let snapshot = app.gpui_snapshot(960., 640., 4.);
+            assert!(snapshot.side_panels.past_sessions.is_empty());
+            assert!(!snapshot.side_panels.sessions_loading);
+            assert!(!app.gpui_extra.session_discovery.busy());
+        }
+    }
 
     #[test]
     fn rejected_task_creation_preserves_draft_and_identity() {

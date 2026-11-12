@@ -8,10 +8,12 @@
 //! - Task Branch Review (`ReviewPanel.vue` + `main/review.js`)
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -586,15 +588,13 @@ fn read_bounded_utf8(path: &Path, max_bytes: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn summarize_session_file(path: &Path) -> (String, Option<PathBuf>) {
+fn summarize_session_file(path: &Path) -> Option<(String, Option<PathBuf>)> {
     let fallback_title = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Session")
         .to_owned();
-    let Some(head) = read_bounded_utf8(path, 16 * 1024) else {
-        return (fallback_title, None);
-    };
+    let head = read_bounded_utf8(path, 16 * 1024)?;
     let mut title = None;
     let mut cwd = None;
     for line in head.lines().take(25) {
@@ -634,62 +634,189 @@ fn summarize_session_file(path: &Path) -> (String, Option<PathBuf>) {
             break;
         }
     }
-    (title.unwrap_or(fallback_title), cwd)
+    Some((title.unwrap_or(fallback_title), cwd))
 }
 
+fn session_uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+}
+fn candidate_session_id(path: &Path, agent: &str, depth: usize) -> Option<String> {
+    if path.extension()?.to_str()? != "jsonl" {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    if agent == "claude" {
+        (depth == 1 && session_uuid(stem)).then(|| stem.to_owned())
+    } else {
+        let id = stem.get(stem.len().checked_sub(36)?..)?;
+        (stem.starts_with("rollout-") && session_uuid(id)).then(|| id.to_owned())
+    }
+}
+fn summarize_codex_session(path: &Path) -> Option<(String, String, Option<PathBuf>)> {
+    // Codex includes agent instructions in session_meta; its first line commonly exceeds 16 KiB.
+    let file = fs::File::open(path).ok()?;
+    let mut first = Vec::new();
+    let mut reader = BufReader::new(file.take(256 * 1024 + 1));
+    (&mut reader)
+        .take(64 * 1024 + 1)
+        .read_until(b'\n', &mut first)
+        .ok()?;
+    if first.len() > 64 * 1024 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&first).ok()?;
+    if value.get("type")?.as_str()? != "session_meta" {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let id = payload.get("id")?.as_str()?;
+    if !session_uuid(id) {
+        return None;
+    }
+    let cwd = payload
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    let id = id.to_owned();
+    let mut title = id.clone();
+    let mut consumed = first.len();
+    for _ in 0..128 {
+        first.clear();
+        let read = reader.read_until(b'\n', &mut first).ok()?;
+        consumed += read;
+        if read == 0 || consumed > 256 * 1024 {
+            break;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&first) else {
+            continue;
+        };
+        let payload = &value["payload"];
+        let text = if value["type"] == "event_msg" && payload["type"] == "user_message" {
+            payload["message"].as_str()
+        } else if value["type"] == "response_item"
+            && payload["type"] == "message"
+            && payload["role"] == "user"
+        {
+            payload["content"].as_str().or_else(|| {
+                payload["content"].as_array()?.iter().find_map(|block| {
+                    if block["type"] == "text" || block["type"] == "input_text" {
+                        block["text"].as_str().filter(|s| !s.is_empty())
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
+        if let Some(text) = text
+            .map(str::trim)
+            .filter(|text| !text.is_empty() && !text.starts_with('<'))
+        {
+            title = mask_transcript_secrets(text).chars().take(120).collect();
+            break;
+        }
+    }
+    Some((id, title, cwd))
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct SessionCandidate {
+    updated_at_ms: u64,
+    path: PathBuf,
+    agent_id: String,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn collect_session_files(
     dir: &Path,
     agent_id: &str,
     depth: usize,
     max_depth: usize,
     limit: usize,
-    out: &mut Vec<SessionHistoryEntry>,
+    out: &mut BinaryHeap<Reverse<SessionCandidate>>,
+    seen: &BTreeSet<(String, String)>,
+    budget: &mut DiscoveryBudget,
 ) {
-    if depth > max_depth || out.len() >= limit || !dir.is_dir() {
+    if !budget.available() || depth > max_depth {
         return;
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(_) => {
+            budget.limited = true;
+            return;
+        }
     };
-    for entry in entries.flatten() {
-        if out.len() >= limit {
+    for entry in entries {
+        if !budget.available() {
             break;
         }
-        let path = entry.path();
+        if budget.visited >= budget.max_entries {
+            budget.limited = true;
+            break;
+        }
+        budget.visited += 1;
+        let Ok(entry) = entry else {
+            budget.limited = true;
+            continue;
+        };
         let Ok(ft) = entry.file_type() else {
+            budget.limited = true;
             continue;
         };
         if ft.is_symlink() {
             continue;
         }
+        let path = entry.path();
         if ft.is_dir() {
-            collect_session_files(&path, agent_id, depth + 1, max_depth, limit, out);
-        } else if ft.is_file()
-            && path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("jsonl") || ext.eq_ignore_ascii_case("json")
-                })
-        {
-            let id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("session")
-                .to_owned();
-            let updated_at_ms = file_mtime_ms(&path).unwrap_or(0);
-            let (title, detected_cwd) = summarize_session_file(&path);
-            let folder = detected_cwd.unwrap_or_else(|| dir.to_path_buf());
-            out.push(SessionHistoryEntry {
-                id,
+            collect_session_files(
+                &path,
+                agent_id,
+                depth + 1,
+                max_depth,
+                limit,
+                out,
+                seen,
+                budget,
+            );
+        } else if ft.is_file() {
+            let Some(id) = candidate_session_id(&path, agent_id, depth) else {
+                continue;
+            };
+            if seen.contains(&(agent_id.to_owned(), id.to_owned())) {
+                continue;
+            }
+            let modified = match entry.metadata().and_then(|m| m.modified()) {
+                Ok(time) => time
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                Err(_) => {
+                    budget.limited = true;
+                    continue;
+                }
+            };
+            let candidate = SessionCandidate {
+                updated_at_ms: modified,
+                path,
                 agent_id: agent_id.to_owned(),
-                title: mask_transcript_secrets(&title),
-                folder,
-                updated_at_ms,
-                file_path: Some(path),
-                open_pane_id: None,
-                transcript_snippet: None,
-            });
+            };
+            if out.len() < limit {
+                out.push(Reverse(candidate));
+            } else if out.peek().is_some_and(|old| candidate > old.0) {
+                out.pop();
+                out.push(Reverse(candidate));
+            }
         }
     }
 }
@@ -700,6 +827,54 @@ pub fn scan_past_sessions(
     live_entries: &[SessionHistoryEntry],
     limit: usize,
 ) -> Vec<SessionHistoryEntry> {
+    scan_past_sessions_cancellable(home_dir, live_entries, limit, &AtomicBool::new(false)).entries
+}
+
+#[derive(Default)]
+pub struct SessionDiscoveryResult {
+    pub entries: Vec<SessionHistoryEntry>,
+    pub limited: bool,
+}
+
+pub fn scan_past_sessions_cancellable(
+    home_dir: Option<&Path>,
+    live_entries: &[SessionHistoryEntry],
+    limit: usize,
+    cancel: &AtomicBool,
+) -> SessionDiscoveryResult {
+    let mut budget = DiscoveryBudget {
+        cancel,
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(3),
+        visited: 0,
+        max_entries: 10_000,
+        limited: false,
+    };
+    discover_with_budget(home_dir, live_entries, limit, &mut budget)
+}
+
+struct DiscoveryBudget<'a> {
+    cancel: &'a AtomicBool,
+    deadline: std::time::Instant,
+    visited: usize,
+    max_entries: usize,
+    limited: bool,
+}
+impl DiscoveryBudget<'_> {
+    fn available(&mut self) -> bool {
+        if self.cancel.load(Ordering::Relaxed) || std::time::Instant::now() >= self.deadline {
+            self.limited = true;
+            false
+        } else {
+            true
+        }
+    }
+}
+fn discover_with_budget(
+    home_dir: Option<&Path>,
+    live_entries: &[SessionHistoryEntry],
+    limit: usize,
+    budget: &mut DiscoveryBudget,
+) -> SessionDiscoveryResult {
     let cap = limit.clamp(1, 500);
     let mut out: Vec<SessionHistoryEntry> = live_entries.to_vec();
     let mut seen_ids: BTreeSet<(String, String)> = out
@@ -708,33 +883,76 @@ pub fn scan_past_sessions(
         .collect();
 
     if let Some(home) = home_dir {
-        let mut disk = Vec::new();
+        let mut disk = BinaryHeap::new();
         collect_session_files(
             &home.join(".claude").join("projects"),
             "claude",
             0,
-            3,
-            cap * 2,
+            1,
+            cap,
             &mut disk,
+            &seen_ids,
+            budget,
         );
         collect_session_files(
             &home.join(".codex").join("sessions"),
             "codex",
             0,
             4,
-            cap * 2,
+            cap,
             &mut disk,
+            &seen_ids,
+            budget,
         );
+        let mut disk: Vec<_> = disk.into_iter().map(|item| item.0).collect();
+        disk.sort_by(|a, b| b.cmp(a));
         for item in disk {
-            if seen_ids.insert((item.agent_id.clone(), item.id.clone())) {
-                out.push(item);
+            if !budget.available() {
+                break;
             }
+            let summary = if item.agent_id == "codex" {
+                summarize_codex_session(&item.path)
+            } else {
+                summarize_session_file(&item.path).map(|(title, cwd)| {
+                    (
+                        item.path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        title,
+                        cwd,
+                    )
+                })
+            };
+            let Some((id, title, cwd)) = summary else {
+                budget.limited = true;
+                continue;
+            };
+            if !seen_ids.insert((item.agent_id.clone(), id.clone())) {
+                continue;
+            }
+            let folder =
+                cwd.unwrap_or_else(|| item.path.parent().unwrap_or(Path::new("")).to_path_buf());
+            out.push(SessionHistoryEntry {
+                id,
+                agent_id: item.agent_id,
+                title: mask_transcript_secrets(&title),
+                folder,
+                updated_at_ms: item.updated_at_ms,
+                file_path: Some(item.path),
+                open_pane_id: None,
+                transcript_snippet: None,
+            });
         }
     }
 
     out.sort_by_key(|a| std::cmp::Reverse(a.updated_at_ms));
     out.truncate(cap);
-    out
+    SessionDiscoveryResult {
+        entries: out,
+        limited: budget.limited,
+    }
 }
 
 #[must_use]
@@ -1673,4 +1891,166 @@ pub fn merge_review_branch(
         ],
         None,
     )
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn discovery_scanner_caps_entries_results_deadline_and_cancellation() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".claude/projects/fixture");
+        fs::create_dir_all(&root).unwrap();
+        for i in 0..6 {
+            fs::write(
+                root.join(format!("00000000-0000-0000-0000-{i:012x}.jsonl")),
+                r#"{"summary":"Fixture","cwd":"fixture"}"#,
+            )
+            .unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let all = scan_past_sessions_cancellable(Some(home.path()), &[], 50, &cancel);
+        assert_eq!(all.entries.len(), 6);
+        assert!(!all.limited);
+        assert!(all.entries.iter().all(|e| e.title == "Fixture"));
+        let capped = scan_past_sessions_cancellable(Some(home.path()), &[], 1, &cancel);
+        assert_eq!(capped.entries.len(), 1);
+        assert!(!capped.limited);
+        let mut budget = DiscoveryBudget {
+            cancel: &cancel,
+            deadline: Instant::now() + Duration::from_secs(3),
+            visited: 0,
+            max_entries: 3,
+            limited: false,
+        };
+        let result = discover_with_budget(Some(home.path()), &[], 50, &mut budget);
+        assert!(result.limited);
+        assert_eq!(budget.visited, 3);
+        assert_eq!(result.entries.len(), 2);
+        budget.deadline = Instant::now();
+        assert!(
+            discover_with_budget(Some(home.path()), &[], 50, &mut budget)
+                .entries
+                .is_empty()
+        );
+        cancel.store(true, Ordering::Relaxed);
+        let cancelled = scan_past_sessions_cancellable(Some(home.path()), &[], 50, &cancel);
+        assert!(cancelled.entries.is_empty());
+        assert!(cancelled.limited);
+    }
+
+    #[test]
+    fn discovery_scanner_selects_newest_before_reading_summaries() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".claude/projects/fixture");
+        fs::create_dir_all(&root).unwrap();
+        for i in 0..12 {
+            let path = root.join(format!("00000000-0000-0000-0000-{i:012x}.jsonl"));
+            fs::write(&path, format!("{{\"summary\":\"session-{i}\"}}\n")).unwrap();
+            let file = fs::File::options().write(true).open(&path).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000 + i)),
+            )
+            .unwrap();
+        }
+        let result =
+            scan_past_sessions_cancellable(Some(home.path()), &[], 2, &AtomicBool::new(false));
+        assert!(!result.limited);
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "00000000-0000-0000-0000-00000000000b",
+                "00000000-0000-0000-0000-00000000000a"
+            ]
+        );
+        assert_eq!(result.entries[0].title, "session-11");
+    }
+
+    #[test]
+    fn discovery_scanner_ignores_subagents_and_reads_codex_session_identity() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude/projects/fixture");
+        let codex = home.path().join(".codex/sessions/2026/01/01");
+        fs::create_dir_all(claude.join("session/subagents")).unwrap();
+        fs::create_dir_all(&codex).unwrap();
+        let cid = "11111111-1111-1111-1111-111111111111";
+        let xid = "22222222-2222-2222-2222-222222222222";
+        fs::write(
+            claude.join(format!("{cid}.jsonl")),
+            r#"{"summary":"Main session"}"#,
+        )
+        .unwrap();
+        for name in [
+            "agent-worker.jsonl",
+            "agent-worker.meta.json",
+            "11111111-1111-1111-1111-111111111111.jsonl",
+        ] {
+            fs::write(claude.join("session/subagents").join(name), "{}").unwrap();
+        }
+        fs::write(claude.join("not-a-session.jsonl"), "{}").unwrap();
+        let meta = serde_json::json!({"type":"session_meta","payload":{"id":xid,"cwd":"fixture-cwd","instructions":"x".repeat(24*1024)}});
+        fs::write(
+            codex.join(format!("rollout-2026-01-01-{xid}.jsonl")),
+            format!("{}\n{}\n{}\n{}", meta,
+                serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ignore</environment_context>"}]}}),
+                serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"Fix the bug\nplease"}}),
+                "x".repeat(128 * 1024)),
+        )
+        .unwrap();
+        let flag = AtomicBool::new(false);
+        let result = scan_past_sessions_cancellable(Some(home.path()), &[], 50, &flag);
+        assert!(!result.limited);
+        assert_eq!(result.entries.len(), 2);
+        let x = result
+            .entries
+            .iter()
+            .find(|e| e.agent_id == "codex")
+            .unwrap();
+        assert_eq!(x.id, xid);
+        assert_eq!(x.title, "Fix the bug please");
+        assert_eq!(x.folder, PathBuf::from("fixture-cwd"));
+        assert!(result.entries.iter().any(|e| e.id == cid));
+        fs::write(
+            codex.join("rollout-33333333-3333-3333-3333-333333333333.jsonl"),
+            r#"{"type":"event_msg"}"#,
+        )
+        .unwrap();
+        let partial = scan_past_sessions_cancellable(Some(home.path()), &[], 50, &flag);
+        assert!(partial.limited);
+        assert_eq!(partial.entries.len(), 2);
+        let oversized = codex.join("oversized.jsonl");
+        let huge = serde_json::json!({"type":"session_meta","payload":{"id":xid,"instructions":"x".repeat(64*1024)}});
+        fs::write(&oversized, huge.to_string()).unwrap();
+        assert!(summarize_codex_session(&oversized).is_none());
+    }
+
+    #[test]
+    fn discovery_scanner_bounds_ignored_entries_and_reports_unreadable_summary() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        for i in 0..8 {
+            fs::write(root.join(format!("ignored-{i}.txt")), "").unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let mut budget = DiscoveryBudget {
+            cancel: &cancel,
+            deadline: Instant::now() + Duration::from_secs(3),
+            visited: 0,
+            max_entries: 3,
+            limited: false,
+        };
+        let result = discover_with_budget(Some(home.path()), &[], 50, &mut budget);
+        assert!(result.entries.is_empty());
+        assert!(result.limited);
+        assert_eq!(budget.visited, 3);
+        assert!(summarize_session_file(&root.join("missing.jsonl")).is_none());
+    }
 }

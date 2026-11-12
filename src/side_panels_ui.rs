@@ -93,6 +93,8 @@ pub struct SidePanelsUiState {
     pub sessions_agent_filter: String,
     pub sessions_query: String,
     pub sessions_include_transcripts: bool,
+    pub sessions_loading: bool,
+    pub sessions_limited: bool,
     pub sessions_modal_open: bool,
 
     // Conversations
@@ -682,7 +684,7 @@ pub fn show_session_history_panel(
         .id_salt("side_session_history_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            if filtered.is_empty() {
+            if filtered.is_empty() && !state.sessions_loading && !state.sessions_limited {
                 ui.add_space(24.0_f32);
                 ui.vertical_centered(|ui| {
                     ui.label(
@@ -783,6 +785,20 @@ pub fn show_session_history_panel(
             }
         });
 
+    if state.sessions_loading {
+        ui.label(if french {
+            "Chargement des conversations…"
+        } else {
+            "Loading conversations…"
+        });
+    }
+    if state.sessions_limited {
+        ui.label(if french {
+            "Liste partielle : limite atteinte ou lecture impossible."
+        } else {
+            "Partial list: a limit was reached or some entries could not be read."
+        });
+    }
     out
 }
 

@@ -1672,6 +1672,12 @@ impl Tessel {
         }
     }
     fn poll(&mut self) {
+        if let Some(entries) = self.gpui_extra.session_discovery.poll() {
+            self.past_sessions_cache = entries;
+            self.gpui_extra.session_query.invalidate();
+        }
+        self.side_panels_ui.sessions_loading = self.gpui_extra.session_discovery.busy();
+        self.side_panels_ui.sessions_limited = self.gpui_extra.session_discovery.limited;
         if let Some(rx) = &self.git_username_rx {
             match rx.try_recv() {
                 Ok(name) => {
@@ -4567,7 +4573,10 @@ impl Tessel {
                         crate::chrome::side_tab(ui, icon, &tab_label, selected).clicked()
                     };
                     if clicked {
-                        if tab == RightTab::History && self.past_sessions_cache.is_empty() {
+                        if tab == RightTab::History
+                            && self.past_sessions_cache.is_empty()
+                            && !self.gpui_extra.session_discovery.requested()
+                        {
                             self.refresh_past_sessions();
                         }
                         self.state.panels.right_tab = tab;
@@ -10785,11 +10794,10 @@ impl Tessel {
             })
             .collect();
         let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
-        self.past_sessions_cache = crate::side_panels_model::scan_past_sessions(
-            home.as_deref(),
-            &live,
-            self.side_panels_ui.sessions_limit,
-        );
+        self.gpui_extra
+            .session_discovery
+            .request(home, live, self.side_panels_ui.sessions_limit);
+        self.side_panels_ui.sessions_loading = true;
     }
 
     fn session_history_view(&mut self, ui: &mut egui::Ui) {
