@@ -1031,3 +1031,11 @@ GuestSession leave/drop signal cancellation, shut down a registered TCP clone an
 
 Validation: the 26-case Live Share integration suite passes, followed by all six final shutdown tests (two added cases; 28 distinct cases overall). Leave and Drop interrupt a silent TLS peer with all 32 request slots occupied; pending receivers disconnect, the worker exits and the left phase persists. A separate held-worker test keeps its JoinHandle inside GuestSession and releases the worker only after observing UI return, directly guarding against a reintroduced join. Tests also cover pre-start cancellation without a connection, registration after cancellation, clone release, and a real host with a task mutation awaiting completion. Halley reviewed registration/cancellation ordering, guarded state updates, transport shutdown and host cleanup. Pending-approval cleanup and the remaining synchronous reply waits remain separate work.
 Strict all-target/all-feature Clippy passes with warnings denied. Formatting and diff checks pass.
+
+
+## Pending guest departure (2026-11-12)
+
+The host's approval loop probes the exclusively owned TCP socket without consuming buffered bytes and restores blocking mode before subsequent TLS operations. An orderly close or transport error removes the waiting guest and approval prompt without charging a failed knock or invitation use. A stale approval after cleanup cannot add a trust record or an offline person. The existing admission/approval race and active-session protocol are unchanged. This is socket liveness detection, not a heartbeat for silent network partitions; the existing knock deadline still bounds those waits.
+
+Validation: all 30 Live Share integration tests pass. The new transport probe test keeps idle and buffered connections usable without consuming bytes; the real TLS approval test checks leave and Drop, prompt cleanup within one second, no invitation counters or trust/offline records, and a stale approval with no effect. Halley reviewed the exclusive socket ownership, mode restoration and cleanup ordering. Buffered unexpected bytes can still mask a FIN until the existing 300-second knock deadline; this change does not alter the admission/closure race or undo an approval already granted by the host.
+Strict all-target/all-feature Clippy, formatting and diff checks pass.

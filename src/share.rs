@@ -2143,6 +2143,10 @@ fn serve_connection(
                 cleanup_disconnected_guest(&inner, &guest_id, false);
                 return;
             }
+            if knock_transport::disconnected(&tls.get_mut().stream) {
+                cleanup_disconnected_guest(&inner, &guest_id, false);
+                return;
+            }
             if knock_start.elapsed() > Duration::from_secs(300) {
                 let _ = write_frame(&mut tls, &json!({"status":"ended","reason":"timeout"}));
                 cleanup_disconnected_guest(&inner, &guest_id, true);
@@ -2215,6 +2219,9 @@ fn serve_connection(
 
     cleanup_disconnected_guest(&inner, &guest_id, false);
 }
+
+#[path = "share/knock_transport.rs"]
+mod knock_transport;
 
 fn cleanup_disconnected_guest(inner: &Arc<Mutex<HostInner>>, guest_id: &str, count_failed: bool) {
     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -3756,3 +3763,7 @@ mod guest_request_tests;
 #[cfg(test)]
 #[path = "share/guest_shutdown_tests.rs"]
 mod guest_shutdown_tests;
+
+#[cfg(test)]
+#[path = "share/knock_departure_tests.rs"]
+mod knock_departure_tests;
