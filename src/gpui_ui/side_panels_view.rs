@@ -2,7 +2,7 @@
 //! - `SideTab::Dashboard` (`AgentDashboard.vue`)
 //! - `SideTab::Files` (`ExplorerPanel.vue`)
 //! - `SideTab::Changes` (`ScmPanel.vue` + docked `ScmHistoryPanel.vue` with `gpui::canvas` 5-color swimlanes)
-//! - `SideTab::Tasks` (`TasksBoard.vue` 4-column Kanban board)
+//! - `SideTab::Tasks` (`TaskBoard.vue` stacked status sections)
 //! - `SideTab::TaskHistory` (`TaskHistoryPanel.vue`)
 //! - `SideTab::History` (`SessionHistoryPanel.vue`)
 //! - `SideTab::Conversations` (`ConversationsPanel.vue`)
@@ -24,8 +24,8 @@ use crate::{
     workspace::SideTab,
 };
 use gpui::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder,
-    Rgba, SharedString, StatefulInteractiveElement, Styled, canvas, div, point,
+    AnyElement, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    PathBuilder, Rgba, SharedString, StatefulInteractiveElement, Styled, canvas, div, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -33,12 +33,14 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
     gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_side_panel_tab_body(
     snapshot: &GpuiWorkspaceSnapshot,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
     task_rename_input: &super::task_rename_input::Input,
+    task_card_input: &super::task_card_input::Inputs,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -52,6 +54,7 @@ pub(crate) fn render_side_panel_tab_body(
             sp,
             panel_query_inputs,
             task_rename_input,
+            task_card_input,
             french,
             tokens,
             cx,
@@ -1213,17 +1216,19 @@ fn render_scm_commits_dock(
 }
 
 // ---------------------------------------------------------------------------
-// 4. `SideTab::Tasks` (`TasksBoard.vue` 4-Column Kanban)
+// 4. `SideTab::Tasks` (`TaskBoard.vue` stacked status sections)
 // ---------------------------------------------------------------------------
 
 fn render_tasks_board_tab(
     sp: &GpuiSidePanelsSnapshot,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
     task_rename_input: &super::task_rename_input::Input,
+    task_card_input: &super::task_card_input::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    use super::task_card_input::{Drag, Ghost};
     use crate::native_task_board::Command;
     let Some(scope) = sp.task_board.scope else {
         return render_empty_note(
@@ -1320,7 +1325,7 @@ fn render_tasks_board_tab(
                 }
             }
         }
-        let mut col = div()
+        let col = div()
             .p(px(6.))
             .rounded(px(tokens.radius_px))
             .bg(tokens.surface)
@@ -1330,8 +1335,36 @@ fn render_tasks_board_tab(
             .flex_col()
             .gap(px(4.))
             .child(header);
+        let mut body = div()
+            .id(("task-drop", column))
+            .debug_selector(move || format!("task-drop-{column}"))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .min_h(px(32.))
+            .on_drag_over::<Drag>(move |style, drag, _, _| {
+                if drag.scope == scope {
+                    style.bg(rgba_with_alpha(accent, 0.12))
+                } else {
+                    style
+                }
+            })
+            .on_drop(cx.listener(move |root, drag: &Drag, _, cx| {
+                if drag.scope == scope {
+                    root.dispatch_action(
+                        GpuiAction::NativeTaskBoard {
+                            scope,
+                            command: Command::Move {
+                                id: drag.id,
+                                column,
+                            },
+                        },
+                        cx,
+                    );
+                }
+            }));
         if cards.is_empty() {
-            col = col.child(render_empty_note(
+            body = body.child(render_empty_note(
                 if french { "Aucune tâche" } else { "No tasks" },
                 tokens,
             ));
@@ -1339,16 +1372,29 @@ fn render_tasks_board_tab(
         for task in cards {
             let id = task.id;
             let editing = sp.task_board.edit.as_ref().is_some_and(|e| e.id == id);
+            let focus = task_card_input
+                .handle(id)
+                .expect("board focus synchronized")
+                .clone();
+            let click_focus = focus.clone();
+            let drag = Drag {
+                scope,
+                id,
+                title: task.title.clone(),
+            };
+            let ghost_tokens = *tokens;
             let title = if editing {
                 task_rename_input.render(french, tokens, cx)
             } else {
                 div()
                     .id(("task-title", id))
+                    .debug_selector(move || format!("task-title-{id}"))
                     .flex_1()
                     .min_w_0()
                     .text_size(px(11.5))
                     .text_color(tokens.text_strong)
-                    .on_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |root, event: &gpui::ClickEvent, w, cx| {
+                        w.focus(&click_focus, cx);
                         if column == 0 && event.click_count() == 2 {
                             root.dispatch_action(
                                 GpuiAction::NativeTaskBoard {
@@ -1359,10 +1405,42 @@ fn render_tasks_board_tab(
                             );
                         }
                     }))
+                    .on_drag(drag, move |drag, _, _, cx| {
+                        cx.new(|_| Ghost {
+                            title: drag.title.clone(),
+                            tokens: ghost_tokens,
+                        })
+                    })
                     .child(task.title.clone())
                     .into_any_element()
             };
             let mut row = div()
+                .id(("task-card", id))
+                .track_focus(&focus)
+                .tab_stop(!editing)
+                .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, w, cx| {
+                    if !focus.is_focused(w) {
+                        return;
+                    }
+                    let k = &event.keystroke;
+                    if k.modifiers.alt
+                        && !k.modifiers.control
+                        && !k.modifiers.platform
+                        && !k.modifiers.shift
+                        && matches!(k.key.as_str(), "left" | "right")
+                    {
+                        cx.stop_propagation();
+                        if !event.is_held {
+                            super::task_card_input::step(
+                                root,
+                                scope,
+                                id,
+                                if k.key == "left" { -1 } else { 1 },
+                                cx,
+                            );
+                        }
+                    }
+                }))
                 .pl(px(7.))
                 .pr(px(6.))
                 .py(px(5.))
@@ -1400,32 +1478,6 @@ fn render_tasks_board_tab(
                 ));
             }
             if !editing {
-                if column > 0 {
-                    row = row.child(render_chip(
-                        format!("task-left-{id}"),
-                        "←".into(),
-                        false,
-                        tokens,
-                        action(Command::Move {
-                            id,
-                            column: column - 1,
-                        }),
-                        cx,
-                    ));
-                }
-                if column < 3 {
-                    row = row.child(render_chip(
-                        format!("task-right-{id}"),
-                        "→".into(),
-                        false,
-                        tokens,
-                        action(Command::Move {
-                            id,
-                            column: column + 1,
-                        }),
-                        cx,
-                    ));
-                }
                 row = row.child(render_chip(
                     format!("task-delete-{id}"),
                     "×".into(),
@@ -1435,9 +1487,9 @@ fn render_tasks_board_tab(
                     cx,
                 ));
             }
-            col = col.child(row);
+            body = body.child(row);
         }
-        columns = columns.child(col);
+        columns = columns.child(col.child(body));
     }
     div()
         .size_full()

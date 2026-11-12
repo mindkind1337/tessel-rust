@@ -10,12 +10,11 @@
 //!     reference colors (`#8b93a1`, `#6c9cff`, `#f5a524`, `#3ddc84`), `8px` status dots,
 //!     rounded count pills, dashed empty placeholders (`"No tasks"` / `"Aucune tâche"`), and
 //!     cards with `3px` column-colored left accent bars.
-//!   - Adapts cleanly to narrow right `SidePanel` widths (`280px`, stacked scrollable sections
-//!     exactly like `style.css:1437-1446`) and wide viewports (`>= 720px`, 4 equal columns)
-//!     without ever imposing `880px` on the parent `Ui`.
+//!   - Stacks all four status sections at narrow and wide widths, matching the
+//!     current reference style.css:1483-1568 without imposing a minimum parent width.
 //!   - Vector chevron move buttons (bounded to `0..=3`), pointer drag-and-drop between columns,
 //!     and strictly focus-scoped keyboard navigation (`ArrowUp`/`ArrowDown` to select cards,
-//!     `Alt+ArrowLeft`/`Alt+ArrowRight` or `ArrowLeft`/`ArrowRight` on the focused card list to
+//!     `Alt+ArrowLeft`/`Alt+ArrowRight` on the focused card list to
 //!     move one column with held-key anti-repeat, respecting `!ui.is_enabled()` and open popups).
 
 use std::collections::BTreeSet;
@@ -557,8 +556,7 @@ impl TasksBoard {
                             modifiers,
                             ..
                         } = ev
-                            && (modifiers.matches_logically(Modifiers::NONE)
-                                || modifiers.matches_logically(Modifiers::ALT))
+                            && modifiers.matches_logically(Modifiers::ALT)
                             && held_before != Some(*k)
                         {
                             let step = if *k == Key::ArrowLeft { -1 } else { 1 };
@@ -569,8 +567,6 @@ impl TasksBoard {
                     if let Some((k, _)) = move_dir {
                         still_held = key_held_after_events(&i.events, k);
                     }
-                    let _ = i.consume_key(Modifiers::NONE, Key::ArrowLeft);
-                    let _ = i.consume_key(Modifiers::NONE, Key::ArrowRight);
                     let _ = i.consume_key(Modifiers::ALT, Key::ArrowLeft);
                     let _ = i.consume_key(Modifiers::ALT, Key::ArrowRight);
                     let down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
@@ -765,8 +761,7 @@ impl TasksBoard {
 
         let mut column_rects: [Option<Rect>; TASK_COLUMN_COUNT] = [None; TASK_COLUMN_COUNT];
 
-        // 3. `.task-board-columns`: stacked sections in narrow panels (`< 720px`, matching
-        // `style.css:1437-1446` with zero forced parent width) and 4 equal columns when wide.
+        // 3. The current reference stacks status sections at every panel width.
         egui::ScrollArea::vertical()
             .id_salt(board_id.with("scroll"))
             .auto_shrink([false, false])
@@ -784,46 +779,23 @@ impl TasksBoard {
                     ui.add_space(pad_x);
                     ui.vertical(|ui| {
                         ui.set_max_width(inner_w);
-                        if inner_w >= 720.0_f32 {
-                            ui.columns(TASK_COLUMN_COUNT, |cols| {
-                                for col_idx in 0..TASK_COLUMN_COUNT {
-                                    let (col_act, rect) = self.render_column(
-                                        &mut cols[col_idx],
-                                        board_id,
-                                        list_id,
-                                        col_idx,
-                                        &buckets[col_idx],
-                                        input.french,
-                                        active_focused_id,
-                                        scroll_to_focused,
-                                        pointer_pos,
-                                        interaction_blocked,
-                                    );
-                                    column_rects[col_idx] = Some(rect);
-                                    if col_act.is_some() {
-                                        action = col_act;
-                                    }
-                                }
-                            });
-                        } else {
-                            ui.spacing_mut().item_spacing.y = 10.0_f32;
-                            for col_idx in 0..TASK_COLUMN_COUNT {
-                                let (col_act, rect) = self.render_column(
-                                    ui,
-                                    board_id,
-                                    list_id,
-                                    col_idx,
-                                    &buckets[col_idx],
-                                    input.french,
-                                    active_focused_id,
-                                    scroll_to_focused,
-                                    pointer_pos,
-                                    interaction_blocked,
-                                );
-                                column_rects[col_idx] = Some(rect);
-                                if col_act.is_some() {
-                                    action = col_act;
-                                }
+                        ui.spacing_mut().item_spacing.y = 10.0_f32;
+                        for col_idx in 0..TASK_COLUMN_COUNT {
+                            let (col_act, rect) = self.render_column(
+                                ui,
+                                board_id,
+                                list_id,
+                                col_idx,
+                                &buckets[col_idx],
+                                input.french,
+                                active_focused_id,
+                                scroll_to_focused,
+                                pointer_pos,
+                                interaction_blocked,
+                            );
+                            column_rects[col_idx] = Some(rect);
+                            if col_act.is_some() {
+                                action = col_act;
                             }
                         }
                     });

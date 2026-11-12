@@ -27,6 +27,7 @@ pub(crate) mod sheet_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
+mod task_card_input;
 mod task_rename_input;
 mod terminal_find_inputs;
 pub(crate) mod terminal_view;
@@ -108,6 +109,7 @@ pub(crate) struct TesselGpuiRoot {
     explorer_input: explorer_input::Input,
     panel_query_inputs: panel_query_inputs::Inputs,
     task_rename_input: task_rename_input::Input,
+    task_card_input: task_card_input::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -287,6 +289,7 @@ impl TesselGpuiRoot {
             explorer_input: explorer_input::Input::default(),
             panel_query_inputs: panel_query_inputs::Inputs::default(),
             task_rename_input: Default::default(),
+            task_card_input: Default::default(),
             _poller_task: poller_task,
         }
     }
@@ -434,6 +437,15 @@ impl TesselGpuiRoot {
         let shift = ks.modifiers.shift;
         let alt = ks.modifiers.alt;
         let key = ks.key.as_str();
+        if key == "escape"
+            && cx
+                .active_drag()
+                .is_some_and(|d| d.value.is::<task_card_input::Drag>())
+        {
+            cx.stop_active_drag(window);
+            cx.stop_propagation();
+            return;
+        }
         let native_target = self
             .search_inputs
             .focused(window, cx)
@@ -446,6 +458,11 @@ impl TesselGpuiRoot {
                 self.task_rename_input
                     .focused(window, cx)
                     .then_some(FocusInputTarget::TaskRenameTitle)
+            })
+            .or_else(|| {
+                self.task_card_input
+                    .focused(window)
+                    .map(FocusInputTarget::TaskCard)
             })
             .or_else(|| self.panel_query_inputs.focused(window, cx))
             .or_else(|| self.modal_query_input.focused(window, cx))
@@ -498,7 +515,10 @@ impl TesselGpuiRoot {
             self.dispatch(GpuiAction::OpenHelp, cx);
             return;
         }
-        if key == "escape" && native_target.is_none() && self.app.gpui_cancel_task_selection() {
+        if key == "escape"
+            && matches!(native_target, None | Some(FocusInputTarget::TaskCard(_)))
+            && self.app.gpui_cancel_task_selection()
+        {
             cx.notify();
             return;
         }
@@ -1133,6 +1153,15 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
+        let card_was_focused = self.task_card_input.focused(window).is_some();
+        self.task_card_input.sync(
+            snapshot.side_panels.task_board.scope,
+            &snapshot.side_panels.tasks,
+            cx,
+        );
+        if card_was_focused && self.task_card_input.focused(window).is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
         let rename = self
             .app
             .gpui_task_rename_input()
@@ -1320,6 +1349,7 @@ impl Render for TesselGpuiRoot {
                 &self.explorer_input,
                 &self.panel_query_inputs,
                 &self.task_rename_input,
+                &self.task_card_input,
                 focus_input,
                 &tokens,
                 self.left_width,

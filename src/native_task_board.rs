@@ -47,6 +47,10 @@ pub enum Command {
     RequestDeleteOne(u64),
     ConfirmDelete,
     CancelDelete,
+    Step {
+        id: u64,
+        delta: i8,
+    },
     Move {
         id: u64,
         column: usize,
@@ -207,8 +211,19 @@ impl State {
                     }
                 }
             }
+            Command::Step { id, delta } => {
+                if matches!(delta, -1 | 1)
+                    && self.edit.as_ref().is_none_or(|e| e.id != id)
+                    && let Some(t) = find(id)
+                    && let Some(column) = t.column.checked_add_signed(isize::from(delta))
+                    && column < 4
+                {
+                    return Some(TasksBoardAction::Move { id, column });
+                }
+            }
             Command::Move { id, column } => {
-                if find(id).is_some() && column < 4 {
+                if find(id).is_some() && column < 4 && self.edit.as_ref().is_none_or(|e| e.id != id)
+                {
                     return Some(TasksBoardAction::Move { id, column });
                 }
             }
@@ -247,6 +262,57 @@ mod tests {
                 column: 3,
             },
         ]
+    }
+    #[test]
+    fn move_and_step_revalidate_live_card_scope_bounds_and_editing() {
+        let mut tasks = tasks();
+        let mut state = State::default();
+        state.reconcile(Some(1), &tasks);
+        let scope = state.scope.unwrap();
+        assert_eq!(
+            state.apply(scope, Command::Step { id: 1, delta: 1 }, &tasks),
+            Some(TasksBoardAction::Move { id: 1, column: 1 })
+        );
+        assert_eq!(
+            state.apply(scope, Command::Step { id: 1, delta: -1 }, &tasks),
+            None
+        );
+        tasks[0].column = 2;
+        assert_eq!(
+            state.apply(scope, Command::Step { id: 1, delta: -1 }, &tasks),
+            Some(TasksBoardAction::Move { id: 1, column: 1 })
+        );
+        for command in [
+            Command::Step { id: 4, delta: -1 },
+            Command::Step { id: 1, delta: 2 },
+            Command::Step { id: 2, delta: 1 },
+            Command::Move { id: 4, column: 0 },
+            Command::Move { id: 1, column: 4 },
+        ] {
+            assert_eq!(state.apply(scope, command, &tasks), None);
+        }
+        tasks[0].column = 0;
+        state.apply(scope, Command::BeginRename(1), &tasks);
+        assert_eq!(
+            state.apply(scope, Command::Move { id: 1, column: 1 }, &tasks),
+            None
+        );
+        assert_eq!(
+            state.apply(scope, Command::Step { id: 1, delta: 1 }, &tasks),
+            None
+        );
+        state.edit = None;
+        tasks[0].project = 2;
+        assert_eq!(
+            state.apply(scope, Command::Move { id: 1, column: 1 }, &tasks),
+            None
+        );
+        state.reconcile(None, &tasks);
+        state.reconcile(Some(1), &tasks);
+        assert_eq!(
+            state.apply(scope, Command::Move { id: 2, column: 1 }, &tasks),
+            None
+        );
     }
     #[test]
     fn rename_requires_exact_edit_and_unstarted_card() {

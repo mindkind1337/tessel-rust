@@ -740,7 +740,7 @@ fn keyboard_navigation_is_strictly_focus_scoped_and_respects_disabled_popup_and_
         vec![key_event(Key::ArrowRight, false, Modifiers::ALT)],
     );
 
-    // ArrowDown steps to card 2 (`id = 2`), plain ArrowLeft moves it from col 1 -> col 0!
+    // ArrowDown steps to card 2 (`id = 2`), Alt+ArrowLeft moves it from col 1 -> col 0!
     let _ = run_frame(
         &mut board,
         &tasks,
@@ -757,8 +757,8 @@ fn keyboard_navigation_is_strictly_focus_scoped_and_respects_disabled_popup_and_
         true,
         false,
         vec![
-            key_event(Key::ArrowLeft, true, Modifiers::NONE),
-            key_event(Key::ArrowLeft, false, Modifiers::NONE),
+            key_event(Key::ArrowLeft, true, Modifiers::ALT),
+            key_event(Key::ArrowLeft, false, Modifiers::ALT),
         ],
     );
     assert_eq!(
@@ -851,15 +851,15 @@ fn dynamic_catalog_mutation_deleted_focused_card_and_reset_stay_consistent() {
     );
 
     // Delete focused card `id = 2`: focus recovers in-place onto `id = 3` (`col 2`),
-    // so pressing ArrowRight moves `id = 3` to `col 3`!
+    // so pressing Alt+ArrowRight moves `id = 3` to `col 3`!
     tasks.retain(|t| t.id != 2);
     let _ = run_frame(&mut board, &tasks, Vec::new());
     let act_after_del = run_frame(
         &mut board,
         &tasks,
         vec![
-            key_event(Key::ArrowRight, true, Modifiers::NONE),
-            key_event(Key::ArrowRight, false, Modifiers::NONE),
+            key_event(Key::ArrowRight, true, Modifiers::ALT),
+            key_event(Key::ArrowRight, false, Modifiers::ALT),
         ],
     );
     assert_eq!(
@@ -970,7 +970,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
         "expected French Add button AccessKit label in {labels:?}"
     );
 
-    // 2. Wide 920px CentralPanel: renders 4 side-by-side columns cleanly with all 4 headers at the same Y row!
+    // 2. Wide panels keep the same stacked sections as the current reference.
     let out_wide = ctx.run(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 680.0))),
@@ -993,7 +993,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
     let todo_r = find_painted_text_rect(&out_wide.shapes, "To do").expect("To do");
     let done_r = find_painted_text_rect(&out_wide.shapes, "Done").expect("Done");
     assert!(
-        (todo_r.center().y - done_r.center().y).abs() <= 2.0 && done_r.min.x > todo_r.max.x + 300.0,
-        "wide layout (>=720px) must place 4 columns side-by-side: todo={todo_r:?}, done={done_r:?}"
+        done_r.min.y > todo_r.max.y && (done_r.min.x - todo_r.min.x).abs() <= 2.0,
+        "wide layout must preserve stacked status sections: todo={todo_r:?}, done={done_r:?}"
     );
 }
