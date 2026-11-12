@@ -1379,6 +1379,8 @@ impl Tessel {
             commit_in_flight: false,
             pending_scm_discard: None,
             pending_agent_install: None,
+            pending_transcript_trash: None,
+            transcript_trash_busy: false,
             active_agent_installs: Vec::new(),
             rename_project_modal: None,
             pending_close_session: None,
@@ -1529,6 +1531,7 @@ impl Tessel {
                 .sessions
                 .iter()
                 .any(|session| session.profile_migration.is_some())
+            || self.transcript_trash_busy
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -1892,6 +1895,7 @@ impl Tessel {
             || self.pending_scm_discard.is_some()
             || self.pending_delete_worktree.is_some()
             || self.pending_agent_install.is_some()
+            || self.pending_transcript_trash.is_some()
             || self.file_action.is_some()
             || self.dev_update_dialog_open
     }
@@ -4299,6 +4303,20 @@ impl Tessel {
                 secondary_label: None,
                 danger: true,
             })
+        } else if let Some(entry) = &self.pending_transcript_trash {
+            Some(GpuiConfirmModalSnapshot {
+                title: tr("Move conversation to Recycle Bin?").into(),
+                body: format!(
+                    "{}\n{}",
+                    entry.title,
+                    tr(
+                        "The local transcript will be removed from history. Close its pane before continuing."
+                    )
+                ),
+                confirm_label: tr("Move to Recycle Bin").into(),
+                secondary_label: None,
+                danger: true,
+            })
         } else if let Some(spec) = &self.pending_agent_install {
             Some(GpuiConfirmModalSnapshot {
                 title: spec.title.clone(),
@@ -6216,6 +6234,7 @@ impl Tessel {
                 self.pending_scm_discard = None;
                 self.pending_delete_worktree = None;
                 self.pending_agent_install = None;
+                self.pending_transcript_trash = None;
                 self.file_action = None;
             }
             GpuiAction::OpenHelp => {
@@ -6465,6 +6484,8 @@ impl Tessel {
                             vec![(wt_path, branch, true)],
                         );
                     }
+                } else if self.pending_transcript_trash.is_some() {
+                    self.confirm_transcript_trash();
                 } else if let Some(spec) = self.pending_agent_install.take() {
                     self.start_agent_install(spec.execution);
                 } else if let Some(fa) = self.file_action.take() {
@@ -6488,6 +6509,7 @@ impl Tessel {
                 self.pending_scm_discard = None;
                 self.pending_delete_worktree = None;
                 self.pending_agent_install = None;
+                self.pending_transcript_trash = None;
                 self.file_action = None;
             }
             GpuiAction::SetTheme(theme) => {
@@ -6538,6 +6560,57 @@ impl Tessel {
 #[cfg(test)]
 mod panel_snapshot_tests {
     use super::*;
+
+    #[test]
+    fn transcript_removal_requires_confirmation_and_rechecks_cached_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("profile");
+        let path = root.join("projects/synthetic/12345678-1234-4234-8234-123456789abc.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}\n").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        app.state.agent_prefs.insert(
+            "claude".into(),
+            crate::agent_preferences::Preferences {
+                env: format!("CLAUDE_CONFIG_DIR={}", root.display()),
+                ..Default::default()
+            },
+        );
+        let source = app
+            .session_history_sources()
+            .into_iter()
+            .find(|s| s.agent_id == "claude")
+            .unwrap();
+        let entry = crate::side_panels_model::SessionHistoryEntry {
+            profile_binding: Some(source.binding),
+            profile_label: String::new(),
+            id: "12345678-1234-4234-8234-123456789abc".into(),
+            agent_id: "claude".into(),
+            title: "Synthetic".into(),
+            folder: temp.path().into(),
+            updated_at_ms: 0,
+            file_path: Some(path.clone()),
+            open_pane_id: None,
+            transcript_snippet: None,
+        };
+        app.past_sessions_cache.push(entry.clone());
+        app.apply_gpui_action(GpuiAction::SidePanels(
+            crate::side_panels_ui::SidePanelsAction::DeleteSession(entry.clone()),
+        ));
+        assert!(app.pending_transcript_trash.is_some());
+        assert!(app.gpui_has_open_modal());
+        assert!(!app.transcript_trash_busy && path.exists());
+        app.apply_gpui_action(GpuiAction::CancelConfirmModal);
+        assert!(app.pending_transcript_trash.is_none());
+        assert!(path.exists());
+        app.apply_gpui_action(GpuiAction::SidePanels(
+            crate::side_panels_ui::SidePanelsAction::DeleteSession(entry),
+        ));
+        app.past_sessions_cache.clear();
+        app.apply_gpui_action(GpuiAction::ConfirmModalPrimary);
+        assert!(!app.transcript_trash_busy && path.exists());
+        assert!(app.error.contains("no longer available"));
+    }
 
     #[test]
     #[cfg(windows)]

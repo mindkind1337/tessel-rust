@@ -6,6 +6,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Removing a past conversation requires confirmation and revalidates its local account, transcript path and provider identity before asking Windows to recycle the file. Open panes, unknown entries, linked paths and changed Codex metadata are refused. Recycling runs in the background and reports cancellation or failure; it no longer directly deletes transcript files.
+
 - Local Claude and Codex terminal conversations retain their original account when resumed, even after another account is selected. Past conversations identifies each profile and resumes in the current workspace with the conversation's original working folder. Older saved panes recover their account in a bounded background scan only when exactly one known profile matches; missing, ambiguous or unavailable profiles stop with an error instead of starting a replacement conversation. Profile bindings contain no credentials and are excluded from portable backups and sync. Relative custom profile paths must still resolve to the original root; switching a profile-bound terminal to native chat is temporarily blocked until native chat supports the same binding.
 
 ### Projects and workspace

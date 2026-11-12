@@ -888,6 +888,8 @@ impl Focusable for TesselGpuiRoot {
 
 impl Render for TesselGpuiRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(windows)]
+        crate::file_actions::set_recycle_owner(window);
         self.poll_backend(cx);
 
         let viewport = window.viewport_size();

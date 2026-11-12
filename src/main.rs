@@ -159,6 +159,7 @@ pub mod tessel_sync;
 mod theme;
 pub mod theme_palettes;
 pub mod toolbar_fit;
+mod transcript_trash;
 #[cfg(windows)]
 mod vault;
 #[cfg(windows)]

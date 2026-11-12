@@ -1123,16 +1123,6 @@ pub fn filter_sessions(
     out
 }
 
-pub fn delete_session_file(entry: &SessionHistoryEntry) -> Result<(), String> {
-    let Some(path) = &entry.file_path else {
-        return Err("Session has no local transcript file.".into());
-    };
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 // ============================================================================
 // 4. Conversations & Activity Threads (`conversations.js` parity)
 // ============================================================================

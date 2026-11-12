@@ -496,6 +496,10 @@ impl Session {
     }
 }
 enum Message {
+    TranscriptTrash(
+        crate::side_panels_model::SessionHistoryEntry,
+        Result<(), String>,
+    ),
     FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
     AddProjectPickedFolder(Option<PathBuf>),
@@ -678,6 +682,8 @@ pub struct Tessel {
     pending_quick_command: Option<(u64, String, bool)>,
     worktree_state: crate::worktree_state::WorktreeState,
     worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
+    pending_transcript_trash: Option<crate::side_panels_model::SessionHistoryEntry>,
+    transcript_trash_busy: bool,
     pending_delete_worktree: Option<(u64, PathBuf, String)>,
     git_username: Option<String>,
     git_username_rx: Option<Receiver<Option<String>>>,
@@ -718,6 +724,8 @@ pub struct Tessel {
 }
 impl Tessel {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        #[cfg(windows)]
+        crate::file_actions::set_recycle_owner(cc);
         crate::system_fonts::install(&cc.egui_ctx);
         #[cfg(windows)]
         let window_frame = if cfg!(feature = "visual-test")
@@ -872,6 +880,8 @@ impl Tessel {
             commit_in_flight: false,
             pending_scm_discard: None,
             pending_agent_install: None,
+            pending_transcript_trash: None,
+            transcript_trash_busy: false,
             active_agent_installs: Vec::new(),
             rename_project_modal: None,
             pending_close_session: None,
@@ -2025,6 +2035,18 @@ impl Tessel {
         self.poll_agent_installs();
         while let Ok(message) = self.receiver.try_recv() {
             match message {
+                Message::TranscriptTrash(entry, result) => {
+                    self.transcript_trash_busy = false;
+                    match result {
+                        Ok(()) => {
+                            self.past_sessions_cache.retain(|cached| {
+                                !crate::transcript_trash::same_identity(cached, &entry)
+                            });
+                            self.refresh_past_sessions();
+                        }
+                        Err(error) => self.error = error,
+                    }
+                }
                 Message::FileAction(result) => {
                     self.file_action_pending = false;
                     match result {
@@ -2174,7 +2196,10 @@ impl Tessel {
                 },
             }
         }
-        if self.state.editor_prefs.auto_save && !self.file_action_pending {
+        if self.state.editor_prefs.auto_save
+            && !self.file_action_pending
+            && !self.transcript_trash_busy
+        {
             let delay = Duration::from_millis(u64::from(
                 self.state
                     .editor_prefs
@@ -4142,6 +4167,7 @@ impl Tessel {
             || self.pending_remove_project.is_some()
             || self.pending_scm_discard.is_some()
             || self.pending_agent_install.is_some()
+            || self.pending_transcript_trash.is_some()
             || self.rename_project_modal.is_some()
             || self.worktree_cleanup.is_some()
             || self.pending_delete_worktree.is_some()
@@ -6840,6 +6866,7 @@ impl Tessel {
         self.host_import.is_none()
             && self.store.is_some()
             && !self.file_action_pending
+            && !self.transcript_trash_busy
             && !self.sessions.iter().any(|s| {
                 s.terminal.is_some()
                     || (s.loading.is_some() || s.profile_migration.is_some())
@@ -6965,6 +6992,7 @@ impl Tessel {
         crate::theme::apply(ctx, self.state.dark, self.state.theme);
         self.worktree_cleanup = None;
         self.pending_delete_worktree = None;
+        self.pending_transcript_trash = None;
         self.refresh_project();
         self.backup_status = format!(
             "{} {}",
@@ -10103,6 +10131,7 @@ impl Tessel {
                             if self.native_modal_open()
                                 || self.restore_preview.is_some()
                                 || self.pending_agent_install.is_some()
+                                || self.pending_transcript_trash.is_some()
                                 || host_dialog_open
                             {
                                 ui.disable();
@@ -10143,7 +10172,10 @@ impl Tessel {
                     egui::vec2(ui.available_width(), height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        if self.native_modal_open() || self.pending_agent_install.is_some() {
+                        if self.native_modal_open()
+                            || self.pending_agent_install.is_some()
+                            || self.pending_transcript_trash.is_some()
+                        {
                             ui.disable();
                         }
                         crate::settings_surface::body(ui, |ui| match self.settings_section {
@@ -10202,7 +10234,74 @@ impl Tessel {
         }
     }
 
+    fn transcript_source_for_trash(
+        &self,
+        entry: &crate::side_panels_model::SessionHistoryEntry,
+    ) -> Result<crate::side_panels_model::SessionSource, String> {
+        if self.sessions.iter().any(|s| {
+            let terminal_match = s.conversation_id.as_ref() == Some(&entry.id)
+                && (s.profile_binding.is_none() || s.profile_binding == entry.profile_binding)
+                && matches!(&s.launch, Launch::Agent(agent) if agent == &entry.agent_id);
+            let native_match = self.state.native_threads.get(&s.id).is_some_and(|thread| {
+                thread.thread == entry.id && thread.provider == entry.agent_id
+            });
+            terminal_match || native_match
+        }) {
+            return Err("Close this conversation's pane before recycling its transcript.".into());
+        }
+        crate::transcript_trash::source_for(
+            entry,
+            &self.past_sessions_cache,
+            &self.session_history_sources(),
+        )
+    }
+
+    fn confirm_transcript_trash(&mut self) {
+        if self.transcript_trash_busy {
+            return;
+        }
+        let Some(entry) = self.pending_transcript_trash.take() else {
+            return;
+        };
+        let source = match self.transcript_source_for_trash(&entry) {
+            Ok(source) => source,
+            Err(error) => {
+                self.error = error;
+                return;
+            }
+        };
+        self.transcript_trash_busy = true;
+        let sender = self.sender.clone();
+        let data = self.store.as_ref().map(|s| s.directory().to_owned());
+        thread::spawn(move || {
+            let result = crate::session_profile::check_account_available(
+                &source.binding,
+                &source.agent_id,
+                data.as_deref(),
+            )
+            .and_then(|()| crate::transcript_trash::recycle(&source, &entry));
+            let _ = sender.send(Message::TranscriptTrash(entry, result));
+        });
+    }
+
     fn confirmations(&mut self, ctx: &egui::Context) {
+        if let Some(entry) = self.pending_transcript_trash.clone() {
+            let mut confirm = false;
+            let mut cancel = false;
+            let response = egui::Modal::new(egui::Id::new("recycle-conversation")).show(ctx, |ui| {
+                ui.heading(tr("Move conversation to Recycle Bin?"));
+                ui.label(&entry.title);
+                ui.label(tr("The local transcript will be removed from history. Close its pane before continuing."));
+                confirm = ui.button(tr("Move to Recycle Bin")).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+            if cancel || response.should_close() {
+                self.pending_transcript_trash = None;
+            } else if confirm {
+                self.confirm_transcript_trash();
+            }
+        }
+
         if let Some(modal) = &mut self.worktree_cleanup {
             let is_en = self.state.language != crate::i18n::Language::French;
             let confirm_before_remove = self.state.general_prefs.confirm_delete_workspace;
@@ -10543,7 +10642,7 @@ impl Tessel {
                 if self.account_busy() { ui.label(tr("Wait for the account request to finish before closing.")); }
                 if model_busy { ui.label(if self.state.language == crate::i18n::Language::French { "Attendez la fin de la recherche et de la sauvegarde des modèles avant de fermer." } else { "Wait for model discovery and saving to finish before closing." }); }
                 if self.remote.needs_close_confirmation() {ui.label(tr("Finish remote requests and save remote edits in Remote files before saving and closing."));}
-                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Save all and close"))).clicked() {
+                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.needs_close_confirmation() && !self.account_busy() && !self.file_action_pending && !self.transcript_trash_busy,egui::Button::new(tr("Save all and close"))).clicked() {
                     match self
                         .documents
                         .iter_mut()
@@ -10556,7 +10655,7 @@ impl Tessel {
                         Err(e) => self.error = e,
                     }
                 }
-                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending,egui::Button::new(tr("Discard edits and close"))).clicked() {
+                if ui.add_enabled(!self.floating.exit_pending && !model_busy && !self.remote.busy() && !self.account_busy() && !self.file_action_pending && !self.transcript_trash_busy,egui::Button::new(tr("Discard edits and close"))).clicked() {
                     self.finish_exit(ctx);
                 }
             });
@@ -10580,6 +10679,7 @@ impl Tessel {
             || self.remote.busy()
             || self.account_busy()
             || self.file_action_pending
+            || self.transcript_trash_busy
     }
     #[cfg(not(windows))]
     fn native_modal_open(&self) -> bool {
@@ -11346,6 +11446,10 @@ impl Tessel {
                 folder,
                 profile_binding,
             } => {
+                if self.transcript_trash_busy {
+                    self.error = "Wait for the conversation recycling operation to finish.".into();
+                    return;
+                }
                 let entry = self
                     .past_sessions_cache
                     .iter()
@@ -11381,10 +11485,12 @@ impl Tessel {
                 );
             }
             SidePanelsAction::DeleteSession(entry) => {
-                if let Err(e) = crate::side_panels_model::delete_session_file(&entry) {
-                    self.error = e;
-                } else {
-                    self.refresh_past_sessions();
+                if self.transcript_trash_busy || self.pending_transcript_trash.is_some() {
+                    return;
+                }
+                match self.transcript_source_for_trash(&entry) {
+                    Ok(_) => self.pending_transcript_trash = Some(entry),
+                    Err(error) => self.error = error,
                 }
             }
             SidePanelsAction::CopyText(text) => {
@@ -12058,6 +12164,7 @@ impl eframe::App for Tessel {
             || self.pending_remove_project.is_some()
             || self.pending_scm_discard.is_some()
             || self.pending_agent_install.is_some()
+            || self.pending_transcript_trash.is_some()
             || self.rename_project_modal.is_some()
             || self.pending_exit
             || self.file_action.is_some()
@@ -12357,7 +12464,8 @@ impl eframe::App for Tessel {
                 || self.account_busy()
                 || self.model_discovery.as_ref().is_some_and(|d| d.active())
                 || self.native_exit_pending()
-                || self.file_action_pending)
+                || self.file_action_pending
+                || self.transcript_trash_busy)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.native_terminals_not_closing() {

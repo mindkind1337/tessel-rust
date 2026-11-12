@@ -85,6 +85,20 @@ pub fn discard_worktree(
     tracked_paths: &[String],
     untracked_paths: &[String],
 ) -> Result<String> {
+    discard_with_recycler(
+        root,
+        tracked_paths,
+        untracked_paths,
+        crate::file_actions::move_to_trash,
+    )
+}
+
+fn discard_with_recycler(
+    root: &Path,
+    tracked_paths: &[String],
+    untracked_paths: &[String],
+    mut recycle: impl FnMut(&Path, &Path) -> Result<std::path::PathBuf>,
+) -> Result<String> {
     let total = tracked_paths.len() + untracked_paths.len();
     if total == 0 || total > 5000 {
         return Err("Select between one and 5,000 files.".into());
@@ -106,20 +120,9 @@ pub fn discard_worktree(
             Some(&input),
         )?;
     }
-    for rel in untracked_paths {
+    for (recycled, rel) in untracked_paths.iter().enumerate() {
         let target = root.join(rel);
-        if crate::file_actions::move_to_trash(root, &target).is_err() {
-            let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
-            let confined = crate::files::confined(&canonical_root, &target)?;
-            if std::fs::symlink_metadata(&target)
-                .map_err(|e| e.to_string())?
-                .file_type()
-                .is_symlink()
-            {
-                return Err("Refusing to remove a symbolic link.".into());
-            }
-            std::fs::remove_file(&confined).map_err(|e| e.to_string())?;
-        }
+        recycle(root, &target).map_err(|_| format!("Recycling failed or was cancelled; no permanent deletion was attempted. {recycled} of {} untracked files were recycled; {} tracked files were already restored.", untracked_paths.len(), tracked_paths.len()))?;
     }
     Ok(format!("Discarded {total} file(s)."))
 }
@@ -1053,6 +1056,21 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("[one].txt")).unwrap(),
             "one"
+        );
+    }
+
+    #[test]
+    fn cancelled_recycling_preserves_untracked_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("keep.txt");
+        std::fs::write(&path, "keep synthetic content").unwrap();
+        let result = discard_with_recycler(temp.path(), &[], &["keep.txt".into()], |_, _| {
+            Err("cancelled".into())
+        });
+        assert!(result.unwrap_err().contains("no permanent deletion"));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "keep synthetic content"
         );
     }
 

@@ -524,5 +524,7 @@
   "Hide conversation threads": "Masquer les fils de conversation",
   "Add workspace (Clone / Init / SSH)\u2026": "Ajouter un espace (Cloner / Init / SSH)\u2026",
   "GitHub PRs & Issues\u2026": "PRs et issues GitHub\u2026",
-  "Clear notifications": "Effacer les notifications"
+  "Clear notifications": "Effacer les notifications",
+  "Move conversation to Recycle Bin?": "Déplacer la conversation dans la Corbeille ?",
+  "The local transcript will be removed from history. Close its pane before continuing.": "Le fichier local de la conversation sera retiré de l’historique. Fermez son volet avant de continuer."
 }
