@@ -48,6 +48,27 @@ pub(crate) struct Snapshot {
 }
 
 impl RemotePanel {
+    pub(crate) fn input_snapshot(&self) -> Snapshot {
+        Snapshot {
+            connected: self.host.as_ref().map(|host| host.alias.clone()),
+            path: self.path.clone(),
+            busy: self.busy(),
+            dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
+            new_name: self.new_name.clone(),
+            rename: self.rename.clone(),
+            document: self
+                .document
+                .as_ref()
+                .map(|doc| (doc.path.clone(), doc.text.clone(), doc.original.len())),
+            ..Default::default()
+        }
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn hold_input_fixture(&mut self) -> impl FnOnce() + use<> {
+        let (sender, receiver) = mpsc::channel();
+        self.pending = Some(receiver);
+        move || drop(sender)
+    }
     #[cfg(feature = "visual-test")]
     pub(crate) fn text_fixture() -> Self {
         let mut panel = Self::fixture();
@@ -224,7 +245,7 @@ impl RemotePanel {
                 }
             }
             Command::Download => self.download_original(),
-            _ if dirty => {}
+            Command::Name(name) if name.len() <= 255 => self.new_name = name,
             Command::RenameDraft(name) => {
                 if let Some((_, draft)) = &mut self.rename
                     && name.len() <= 255
@@ -232,6 +253,7 @@ impl RemotePanel {
                     *draft = name;
                 }
             }
+            _ if dirty => {}
             Command::ConfirmRename => {
                 if let Some((path, name)) = self.rename.take()
                     && !name.is_empty()
@@ -289,7 +311,6 @@ impl RemotePanel {
                     });
                 }
             }
-            Command::Name(name) if name.len() <= 255 => self.new_name = name,
             Command::Create(directory) if !self.new_name.is_empty() && !self.path.is_empty() => {
                 self.request(Action::Create {
                     parent: self.path.clone(),
@@ -454,6 +475,21 @@ mod tests {
             .unwrap();
         panel.poll();
         panel
+    }
+
+    #[test]
+    fn remote_drafts_remain_editable_with_dialog_and_dirty_document() {
+        let mut panel = text_panel();
+        panel.rename = Some(("/fixture/note.txt".into(), "note.txt".into()));
+        panel.command(Command::Edit("modified".into()), &[]);
+        panel.command(Command::Name("new.txt".into()), &[]);
+        panel.command(Command::RenameDraft("renamed.txt".into()), &[]);
+        assert_eq!(panel.new_name, "new.txt");
+        assert_eq!(panel.rename.as_ref().unwrap().1, "renamed.txt");
+        panel.command(Command::ConfirmRename, &[]);
+        assert!(!panel.busy());
+        assert!(panel.rename.is_some());
+        assert!(panel.input_snapshot().dirty);
     }
 
     #[test]

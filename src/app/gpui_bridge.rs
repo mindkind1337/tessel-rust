@@ -1555,6 +1555,24 @@ impl Tessel {
         self.view == View::Files && !self.documents.is_empty()
     }
 
+    pub(crate) fn gpui_remote_input_snapshot(
+        &mut self,
+    ) -> Option<crate::remote_panel::control::Snapshot> {
+        (self.view == View::Remote && !self.gpui_has_open_modal())
+            .then(|| self.remote.input_snapshot())
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_remote_input_fixture(&mut self) {
+        self.view = View::Remote;
+        self.remote = crate::remote_panel::RemotePanel::text_fixture();
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn hold_remote_input_fixture(&mut self) -> impl FnOnce() + use<> {
+        self.remote.hold_input_fixture()
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_claude_frame_for_test(&mut self, pane_id: u64, frame: serde_json::Value) {
         self.ensure_native_chat_instances();

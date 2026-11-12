@@ -8,6 +8,7 @@ pub(crate) mod chrome;
 pub mod editor_view;
 pub mod icons;
 pub(crate) mod modals_view;
+pub(crate) mod remote_inputs;
 pub(crate) mod remote_view;
 pub(crate) mod settings_view;
 pub(crate) mod sheet_view;
@@ -79,6 +80,7 @@ pub(crate) struct TesselGpuiRoot {
     pub(crate) active_drag: Option<DragTarget>,
     repaint_flag: Arc<AtomicBool>,
     presented_images: crate::gpui_pixels::PresentedImages,
+    remote_inputs: remote_inputs::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -136,6 +138,7 @@ impl TesselGpuiRoot {
             active_drag: None,
             repaint_flag,
             presented_images: crate::gpui_pixels::PresentedImages::default(),
+            remote_inputs: remote_inputs::Inputs::default(),
             _poller_task: poller_task,
         }
     }
@@ -161,6 +164,20 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        if matches!(
+            &action,
+            GpuiAction::Remote(crate::remote_panel::control::Command::Discard)
+        ) {
+            self.remote_inputs.discard_text();
+        }
+        let remote_edit = matches!(
+            &action,
+            GpuiAction::Remote(
+                crate::remote_panel::control::Command::Edit(_)
+                    | crate::remote_panel::control::Command::Name(_)
+                    | crate::remote_panel::control::Command::RenameDraft(_)
+            )
+        );
         match &action {
             GpuiAction::ToggleCommandPalette => {
                 self.focus_input = FocusInputTarget::PaletteQuery;
@@ -192,6 +209,9 @@ impl TesselGpuiRoot {
             _ => {}
         }
         self.app.apply_gpui_action(action);
+        if remote_edit && let Some(snapshot) = self.app.gpui_remote_input_snapshot() {
+            self.remote_inputs.acknowledge(&snapshot);
+        }
         if let Some(copied) = self.app.gpui_take_copied_clipboard() {
             cx.write_to_clipboard(ClipboardItem::new_string(copied));
         }
@@ -202,7 +222,7 @@ impl TesselGpuiRoot {
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let ks = &event.keystroke;
@@ -210,6 +230,17 @@ impl TesselGpuiRoot {
         let shift = ks.modifiers.shift;
         let alt = ks.modifiers.alt;
         let key = ks.key.as_str();
+        let native_target = self.remote_inputs.focused(window, cx);
+        if let Some(target) = native_target {
+            self.focus_input = target;
+            if !ctrl && !alt && key == "enter" && target == FocusInputTarget::RemoteRename {
+                self.dispatch(
+                    GpuiAction::Remote(crate::remote_panel::control::Command::ConfirmRename),
+                    cx,
+                );
+                return;
+            }
+        }
 
         if key == "f1" {
             self.dispatch(GpuiAction::OpenHelp, cx);
@@ -456,6 +487,10 @@ impl TesselGpuiRoot {
             return;
         }
 
+        // Native fields own ordinary editing and IME input, including shortcuts.
+        if native_target.is_some() {
+            return;
+        }
         let target = if self.focus_input == FocusInputTarget::None {
             self.app.gpui_default_focus_target()
         } else {
@@ -638,6 +673,20 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        if (snapshot.center_mode != GpuiCenterMode::RemoteSftp || self.app.gpui_has_open_modal())
+            && self.remote_inputs.focused(window, cx).is_some()
+        {
+            window.focus(&self.focus_handle, cx);
+        }
+        if snapshot.center_mode == GpuiCenterMode::RemoteSftp {
+            if !self.app.gpui_has_open_modal() {
+                for command in self.remote_inputs.sync(&snapshot.remote, window, cx) {
+                    self.dispatch(GpuiAction::Remote(command), cx);
+                }
+            }
+        } else {
+            self.remote_inputs = remote_inputs::Inputs::default();
+        }
         // Every new img() preview must participate here so discarded images leave the GPU atlas.
         let media = match snapshot.center_mode {
             GpuiCenterMode::DocumentEditor => snapshot
@@ -690,6 +739,7 @@ impl Render for TesselGpuiRoot {
             )
             .child(shell::render_workspace_body(
                 &snapshot,
+                &self.remote_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,
@@ -725,6 +775,10 @@ pub fn run_gpui_app() -> Result<(), String> {
 
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         gpui_platform::application().run(move |cx: &mut App| {
+            use gpui_ce_elements::editable_text::actions::{
+                DEFAULT_INPUT_CONTEXT, default_bindings,
+            };
+            cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
             let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

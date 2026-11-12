@@ -28,6 +28,7 @@ use gpui::{
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_workspace_body(
     snapshot: &GpuiWorkspaceSnapshot,
+    remote_inputs: &super::remote_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -54,6 +55,7 @@ pub(crate) fn render_workspace_body(
         .when(!hide_center, |el| {
             el.child(render_center_column(
                 snapshot,
+                remote_inputs,
                 focus_input,
                 tokens,
                 stage_height_px,
@@ -74,6 +76,7 @@ pub(crate) fn render_workspace_body(
 
 fn render_center_column(
     snapshot: &GpuiWorkspaceSnapshot,
+    remote_inputs: &super::remote_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     stage_height_px: f32,
@@ -118,7 +121,7 @@ fn render_center_column(
                             .into_any_element()
                     }
                     GpuiCenterMode::RemoteSftp => {
-                        render_remote_sftp_stage(snapshot, focus_input, tokens, cx)
+                        render_remote_sftp_stage(snapshot, remote_inputs, focus_input, tokens, cx)
                             .into_any_element()
                     }
                 })
@@ -1021,11 +1024,12 @@ fn render_split_divider(
 
 fn render_remote_sftp_stage(
     snapshot: &GpuiWorkspaceSnapshot,
+    remote_inputs: &super::remote_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
-    super::remote_view::render(snapshot, focus_input, tokens, cx)
+    super::remote_view::render(snapshot, remote_inputs, focus_input, tokens, cx)
 }
 
 fn render_right_panel(

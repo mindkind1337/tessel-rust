@@ -25,6 +25,7 @@ tessel-host = { git = "https://github.com/mindkind1337/tessel-host", rev = "78db
 eframe = "=0.33.0"
 gpui = { package = "gpui-ce", version = "0.3" }
 gpui_platform = { package = "gpui_ce_platform", version = "0.3" }
+gpui_ce_elements = "=0.3.0"
 portable-pty = "=0.9.0"
 vt100 = "=0.15.2"
 serde = { version = "1", features = ["derive"] }
@@ -75,4 +76,5 @@ opt-level = 2
 strip = "debuginfo"
 
 [dev-dependencies]
+gpui = { package = "gpui-ce", version = "0.3", features = ["test-support"] }
 tokio = { version = "1", features = ["test-util"] }

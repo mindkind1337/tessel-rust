@@ -35,6 +35,7 @@ fn button(
 
 fn field(
     id: &'static str,
+    inputs: &super::remote_inputs::Inputs,
     text: String,
     target: (FocusInputTarget, bool),
     enabled: bool,
@@ -42,6 +43,23 @@ fn field(
     cx: &Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let (target, focused) = target;
+    if let Some(state) = inputs.get(target) {
+        return gpui_ce_elements::editable_text::editable_text(id)
+            .state(state.downgrade())
+            .multiline(target == FocusInputTarget::RemoteText)
+            .accepts_input(enabled)
+            .caret_blink_interval_500ms()
+            .caret_color(gpui::rgb_to_hsla(tokens.text))
+            .selection_color(gpui::rgb_to_hsla(tokens.accent_soft_bg))
+            .min_w(px(180.))
+            .w_full()
+            .px(px(8.))
+            .py(px(5.))
+            .border_1()
+            .border_color(tokens.border)
+            .bg(tokens.surface)
+            .into_any_element();
+    }
     div()
         .id(id)
         .min_w(px(180.))
@@ -64,10 +82,12 @@ fn field(
         } else {
             text
         }))
+        .into_any_element()
 }
 
 pub(crate) fn render(
     snapshot: &GpuiWorkspaceSnapshot,
+    inputs: &super::remote_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &Context<TesselGpuiRoot>,
@@ -188,6 +208,7 @@ pub(crate) fn render(
                 .gap(px(6.))
                 .child(field(
                     "remote-name",
+                    inputs,
                     remote.new_name.clone(),
                     (
                         FocusInputTarget::RemoteName,
@@ -315,6 +336,7 @@ pub(crate) fn render(
                 .gap(px(6.))
                 .child(field(
                     "remote-rename-draft",
+                    inputs,
                     name.clone(),
                     (
                         FocusInputTarget::RemoteRename,
@@ -434,6 +456,7 @@ pub(crate) fn render(
                     .overflow_y_scroll()
                     .child(field(
                         "remote-text",
+                        inputs,
                         text.clone(),
                         (
                             FocusInputTarget::RemoteText,
