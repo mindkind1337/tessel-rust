@@ -927,6 +927,10 @@ pub(crate) enum GpuiAction {
     OpenReviewModal,
     TasksSetNewTitle(String),
     TasksAddFromDraft,
+    NativeTaskSubmit {
+        scope: NativePanelQueryScope,
+        base: String,
+    },
     TasksBoard(crate::tasks_board_panel::TasksBoardAction),
     SetTaskHistoryWindow(crate::side_panels_model::TaskHistoryFilter),
     SetTaskHistorySort(crate::side_panels_model::TaskHistorySort),
@@ -1683,6 +1687,7 @@ impl Tessel {
             return None;
         }
         let target = match self.state.panels.right_tab {
+            SideTab::Tasks if self.gpui_scm_owner().is_some() => GpuiFocusTarget::TaskNewTitle,
             SideTab::Dashboard => GpuiFocusTarget::DashboardQuery,
             SideTab::TaskHistory => GpuiFocusTarget::TaskHistoryQuery,
             SideTab::History => GpuiFocusTarget::SessionsQuery,
@@ -1694,6 +1699,7 @@ impl Tessel {
     pub(crate) fn gpui_panel_query_input(&self) -> Option<(NativePanelQueryScope, &str)> {
         let target = self.gpui_panel_query_context()?.0;
         let text = match target {
+            GpuiFocusTarget::TaskNewTitle => &self.gpui_extra.new_task_title,
             GpuiFocusTarget::DashboardQuery => &self.side_panels_ui.dashboard_query,
             GpuiFocusTarget::TaskHistoryQuery => &self.side_panels_ui.history_query,
             GpuiFocusTarget::SessionsQuery => &self.side_panels_ui.sessions_query,
@@ -2266,19 +2272,7 @@ impl Tessel {
             GpuiFocusTarget::HelpQuery => false,
             GpuiFocusTarget::ExplorerFilter => false,
             GpuiFocusTarget::ScmCommitMessage => false,
-            GpuiFocusTarget::TaskNewTitle => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::TasksAddFromDraft);
-                    return true;
-                }
-                let mut cur = self.gpui_extra.new_task_title.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::TasksSetNewTitle(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::TaskNewTitle => false,
             GpuiFocusTarget::DashboardQuery
             | GpuiFocusTarget::TaskHistoryQuery
             | GpuiFocusTarget::SessionsQuery
@@ -5334,6 +5328,7 @@ impl Tessel {
                     && self.gpui_panel_query_input() == Some((scope, base.as_str()))
                 {
                     match scope.target {
+                        GpuiFocusTarget::TaskNewTitle => self.gpui_extra.new_task_title = text,
                         GpuiFocusTarget::DashboardQuery => {
                             self.side_panels_ui.dashboard_query = text
                         }
@@ -5349,7 +5344,7 @@ impl Tessel {
                 }
             }
             GpuiAction::NativePanelQueryExitFullscreen { scope, base } => {
-                if base.is_empty()
+                if (base.is_empty() || scope.target == GpuiFocusTarget::TaskNewTitle)
                     && scope.target != GpuiFocusTarget::SessionsQuery
                     && self.gpui_panel_query_input() == Some((scope, base.as_str()))
                 {
@@ -5564,16 +5559,31 @@ impl Tessel {
             GpuiAction::TasksSetNewTitle(t) => {
                 self.gpui_extra.new_task_title = t;
             }
+            GpuiAction::NativeTaskSubmit { scope, base } => {
+                if scope.target == GpuiFocusTarget::TaskNewTitle
+                    && base.chars().count() <= crate::tasks_board_panel::MAX_TASK_TITLE_CHARS
+                    && self.gpui_panel_query_input() == Some((scope, base.as_str()))
+                {
+                    self.apply_gpui_action(GpuiAction::TasksAddFromDraft);
+                }
+            }
             GpuiAction::TasksAddFromDraft => {
                 let title = self.gpui_extra.new_task_title.trim().to_owned();
                 if !title.is_empty()
                     && let Some(pid) = self.state.active_project
                 {
-                    self.gpui_extra.new_task_title.clear();
-                    self.apply_tasks_board_action(
+                    let added = self.apply_tasks_board_action(
                         pid,
                         crate::tasks_board_panel::TasksBoardAction::Add(title),
                     );
+                    if added {
+                        self.gpui_extra.new_task_title.clear();
+                        self.gpui_extra.panel_query_generation = self
+                            .gpui_extra
+                            .panel_query_generation
+                            .checked_add(1)
+                            .expect("panel identity exhausted");
+                    }
                 }
             }
             GpuiAction::TasksBoard(tba) => {
@@ -6496,6 +6506,29 @@ impl Tessel {
 #[cfg(test)]
 mod panel_snapshot_tests {
     use super::*;
+
+    #[test]
+    fn rejected_task_creation_preserves_draft_and_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_path_buf()));
+        let pid = app.state.active_project.unwrap();
+        app.state.tasks = (0..10_000)
+            .map(|id| crate::workspace::Task {
+                id,
+                project: pid,
+                title: "existing".into(),
+                column: 0,
+            })
+            .collect();
+        app.gpui_extra.new_task_title = "keep this draft".into();
+        let generation = app.gpui_extra.panel_query_generation;
+        app.apply_gpui_action(GpuiAction::TasksAddFromDraft);
+        assert_eq!(app.gpui_extra.new_task_title, "keep this draft");
+        assert_eq!(app.gpui_extra.panel_query_generation, generation);
+        assert_eq!(app.state.tasks.len(), 10_000);
+        assert!(!app.error.is_empty());
+    }
 
     #[test]
     fn hidden_panels_do_not_read_transcripts_or_collect_rows() {

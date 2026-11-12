@@ -6585,7 +6585,7 @@ impl Tessel {
         &mut self,
         project: u64,
         action: crate::tasks_board_panel::TasksBoardAction,
-    ) {
+    ) -> bool {
         let moved_to_done_title =
             if let crate::tasks_board_panel::TasksBoardAction::Move { id, column: 3 } = &action {
                 self.state
@@ -6642,9 +6642,13 @@ impl Tessel {
                     }
                 }
                 self.save();
+                true
             }
-            Ok(false) => {}
-            Err(error) => self.error = tr(&error).into(),
+            Ok(false) => false,
+            Err(error) => {
+                self.error = tr(&error).into();
+                false
+            }
         }
     }
     fn can_restore(&self) -> bool {

@@ -495,6 +495,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::TaskHistoryQuery
                         | FocusInputTarget::SessionsQuery
                         | FocusInputTarget::ConversationsQuery
+                        | FocusInputTarget::TaskNewTitle
                 )
             )
         {

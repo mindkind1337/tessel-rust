@@ -39,7 +39,6 @@ pub(crate) fn render_side_panel_tab_body(
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
-    focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -49,7 +48,7 @@ pub(crate) fn render_side_panel_tab_body(
         SideTab::Dashboard => render_dashboard_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Files => render_explorer_tab(sp, explorer_input, french, tokens, cx),
         SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
-        SideTab::Tasks => render_tasks_board_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Tasks => render_tasks_board_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::TaskHistory => render_task_history_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::History => render_sessions_history_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Conversations => {
@@ -1212,7 +1211,7 @@ fn render_scm_commits_dock(
 
 fn render_tasks_board_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1224,41 +1223,7 @@ fn render_tasks_board_tab(
         (3, "Done", "Terminé", 0x3ddc84),
     ];
 
-    let add_bar = div()
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .child(div().flex_1().child(render_focus_input_box(
-            "gpui-tasks-new-input",
-            FocusInputTarget::TaskNewTitle,
-            focus_input == FocusInputTarget::TaskNewTitle,
-            &sp.new_task_title,
-            if french {
-                "Nouvelle tâche…"
-            } else {
-                "Add a task…"
-            },
-            tokens,
-            cx,
-        )))
-        .child(
-            div()
-                .id("gpui-tasks-add-btn")
-                .px(px(9.0))
-                .h(px(28.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.accent)
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(11.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens.accent_fg)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.dispatch_action(GpuiAction::TasksAddFromDraft, cx);
-                }))
-                .child("+"),
-        );
+    let add_bar = panel_query_inputs.render(FocusInputTarget::TaskNewTitle, french, tokens, cx);
 
     let mut columns = div()
         .id("gpui-tasks-scroll")

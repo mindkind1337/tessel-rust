@@ -1,4 +1,4 @@
-//! Persistent native search history, with scoped actions for each side-panel query.
+//! Native side-panel queries and task creation, with scoped editing and submission.
 use super::{FocusInputTarget, TesselGpuiRoot};
 use crate::app::gpui_bridge::{GpuiAction, NativePanelQueryScope};
 use gpui::{App, AppContext, Context, Entity, EntityInputHandler, Focusable, Subscription, Window};
@@ -94,7 +94,11 @@ impl Inputs {
         let expected = (b.scope, b.state.clone());
         let clicked = expected.clone();
         let button = expected.clone();
+        let enter = expected.clone();
+        let add = expected.clone();
         let placeholder = match (target, french) {
+            (FocusInputTarget::TaskNewTitle, true) => "Ajouter une tâche…",
+            (FocusInputTarget::TaskNewTitle, false) => "Add a task…",
             (FocusInputTarget::DashboardQuery, true) => "Rechercher un agent, une tâche, un projet",
             (FocusInputTarget::DashboardQuery, false) => "Search agents, tasks, projects",
             (FocusInputTarget::TaskHistoryQuery, true) => "Chercher dans les titres",
@@ -111,7 +115,11 @@ impl Inputs {
             .on_action(
                 cx.listener(move |root, _: &Clear, w, cx| clear(root, &expected, w, cx, true)),
             )
-            .on_action(cx.listener(|_, _: &ConsumeEnter, _, _| {}))
+            .on_action(cx.listener(move |root, _: &ConsumeEnter, w, cx| {
+                if target == FocusInputTarget::TaskNewTitle {
+                    submit(root, &enter, w, cx);
+                }
+            }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |root, _, _, cx| {
@@ -141,31 +149,51 @@ impl Inputs {
                     .border_color(tokens.border)
                     .rounded(px(4.))
                     .child(field)
-                    .when(!b.state.read(cx).as_str().is_empty(), |el| {
+                    .when(target == FocusInputTarget::TaskNewTitle, |el| {
                         el.child(
                             div()
-                                .id("native-panel-query-clear")
-                                .px(px(6.))
+                                .id("native-task-add")
+                                .px(px(9.))
                                 .cursor_pointer()
-                                .text_color(tokens.text_dim)
-                                .on_click(cx.listener(move |root, _, w, cx| {
-                                    clear(root, &button, w, cx, false)
-                                }))
-                                .child("×"),
+                                .text_color(tokens.accent)
+                                .on_click(
+                                    cx.listener(move |root, _, w, cx| submit(root, &add, w, cx)),
+                                )
+                                .child(if french { "Ajouter" } else { "Add" }),
                         )
-                    }),
+                    })
+                    .when(
+                        target != FocusInputTarget::TaskNewTitle
+                            && !b.state.read(cx).as_str().is_empty(),
+                        |el| {
+                            el.child(
+                                div()
+                                    .id("native-panel-query-clear")
+                                    .px(px(6.))
+                                    .cursor_pointer()
+                                    .text_color(tokens.text_dim)
+                                    .on_click(cx.listener(move |root, _, w, cx| {
+                                        clear(root, &button, w, cx, false)
+                                    }))
+                                    .child("×"),
+                            )
+                        },
+                    ),
             )
             .when(b.too_long, |el| {
-                el.child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(tokens.warn)
-                        .child(if french {
-                            "Recherche limitée à 8 Kio"
+                el.child(div().text_size(px(10.)).text_color(tokens.warn).child(
+                    if target == FocusInputTarget::TaskNewTitle {
+                        if french {
+                            "Titre limité à 1 000 caractères"
                         } else {
-                            "Search limit: 8 KiB"
-                        }),
-                )
+                            "Title limit: 1,000 characters"
+                        }
+                    } else if french {
+                        "Recherche limitée à 8 Kio"
+                    } else {
+                        "Search limit: 8 KiB"
+                    },
+                ))
             })
             .into_any_element()
     }
@@ -193,7 +221,9 @@ pub(crate) fn flush(root: &mut TesselGpuiRoot, cx: &mut Context<TesselGpuiRoot>)
         return;
     };
     let text = b.state.read(cx).as_str();
-    let too_long = text.len() > LIMIT;
+    let too_long = text.len() > LIMIT
+        || (scope.target == FocusInputTarget::TaskNewTitle
+            && text.chars().count() > crate::tasks_board_panel::MAX_TASK_TITLE_CHARS);
     if !too_long && text != base {
         root.app
             .apply_gpui_action(GpuiAction::NativePanelQueryEdit {
@@ -227,12 +257,18 @@ fn clear(
         return;
     }
     flush(root, cx);
-    if token.1.read(cx).as_str().is_empty() {
+    if token.1.read(cx).as_str().is_empty()
+        || (escape && token.0.target == FocusInputTarget::TaskNewTitle)
+    {
         if escape {
             root.app
                 .apply_gpui_action(GpuiAction::NativePanelQueryExitFullscreen {
                     scope: token.0,
-                    base: String::new(),
+                    base: root
+                        .app
+                        .gpui_panel_query_input()
+                        .map(|(_, text)| text.to_owned())
+                        .unwrap_or_default(),
                 });
         }
     } else {
@@ -246,6 +282,42 @@ fn clear(
     }
     root.focus_input = token.0.target;
     w.focus(&token.1.read(cx).focus_handle(cx), cx);
+    cx.notify();
+}
+
+fn submit(
+    root: &mut TesselGpuiRoot,
+    token: &Token,
+    w: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    if !matches(root, token)
+        || token.0.target != FocusInputTarget::TaskNewTitle
+        || token
+            .1
+            .update(cx, |s, cx| s.marked_text_range(w, cx).is_some())
+    {
+        return;
+    }
+    flush(root, cx);
+    let text = token.1.read(cx).as_str();
+    if text.trim().is_empty()
+        || text.chars().count() > crate::tasks_board_panel::MAX_TASK_TITLE_CHARS
+    {
+        return;
+    }
+    root.app.apply_gpui_action(GpuiAction::NativeTaskSubmit {
+        scope: token.0,
+        base: text.to_owned(),
+    });
+    if root
+        .app
+        .gpui_panel_query_input()
+        .is_some_and(|(scope, _)| scope != token.0)
+    {
+        root.panel_query_inputs.bindings.remove(&token.0.target);
+    }
+    root.focus_input = token.0.target;
     cx.notify();
 }
 
@@ -268,6 +340,145 @@ mod tests {
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
     }
+
+    #[gpui::test]
+    fn native_task_create_unicode_history_escape_and_single_submit(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(project), cx);
+            root.dispatch(GpuiAction::SelectSideTab(SideTab::Tasks), cx);
+            root.dispatch(GpuiAction::ToggleRightFullscreen, cx);
+            root.focus_input = FocusInputTarget::TaskNewTitle;
+            root
+        });
+        cx.refresh().unwrap();
+        let old = view
+            .update(cx, |root, w, cx| {
+                let token = (
+                    root.app.gpui_panel_query_input().unwrap().0,
+                    root.panel_query_inputs.state().unwrap().clone(),
+                );
+                token.1.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "Fix 😀 title", w, cx);
+                    s.push_undo_stop();
+                    s.replace_text_in_range(Some(4..6), "Rust", w, cx);
+                    s.push_undo_stop();
+                });
+                clear(root, &token, w, cx, true);
+                assert_eq!(token.1.read(cx).as_str(), "Fix Rust title");
+                assert!(!root.app.gpui_snapshot(960., 640., 4.).right_fullscreen);
+                token
+            })
+            .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        view.update(cx, |root, w, cx| {
+            assert_eq!(old.1.read(cx).as_str(), "Fix 😀 title");
+            submit(root, &old, w, cx);
+            submit(root, &old, w, cx); // Same-frame double activation is not a second task.
+            let tasks = root.app.gpui_snapshot(960., 640., 4.).side_panels.tasks;
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].title, "Fix 😀 title");
+            assert_eq!(root.app.gpui_panel_query_input().unwrap().1, "");
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            assert_ne!(root.panel_query_inputs.state(), Some(&old.1))
+        })
+        .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_panel_query_input().unwrap().1, "")
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn native_task_create_rejects_previous_project_ime_and_oversize(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(a), cx);
+            root.dispatch(GpuiAction::SelectSideTab(SideTab::Tasks), cx);
+            root.focus_input = FocusInputTarget::TaskNewTitle;
+            root
+        });
+        cx.refresh().unwrap();
+        let old = view
+            .update(cx, |root, w, cx| {
+                let token = (
+                    root.app.gpui_panel_query_input().unwrap().0,
+                    root.panel_query_inputs.state().unwrap().clone(),
+                );
+                token
+                    .1
+                    .update(cx, |s, cx| s.replace_text_in_range(None, "draft", w, cx));
+                root.dispatch(GpuiAction::AddProjectPath(b), cx);
+                submit(root, &token, w, cx);
+                assert!(
+                    root.app
+                        .gpui_snapshot(960., 640., 4.)
+                        .side_panels
+                        .tasks
+                        .is_empty()
+                );
+                assert_eq!(root.app.gpui_panel_query_input().unwrap().1, "draft");
+                token
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, w, cx| {
+            let token = (
+                root.app.gpui_panel_query_input().unwrap().0,
+                root.panel_query_inputs.state().unwrap().clone(),
+            );
+            assert_eq!(token.1, old.1); // Draft/history survives the intentional project switch.
+            assert!(!matches(root, &old));
+            token.1.update(cx, |s, cx| {
+                s.replace_and_mark_text_in_range(Some(0..5), "日", None, w, cx)
+            });
+            submit(root, &token, w, cx);
+            assert!(
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .side_panels
+                    .tasks
+                    .is_empty()
+            );
+            token.1.update(cx, |s, cx| {
+                s.unmark_text(w, cx);
+                s.replace_text_in_range(Some(0..1), &"x".repeat(1001), w, cx);
+            });
+            submit(root, &token, w, cx);
+            assert!(
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .side_panels
+                    .tasks
+                    .is_empty()
+            );
+            assert_eq!(token.1.read(cx).as_str().len(), 1001);
+            token.1.update(cx, |s, cx| {
+                s.replace_text_in_range(Some(0..1001), "New task", w, cx)
+            });
+            submit(root, &token, w, cx);
+            let snap = root.app.gpui_snapshot(960., 640., 4.);
+            assert_eq!(snap.side_panels.tasks.len(), 1);
+            assert_eq!(snap.side_panels.tasks[0].title, "New task");
+        })
+        .unwrap();
+    }
+
     #[gpui::test]
     fn native_panel_queries_edit_unicode_clear_and_restore_history(cx: &mut TestAppContext) {
         bindings(cx);
