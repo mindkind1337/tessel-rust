@@ -52,6 +52,7 @@ mod codex_terminal;
 #[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
+mod conversation_loader;
 pub mod dev_update;
 pub mod device_login;
 pub mod dialogs_toolbar_model;

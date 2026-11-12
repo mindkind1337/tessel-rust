@@ -1882,7 +1882,9 @@ fn render_conversations_tab(
             .into_any_element()
     } else {
         render_empty_note(
-            if french {
+            if sp.conversations_loading {
+                "…"
+            } else if french {
                 "Aucun fil de conversation."
             } else {
                 "No conversation threads yet."
@@ -1901,6 +1903,26 @@ fn render_conversations_tab(
         .child(win_bar)
         .child(thread_list)
         .child(detail)
+        .when(sp.conversations_loading, |view| {
+            view.child(render_empty_note(
+                if french {
+                    "Chargement des messages récents…"
+                } else {
+                    "Loading recent messages…"
+                },
+                tokens,
+            ))
+        })
+        .when(sp.conversations_limited, |view| {
+            view.child(render_empty_note(
+                if french {
+                    "Aperçu partiel : limite atteinte ou fichiers indisponibles."
+                } else {
+                    "Partial preview: limit reached or unavailable files."
+                },
+                tokens,
+            ))
+        })
         .into_any_element()
 }
 

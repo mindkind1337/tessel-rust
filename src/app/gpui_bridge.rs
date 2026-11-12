@@ -52,6 +52,7 @@ pub(crate) struct GpuiExtraUiState {
     pub explorer_input_generation: u64,
     pub panel_query_generation: u64,
     pub session_query: crate::session_query::Search,
+    pub conversation_loader: crate::conversation_loader::Loader,
     pub session_discovery: crate::session_discovery::Discovery,
     pub help_query: String,
     pub settings_search: String,
@@ -90,6 +91,7 @@ impl Default for GpuiExtraUiState {
             explorer_input_generation: 1,
             panel_query_generation: 1,
             session_query: crate::session_query::Search::default(),
+            conversation_loader: crate::conversation_loader::Loader::default(),
             session_discovery: crate::session_discovery::Discovery::default(),
             help_query: String::new(),
             settings_search: String::new(),
@@ -449,6 +451,8 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub conv_query: String,
     pub selected_thread_key: Option<String>,
     pub threads: Vec<crate::side_panels_model::ConversationThread>,
+    pub conversations_loading: bool,
+    pub conversations_limited: bool,
 }
 
 #[allow(dead_code)]
@@ -1423,8 +1427,6 @@ impl Tessel {
             notified_waiting_panes: Default::default(),
             task_history_store,
             activity_store,
-            claude_prompt_caches: Default::default(),
-            claude_conv_cache: None,
             past_sessions_cache: Vec::new(),
             scm_commits_cache: Vec::new(),
             scm_commits_project: None,
@@ -1509,6 +1511,9 @@ impl Tessel {
                 && self.state.panels.right_tab == SideTab::History
                 && self.gpui_extra.session_query.pending())
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
+            || (self.state.panels.right_open
+                && self.state.panels.right_tab == SideTab::Conversations
+                && self.gpui_extra.conversation_loader.needs_frame())
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -3803,6 +3808,8 @@ impl Tessel {
             conv_query: self.side_panels_ui.conv_query.clone(),
             selected_thread_key: self.side_panels_ui.selected_thread_key.clone(),
             threads,
+            conversations_loading: self.gpui_extra.conversation_loader.loading(),
+            conversations_limited: self.gpui_extra.conversation_loader.limited,
         }
     }
 
@@ -6597,7 +6604,7 @@ mod panel_snapshot_tests {
             assert!(snap.past_sessions.is_empty());
             assert!(snap.threads.is_empty());
             assert!(
-                app.claude_conv_cache.is_none(),
+                !app.gpui_extra.conversation_loader.requested(),
                 "hidden conversation scan for {tab:?}"
             );
         }
@@ -6611,9 +6618,9 @@ mod panel_snapshot_tests {
         );
         app.state.panels.right_tab = SideTab::Conversations;
         app.build_side_panels_snapshot(false);
-        assert!(app.claude_conv_cache.is_none());
+        assert!(!app.gpui_extra.conversation_loader.requested());
         app.state.panels.right_open = true;
         app.build_side_panels_snapshot(false);
-        assert!(app.claude_conv_cache.is_some());
+        assert!(app.gpui_extra.conversation_loader.requested());
     }
 }

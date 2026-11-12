@@ -462,6 +462,32 @@ pub fn read_claude_window_messages(
     cache: &mut PromptBeforeCache,
     fallback_timestamp_ms: u64,
 ) -> io::Result<Vec<TranscriptTurnMessage>> {
+    read_window_impl(path, window_bytes, cache, fallback_timestamp_ms, None)
+}
+
+/// Bounded preview with fresh prompt recovery: never reuse an older prompt after a budget-limited scan.
+pub fn read_claude_window_messages_bounded(
+    path: &Path,
+    window_bytes: usize,
+    fallback_timestamp_ms: u64,
+    options: ScanOptions,
+) -> io::Result<Vec<TranscriptTurnMessage>> {
+    read_window_impl(
+        path,
+        window_bytes,
+        &mut PromptBeforeCache::default(),
+        fallback_timestamp_ms,
+        Some(options),
+    )
+}
+
+fn read_window_impl(
+    path: &Path,
+    window_bytes: usize,
+    cache: &mut PromptBeforeCache,
+    fallback_timestamp_ms: u64,
+    options: Option<ScanOptions>,
+) -> io::Result<Vec<TranscriptTurnMessage>> {
     let sym = fs::symlink_metadata(path)?;
     if sym.file_type().is_symlink() || !sym.is_file() {
         return Ok(Vec::new());
@@ -489,7 +515,11 @@ pub fn read_claude_window_messages(
     };
 
     let prepended = if head > 0 {
-        cache.resolve_local(path, head)?
+        if let Some(options) = options {
+            last_prompt_before_with_options(path, head, options)?
+        } else {
+            cache.resolve_local(path, head)?
+        }
     } else {
         let _ = cache.resolve_local(path, 0);
         None
