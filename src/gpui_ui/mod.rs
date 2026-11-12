@@ -13,6 +13,7 @@ mod editor_syntax;
 mod editor_tool_inputs;
 pub mod editor_view;
 pub mod icons;
+mod modal_query_input;
 pub(crate) mod modals_view;
 mod question_inputs;
 pub(crate) mod remote_inputs;
@@ -98,6 +99,7 @@ pub(crate) struct TesselGpuiRoot {
     search_inputs: search_inputs::Inputs,
     terminal_find_inputs: terminal_find_inputs::Inputs,
     browser_input: browser_input::Input,
+    modal_query_input: modal_query_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -127,6 +129,16 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "escape",
+                modal_query_input::Dismiss,
+                Some("TesselModalQuery"),
+            ),
+            gpui::KeyBinding::new(
+                "enter",
+                modal_query_input::ConsumeEnter,
+                Some("TesselModalQuery"),
+            ),
             gpui::KeyBinding::new(
                 "escape",
                 browser_input::Dismiss,
@@ -234,6 +246,7 @@ impl TesselGpuiRoot {
             search_inputs: search_inputs::Inputs::default(),
             terminal_find_inputs: terminal_find_inputs::Inputs::default(),
             browser_input: browser_input::Input::default(),
+            modal_query_input: modal_query_input::Input::default(),
             _poller_task: poller_task,
         }
     }
@@ -306,7 +319,18 @@ impl TesselGpuiRoot {
             }
             _ => {}
         }
+        let modal_toggle = matches!(
+            &action,
+            GpuiAction::OpenHelp | GpuiAction::OpenSettings | GpuiAction::OpenSettingsPage(_)
+        );
         self.app.apply_gpui_action(action);
+        if modal_toggle {
+            self.focus_input = self
+                .app
+                .gpui_modal_query()
+                .map(|v| v.0.1)
+                .unwrap_or(FocusInputTarget::None);
+        }
         if let Some(sid) = terminal_find_open
             && let Some((id, _)) = self.app.gpui_terminal_find_input(sid)
         {
@@ -350,6 +374,7 @@ impl TesselGpuiRoot {
         let native_target = self
             .search_inputs
             .focused(window, cx)
+            .or_else(|| self.modal_query_input.focused(window, cx))
             .or_else(|| self.editor_input.tools.focused(window, cx))
             .or_else(|| self.terminal_find_inputs.focused(window, cx))
             .or_else(|| {
@@ -405,6 +430,8 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::EditorGoto
                         | FocusInputTarget::TerminalFind(_)
                         | FocusInputTarget::BrowserUrl
+                        | FocusInputTarget::HelpQuery
+                        | FocusInputTarget::SettingsSearch
                 )
             )
         {
@@ -997,6 +1024,22 @@ impl Render for TesselGpuiRoot {
         {
             self.focus_input = FocusInputTarget::None;
         }
+        let modal_was_focused = self.modal_query_input.focused(window, cx).is_some();
+        if let Some((scope, text)) = self.app.gpui_modal_query().map(|(s, t)| (s, t.to_owned())) {
+            if self.modal_query_input.scope() != Some(scope) {
+                self.focus_input = scope.1;
+            }
+            self.modal_query_input.sync(scope, &text, cx);
+            if self.focus_input == scope.1
+                && let Some(input) = self.modal_query_input.state().cloned()
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            } else if modal_was_focused {
+                window.focus(&self.focus_handle, cx);
+            }
+        } else if modal_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         let browser_was_focused = self.browser_input.focused(window, cx);
         let previous_browser_input = self.browser_input.state().cloned();
         if let Some((scope, text)) = self
@@ -1137,12 +1180,19 @@ impl Render for TesselGpuiRoot {
             .children(modals_view::render_active_modals_and_popovers(
                 &snapshot,
                 &self.search_inputs,
+                &self.modal_query_input,
                 focus_input,
                 &tokens,
                 cx,
             ))
             .when_some(
-                settings_view::render_settings_modal(&snapshot, focus_input, &tokens, cx),
+                settings_view::render_settings_modal(
+                    &snapshot,
+                    &self.modal_query_input,
+                    focus_input,
+                    &tokens,
+                    cx,
+                ),
                 |el, modal| el.child(modal),
             )
     }

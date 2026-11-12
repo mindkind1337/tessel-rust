@@ -38,6 +38,7 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
 pub(crate) fn render_active_modals_and_popovers(
     snapshot: &GpuiWorkspaceSnapshot,
     search_inputs: &super::search_inputs::Inputs,
+    modal_query: &super::modal_query_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -71,7 +72,7 @@ pub(crate) fn render_active_modals_and_popovers(
         layers.push(render_file_finder(m, search_inputs, french, tokens, cx));
     }
     if m.help_open {
-        layers.push(render_help_modal(m, focus_input, french, tokens, cx));
+        layers.push(render_help_modal(m, modal_query, french, tokens, cx));
     }
     if m.share_modal_open {
         layers.push(render_share_modal(snapshot, focus_input, tokens, cx));
@@ -554,7 +555,7 @@ fn launch_row_btn(
 
 fn render_help_modal(
     m: &GpuiModalsSnapshot,
-    focus_input: FocusInputTarget,
+    modal_query: &super::modal_query_input::Input,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -649,19 +650,7 @@ fn render_help_modal(
                 GpuiAction::CloseOverlays,
                 cx,
             ))
-            .child(render_focus_input_box(
-                "gpui-help-query",
-                FocusInputTarget::HelpQuery,
-                focus_input == FocusInputTarget::HelpQuery,
-                &m.help_query,
-                if french {
-                    "Filtrer les raccourcis…"
-                } else {
-                    "Search shortcuts…"
-                },
-                tokens,
-                cx,
-            ))
+            .child(modal_query.render(FocusInputTarget::HelpQuery, french, tokens, cx))
             .child(groups_col)
             .child(
                 div()

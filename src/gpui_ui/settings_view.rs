@@ -29,6 +29,7 @@ use gpui::{
 
 pub(crate) fn render_settings_modal(
     snapshot: &GpuiWorkspaceSnapshot,
+    modal_query: &super::modal_query_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -137,19 +138,7 @@ pub(crate) fn render_settings_modal(
         .flex()
         .flex_col()
         .gap(px(8.0))
-        .child(render_focus_input_box(
-            "gpui-settings-search",
-            FocusInputTarget::SettingsSearch,
-            focus_input == FocusInputTarget::SettingsSearch,
-            &s.search_query,
-            if french {
-                "Rechercher un paramètre…"
-            } else {
-                "Search settings…"
-            },
-            tokens,
-            cx,
-        ))
+        .child(modal_query.render(FocusInputTarget::SettingsSearch, french, tokens, cx))
         .child(nav_scroll);
 
     let page_body = render_settings_page_body(snapshot, s, focus_input, tokens, cx);

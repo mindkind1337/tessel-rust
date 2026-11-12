@@ -30,6 +30,7 @@ pub(crate) struct GpuiExtraUiState {
     pub launch_menu_open: bool,
     pub launch_placement: crate::finder_model::LaunchPlacement,
     pub launch_in_worktree: bool,
+    pub modal_input_generation: u64,
     pub help_query: String,
     pub settings_search: String,
     pub scm_commit_msg: String,
@@ -63,6 +64,7 @@ impl Default for GpuiExtraUiState {
             launch_menu_open: false,
             launch_placement: crate::finder_model::LaunchPlacement::Auto,
             launch_in_worktree: false,
+            modal_input_generation: 1,
             help_query: String::new(),
             settings_search: String::new(),
             scm_commit_msg: String::new(),
@@ -986,6 +988,15 @@ pub(crate) enum GpuiAction {
     CloseOverlays,
     OpenHelp,
     SetHelpQuery(String),
+    NativeModalQuery {
+        scope: (u64, GpuiFocusTarget),
+        base: String,
+        text: String,
+    },
+    DismissNativeModalQuery {
+        scope: (u64, GpuiFocusTarget),
+        base: String,
+    },
     OpenLiveShare,
     ToggleToolbarMore,
     ToolbarMore(crate::toolbar_fit::MoreMenuAction),
@@ -1582,6 +1593,24 @@ impl Tessel {
         self.command_palette.open
     }
 
+    pub(crate) fn gpui_modal_query(&self) -> Option<((u64, GpuiFocusTarget), &str)> {
+        if self.gpui_has_aux_modal() {
+            return None;
+        }
+        let (target, text) = match self.overlay {
+            Some(Overlay::Help) => (
+                GpuiFocusTarget::HelpQuery,
+                self.gpui_extra.help_query.as_str(),
+            ),
+            Some(Overlay::Settings) => (
+                GpuiFocusTarget::SettingsSearch,
+                self.gpui_extra.settings_search.as_str(),
+            ),
+            _ => return None,
+        };
+        Some(((self.gpui_extra.modal_input_generation, target), text))
+    }
+
     pub(crate) fn gpui_escape_clears_modal_search(&mut self) -> bool {
         if self.overlay == Some(Overlay::Help) && !self.gpui_extra.help_query.is_empty() {
             self.gpui_extra.help_query.clear();
@@ -1642,8 +1671,10 @@ impl Tessel {
     }
 
     fn gpui_has_non_search_modal(&self) -> bool {
-        self.overlay.is_some()
-            || self.gpui_extra.launch_menu_open
+        self.overlay.is_some() || self.gpui_has_aux_modal()
+    }
+    fn gpui_has_aux_modal(&self) -> bool {
+        self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
             || self.side_panels_ui.any_modal_open()
@@ -2064,15 +2095,7 @@ impl Tessel {
             GpuiFocusTarget::EditorBody => false,
             GpuiFocusTarget::BrowserUrl => false,
             GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
-            GpuiFocusTarget::HelpQuery => {
-                let mut cur = self.gpui_extra.help_query.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetHelpQuery(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::HelpQuery => false,
             GpuiFocusTarget::ExplorerFilter => {
                 let mut cur = self.explorer_tree.gpui_filter_query().to_owned();
                 if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
@@ -2148,15 +2171,7 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::SettingsSearch => {
-                let mut cur = self.gpui_extra.settings_search.clone();
-                if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::SetSettingsSearch(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::SettingsSearch => false,
             GpuiFocusTarget::NotesEditor => {
                 let mut cur = self.side_panels_ui.notes.text.clone();
                 if lower == "enter" {
@@ -4209,6 +4224,17 @@ impl Tessel {
     }
 
     pub(crate) fn apply_gpui_action(&mut self, action: GpuiAction) {
+        let overlay = self.overlay;
+        self.apply_gpui_action_inner(action);
+        if overlay != self.overlay {
+            self.gpui_extra.modal_input_generation = self
+                .gpui_extra
+                .modal_input_generation
+                .checked_add(1)
+                .expect("modal input identity exhausted");
+        }
+    }
+    fn apply_gpui_action_inner(&mut self, action: GpuiAction) {
         self.ensure_native_chat_instances();
         match action {
             GpuiAction::Remote(command) => {
@@ -5898,6 +5924,20 @@ impl Tessel {
                     self.overlay = None;
                 } else {
                     self.overlay = Some(Overlay::Help);
+                }
+            }
+            GpuiAction::NativeModalQuery { scope, base, text } => {
+                if text.len() <= 8192 && self.gpui_modal_query() == Some((scope, base.as_str())) {
+                    match scope.1 {
+                        GpuiFocusTarget::HelpQuery => self.gpui_extra.help_query = text,
+                        GpuiFocusTarget::SettingsSearch => self.gpui_extra.settings_search = text,
+                        _ => {}
+                    }
+                }
+            }
+            GpuiAction::DismissNativeModalQuery { scope, base } => {
+                if self.gpui_modal_query() == Some((scope, base.as_str())) {
+                    self.apply_gpui_action(GpuiAction::CloseOverlays);
                 }
             }
             GpuiAction::SetHelpQuery(q) => {
