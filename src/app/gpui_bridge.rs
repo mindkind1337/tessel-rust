@@ -52,6 +52,7 @@ pub(crate) struct GpuiExtraUiState {
     pub explorer_input_generation: u64,
     pub panel_query_generation: u64,
     pub session_query: crate::session_query::Search,
+    pub conversation_model: crate::conversation_model::Model,
     pub conversation_loader: crate::conversation_loader::Loader,
     pub session_discovery: crate::session_discovery::Discovery,
     pub help_query: String,
@@ -91,6 +92,7 @@ impl Default for GpuiExtraUiState {
             explorer_input_generation: 1,
             panel_query_generation: 1,
             session_query: crate::session_query::Search::default(),
+            conversation_model: crate::conversation_model::Model::default(),
             conversation_loader: crate::conversation_loader::Loader::default(),
             session_discovery: crate::session_discovery::Discovery::default(),
             help_query: String::new(),
@@ -450,7 +452,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub conv_window: crate::side_panels_model::ConversationWindow,
     pub conv_query: String,
     pub selected_thread_key: Option<String>,
-    pub threads: Vec<crate::side_panels_model::ConversationThread>,
+    pub threads: std::sync::Arc<[crate::side_panels_model::ConversationThread]>,
     pub conversations_loading: bool,
     pub conversations_limited: bool,
 }
@@ -1513,7 +1515,11 @@ impl Tessel {
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
             || (self.state.panels.right_open
                 && self.state.panels.right_tab == SideTab::Conversations
-                && self.gpui_extra.conversation_loader.needs_frame())
+                && (self.gpui_extra.conversation_loader.needs_frame()
+                    || self
+                        .gpui_extra
+                        .conversation_model
+                        .needs_frame(crate::side_panels_model::now_unix_ms())))
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -3637,7 +3643,7 @@ impl Tessel {
             self.sync_git_project();
         }
         use crate::side_panels_model::{
-            build_conversation_threads, build_dashboard, filter_and_sort_task_history, now_unix_ms,
+            build_dashboard, filter_and_sort_task_history, now_unix_ms,
         };
 
         let dashboard_vm = if visible == Some(SideTab::Dashboard) {
@@ -3748,16 +3754,18 @@ impl Tessel {
             && (self.gpui_extra.session_query.limited() || self.side_panels_ui.sessions_limited);
 
         let threads = if visible == Some(SideTab::Conversations) {
-            let conv_messages = self.merged_conversation_messages();
-            build_conversation_threads(
-                &conv_messages,
+            let preview = self.conversation_preview();
+            self.gpui_extra.conversation_model.update(
+                &self.activity_store,
+                &preview,
+                self.gpui_extra.conversation_loader.revision,
                 self.side_panels_ui.conv_window,
                 self.side_panels_ui.conv_media,
                 &self.side_panels_ui.conv_query,
                 now_unix_ms(),
             )
         } else {
-            Vec::new()
+            std::sync::Arc::default()
         };
 
         GpuiSidePanelsSnapshot {

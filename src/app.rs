@@ -10813,10 +10813,9 @@ impl Tessel {
         }
     }
 
-    pub(crate) fn merged_conversation_messages(
+    pub(crate) fn conversation_preview(
         &mut self,
-    ) -> Vec<crate::side_panels_model::ActivityMessage> {
-        let mut combined = self.activity_store.messages.clone();
+    ) -> std::sync::Arc<[crate::side_panels_model::ActivityMessage]> {
         let mut inputs = Vec::new();
         let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
         let inherited_cfg = std::env::var("CLAUDE_CONFIG_DIR").ok();
@@ -10851,17 +10850,16 @@ impl Tessel {
                 });
             }
         }
-        let rows = self
-            .gpui_extra
+        self.gpui_extra
             .conversation_loader
-            .update(inputs, std::time::Instant::now());
-        combined.extend(rows.iter().cloned());
-        combined
+            .update(inputs, std::time::Instant::now())
     }
 
     fn conversations_view(&mut self, ui: &mut egui::Ui) {
         let french = self.state.language == crate::i18n::Language::French;
-        let messages = self.merged_conversation_messages();
+        let preview = self.conversation_preview();
+        let mut messages = self.activity_store.messages.clone();
+        messages.extend(preview.iter().cloned());
         if self.gpui_extra.conversation_loader.loading() {
             ui.label(if french {
                 "Chargement des messages récents…"
