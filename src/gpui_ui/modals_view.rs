@@ -219,18 +219,26 @@ fn render_command_palette(
             .flex_col()
             .gap(px(8.0))
             .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-            .child(inputs.render(
-                crate::app::gpui_bridge::NativeSearchKind::Palette,
-                &m.palette_query,
-                if french {
-                    "Rechercher un panneau, projet ou commande…"
-                } else {
-                    "Type a command, pane, or workspace…"
-                },
-                french,
-                tokens,
-                cx,
-            ))
+            .child(
+                inputs.render(
+                    super::search_inputs::SearchView {
+                        kind: crate::app::gpui_bridge::NativeSearchKind::Palette,
+                        value: &m.palette_query,
+                        selected: m
+                            .palette_rows
+                            .get(m.palette_selected)
+                            .map(|r| r.command.id.as_str()),
+                        placeholder: if french {
+                            "Rechercher un panneau, projet ou commande…"
+                        } else {
+                            "Type a command, pane, or workspace…"
+                        },
+                        french,
+                    },
+                    tokens,
+                    cx,
+                ),
+            )
             .child(list)
             .into_any_element(),
         cx,
@@ -307,14 +315,17 @@ fn render_file_finder(
             .gap(px(8.0))
             .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
             .child(inputs.render(
-                crate::app::gpui_bridge::NativeSearchKind::Finder,
-                &f.query,
-                if french {
-                    "Aller à un fichier du projet…"
-                } else {
-                    "Jump to a project file…"
+                super::search_inputs::SearchView {
+                    kind: crate::app::gpui_bridge::NativeSearchKind::Finder,
+                    value: &f.query,
+                    selected: f.results.get(f.selected).map(String::as_str),
+                    placeholder: if french {
+                        "Aller à un fichier du projet…"
+                    } else {
+                        "Jump to a project file…"
+                    },
+                    french,
                 },
-                french,
                 tokens,
                 cx,
             ))

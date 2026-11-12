@@ -1589,6 +1589,23 @@ impl Tessel {
         ))
     }
 
+    pub(crate) fn gpui_native_search_choice(&self, scope: NativeSearchScope) -> Option<String> {
+        let (current, query) = self.gpui_native_search_input()?;
+        if current != scope {
+            return None;
+        }
+        match scope.kind {
+            NativeSearchKind::Finder => self.finder.native_selected_path().map(str::to_owned),
+            NativeSearchKind::Palette => {
+                let commands =
+                    self.build_palette_commands(self.state.theme.unwrap_or(ThemeId::Classic));
+                crate::palette::filter_palette_commands(&commands, query)
+                    .get(self.command_palette.index)
+                    .map(|r| r.command.id.clone())
+            }
+        }
+    }
+
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
         self.command_palette.open || self.finder.is_open() || self.gpui_has_non_search_modal()
     }
@@ -1634,6 +1651,11 @@ impl Tessel {
     #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn install_finder_input_fixture(&mut self, root: std::path::PathBuf) {
         self.finder = crate::finder_panel::Finder::fixture(root);
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn complete_finder_scan_for_test(&mut self, files: Vec<String>) {
+        self.finder.complete_scan_for_test(files);
     }
 
     #[cfg(all(test, feature = "visual-test"))]

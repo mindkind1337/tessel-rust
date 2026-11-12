@@ -63,6 +63,28 @@ impl Finder {
             ..Default::default()
         }
     }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn complete_scan_for_test(&mut self, files: Vec<String>) {
+        let (sender, result) = mpsc::sync_channel(1);
+        sender
+            .send(Ok(ProjectFileList {
+                total_path_bytes: files.iter().map(String::len).sum(),
+                files,
+                truncated: false,
+                stop_reason: None,
+            }))
+            .unwrap();
+        self.scan = Some(Scan {
+            cancel: Arc::new(AtomicBool::new(false)),
+            result,
+        });
+        self.poll();
+    }
+    pub(crate) fn native_selected_path(&self) -> Option<&str> {
+        self.open
+            .then(|| self.results.get(self.state.selected).map(String::as_str))
+            .flatten()
+    }
     pub(crate) fn native_input(&self) -> Option<(u64, &str)> {
         self.open.then_some((self.generation, self.state.query()))
     }

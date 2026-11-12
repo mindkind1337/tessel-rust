@@ -13,6 +13,8 @@ struct Binding {
     state: Entity<EditableTextState>,
     synced: String,
     too_long: bool,
+    navigation_serial: u64,
+    navigation: Option<(String, Option<String>)>,
     _changed: Subscription,
 }
 #[derive(Default)]
@@ -27,6 +29,13 @@ fn target(kind: NativeSearchKind) -> FocusInputTarget {
 }
 fn oversized(kind: NativeSearchKind, text: &str) -> bool {
     kind == NativeSearchKind::Finder && text.chars().take(257).count() > 256
+}
+pub(crate) struct SearchView<'a> {
+    pub kind: NativeSearchKind,
+    pub value: &'a str,
+    pub placeholder: &'a str,
+    pub selected: Option<&'a str>,
+    pub french: bool,
 }
 impl Inputs {
     pub fn focused(&self, window: &Window, cx: &App) -> Option<FocusInputTarget> {
@@ -84,28 +93,37 @@ impl Inputs {
                 state,
                 synced: text.to_owned(),
                 too_long: false,
+                navigation_serial: 0,
+                navigation: None,
                 _changed: changed,
             },
         );
     }
     pub fn render(
         &self,
-        kind: NativeSearchKind,
-        value: &str,
-        placeholder: &str,
-        french: bool,
+        view: SearchView<'_>,
         tokens: &super::theme::GpuiThemeTokens,
         cx: &mut Context<TesselGpuiRoot>,
     ) -> gpui::AnyElement {
         use gpui::{
             InteractiveElement, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder, px,
         };
+        let SearchView {
+            kind,
+            value,
+            placeholder,
+            selected,
+            french,
+        } = view;
+        let rendered = (value.to_owned(), selected.map(str::to_owned));
+        let rendered_insert = rendered.clone();
         let Some(b) = self.bindings.get(&kind) else {
             return div()
                 .child(gpui::SharedString::from(value.to_owned()))
                 .into_any_element();
         };
         let scope = b.scope;
+        let navigation_serial = b.navigation_serial;
         let input =
             gpui_ce_elements::editable_text::text_input(match kind {
                 NativeSearchKind::Palette => "native-palette",
@@ -115,10 +133,22 @@ impl Inputs {
             .placeholder(placeholder.to_owned())
             .key_context("EditableText TesselNativeSearch")
             .on_action(cx.listener(move |root, _: &Accept, w, cx| {
-                act(root, scope, SearchAction::Accept(false), w, cx)
+                act(
+                    root,
+                    scope,
+                    SearchAction::Accept(false, rendered.clone(), navigation_serial),
+                    w,
+                    cx,
+                )
             }))
             .on_action(cx.listener(move |root, _: &Insert, w, cx| {
-                act(root, scope, SearchAction::Accept(true), w, cx)
+                act(
+                    root,
+                    scope,
+                    SearchAction::Accept(true, rendered_insert.clone(), navigation_serial),
+                    w,
+                    cx,
+                )
             }))
             .on_action(cx.listener(move |root, _: &Previous, w, cx| {
                 act(root, scope, SearchAction::Step(-1), w, cx)
@@ -173,7 +203,7 @@ fn acknowledge(root: &mut TesselGpuiRoot, scope: NativeSearchScope) {
     }
 }
 enum SearchAction {
-    Accept(bool),
+    Accept(bool, (String, Option<String>), u64),
     Step(isize),
     Dismiss,
 }
@@ -196,6 +226,7 @@ fn act(
     }
     let state = b.state.clone();
     let base = b.synced.clone();
+    let navigation = (b.navigation_serial, b.navigation.clone());
     if state.update(cx, |s, cx| s.marked_text_range(window, cx).is_some()) {
         return;
     }
@@ -226,17 +257,42 @@ fn act(
         return;
     }
     match action {
-        SearchAction::Accept(insert) => root.dispatch(
-            GpuiAction::NativeSearchAccept {
-                scope,
-                query,
-                choice: None,
-                insert,
-            },
-            cx,
-        ),
+        SearchAction::Accept(insert, rendered, rendered_serial) => {
+            let (rendered_query, rendered_choice) = if navigation.0 != rendered_serial {
+                navigation.1.unwrap_or(rendered)
+            } else {
+                rendered
+            };
+            // With unchanged text, accept only the result the user actually saw.
+            // A pending native edit instead selects from the newly filtered results.
+            let choice = if query == rendered_query {
+                let Some(choice) = rendered_choice else {
+                    return;
+                };
+                Some(choice)
+            } else {
+                None
+            };
+            root.dispatch(
+                GpuiAction::NativeSearchAccept {
+                    scope,
+                    query,
+                    choice,
+                    insert,
+                },
+                cx,
+            );
+        }
         SearchAction::Step(delta) => {
-            root.dispatch(GpuiAction::NativeSearchStep { scope, delta }, cx)
+            root.dispatch(GpuiAction::NativeSearchStep { scope, delta }, cx);
+            let choice = root.app.gpui_native_search_choice(scope);
+            if let Some(b) = root.search_inputs.bindings.get_mut(&scope.kind) {
+                b.navigation_serial = b
+                    .navigation_serial
+                    .checked_add(1)
+                    .expect("search navigation exhausted");
+                b.navigation = Some((query, choice));
+            }
         }
         SearchAction::Dismiss => {}
     }
@@ -281,6 +337,110 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+    #[gpui::test]
+    fn native_search_accept_preserves_rendered_result_across_scan_and_pending_edit(
+        cx: &mut TestAppContext,
+    ) {
+        bindings(cx);
+        for scenario in 0..6 {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("project");
+            std::fs::create_dir_all(project.join("src")).unwrap();
+            std::fs::write(project.join("src/app.rs"), "app").unwrap();
+            std::fs::write(project.join("src/main.rs"), "main").unwrap();
+            std::fs::write(project.join("zzz.rs"), "zzz").unwrap();
+            let query = if scenario == 3 { "zzz" } else { "src" };
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                root.app
+                    .apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+                root.app.install_finder_input_fixture(project);
+                root.app
+                    .apply_gpui_action(GpuiAction::FinderSetQuery(query.into()));
+                root
+            });
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                let snapshot = root
+                    .app
+                    .gpui_snapshot(960., 640., 4.)
+                    .modals
+                    .finder
+                    .unwrap();
+                let rendered = (
+                    snapshot.query,
+                    snapshot.results.get(snapshot.selected).cloned(),
+                );
+                assert_eq!(
+                    rendered.1.as_deref(),
+                    if scenario == 3 {
+                        None
+                    } else {
+                        Some("src/app.rs")
+                    }
+                );
+                let scope = root.app.gpui_native_search_input().unwrap().0;
+                let files = if scenario == 0 {
+                    vec!["src/main.rs".into()]
+                } else {
+                    vec!["src/app.rs".into(), "src/main.rs".into(), "zzz.rs".into()]
+                };
+                root.app.complete_finder_scan_for_test(files);
+                if scenario == 1 {
+                    root.app.apply_gpui_action(GpuiAction::FinderStep(1));
+                }
+                if scenario >= 4 {
+                    act(root, scope, SearchAction::Step(1), window, cx);
+                    if scenario == 5 {
+                        root.app
+                            .complete_finder_scan_for_test(vec!["src/app.rs".into()]);
+                    }
+                }
+                if scenario == 2 {
+                    root.search_inputs
+                        .get(NativeSearchKind::Finder)
+                        .unwrap()
+                        .clone()
+                        .update(cx, |s, cx| {
+                            s.replace_text_in_range(Some(0..3), "main", window, cx)
+                        });
+                }
+                act(
+                    root,
+                    scope,
+                    SearchAction::Accept(false, rendered, 0),
+                    window,
+                    cx,
+                );
+                if scenario == 0 || scenario == 3 || scenario == 5 {
+                    assert!(root.app.gpui_native_search_input().is_some());
+                }
+            })
+            .unwrap();
+            if scenario == 1 || scenario == 2 || scenario == 4 {
+                for _ in 0..100 {
+                    let ready = view
+                        .update(cx, |root, _, _| {
+                            root.app.poll_for_gpui();
+                            root.app.gpui_editor_document().is_some()
+                        })
+                        .unwrap();
+                    if ready {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                view.update(cx, |root, _, _| {
+                    assert_eq!(
+                        root.app.gpui_editor_document().unwrap().text,
+                        if scenario == 1 { "app" } else { "main" }
+                    )
+                })
+                .unwrap();
+            }
+        }
     }
     #[gpui::test]
     fn native_palette_toggle_restores_editor_caret(cx: &mut TestAppContext) {
