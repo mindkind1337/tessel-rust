@@ -200,9 +200,116 @@ pub fn with_root(agent: &str, prefs: &Preferences, root: &Path) -> Result<Prefer
     Ok(result)
 }
 
+/// Runtime-only native transport scope. Never serialized or included in Debug output.
+#[derive(Clone)]
+pub struct NativeLaunch {
+    agent: String,
+    binding: Binding,
+    root: PathBuf,
+    data_dir: Option<PathBuf>,
+}
+impl NativeLaunch {
+    pub fn new(
+        agent: &str,
+        binding: Binding,
+        root: PathBuf,
+        data_dir: Option<PathBuf>,
+    ) -> Result<Self, String> {
+        env_key(agent)?;
+        if !binding.valid() {
+            return Err("Invalid native account identity.".into());
+        }
+        validate_root(&root)?;
+        Ok(Self {
+            agent: agent.into(),
+            binding,
+            root,
+            data_dir,
+        })
+    }
+    pub fn validate_resume(&self, agent: &str, cwd: &Path, id: &str) -> Result<(), String> {
+        if agent != self.agent || !cwd.is_dir() || !crate::claude::valid_uuid(id) {
+            return Err("Invalid saved native conversation or working folder.".into());
+        }
+        let found = if agent == "codex" {
+            crate::codex_sessions::verify(&self.root, cwd, id)?
+        } else {
+            crate::claude_terminal::exists(&self.root, id)?
+        };
+        if !found {
+            return Err("The saved native conversation is missing from its original account; no replacement was started.".into());
+        }
+        Ok(())
+    }
+    pub fn apply(&self, agent: &str, command: &mut std::process::Command) -> Result<(), String> {
+        if agent != self.agent {
+            return Err("Native account belongs to another provider.".into());
+        }
+        check_account_available(&self.binding, agent, self.data_dir.as_deref())?;
+        if matches!(self.binding, Binding::Managed { .. }) {
+            let credentials: &[&str] = if agent == "codex" {
+                &[
+                    "OPENAI_API_KEY",
+                    "CODEX_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT_ID",
+                ]
+            } else {
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "CLAUDE_CODE_OAUTH_TOKEN",
+                    "ANTHROPIC_BASE_URL",
+                    "ANTHROPIC_CUSTOM_HEADERS",
+                    "CLAUDE_CODE_USE_BEDROCK",
+                    "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY",
+                ]
+            };
+            for key in credentials {
+                command.env_remove(key);
+            }
+        }
+        command.env(env_key(agent)?, &self.root);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_resume_requires_original_profile_transcript_and_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("claude");
+        let profile = NativeLaunch::new("claude", Binding::Default, root.clone(), None).unwrap();
+        let id = "12345678-1234-4234-8234-123456789abc";
+        assert!(profile.validate_resume("claude", temp.path(), id).is_err());
+        fs_create_transcript(&root, id);
+        assert!(profile.validate_resume("claude", temp.path(), id).is_ok());
+        assert!(profile.validate_resume("codex", temp.path(), id).is_err());
+        let removed = NativeLaunch::new(
+            "claude",
+            Binding::Managed {
+                account_id: "removed".into(),
+            },
+            root,
+            Some(temp.path().into()),
+        )
+        .unwrap();
+        assert!(
+            removed
+                .apply("claude", &mut std::process::Command::new("synthetic"))
+                .is_err()
+        );
+    }
+    fn fs_create_transcript(root: &Path, id: &str) {
+        let folder = root.join("projects/synthetic");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{id}.jsonl")), "{}\n").unwrap();
+    }
+
     #[test]
     fn default_binding_ignores_current_profile_and_configured_binding_refuses_changes() {
         let temp = tempfile::tempdir().unwrap();

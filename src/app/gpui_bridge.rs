@@ -1530,7 +1530,7 @@ impl Tessel {
             || self
                 .sessions
                 .iter()
-                .any(|session| session.profile_migration.is_some())
+                .any(|session| session.profile_migration.is_some() || session.restarting.is_some())
             || self.transcript_trash_busy
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
@@ -1545,13 +1545,13 @@ impl Tessel {
                             .is_some_and(crate::office::OfficeView::is_rendering)
                 }));
         self.native_hosts.poll();
-        self.poll();
+        let native_changed = self.poll();
         self.floating.poll();
         self.sync_live_share();
         #[cfg(windows)]
         self.browser.poll();
         self.flush_gpui_terminal_side_effects();
-        refresh
+        refresh || native_changed
     }
 
     fn flush_gpui_terminal_side_effects(&mut self) {
@@ -2602,54 +2602,137 @@ impl Tessel {
         }
     }
 
-    fn ensure_native_chat_instances(&mut self) {
-        type PendingChatInit = (u64, u64, PathBuf, Option<String>, Option<serde_json::Value>);
-        let mut need_codex: Vec<PendingChatInit> = Vec::new();
-        let mut need_claude: Vec<PendingChatInit> = Vec::new();
-        for sess in &self.sessions {
-            let Some(pid) = sess.project else {
-                continue;
+    #[cfg(test)]
+    pub(crate) fn synthetic_wait_for_terminal_operation(&mut self, pane: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while self
+            .sessions
+            .iter()
+            .any(|s| s.id == pane && (s.loading.is_some() || s.restarting.is_some()))
+        {
+            self.poll_for_gpui();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn synthetic_native_profiles(&mut self, root: &std::path::Path) {
+        for agent in ["claude", "codex"] {
+            self.state.agent_prefs.insert(
+                agent.into(),
+                crate::agent_preferences::Preferences {
+                    command: "tessel-synthetic-cli-does-not-exist".into(),
+                    env: format!(
+                        "{}={}",
+                        crate::session_profile::env_key(agent).unwrap(),
+                        root.join(agent).display()
+                    ),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    pub(super) fn ensure_native_chat_instances(&mut self) {
+        let panes: Vec<_> = self
+            .sessions
+            .iter()
+            .filter_map(|s| {
+                let provider = s.launch.native_chat()?;
+                let pid = s.project?;
+                let saved = self
+                    .state
+                    .native_resume(s.id, pid, provider)
+                    .map(str::to_owned)
+                    .or_else(|| s.conversation_id.clone());
+                Some((
+                    s.id,
+                    pid,
+                    provider,
+                    s.cwd.clone(),
+                    saved,
+                    s.session_options.clone(),
+                ))
+            })
+            .collect();
+        let mut changed = false;
+        for (pane, pid, provider, cwd, saved, options) in panes {
+            let agent = provider.to_ascii_lowercase();
+            if provider == "Codex" && !self.chats.iter().any(|c| c.pane == pane) {
+                let mut chat = crate::chat::Chat::new(pid, cwd.clone());
+                chat.pane = pane;
+                chat.require_profile = true;
+                if let Some(id) = &saved {
+                    chat.set_resume(id.clone());
+                }
+                chat.options = crate::native_chat_options::Options::from_value(options.as_ref());
+                self.chats.push(chat);
+            } else if provider == "Claude" && !self.claude_chats.iter().any(|c| c.pane == pane) {
+                let mut chat = crate::claude::Chat::new(pid, cwd, saved.clone());
+                chat.pane = pane;
+                chat.require_profile = true;
+                chat.options = crate::native_chat_options::Options::from_value(options.as_ref());
+                self.claude_chats.push(chat);
+            }
+            let (needs_profile, retry) = if provider == "Codex" {
+                let chat = self
+                    .chats
+                    .iter_mut()
+                    .find(|c| c.pane == pane)
+                    .expect("native instance");
+                (
+                    chat.require_profile && chat.profile.is_none(),
+                    std::mem::take(&mut chat.retry_profile),
+                )
+            } else {
+                let chat = self
+                    .claude_chats
+                    .iter_mut()
+                    .find(|c| c.pane == pane)
+                    .expect("native instance");
+                (
+                    chat.require_profile && chat.profile.is_none(),
+                    std::mem::take(&mut chat.retry_profile),
+                )
             };
-            match &sess.launch {
-                Launch::CodexChat if !self.chats.iter().any(|c| c.pane == sess.id) => {
-                    need_codex.push((
-                        sess.id,
-                        pid,
-                        sess.cwd.clone(),
-                        sess.conversation_id.clone(),
-                        sess.session_options.clone(),
-                    ));
+            if !needs_profile {
+                continue;
+            }
+            if retry && let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane) {
+                session.error.clear();
+            }
+            let resolution = self.prepare_native_profile(pane, &agent, saved.as_deref());
+            let (profile, error, status) = match resolution {
+                Ok(Some(profile)) => {
+                    changed = true;
+                    (Some(profile), String::new(), "Not connected")
                 }
-                Launch::ClaudeChat if !self.claude_chats.iter().any(|c| c.pane == sess.id) => {
-                    need_claude.push((
-                        sess.id,
-                        pid,
-                        sess.cwd.clone(),
-                        sess.conversation_id.clone(),
-                        sess.session_options.clone(),
-                    ));
-                }
-                _ => {}
+                Ok(None) => (None, String::new(), "Identifying original account…"),
+                Err(error) => (None, error, "Account unavailable"),
+            };
+            if provider == "Codex" {
+                let chat = self
+                    .chats
+                    .iter_mut()
+                    .find(|c| c.pane == pane)
+                    .expect("native instance");
+                chat.profile = profile;
+                chat.error = error;
+                chat.status = status.into();
+            } else {
+                let chat = self
+                    .claude_chats
+                    .iter_mut()
+                    .find(|c| c.pane == pane)
+                    .expect("native instance");
+                chat.profile = profile;
+                chat.error = error;
+                chat.status = status.into();
             }
         }
-        for (pane_id, pid, cwd, conv, opts) in need_codex {
-            let mut chat = crate::chat::Chat::new(pid, cwd);
-            chat.pane = pane_id;
-            if let Some(id) = conv {
-                chat.set_resume(id);
-            }
-            if let Some(val) = opts {
-                chat.options = crate::native_chat_options::Options::from_value(Some(&val));
-            }
-            self.chats.push(chat);
-        }
-        for (pane_id, pid, cwd, conv, opts) in need_claude {
-            let mut chat = crate::claude::Chat::new(pid, cwd, conv);
-            chat.pane = pane_id;
-            if let Some(val) = opts {
-                chat.options = crate::native_chat_options::Options::from_value(Some(&val));
-            }
-            self.claude_chats.push(chat);
+        if changed {
+            self.save();
         }
     }
 
@@ -4540,33 +4623,17 @@ impl Tessel {
                 self.new_session_placed(Launch::Agent(agent_id), None);
             }
             GpuiAction::LaunchCodexChat => {
-                if let Some(pid) = self.state.active_project
-                    && let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned()
-                {
+                if self.state.active().is_some() {
                     self.new_session_placed(Launch::CodexChat, None);
-                    if let Some(pane_id) = self.active_session
-                        && !self.chats.iter().any(|c| c.pane == pane_id)
-                    {
-                        let mut chat = crate::chat::Chat::new(pid, proj.path);
-                        chat.pane = pane_id;
-                        self.chats.push(chat);
-                    }
+                    self.ensure_native_chat_instances();
                 } else {
                     self.error = tr("Select a project for native chat.").into();
                 }
             }
             GpuiAction::LaunchClaudeChat => {
-                if let Some(pid) = self.state.active_project
-                    && let Some(proj) = self.state.projects.iter().find(|p| p.id == pid).cloned()
-                {
+                if self.state.active().is_some() {
                     self.new_session_placed(Launch::ClaudeChat, None);
-                    if let Some(pane_id) = self.active_session
-                        && !self.claude_chats.iter().any(|c| c.pane == pane_id)
-                    {
-                        let mut chat = crate::claude::Chat::new(pid, proj.path, None);
-                        chat.pane = pane_id;
-                        self.claude_chats.push(chat);
-                    }
+                    self.ensure_native_chat_instances();
                 } else {
                     self.error = tr("Select a project for native chat.").into();
                 }
@@ -6610,6 +6677,184 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::ConfirmModalPrimary);
         assert!(!app.transcript_trash_busy && path.exists());
         assert!(app.error.contains("no longer available"));
+    }
+
+    #[test]
+    fn native_mode_switch_waits_for_confirmed_cli_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        app.synthetic_native_profiles(temp.path());
+        app.apply_gpui_action(GpuiAction::AddProjectPath(temp.path().into()));
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        app.ensure_native_chat_instances();
+        let pane = app.sessions[0].id;
+        let binding = app.sessions[0].profile_binding.clone();
+        app.sessions[0].launch = Launch::Agent("claude".into());
+        app.claude_chats.clear();
+        let (sender, result) = mpsc::channel();
+        app.sessions[0].restarting = Some(super::super::Restart {
+            switch_mode: true,
+            result,
+            preferences: None,
+        });
+        app.switch_session_chat_mode(pane);
+        app.poll_for_gpui();
+        assert!(matches!(app.sessions[0].launch, Launch::Agent(_)));
+        assert!(app.claude_chats.is_empty());
+        drop(sender);
+        app.poll_for_gpui();
+        assert!(matches!(app.sessions[0].launch, Launch::Agent(_)));
+        assert!(app.sessions[0].error.contains("not confirmed"));
+        let (sender, result) = mpsc::channel();
+        app.sessions[0].restarting = Some(super::super::Restart {
+            switch_mode: true,
+            result,
+            preferences: None,
+        });
+        sender.send(Ok(())).unwrap();
+        app.poll_for_gpui();
+        app.ensure_native_chat_instances();
+        assert!(matches!(app.sessions[0].launch, Launch::ClaudeChat));
+        assert_eq!(app.sessions[0].profile_binding, binding);
+        assert!(app.claude_chats[0].process_id().is_none());
+    }
+
+    #[test]
+    fn legacy_native_profile_recovers_original_account_without_connecting() {
+        use crate::settings_extra_model::{ManagedAccount, ManagedAccountsRoster};
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("state");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let (store, mut state) = Store::open(&data).unwrap();
+        let project = state.add_project(temp.path()).unwrap();
+        state.general_prefs.restore_workspaces = true;
+        let id = "12345678-1234-4234-8234-123456789abc";
+        state.sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "project": project, "title": "Synthetic native",
+                "launch": Launch::ClaudeChat, "cwd": state.projects[0].path
+            }))
+            .unwrap(),
+        );
+        state
+            .remember_native_thread(1, project, "Claude", Some(id))
+            .unwrap();
+        let prefs = crate::agent_preferences::Preferences {
+            command: "tessel-synthetic-cli-does-not-exist".into(),
+            env: format!("CLAUDE_CONFIG_DIR={}", home.join(".claude").display()),
+            ..Default::default()
+        };
+        state.agent_prefs.insert("claude".into(), prefs.clone());
+        store.save(&state).unwrap();
+        drop(store);
+        let roster = ManagedAccountsRoster {
+            accounts: ["original", "selected"]
+                .map(|id| ManagedAccount {
+                    id: id.into(),
+                    label: id.into(),
+                    email: String::new(),
+                    plan: String::new(),
+                    added_at: 0,
+                })
+                .to_vec(),
+            selected_id: Some("selected".into()),
+        };
+        crate::settings_extra_model::save_managed_accounts(&data, "claude", &roster).unwrap();
+        let root =
+            crate::settings_extra_model::managed_account_profile_dir(&data, "claude", "original")
+                .unwrap();
+        let folder = root.join("projects/synthetic");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(data.clone()), false, || {});
+        app.sessions[0].profile_migration = Some(
+            crate::session_profile_migration::Migration::start(
+                "claude".into(),
+                id.into(),
+                temp.path().into(),
+                Some(data.clone()),
+                home,
+                prefs,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        app.ensure_native_chat_instances();
+        assert!(app.claude_chats[0].profile.is_none());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.sessions[0].profile_migration.is_some() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.ensure_native_chat_instances();
+        assert!(
+            app.sessions[0].error.is_empty(),
+            "{}",
+            app.sessions[0].error
+        );
+        let binding = Some(crate::session_profile::Binding::Managed {
+            account_id: "original".into(),
+        });
+        assert_eq!(app.sessions[0].profile_binding, binding);
+        assert!(app.sessions[0].terminal.is_none() && app.sessions[0].loading.is_none());
+        assert!(app.claude_chats[0].process_id().is_none());
+        assert!(!app.claude_chats[0].busy());
+        let mut command = std::process::Command::new("synthetic");
+        app.claude_chats[0]
+            .profile
+            .as_ref()
+            .unwrap()
+            .apply("claude", &mut command)
+            .unwrap();
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(k, _)| *k == "CLAUDE_CONFIG_DIR")
+                .unwrap()
+                .1,
+            Some(root.as_os_str())
+        );
+        app.save();
+        let saved: Workspace =
+            serde_json::from_slice(&std::fs::read(data.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(saved.sessions[0].profile_binding, binding);
+        assert_eq!(saved.native_resume(1, project, "Claude"), Some(id));
+        // Native pane identities use title-case providers, unlike history entries.
+        let entry = crate::side_panels_model::SessionHistoryEntry {
+            id: id.into(),
+            agent_id: "claude".into(),
+            profile_label: String::new(),
+            profile_binding: binding.clone(),
+            title: "Synthetic".into(),
+            folder: temp.path().into(),
+            updated_at_ms: 0,
+            file_path: None,
+            open_pane_id: None,
+            transcript_snippet: None,
+        };
+        assert!(
+            app.transcript_source_for_trash(&entry)
+                .unwrap_err()
+                .contains("Close this conversation")
+        );
+        // Removal of the account blocks restored native panes instead of selecting another.
+        crate::settings_extra_model::save_managed_accounts(
+            &data,
+            "claude",
+            &ManagedAccountsRoster::default(),
+        )
+        .unwrap();
+        app.claude_chats.clear();
+        app.sessions[0].profile_root = None;
+        app.ensure_native_chat_instances();
+        assert!(app.claude_chats[0].profile.is_none());
+        app.claude_chats[0].gpui_connect();
+        assert!(app.claude_chats[0].process_id().is_none());
+        assert!(!app.claude_chats[0].busy());
+        assert!(app.sessions[0].terminal.is_none() && app.sessions[0].loading.is_none());
     }
 
     #[test]

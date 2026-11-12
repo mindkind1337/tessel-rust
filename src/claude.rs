@@ -18,11 +18,15 @@ struct Approval {
     input: Value,
 }
 pub struct Chat {
+    pub(crate) profile: Option<crate::session_profile::NativeLaunch>,
+    pub(crate) require_profile: bool,
+    pub(crate) retry_profile: bool,
     pub pane: u64,
     pub project: u64,
     pub saved_session: Option<String>,
     cwd: PathBuf,
     transport: Option<transport::Transport>,
+    connecting: Option<crate::native_connection::Pending<transport::Transport>>,
     session: String,
     resume: String,
     pub options: crate::native_chat_options::Options,
@@ -42,8 +46,8 @@ pub struct Chat {
     initializing: Option<Instant>,
     stream_id: Option<String>,
     stream_row: Option<usize>,
-    error: String,
-    status: String,
+    pub(crate) error: String,
+    pub(crate) status: String,
 }
 pub fn valid_uuid(id: &str) -> bool {
     id.len() == 36
@@ -113,12 +117,16 @@ impl Chat {
     }
     pub fn new(project: u64, cwd: PathBuf, saved: Option<String>) -> Self {
         Self {
+            profile: None,
+            require_profile: false,
+            retry_profile: false,
             pane: 0,
             project,
             cwd,
             resume: saved.clone().unwrap_or_default(),
             saved_session: saved,
             transport: None,
+            connecting: None,
             session: String::new(),
             options: Default::default(),
             defaults: None,
@@ -163,13 +171,19 @@ impl Chat {
         }
     }
     pub fn busy(&self) -> bool {
-        self.transport.is_some() || self.active || self.initializing.is_some()
+        self.connecting.is_some()
+            || self.transport.is_some()
+            || self.active
+            || self.initializing.is_some()
     }
     pub fn waiting_for_user(&self) -> bool {
         !self.approvals.is_empty() || self.questions.is_some()
     }
     pub fn working(&self) -> bool {
         !self.waiting_for_user() && (self.active || self.initializing.is_some())
+    }
+    pub fn starting(&self) -> bool {
+        self.connecting.is_some()
     }
     pub fn process_id(&self) -> Option<u32> {
         self.transport.as_ref().map(|t| t.child_id())
@@ -198,7 +212,7 @@ impl Chat {
             cwd_display: self.cwd.display().to_string(),
             thread_id,
             resume_draft: self.resume.clone(),
-            connected: self.transport.is_some(),
+            connected: self.transport.is_some() || self.connecting.is_some(),
             ready: self.ready,
             working: self.working(),
             can_load_older: false,
@@ -217,6 +231,7 @@ impl Chat {
 
     pub fn gpui_connect(&mut self) {
         if self.transport.is_none()
+            && self.connecting.is_none()
             && let Err(e) = self.connect()
         {
             self.error = e;
@@ -228,7 +243,7 @@ impl Chat {
     }
 
     pub fn gpui_new_conversation(&mut self) {
-        if self.transport.is_none() {
+        if self.transport.is_none() && self.connecting.is_none() {
             self.composer_id = crate::chat::next_input_id();
             self.saved_session = None;
             self.resume.clear();
@@ -278,21 +293,21 @@ impl Chat {
     }
 
     pub fn gpui_set_model(&mut self, model: String) {
-        if self.transport.is_none() {
+        if self.transport.is_none() && self.connecting.is_none() {
             self.options.model = model;
             self.commit_options();
         }
     }
 
     pub fn gpui_set_effort(&mut self, effort: String) {
-        if self.transport.is_none() {
+        if self.transport.is_none() && self.connecting.is_none() {
             self.options.effort = effort;
             self.commit_options();
         }
     }
 
     pub fn gpui_set_resume(&mut self, resume: String) {
-        if self.transport.is_none() {
+        if self.transport.is_none() && self.connecting.is_none() {
             self.resume = resume;
         }
     }
@@ -383,7 +398,11 @@ impl Chat {
             .send(value)
     }
     fn connect(&mut self) -> Result<(), String> {
-        if self.transport.is_some() {
+        if self.require_profile && self.profile.is_none() {
+            self.retry_profile = true;
+            return Err("The original account is not ready; retry after account recovery.".into());
+        }
+        if self.transport.is_some() || self.connecting.is_some() {
             return Err("Stop the current connection first".into());
         }
         if !self.resume.is_empty() && !valid_uuid(&self.resume) {
@@ -401,13 +420,24 @@ impl Chat {
         self.commit_options();
         let resume = !self.resume.is_empty();
         self.session = if resume { self.resume.clone() } else { uuid()? };
-        self.transport = Some(transport::Transport::start(
-            &self.cwd,
-            &self.session,
-            resume,
-            &options.model,
-            &options.effort,
-        )?);
+        let profile = self.profile.clone();
+        let cwd = self.cwd.clone();
+        let session = self.session.clone();
+        self.connecting = Some(crate::native_connection::Pending::start(move || {
+            if let Some(profile) = &profile
+                && resume
+            {
+                profile.validate_resume("claude", &cwd, &session)?;
+            }
+            transport::Transport::start(
+                &cwd,
+                &session,
+                resume,
+                &options.model,
+                &options.effort,
+                profile.as_ref(),
+            )
+        })?);
         self.ready = false;
         self.active = false;
         self.interrupting = false;
@@ -416,11 +446,13 @@ impl Chat {
         self.questions = None;
         self.error.clear();
         self.status = "Connecting".into();
-        self.initializing = Some(Instant::now());
-        if let Err(e)=self.send(json!({"type":"control_request","request_id":"tessel-init","request":{"subtype":"initialize"}})){self.stop();return Err(e);}
+        // Protocol timeout starts only after validation and spawn complete.
+        self.initializing = None;
+
         Ok(())
     }
     fn stop(&mut self) {
+        self.connecting = None;
         self.transport.take();
         self.ready = false;
         self.active = false;
@@ -648,7 +680,28 @@ impl Chat {
             _ => {}
         }
     }
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(result) = self
+            .connecting
+            .as_ref()
+            .and_then(crate::native_connection::Pending::poll)
+        {
+            changed = true;
+            self.connecting = None;
+            match result {
+                Ok(transport) => {
+                    self.transport = Some(transport);
+                    self.initializing = Some(Instant::now());
+                    if let Err(error) = self.send(json!({"type":"control_request","request_id":"tessel-init","request":{"subtype":"initialize"}})) { self.error = error; self.stop(); }
+                }
+                Err(error) => {
+                    self.error = error;
+                    self.stop();
+                }
+            }
+        }
+
         for _ in 0..64 {
             let Some(transport) = &self.transport else {
                 break;
@@ -656,6 +709,7 @@ impl Chat {
             let Ok(frame) = transport.reader.try_recv() else {
                 break;
             };
+            changed = true;
             match frame {
                 Ok(value) => {
                     let completed = value["type"] == "result";
@@ -677,60 +731,70 @@ impl Chat {
             .initializing
             .is_some_and(|t| t.elapsed() > Duration::from_secs(30))
         {
+            changed = true;
             self.error = "Claude initialization timed out".into();
             self.stop();
         }
+        changed
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Native Claude chat"));
         ui.label(tr("Uses your installed Claude CLI sign-in and permission controls. Project hooks, customizations and external MCP servers are disabled in this native connection."));
         ui.horizontal_wrapped(|ui| {
-            ui.add_enabled_ui(self.transport.is_none(), |ui| {
-                ui.label(tr("Model"));
-                if ui
-                    .add(egui::TextEdit::singleline(&mut self.options.model).desired_width(140.0))
-                    .lost_focus()
-                {
-                    self.commit_options();
-                }
-                egui::ComboBox::from_id_salt("claude-effort")
-                    .selected_text(if self.options.effort.is_empty() {
-                        tr("Default")
-                    } else {
-                        &self.options.effort
-                    })
-                    .show_ui(ui, |ui| {
-                        for effort in ["", "low", "medium", "high", "xhigh", "max"] {
-                            if ui
-                                .selectable_value(
-                                    &mut self.options.effort,
-                                    effort.into(),
-                                    if effort.is_empty() {
-                                        tr("Default")
-                                    } else {
-                                        effort
-                                    },
-                                )
-                                .changed()
-                            {
-                                self.commit_options();
+            ui.add_enabled_ui(
+                self.transport.is_none() && self.connecting.is_none(),
+                |ui| {
+                    ui.label(tr("Model"));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.options.model)
+                                .desired_width(140.0),
+                        )
+                        .lost_focus()
+                    {
+                        self.commit_options();
+                    }
+                    egui::ComboBox::from_id_salt("claude-effort")
+                        .selected_text(if self.options.effort.is_empty() {
+                            tr("Default")
+                        } else {
+                            &self.options.effort
+                        })
+                        .show_ui(ui, |ui| {
+                            for effort in ["", "low", "medium", "high", "xhigh", "max"] {
+                                if ui
+                                    .selectable_value(
+                                        &mut self.options.effort,
+                                        effort.into(),
+                                        if effort.is_empty() {
+                                            tr("Default")
+                                        } else {
+                                            effort
+                                        },
+                                    )
+                                    .changed()
+                                {
+                                    self.commit_options();
+                                }
                             }
-                        }
-                    });
-                ui.label(tr("Resume ID"));
-                ui.add(egui::TextEdit::singleline(&mut self.resume).desired_width(220.0));
-                if ui.button(tr("Connect")).clicked()
-                    && let Err(e) = self.connect()
-                {
-                    self.error = e;
-                }
-                if ui.button(tr("New conversation")).clicked() {
-                    self.saved_session = None;
-                    self.resume.clear();
-                    self.transcript.clear();
-                }
-            });
-            if self.transport.is_some() && ui.button(tr("Stop")).clicked() {
+                        });
+                    ui.label(tr("Resume ID"));
+                    ui.add(egui::TextEdit::singleline(&mut self.resume).desired_width(220.0));
+                    if ui.button(tr("Connect")).clicked()
+                        && let Err(e) = self.connect()
+                    {
+                        self.error = e;
+                    }
+                    if ui.button(tr("New conversation")).clicked() {
+                        self.saved_session = None;
+                        self.resume.clear();
+                        self.transcript.clear();
+                    }
+                },
+            );
+            if (self.transport.is_some() || self.connecting.is_some())
+                && ui.button(tr("Stop")).clicked()
+            {
                 self.stop();
             }
         });

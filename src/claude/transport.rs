@@ -42,11 +42,14 @@ impl Transport {
         resume: bool,
         model: &str,
         effort: &str,
+        profile: Option<&crate::session_profile::NativeLaunch>,
     ) -> Result<Self, String> {
         let exe = executable().ok_or("Install Claude Code and sign in with its CLI first")?;
-        Self::spawn(&mut Self::command(
-            &exe, cwd, session, resume, model, effort,
-        ))
+        let mut command = Self::command(&exe, cwd, session, resume, model, effort);
+        if let Some(profile) = profile {
+            profile.apply("claude", &mut command)?;
+        }
+        Self::spawn(&mut command)
     }
     fn command(
         exe: &Path,
@@ -208,6 +211,9 @@ impl Job {
         }
     }
 }
+// A job object is an owned, thread-independent kernel handle, not a COM interface.
+#[cfg(windows)]
+unsafe impl Send for Job {}
 #[cfg(windows)]
 impl Drop for Job {
     fn drop(&mut self) {

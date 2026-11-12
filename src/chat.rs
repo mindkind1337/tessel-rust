@@ -79,7 +79,11 @@ struct Rpc {
     reader: Receiver<Result<Value, String>>,
 }
 impl Rpc {
-    fn start(executable: &Path, cwd: &Path) -> Result<Self, String> {
+    fn start(
+        executable: &Path,
+        cwd: &Path,
+        profile: Option<&crate::session_profile::NativeLaunch>,
+    ) -> Result<Self, String> {
         let mut command = Command::new(executable);
         command
             .arg("app-server")
@@ -92,6 +96,12 @@ impl Rpc {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
+        if let Some(profile) = profile {
+            profile.apply("codex", &mut command)?;
+        }
+        Self::spawn(command)
+    }
+    fn spawn(mut command: Command) -> Result<Self, String> {
         let mut child = command.spawn().map_err(|e| e.to_string())?;
         let mut stdin = child.stdin.take().ok_or("No Codex input pipe")?;
         let stdout = child.stdout.take().ok_or("No Codex output pipe")?;
@@ -171,11 +181,15 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 pub struct Chat {
+    pub(crate) profile: Option<crate::session_profile::NativeLaunch>,
+    pub(crate) require_profile: bool,
+    pub(crate) retry_profile: bool,
     pub pane: u64,
     pub project: u64,
     pub cwd: PathBuf,
     pub thread_id: Option<String>,
     rpc: Option<Rpc>,
+    connecting: Option<crate::native_connection::Pending<Rpc>>,
     pending: HashMap<u64, (String, Instant)>,
     next_id: u64,
     pub status: String,
@@ -242,11 +256,15 @@ impl Chat {
 
     pub fn new(project: u64, cwd: PathBuf) -> Self {
         Self {
+            profile: None,
+            require_profile: false,
+            retry_profile: false,
             pane: 0,
             project,
             cwd,
             thread_id: None,
             rpc: None,
+            connecting: None,
             pending: HashMap::new(),
             next_id: 1,
             status: "Not connected".into(),
@@ -408,6 +426,14 @@ impl Chat {
         }
     }
     fn start(&mut self) {
+        if self.rpc.is_some() || self.connecting.is_some() {
+            return;
+        }
+        if self.require_profile && self.profile.is_none() {
+            self.retry_profile = true;
+            self.error = "The original account is not ready; retry after account recovery.".into();
+            return;
+        }
         self.error.clear();
         let options = self.options.effective(self.defaults.as_ref());
         if !options.valid_for("codex") {
@@ -420,14 +446,22 @@ impl Chat {
             return;
         }
         self.commit_options();
-        let Some(exe) = executable() else {
-            self.error = "Native Codex executable not found. Install the Codex CLI first.".into();
-            return;
-        };
-        match Rpc::start(&exe, &self.cwd) {
-            Ok(rpc) => self.rpc = Some(rpc),
-            Err(e) => {
-                self.error = e;
+        let profile = self.profile.clone();
+        let cwd = self.cwd.clone();
+        let resume = self.resume.trim().to_owned();
+        match crate::native_connection::Pending::start(move || {
+            if let Some(profile) = &profile
+                && !resume.is_empty()
+            {
+                profile.validate_resume("codex", &cwd, &resume)?;
+            }
+            let exe = executable()
+                .ok_or("Native Codex executable not found. Install the Codex CLI first.")?;
+            Rpc::start(&exe, &cwd, profile.as_ref())
+        }) {
+            Ok(pending) => self.connecting = Some(pending),
+            Err(error) => {
+                self.error = error;
                 return;
             }
         }
@@ -435,9 +469,9 @@ impl Chat {
         self.history_unavailable = false;
         self.pending.clear();
         self.status = "Initializing Codex…".into();
-        if let Err(e)=self.request("initialize",json!({"clientInfo":{"name":"tessel_rust","title":"Tessel Rust","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})){self.error=e;}
     }
     fn stop(&mut self) {
+        self.connecting = None;
         self.rpc = None;
         self.ready = false;
         self.turn = None;
@@ -461,7 +495,7 @@ impl Chat {
         }
     }
     pub fn busy(&self) -> bool {
-        self.rpc.is_some()
+        self.rpc.is_some() || self.connecting.is_some()
     }
     fn turn_params(&self, input: Value, options: &crate::native_chat_options::Options) -> Value {
         let mut params = json!({"threadId":self.thread_id,"input":input,"cwd":self.cwd,"approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":[self.cwd],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}});
@@ -817,15 +851,42 @@ impl Chat {
     pub fn working(&self) -> bool {
         !self.waiting_for_user() && (self.turn.is_some() || self.starting_turn)
     }
+    pub fn starting(&self) -> bool {
+        self.connecting.is_some()
+    }
     pub fn process_id(&self) -> Option<u32> {
         self.rpc.as_ref().map(|r| r.child.id())
     }
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(result) = self
+            .connecting
+            .as_ref()
+            .and_then(crate::native_connection::Pending::poll)
+        {
+            changed = true;
+            self.connecting = None;
+            match result {
+                Ok(rpc) => {
+                    self.rpc = Some(rpc);
+                    if let Err(error) = self.request("initialize", json!({"clientInfo":{"name":"tessel_rust","title":"Tessel Rust","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})) { self.error = error; self.stop(); }
+                }
+                Err(error) => {
+                    self.error = error;
+                    self.status = "Connection failed".into();
+                }
+            }
+        }
+
         for _ in 0..128 {
             let event = self.rpc.as_ref().and_then(|r| r.reader.try_recv().ok());
             match event {
-                Some(Ok(v)) => self.frame(v),
+                Some(Ok(v)) => {
+                    changed = true;
+                    self.frame(v);
+                }
                 Some(Err(e)) => {
+                    changed = true;
                     self.error = e;
                     self.stop();
                     break;
@@ -838,10 +899,12 @@ impl Chat {
             .values()
             .any(|(_, t)| t.elapsed() > Duration::from_secs(30))
         {
+            changed = true;
             self.error =
                 "Codex request timed out. The session has stopped; it can be resumed.".into();
             self.stop();
         }
+        changed
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr("Codex · native chat"));
@@ -856,7 +919,7 @@ impl Chat {
         }
         ui.horizontal_wrapped(|ui| {
             ui.label(tr(&self.status));
-            if self.rpc.is_none() {
+            if self.rpc.is_none() && self.connecting.is_none() {
                 if ui.button(tr("Connect")).clicked() {
                     self.start();
                 }
@@ -873,7 +936,7 @@ impl Chat {
                 self.error = e;
             }
         });
-        if self.rpc.is_none() {
+        if self.rpc.is_none() && self.connecting.is_none() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(tr("Resume thread ID (optional)"));
                 ui.text_edit_singleline(&mut self.resume);
@@ -1056,7 +1119,7 @@ impl Chat {
             cwd_display: self.cwd.display().to_string(),
             thread_id: self.thread_id.clone(),
             resume_draft: self.resume.clone(),
-            connected: self.rpc.is_some(),
+            connected: self.rpc.is_some() || self.connecting.is_some(),
             ready: self.ready,
             working: self.working(),
             can_load_older: self.history_cursor.is_some()
@@ -1075,7 +1138,7 @@ impl Chat {
     }
 
     pub fn gpui_connect(&mut self) {
-        if self.rpc.is_none() {
+        if self.rpc.is_none() && self.connecting.is_none() {
             self.start();
         }
     }
@@ -1257,6 +1320,59 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(windows)]
+    fn native_account_commands_start_distinct_children_and_remove_foreign_credentials() {
+        use crate::settings_extra_model::{ManagedAccount, ManagedAccountsRoster};
+        let temp = tempfile::tempdir().unwrap();
+        let roster = ManagedAccountsRoster {
+            accounts: ["first", "second"]
+                .map(|id| ManagedAccount {
+                    id: id.into(),
+                    label: id.into(),
+                    email: String::new(),
+                    plan: String::new(),
+                    added_at: 0,
+                })
+                .to_vec(),
+            selected_id: Some("second".into()),
+        };
+        crate::settings_extra_model::save_managed_accounts(temp.path(), "codex", &roster).unwrap();
+        let mut processes = Vec::new();
+        for id in ["first", "second"] {
+            let root =
+                crate::settings_extra_model::managed_account_profile_dir(temp.path(), "codex", id)
+                    .unwrap();
+            let profile = crate::session_profile::NativeLaunch::new(
+                "codex",
+                crate::session_profile::Binding::Managed {
+                    account_id: id.into(),
+                },
+                root.clone(),
+                Some(temp.path().into()),
+            )
+            .unwrap();
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.WriteLine((@{root=$env:CODEX_HOME;pid=$PID;foreign=[bool]$env:OPENAI_API_KEY}|ConvertTo-Json -Compress));[Console]::In.ReadLine()|Out-Null"])
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+                .env("OPENAI_API_KEY", "synthetic-foreign-key");
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+            profile.apply("codex", &mut command).unwrap();
+            let rpc = Rpc::spawn(command).unwrap();
+            let value = rpc
+                .reader
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap();
+            assert_eq!(value["root"], root.to_string_lossy().as_ref());
+            assert_eq!(value["foreign"], false);
+            assert_eq!(value["pid"].as_u64(), Some(u64::from(rpc.child.id())));
+            processes.push(rpc);
+        }
+        assert_ne!(processes[0].child.id(), processes[1].child.id());
+    }
+
     #[test]
     fn steering_is_independent_of_an_invalid_model_draft() {
         let mut chat = Chat::new(1, PathBuf::from("."));

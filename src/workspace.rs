@@ -935,7 +935,8 @@ impl Workspace {
             }
             if let Some(binding) = &session.profile_binding
                 && (!binding.valid()
-                    || !matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex"))
+                    || !(matches!(&session.launch, crate::launch::Launch::Agent(agent) if crate::claude_terminal::supported(agent) || agent == "codex")
+                        || session.launch.native_chat().is_some()))
             {
                 return Err("Invalid local session profile identity.".into());
             }
@@ -1230,7 +1231,6 @@ impl Workspace {
                     )
                 };
                 let conv = self.sessions[idx].conversation_id.take();
-                self.sessions[idx].profile_binding = None;
                 let prev_opts = self.sessions[idx].session_options.take();
                 let mut native_opts =
                     crate::native_chat_options::Options::from_value(prev_opts.as_ref());
@@ -2058,7 +2058,9 @@ mod tests {
             last_model: None,
             codex_seed: None,
             conversation_id: Some(uuid.to_owned()),
-            profile_binding: None,
+            profile_binding: Some(crate::session_profile_identity::Binding::Managed {
+                account_id: "original".into(),
+            }),
             launch_fingerprint: None,
             session_options: Some(serde_json::json!({"model": "claude-sonnet-4-6"})),
             native_options: None,
@@ -2072,6 +2074,13 @@ mod tests {
             cwd: proj_path,
         });
         store.save(&state).unwrap();
+        let reopened: Workspace =
+            serde_json::from_slice(&fs::read(dir.path().join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(
+            reopened.sessions[0].profile_binding,
+            state.sessions[0].profile_binding
+        );
+        assert!(state.sessions[0].profile_binding.is_some());
 
         // 1. Switch Terminal (`Agent("claude")`) -> NativeChat (`ClaudeChat`) in-place:
         assert!(state.switch_saved_session_chat_mode(7, None).unwrap());
@@ -2083,6 +2092,13 @@ mod tests {
         ));
         assert_eq!(state.native_resume(7, pid, "Claude"), Some(uuid));
         store.save(&state).unwrap();
+        let reopened: Workspace =
+            serde_json::from_slice(&fs::read(dir.path().join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(
+            reopened.sessions[0].profile_binding,
+            state.sessions[0].profile_binding
+        );
+        assert!(state.sessions[0].profile_binding.is_some());
 
         // 2. Switch NativeChat (`ClaudeChat`) -> Terminal (`Agent("claude")`) in-place:
         assert!(state.switch_saved_session_chat_mode(7, None).unwrap());
@@ -2095,5 +2111,12 @@ mod tests {
         assert_eq!(state.sessions[0].conversation_id.as_deref(), Some(uuid));
         assert!(!state.native_threads.contains_key(&7));
         store.save(&state).unwrap();
+        let reopened: Workspace =
+            serde_json::from_slice(&fs::read(dir.path().join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(
+            reopened.sessions[0].profile_binding,
+            state.sessions[0].profile_binding
+        );
+        assert!(state.sessions[0].profile_binding.is_some());
     }
 }

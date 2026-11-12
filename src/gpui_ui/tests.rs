@@ -210,6 +210,7 @@ fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
     std::fs::create_dir_all(&proj_dir).expect("create project dir");
 
     let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().to_path_buf()), false, || {});
+    app.synthetic_native_profiles(temp.path());
     app.apply_gpui_action(GpuiAction::AddProjectPath(proj_dir));
     app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
 
@@ -305,13 +306,17 @@ fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
     assert!(chat4.approval.is_none());
 
     // Switch session mode in-place to CLI terminal and back to Native Chat
+    app.synthetic_wait_for_terminal_operation(pane_id);
     app.apply_gpui_action(GpuiAction::SwitchSessionChatMode(pane_id));
+    app.synthetic_wait_for_terminal_operation(pane_id);
     let snap5 = app.gpui_snapshot(960.0, 640.0, 4.0);
     assert_eq!(snap5.tiles[0].session_id, pane_id);
     assert!(!snap5.tiles[0].is_native_chat);
     assert!(snap5.tiles[0].can_switch_chat_mode);
 
+    app.synthetic_wait_for_terminal_operation(pane_id);
     app.apply_gpui_action(GpuiAction::SwitchSessionChatMode(pane_id));
+    app.synthetic_wait_for_terminal_operation(pane_id);
     let snap6 = app.gpui_snapshot(960.0, 640.0, 4.0);
     assert_eq!(snap6.tiles[0].session_id, pane_id);
     assert!(snap6.tiles[0].is_native_chat);

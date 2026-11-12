@@ -21,6 +21,7 @@ use std::{
 };
 
 struct Restart {
+    switch_mode: bool,
     result: Receiver<Result<(), (Terminal, String)>>,
     preferences: Option<crate::agent_preferences::Preferences>,
 }
@@ -140,6 +141,7 @@ impl Session {
         };
         let (sender, result) = mpsc::channel();
         self.restarting = Some(Restart {
+            switch_mode: false,
             result,
             preferences: prefs,
         });
@@ -425,6 +427,7 @@ impl Session {
             match result {
                 Ok(binding) => {
                     self.profile_binding = Some(binding);
+                    self.error.clear();
                     self.start_with_trust(
                         Some(migration.prefs.clone()),
                         migration.preferred_shell.clone(),
@@ -438,6 +441,7 @@ impl Session {
         let stopped = match self
             .restarting
             .as_ref()
+            .filter(|pending| !pending.switch_mode)
             .map(|pending| pending.result.try_recv())
         {
             Some(Ok(result)) => Some(Ok(result)),
@@ -1813,7 +1817,35 @@ impl Tessel {
             session.settings_changed = session.launch_stale(prefs.as_ref());
         }
     }
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
+        let mut native_changed = false;
+        let mut completed_switches = Vec::new();
+        for session in &mut self.sessions {
+            if let Some(pending) = &session.restarting
+                && pending.switch_mode
+            {
+                let result = pending.result.try_recv();
+                if matches!(result, Err(mpsc::TryRecvError::Empty)) {
+                    continue;
+                }
+                session.restarting = None;
+                native_changed = true;
+                match result {
+                    Ok(Ok(())) => completed_switches.push(session.id),
+                    Ok(Err((terminal, error))) => {
+                        session.terminal = Some(terminal);
+                        session.error = error;
+                    }
+                    Err(_) => {
+                        session.error =
+                            "Terminal stop was not confirmed; chat mode was kept.".into()
+                    }
+                }
+            }
+        }
+        for pane in completed_switches {
+            self.switch_session_chat_mode(pane);
+        }
         if !self.state.panels.right_open
             || self.state.panels.right_tab != crate::workspace::SideTab::Conversations
         {
@@ -1957,7 +1989,7 @@ impl Tessel {
         }
         let mut chat_metadata_changed = false;
         for chat in &mut self.chats {
-            chat.poll();
+            native_changed |= chat.poll();
             #[cfg(windows)]
             self.agent_browsers.poll(chat);
             while let Some(call) = chat.tool_calls.pop_front() {
@@ -2001,7 +2033,7 @@ impl Tessel {
             }
         }
         for chat in &mut self.claude_chats {
-            chat.poll();
+            native_changed |= chat.poll();
             match self.state.remember_native_thread(
                 chat.pane,
                 chat.project,
@@ -2236,6 +2268,7 @@ impl Tessel {
                 self.pending_quick_command = None;
             }
         }
+        native_changed
     }
     fn new_session(&mut self, launch: Launch) {
         self.new_session_placed(launch, None);
@@ -5168,47 +5201,8 @@ impl Tessel {
                 egui::vec2(px.width as f32, px.height as f32),
             )
         };
-        // Each native pane owns its provider process and resume ID. No connection on restore.
-        if let Some(project) = self.state.active() {
-            for session in self
-                .sessions
-                .iter()
-                .filter(|s| s.project == Some(project.id))
-            {
-                match session.launch {
-                    Launch::CodexChat if !self.chats.iter().any(|c| c.pane == session.id) => {
-                        let mut chat = crate::chat::Chat::new(project.id, session.cwd.clone());
-                        chat.pane = session.id;
-                        chat.options = crate::native_chat_options::Options::from_value(
-                            session.session_options.as_ref(),
-                        );
-                        if let Some(thread) =
-                            self.state.native_resume(session.id, project.id, "Codex")
-                        {
-                            chat.set_resume(thread.into());
-                        }
-                        self.chats.push(chat);
-                    }
-                    Launch::ClaudeChat
-                        if !self.claude_chats.iter().any(|c| c.pane == session.id) =>
-                    {
-                        let mut chat = crate::claude::Chat::new(
-                            project.id,
-                            session.cwd.clone(),
-                            self.state
-                                .native_resume(session.id, project.id, "Claude")
-                                .map(str::to_owned),
-                        );
-                        chat.pane = session.id;
-                        chat.options = crate::native_chat_options::Options::from_value(
-                            session.session_options.as_ref(),
-                        );
-                        self.claude_chats.push(chat);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // One identity/profile path for both native renderers; never connects on restore.
+        self.ensure_native_chat_instances();
         let mut rename = None;
         let mut close = None;
         let mut split = None;
@@ -6593,12 +6587,132 @@ impl Tessel {
         }
     }
 
+    fn prepare_native_profile(
+        &mut self,
+        pane: u64,
+        agent: &str,
+        saved: Option<&str>,
+    ) -> Result<Option<crate::session_profile::NativeLaunch>, String> {
+        let mut prefs = self
+            .state
+            .agent_prefs
+            .get(agent)
+            .cloned()
+            .unwrap_or_default();
+        let data = self
+            .store
+            .as_ref()
+            .map(|store| store.directory().to_owned());
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == pane)
+            .ok_or("Native pane is unavailable.")?;
+        if session.profile_migration.is_some() {
+            return Ok(None);
+        }
+        if !session.error.is_empty() {
+            return Err(session.error.clone());
+        }
+        let result: Result<Option<crate::session_profile::NativeLaunch>, String> = (|| {
+            if session.profile_binding.is_none()
+                && let Some(saved) = saved
+            {
+                let home =
+                    directories::BaseDirs::new().ok_or("Cannot locate the local home folder.")?;
+                session.profile_migration =
+                    Some(crate::session_profile_migration::Migration::start(
+                        agent.into(),
+                        saved.into(),
+                        session.cwd.clone(),
+                        data.clone(),
+                        home.home_dir().to_owned(),
+                        prefs,
+                        None,
+                        None,
+                    )?);
+                return Ok(None);
+            }
+            if session.profile_binding.is_none()
+                && let Some(data) = data.as_deref()
+                && let Some(line) =
+                    crate::settings_extra_model::active_managed_env_line(data, agent)
+                && crate::agent_env::parse(&prefs.env).is_ok_and(|env| {
+                    crate::agent_env::effective_value(
+                        &env,
+                        crate::session_profile::env_key(agent).expect("native provider"),
+                    )
+                    .is_none()
+                })
+            {
+                if !prefs.env.is_empty() {
+                    prefs.env.push('\n');
+                }
+                prefs.env.push_str(&line);
+            }
+            session.profile_data_dir = data.clone();
+            session.bind_profile(agent, &prefs)?;
+            Ok(Some(crate::session_profile::NativeLaunch::new(
+                agent,
+                session.profile_binding.clone().expect("bound account"),
+                session.profile_root.clone().expect("resolved account"),
+                data,
+            )?))
+        })();
+        if let Err(error) = &result {
+            session.error = error.clone();
+        }
+        result
+    }
+
     fn switch_session_chat_mode(&mut self, pane_id: u64) {
+        if self.chats.iter().any(|c| c.pane == pane_id && c.starting())
+            || self
+                .claude_chats
+                .iter()
+                .any(|c| c.pane == pane_id && c.starting())
+        {
+            self.error = "Wait for native chat startup to finish before switching modes.".into();
+            return;
+        }
+        if self
+            .sessions
+            .iter()
+            .any(|s| s.id == pane_id && (s.loading.is_some() || s.restarting.is_some()))
+        {
+            self.error =
+                "Wait for the terminal operation to finish before switching chat mode.".into();
+            return;
+        }
+        self.ensure_native_chat_instances();
         if self.sessions.iter().any(|session| {
             session.id == pane_id
-                && (session.profile_binding.is_some() || session.profile_migration.is_some())
+                && (session.profile_binding.is_none() || session.profile_migration.is_some())
         }) {
-            self.error = "Switching an account-bound terminal to native chat is not available yet; the original session was kept.".into();
+            self.error = "Identify the original account in the current mode before switching; the session was kept.".into();
+            return;
+        }
+
+        // Do not expose a second transport until the old CLI has acknowledged exit.
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id)
+            && let Some(mut terminal) = session.terminal.take()
+        {
+            let (sender, result) = mpsc::channel();
+            session.restarting = Some(Restart {
+                switch_mode: true,
+                result,
+                preferences: None,
+            });
+            thread::spawn(move || {
+                let result = match terminal.stop_for_restart() {
+                    Ok(()) => {
+                        drop(terminal);
+                        Ok(())
+                    }
+                    Err(error) => Err((terminal, error)),
+                };
+                let _ = sender.send(result);
+            });
             return;
         }
 
@@ -6634,11 +6748,6 @@ impl Tessel {
                 self.chats.retain(|c| c.pane != pane_id);
                 self.claude_chats.retain(|c| c.pane != pane_id);
                 if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id) {
-                    if let Some(mut term) = session.terminal.take() {
-                        thread::spawn(move || {
-                            let _ = term.stop_for_restart();
-                        });
-                    }
                     session.loading = None;
                     session.restarting = None;
                     session.codex_discovery = None;
@@ -10243,7 +10352,7 @@ impl Tessel {
                 && (s.profile_binding.is_none() || s.profile_binding == entry.profile_binding)
                 && matches!(&s.launch, Launch::Agent(agent) if agent == &entry.agent_id);
             let native_match = self.state.native_threads.get(&s.id).is_some_and(|thread| {
-                thread.thread == entry.id && thread.provider == entry.agent_id
+                thread.thread == entry.id && thread.provider.eq_ignore_ascii_case(&entry.agent_id)
             });
             terminal_match || native_match
         }) {
@@ -13938,6 +14047,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             resume_required: false,
             native_host: None,
             restarting: Some(Restart {
+                switch_mode: false,
                 result: receiver,
                 preferences: None,
             }),
@@ -13978,6 +14088,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
         session.terminal.take();
         let (sender, result) = mpsc::channel();
         session.restarting = Some(Restart {
+            switch_mode: false,
             result,
             preferences: None,
         });
