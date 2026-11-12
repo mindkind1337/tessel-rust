@@ -24,7 +24,7 @@ fn guest_request_full_queue_returns_immediately_and_retains_reply_receiver() {
         generation: 1,
         state: Arc::new(Mutex::new(state)),
         tx,
-        stop: Arc::new(AtomicBool::new(false)),
+        stop: Arc::new(GuestStop::default()),
         worker: None,
     };
     let reply = session
@@ -58,6 +58,6 @@ fn guest_request_full_queue_returns_immediately_and_retains_reply_receiver() {
         .send(Ok(json!({"tasks":[],"limited":false})))
         .unwrap();
     assert!(reply.try_recv().unwrap().is_ok());
-    session.stop.store(true, Ordering::Relaxed);
+    session.stop.cancel();
     assert!(session.request(json!({"op":"tasks.list"})).is_err());
 }

@@ -2881,6 +2881,17 @@ fn make_pinned_tls_client(
     rustls::StreamOwned<rustls::ClientConnection, DeadlineStream>,
     Vec<u8>,
 )> {
+    make_cancellable_pinned_tls_client(invitation, connect_timeout, None)
+}
+
+fn make_cancellable_pinned_tls_client(
+    invitation: &Invitation,
+    connect_timeout: Duration,
+    stop: Option<&GuestStop>,
+) -> Result<(
+    rustls::StreamOwned<rustls::ClientConnection, DeadlineStream>,
+    Vec<u8>,
+)> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cert = B64
         .decode(&invitation.certificate)
@@ -2894,6 +2905,9 @@ fn make_pinned_tls_client(
         .with_no_client_auth();
     let stream = TcpStream::connect_timeout(&invitation.address, connect_timeout)
         .map_err(|_| "Host is unreachable")?;
+    if let Some(stop) = stop {
+        stop.register(&stream)?;
+    }
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| e.to_string())?;
@@ -2956,6 +2970,10 @@ pub struct GuestSnapshot {
 #[path = "share/guest_rpc.rs"]
 mod guest_rpc;
 pub use guest_rpc::{GuestRpcError, TASK_RESULT_NOT_AVAILABLE};
+#[path = "share/guest_shutdown.rs"]
+mod guest_shutdown;
+use guest_shutdown::{GuestStop, SocketLifetime, active_state, mark_left};
+
 type GuestRpcResult = std::result::Result<Value, GuestRpcError>;
 
 enum GuestRpcReq {
@@ -2963,14 +2981,13 @@ enum GuestRpcReq {
         payload: Value,
         reply: Option<SyncSender<GuestRpcResult>>,
     },
-    Leave,
 }
 
 pub struct GuestSession {
     generation: u64,
     state: Arc<Mutex<GuestSnapshot>>,
     tx: SyncSender<GuestRpcReq>,
-    stop: Arc<AtomicBool>,
+    stop: Arc<GuestStop>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -2999,7 +3016,7 @@ impl GuestSession {
         };
         let state = Arc::new(Mutex::new(snap));
         let (tx, rx) = mpsc::sync_channel::<GuestRpcReq>(32);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(GuestStop::default());
         let state_worker = Arc::clone(&state);
         let stop_worker = Arc::clone(&stop);
 
@@ -3033,7 +3050,7 @@ impl GuestSession {
 
     /// Queue a request without blocking the UI; the receiver is polled by its owner.
     pub fn request(&self, payload: Value) -> Result<Receiver<GuestRpcResult>> {
-        if self.stop.load(Ordering::Relaxed) {
+        if self.stop.is_stopped() {
             return Err("Session closed.".into());
         }
         let (reply, receiver) = mpsc::sync_channel(1);
@@ -3051,13 +3068,7 @@ impl GuestSession {
 
     /// Synchronous RPC call over the persistent duplex TLS stream (used by tests & actions).
     pub fn call_sync(&self, payload: Value, timeout: Duration) -> Result<Value> {
-        let (rtx, rrx) = mpsc::sync_channel(1);
-        self.tx
-            .send(GuestRpcReq::Call {
-                payload,
-                reply: Some(rtx),
-            })
-            .map_err(|_| "Session closed.".to_string())?;
+        let rrx = self.request(payload)?;
         rrx.recv_timeout(timeout)
             .map_err(|_| "Timed out waiting for host reply.".to_string())?
             .map_err(|error| error.to_string())
@@ -3065,6 +3076,9 @@ impl GuestSession {
 
     /// Non-blocking fire-and-update request for UI buttons.
     pub fn send_async(&self, payload: Value) {
+        if self.stop.is_stopped() {
+            return;
+        }
         let _ = self.tx.try_send(GuestRpcReq::Call {
             payload,
             reply: None,
@@ -3072,21 +3086,15 @@ impl GuestSession {
     }
 
     pub fn leave(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.tx.try_send(GuestRpcReq::Leave);
-        if let Some(w) = self.worker.take() {
-            let _ = w.join();
-        }
+        self.stop.cancel();
+        mark_left(&self.state);
+        // Dropping the handle detaches the bounded/cancellable worker; never join on UI.
+        self.worker.take();
     }
 }
-
 impl Drop for GuestSession {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.tx.try_send(GuestRpcReq::Leave);
-        if let Some(w) = self.worker.take() {
-            let _ = w.join();
-        }
+        self.leave();
     }
 }
 
@@ -3096,11 +3104,17 @@ fn run_guest_worker(
     identity_hex: String,
     state: Arc<Mutex<GuestSnapshot>>,
     rx: Receiver<GuestRpcReq>,
-    stop: Arc<AtomicBool>,
+    stop: Arc<GuestStop>,
 ) {
+    let _socket_lifetime = SocketLifetime(&stop);
+    if stop.is_stopped() {
+        return;
+    }
     let mut client_nonce = [0u8; 32];
     if getrandom::fill(&mut client_nonce).is_err() {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(&state, &stop) else {
+            return;
+        };
         g.phase = GuestPhase::Ended {
             reason: "error".into(),
             host_name: String::new(),
@@ -3108,10 +3122,16 @@ fn run_guest_worker(
         return;
     }
 
-    let (mut tls, cert_der) = match make_pinned_tls_client(&invitation, Duration::from_secs(5)) {
+    let (mut tls, cert_der) = match make_cancellable_pinned_tls_client(
+        &invitation,
+        Duration::from_secs(5),
+        Some(&stop),
+    ) {
         Ok(v) => v,
         Err(_) => {
-            let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(mut g) = active_state(&state, &stop) else {
+                return;
+            };
             g.phase = GuestPhase::Ended {
                 reason: "unreachable".into(),
                 host_name: String::new(),
@@ -3128,7 +3148,9 @@ fn run_guest_worker(
         "identity": identity_hex,
     });
     if write_frame(&mut tls, &hello).is_err() {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(&state, &stop) else {
+            return;
+        };
         g.phase = GuestPhase::Ended {
             reason: "closed".into(),
             host_name: String::new(),
@@ -3139,7 +3161,9 @@ fn run_guest_worker(
     let reply = match read_frame(&mut tls, MAX_RESPONSE) {
         Ok(v) => v,
         Err(_) => {
-            let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(mut g) = active_state(&state, &stop) else {
+                return;
+            };
             g.phase = GuestPhase::Ended {
                 reason: "closed".into(),
                 host_name: String::new(),
@@ -3149,7 +3173,9 @@ fn run_guest_worker(
     };
 
     if let Some(err) = reply.get("error").and_then(Value::as_str) {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(&state, &stop) else {
+            return;
+        };
         g.phase = GuestPhase::Ended {
             reason: err.to_owned(),
             host_name: String::new(),
@@ -3168,7 +3194,9 @@ fn run_guest_worker(
         .and_then(|s| B64.decode(s).ok())
         .unwrap_or_default();
     let Ok(server_nonce): std::result::Result<[u8; 32], _> = server_nonce_vec.try_into() else {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(&state, &stop) else {
+            return;
+        };
         g.phase = GuestPhase::Ended {
             reason: "protocol".into(),
             host_name,
@@ -3179,7 +3207,9 @@ fn run_guest_worker(
     let mut joined = reply.get("status").and_then(Value::as_str) == Some("joined");
 
     {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(&state, &stop) else {
+            return;
+        };
         g.phase = if joined {
             GuestPhase::Joined {
                 sas_code: computed_sas.clone(),
@@ -3200,7 +3230,7 @@ fn run_guest_worker(
             .stream
             .set_read_timeout(Some(Duration::from_millis(150)));
         let wait_start = Instant::now();
-        while !stop.load(Ordering::Relaxed) && wait_start.elapsed() < Duration::from_secs(300) {
+        while !stop.is_stopped() && wait_start.elapsed() < Duration::from_secs(300) {
             tls.get_mut().reset_deadline(Duration::from_secs(10));
             let mut header = [0u8; 4];
             match tls.read_exact(&mut header) {
@@ -3218,7 +3248,9 @@ fn run_guest_worker(
                     };
                     if decision.get("status").and_then(Value::as_str) == Some("joined") {
                         joined = true;
-                        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let Some(mut g) = active_state(&state, &stop) else {
+                            return;
+                        };
                         g.phase = GuestPhase::Joined {
                             sas_code: computed_sas.clone(),
                             host_name: host_name.clone(),
@@ -3230,7 +3262,9 @@ fn run_guest_worker(
                             .and_then(Value::as_str)
                             .unwrap_or("denied")
                             .to_owned();
-                        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let Some(mut g) = active_state(&state, &stop) else {
+                            return;
+                        };
                         g.phase = GuestPhase::Ended { reason, host_name };
                         return;
                     }
@@ -3241,7 +3275,7 @@ fn run_guest_worker(
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    if let Ok(GuestRpcReq::Leave) = rx.try_recv() {
+                    if stop.is_stopped() {
                         return;
                     }
                 }
@@ -3249,9 +3283,11 @@ fn run_guest_worker(
             }
         }
         if !joined {
-            let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(mut g) = active_state(&state, &stop) else {
+                return;
+            };
             g.phase = GuestPhase::Ended {
-                reason: if stop.load(Ordering::Relaxed) {
+                reason: if stop.is_stopped() {
                     "left".into()
                 } else {
                     "timeout".into()
@@ -3271,31 +3307,23 @@ fn run_guest_worker(
     let _ = perform_guest_rpc(
         &mut tls,
         &state,
+        &stop,
         &host_name,
         &json!({"op": "workspace.snapshot"}),
     );
     let _ = perform_guest_rpc(
         &mut tls,
         &state,
+        &stop,
         &host_name,
         &json!({"op": "files.list", "path": ""}),
     );
 
     let mut last_poll = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.is_stopped() {
         match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(GuestRpcReq::Leave) => {
-                tls.get_mut().reset_deadline(Duration::from_secs(2));
-                let _ = write_frame(&mut tls, &json!({"op": "leave"}));
-                let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
-                g.phase = GuestPhase::Ended {
-                    reason: "left".into(),
-                    host_name,
-                };
-                return;
-            }
             Ok(GuestRpcReq::Call { payload, reply }) => {
-                let res = perform_guest_rpc(&mut tls, &state, &host_name, &payload);
+                let res = perform_guest_rpc(&mut tls, &state, &stop, &host_name, &payload);
                 let ended = {
                     let g = state.lock().unwrap_or_else(|e| e.into_inner());
                     matches!(g.phase, GuestPhase::Ended { .. })
@@ -3313,6 +3341,7 @@ fn run_guest_worker(
                     if perform_guest_rpc(
                         &mut tls,
                         &state,
+                        &stop,
                         &host_name,
                         &json!({"op": "workspace.snapshot"}),
                     )
@@ -3333,12 +3362,18 @@ fn run_guest_worker(
 fn perform_guest_rpc(
     tls: &mut rustls::StreamOwned<rustls::ClientConnection, DeadlineStream>,
     state: &Arc<Mutex<GuestSnapshot>>,
+    stop: &GuestStop,
     host_name: &str,
     payload: &Value,
 ) -> GuestRpcResult {
+    if stop.is_stopped() {
+        return Err(GuestRpcError::Transport("Session closed.".into()));
+    }
     tls.get_mut().reset_deadline(Duration::from_secs(15));
     if let Err(e) = write_frame(tls, payload) {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(state, stop) else {
+            return Err(GuestRpcError::Transport("Session closed.".into()));
+        };
         g.phase = GuestPhase::Ended {
             reason: "lost".into(),
             host_name: host_name.to_owned(),
@@ -3349,7 +3384,9 @@ fn perform_guest_rpc(
     let reply = match read_frame(tls, MAX_RESPONSE) {
         Ok(v) => v,
         Err(e) => {
-            let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(mut g) = active_state(state, stop) else {
+                return Err(GuestRpcError::Transport("Session closed.".into()));
+            };
             g.phase = GuestPhase::Ended {
                 reason: "closed".into(),
                 host_name: host_name.to_owned(),
@@ -3367,7 +3404,9 @@ fn perform_guest_rpc(
             .and_then(Value::as_str)
             .unwrap_or("stopped")
             .to_owned();
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(state, stop) else {
+            return Err(GuestRpcError::Transport("Session closed.".into()));
+        };
         g.phase = GuestPhase::Ended {
             reason,
             host_name: host_name.to_owned(),
@@ -3376,7 +3415,9 @@ fn perform_guest_rpc(
     }
 
     if let Some(err) = reply.get("error").and_then(Value::as_str) {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(state, stop) else {
+            return Err(GuestRpcError::Transport("Session closed.".into()));
+        };
         g.last_error = err.to_owned();
         return Err(GuestRpcError::Host(err.to_owned()));
     }
@@ -3384,7 +3425,9 @@ fn perform_guest_rpc(
     let result = reply.get("result").cloned().unwrap_or(Value::Null);
     let op = payload.get("op").and_then(Value::as_str).unwrap_or("");
     {
-        let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut g) = active_state(state, stop) else {
+            return Err(GuestRpcError::Transport("Session closed.".into()));
+        };
         g.last_error.clear();
         match op {
             "workspace.snapshot" => {
@@ -3709,3 +3752,7 @@ mod tests {
 #[cfg(test)]
 #[path = "share/guest_request_tests.rs"]
 mod guest_request_tests;
+
+#[cfg(test)]
+#[path = "share/guest_shutdown_tests.rs"]
+mod guest_shutdown_tests;
