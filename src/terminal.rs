@@ -22,6 +22,16 @@ use portable_pty::CommandBuilder;
 #[cfg(test)]
 use std::sync::mpsc;
 
+fn next_find_input_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.try_update(
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+        |id| id.checked_add(1),
+    )
+    .expect("terminal find identity exhausted")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BroadcastInput {
     Raw(Vec<u8>),
@@ -52,6 +62,7 @@ pub struct TerminalRenderSnapshot {
     pub exited: bool,
     pub exit_code: Option<i32>,
     pub find_open: bool,
+    pub find_input_id: u64,
     pub find_query: String,
     pub find_badge: String,
     pub device_login: Option<crate::device_login::DeviceLoginPrompt>,
@@ -308,6 +319,7 @@ pub struct Terminal {
     broadcast_outbox: Vec<BroadcastInput>,
     agent_kind: Option<String>,
     find_open: bool,
+    find_input_id: u64,
     find_query: String,
     find_index: usize,
     find_focus_pending: bool,
@@ -426,6 +438,7 @@ impl Terminal {
             exited: self.exited,
             exit_code: self.exit_code,
             find_open: self.find_open,
+            find_input_id: self.find_input_id,
             find_query: self.find_query.clone(),
             find_badge,
             device_login: self.device_login.active_prompt().cloned(),
@@ -536,6 +549,11 @@ impl Terminal {
 
     pub fn gpui_clear_selection(&mut self) {
         self.selection = None;
+    }
+
+    pub fn native_find_input(&self) -> Option<(u64, &str)> {
+        self.find_open
+            .then_some((self.find_input_id, self.find_query.as_str()))
     }
 
     pub fn gpui_find_query_str(&self) -> &str {
@@ -710,6 +728,9 @@ impl Terminal {
     }
 
     pub fn open_find(&mut self) {
+        if !self.find_open {
+            self.find_input_id = next_find_input_id();
+        }
         self.find_open = true;
         self.find_focus_pending = true;
     }
@@ -1153,6 +1174,24 @@ impl Terminal {
         self.widget_id
             .is_some_and(|id| ctx.memory(|m| m.has_focus(id)))
     }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn native_find_fixture() -> (Self, mpsc::Receiver<Vec<u8>>) {
+        #[cfg(windows)]
+        let mut command = CommandBuilder::new("cmd.exe");
+        #[cfg(windows)]
+        command.args(["/d", "/c", "exit 0"]);
+        #[cfg(not(windows))]
+        let mut command = CommandBuilder::new("/bin/sh");
+        #[cfg(not(windows))]
+        command.args(["-c", "exit 0"]);
+        let mut terminal = Self::spawn_command(command).unwrap();
+        terminal.fixture = true;
+        terminal.process_output("alpha é😀 alpha\r\nbeta alpha\r\n".as_bytes());
+        let (sender, receiver) = mpsc::sync_channel(32);
+        terminal.backend.replace_input(sender);
+        (terminal, receiver)
+    }
+
     #[cfg(feature = "visual-test")]
     pub fn visual_fixture() -> Result<Self, Box<dyn std::error::Error>> {
         let command = crate::launch::command(
@@ -1261,6 +1300,7 @@ impl Terminal {
             broadcast_outbox: Vec::new(),
             agent_kind: None,
             find_open: false,
+            find_input_id: next_find_input_id(),
             find_query: String::new(),
             find_index: 0,
             find_focus_pending: false,

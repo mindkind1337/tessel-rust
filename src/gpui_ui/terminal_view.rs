@@ -23,6 +23,7 @@ fn rgb_triplet(rgb: [u8; 3]) -> Rgba {
 
 pub(crate) fn render_terminal_pane_body(
     tile: &GpuiPaneTileSnapshot,
+    inputs: &super::terminal_find_inputs::Inputs,
     font_size: f32,
     french: bool,
     tokens: &GpuiThemeTokens,
@@ -155,6 +156,7 @@ pub(crate) fn render_terminal_pane_body(
     render_vt_surface(
         Some(sid),
         render_snap,
+        inputs,
         tile.cursor_style,
         tile.active,
         &tile.error,
@@ -170,6 +172,7 @@ pub(crate) fn render_terminal_pane_body(
 fn render_vt_surface(
     session_id: Option<u64>,
     snap: &TerminalRenderSnapshot,
+    inputs: &super::terminal_find_inputs::Inputs,
     cursor_style: TerminalCursorStyle,
     focused_pane: bool,
     extra_error: &str,
@@ -438,16 +441,8 @@ fn render_vt_surface(
         );
     }
 
-    if snap.find_open {
-        let query_disp = if snap.find_query.is_empty() {
-            if french {
-                "Rechercher dans le terminal…".into()
-            } else {
-                "Find in terminal…".into()
-            }
-        } else {
-            snap.find_query.clone()
-        };
+    if snap.find_open && inputs.visible(session_id, snap.find_input_id) {
+        let find_id = snap.find_input_id;
         wrapper = wrapper.child(
             div()
                 .px(px(8.0))
@@ -460,29 +455,7 @@ fn render_vt_surface(
                 .gap(px(6.0))
                 .text_size(px(11.5))
                 .child(GpuiIcon::Search.render(12.0, tokens.accent))
-                .child(
-                    div()
-                        .id(("term-find-box", salt))
-                        .flex_1()
-                        .px(px(6.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(tokens.term)
-                        .border_1()
-                        .border_color(tokens.accent)
-                        .font_family(mono_font_family())
-                        .text_color(if snap.find_query.is_empty() {
-                            tokens.text_dim
-                        } else {
-                            tokens.text_strong
-                        })
-                        .cursor_text()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.focus_input = FocusInputTarget::TerminalFind(session_id);
-                            cx.notify();
-                        }))
-                        .child(SharedString::from(query_disp)),
-                )
+                .child(inputs.render(session_id, snap, french, tokens, cx))
                 .when(!snap.find_badge.is_empty(), |el| {
                     el.child(
                         div()
@@ -499,14 +472,15 @@ fn render_vt_surface(
                         .rounded(px(4.0))
                         .bg(tokens.surface_2)
                         .cursor_pointer()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.dispatch(
-                                GpuiAction::TerminalStepFind {
-                                    session_id,
-                                    dir: -1,
-                                },
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            super::terminal_find_inputs::run(
+                                root,
+                                session_id,
+                                find_id,
+                                Some(-1),
+                                window,
                                 cx,
-                            );
+                            )
                         }))
                         .child("↑"),
                 )
@@ -518,8 +492,15 @@ fn render_vt_surface(
                         .rounded(px(4.0))
                         .bg(tokens.surface_2)
                         .cursor_pointer()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.dispatch(GpuiAction::TerminalStepFind { session_id, dir: 1 }, cx);
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            super::terminal_find_inputs::run(
+                                root,
+                                session_id,
+                                find_id,
+                                Some(1),
+                                window,
+                                cx,
+                            )
                         }))
                         .child("↓"),
                 )
@@ -530,9 +511,10 @@ fn render_vt_surface(
                         .rounded(px(4.0))
                         .cursor_pointer()
                         .hover(|s| s.bg(tokens.surface_2))
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.focus_input = FocusInputTarget::Terminal(session_id);
-                            root.dispatch(GpuiAction::TerminalCloseFind(session_id), cx);
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            super::terminal_find_inputs::run(
+                                root, session_id, find_id, None, window, cx,
+                            )
                         }))
                         .child(GpuiIcon::Close.render(11.0, tokens.text_dim)),
                 ),
@@ -786,6 +768,7 @@ fn render_terminal_row(
 
 pub(crate) fn render_floating_terminal_drawer(
     floating: &GpuiFloatingTerminalSnapshot,
+    inputs: &super::terminal_find_inputs::Inputs,
     stage_height_px: f32,
     font_size: f32,
     french: bool,
@@ -799,6 +782,7 @@ pub(crate) fn render_floating_terminal_drawer(
         render_vt_surface(
             None,
             snap,
+            inputs,
             floating.cursor_style,
             true,
             err_str,

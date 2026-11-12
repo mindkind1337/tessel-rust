@@ -22,6 +22,7 @@ pub(crate) mod sheet_view;
 pub(crate) mod shell;
 pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
+mod terminal_find_inputs;
 pub(crate) mod terminal_view;
 pub mod theme;
 
@@ -94,6 +95,7 @@ pub(crate) struct TesselGpuiRoot {
     editor_input: editor_input::Input,
     chat_inputs: chat_inputs::Inputs,
     search_inputs: search_inputs::Inputs,
+    terminal_find_inputs: terminal_find_inputs::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -123,6 +125,21 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "enter",
+                terminal_find_inputs::Next,
+                Some("TesselTerminalFind"),
+            ),
+            gpui::KeyBinding::new(
+                "shift-enter",
+                terminal_find_inputs::Previous,
+                Some("TesselTerminalFind"),
+            ),
+            gpui::KeyBinding::new(
+                "escape",
+                terminal_find_inputs::Dismiss,
+                Some("TesselTerminalFind"),
+            ),
             gpui::KeyBinding::new(
                 "enter",
                 editor_tool_inputs::Submit,
@@ -203,6 +220,7 @@ impl TesselGpuiRoot {
             editor_input: editor_input::Input::default(),
             chat_inputs: chat_inputs::Inputs::default(),
             search_inputs: search_inputs::Inputs::default(),
+            terminal_find_inputs: terminal_find_inputs::Inputs::default(),
             _poller_task: poller_task,
         }
     }
@@ -242,6 +260,11 @@ impl TesselGpuiRoot {
                     | crate::remote_panel::control::Command::RenameDraft(_)
             )
         );
+        let terminal_find_open = if let GpuiAction::TerminalOpenFind(sid) = &action {
+            Some(*sid)
+        } else {
+            None
+        };
         let search_toggle = matches!(
             &action,
             GpuiAction::ToggleCommandPalette | GpuiAction::OpenFinder
@@ -271,6 +294,12 @@ impl TesselGpuiRoot {
             _ => {}
         }
         self.app.apply_gpui_action(action);
+        if let Some(sid) = terminal_find_open
+            && let Some((id, _)) = self.app.gpui_terminal_find_input(sid)
+        {
+            self.focus_input = FocusInputTarget::TerminalFind(sid);
+            self.terminal_find_inputs.select_on_focus = Some((sid, id));
+        }
         if search_toggle {
             self.focus_input =
                 self.app
@@ -309,6 +338,7 @@ impl TesselGpuiRoot {
             .search_inputs
             .focused(window, cx)
             .or_else(|| self.editor_input.tools.focused(window, cx))
+            .or_else(|| self.terminal_find_inputs.focused(window, cx))
             .or_else(|| self.chat_inputs.focused(window, cx))
             .or_else(|| self.remote_inputs.focused(window, cx))
             .or_else(|| {
@@ -340,6 +370,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::EditorFind
                         | FocusInputTarget::EditorReplace
                         | FocusInputTarget::EditorGoto
+                        | FocusInputTarget::TerminalFind(_)
                 )
             )
         {
@@ -379,6 +410,20 @@ impl TesselGpuiRoot {
             }
         }
 
+        if ctrl
+            && shift
+            && !alt
+            && key == "f"
+            && let FocusInputTarget::TerminalFind(sid) = self.effective_focus_target()
+        {
+            if let Some((id, _)) = self.app.gpui_terminal_find_input(sid)
+                && let Some(state) = self.terminal_find_inputs.get(sid, id).cloned()
+                && state.update(cx, |s, cx| s.marked_text_range(window, cx).is_none())
+            {
+                self.dispatch(GpuiAction::TerminalOpenFind(sid), cx);
+            }
+            return;
+        }
         if ctrl && !alt {
             if key == "s" && self.focus_input == FocusInputTarget::RemoteText {
                 self.dispatch(
@@ -912,6 +957,56 @@ impl Render for TesselGpuiRoot {
         } else {
             self.remote_inputs = remote_inputs::Inputs::default();
         }
+        if !self.app.gpui_has_open_modal()
+            && let FocusInputTarget::TerminalFind(sid) = self.focus_input
+            && self.app.gpui_terminal_find_input(sid).is_none()
+        {
+            self.focus_input = FocusInputTarget::None;
+        }
+        self.terminal_find_inputs.begin_frame();
+        let had_terminal_find_focus = self.terminal_find_inputs.focused(window, cx).is_some();
+        self.terminal_find_inputs
+            .retain(&self.app.gpui_terminal_find_ids());
+        if !self.app.gpui_has_open_modal() {
+            for tile in &snapshot.tiles {
+                if self
+                    .app
+                    .gpui_terminal_find_input(Some(tile.session_id))
+                    .is_some()
+                    && let Some(snap) = &tile.terminal_render
+                {
+                    self.terminal_find_inputs
+                        .sync(Some(tile.session_id), snap, cx);
+                }
+            }
+            if self.app.gpui_terminal_find_input(None).is_some()
+                && let Some(snap) = &snapshot.floating.terminal_render
+            {
+                self.terminal_find_inputs.sync(None, snap, cx);
+            }
+        }
+        if had_terminal_find_focus && self.terminal_find_inputs.focused(window, cx).is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
+        if let Some(FocusInputTarget::TerminalFind(sid)) =
+            self.terminal_find_inputs.focused(window, cx)
+            && (self.app.gpui_terminal_find_input(sid).is_none()
+                || self.effective_focus_target() != FocusInputTarget::TerminalFind(sid))
+        {
+            window.focus(&self.focus_handle, cx);
+        }
+        if let FocusInputTarget::TerminalFind(sid) = self.effective_focus_target()
+            && let Some((id, _)) = self.app.gpui_terminal_find_input(sid)
+            && let Some(input) = self.terminal_find_inputs.get(sid, id).cloned()
+        {
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+            if self.terminal_find_inputs.select_on_focus.take() == Some((sid, id)) {
+                input.update(cx, |s, cx| {
+                    let len = s.as_str().encode_utf16().count();
+                    s.set_selected_text_range(0..len, window, cx);
+                });
+            }
+        }
         // Every new img() preview must participate here so discarded images leave the GPU atlas.
         let media = match snapshot.center_mode {
             GpuiCenterMode::DocumentEditor => snapshot
@@ -967,6 +1062,7 @@ impl Render for TesselGpuiRoot {
                 &self.remote_inputs,
                 &self.editor_input,
                 &self.chat_inputs,
+                &self.terminal_find_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,

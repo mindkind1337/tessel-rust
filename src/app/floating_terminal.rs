@@ -152,6 +152,23 @@ impl State {
             terminal.poll();
         }
     }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub fn install_find_fixture(&mut self, terminal: Terminal) {
+        self.runtime = Controller::new(|| {});
+        self.runtime.open(move || Ok(terminal)).unwrap();
+        for _ in 0..1000 {
+            self.runtime.poll();
+            if self.runtime.process_ref().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(self.runtime.process_ref().is_some());
+        self.ui.show();
+    }
+    pub fn process_ref(&self) -> Option<&Terminal> {
+        self.runtime.process_ref()
+    }
     pub fn process_mut(&mut self) -> Option<&mut Terminal> {
         self.runtime.process()
     }

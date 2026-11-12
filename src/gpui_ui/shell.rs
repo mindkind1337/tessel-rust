@@ -31,6 +31,7 @@ pub(crate) fn render_workspace_body(
     remote_inputs: &super::remote_inputs::Inputs,
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
+    terminal_inputs: &super::terminal_find_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -60,6 +61,7 @@ pub(crate) fn render_workspace_body(
                 remote_inputs,
                 editor_input,
                 chat_inputs,
+                terminal_inputs,
                 focus_input,
                 tokens,
                 stage_height_px,
@@ -84,6 +86,7 @@ fn render_center_column(
     remote_inputs: &super::remote_inputs::Inputs,
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
+    terminal_inputs: &super::terminal_find_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     stage_height_px: f32,
@@ -117,7 +120,8 @@ fn render_center_column(
                         render_empty_project_launcher(snapshot, tokens, cx).into_any_element()
                     }
                     GpuiCenterMode::WorkGrid => {
-                        render_work_grid(snapshot, chat_inputs, tokens, cx).into_any_element()
+                        render_work_grid(snapshot, chat_inputs, terminal_inputs, tokens, cx)
+                            .into_any_element()
                     }
                     GpuiCenterMode::DocumentEditor => editor_view::render_document_editor_stage(
                         snapshot,
@@ -138,6 +142,7 @@ fn render_center_column(
                 .when(snapshot.floating.open, |el| {
                     el.child(terminal_view::render_floating_terminal_drawer(
                         &snapshot.floating,
+                        terminal_inputs,
                         stage_height_px,
                         snapshot.font_size,
                         snapshot.french,
@@ -560,6 +565,7 @@ fn launcher_card_btn(
 fn render_work_grid(
     snapshot: &GpuiWorkspaceSnapshot,
     chat_inputs: &super::chat_inputs::Inputs,
+    terminal_inputs: &super::terminal_find_inputs::Inputs,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
@@ -569,6 +575,7 @@ fn render_work_grid(
         stage = stage.child(render_pane_tile(
             tile,
             chat_inputs,
+            terminal_inputs,
             snapshot.font_size,
             snapshot.french,
             tokens,
@@ -584,6 +591,7 @@ fn render_work_grid(
 fn render_pane_tile(
     tile: &GpuiPaneTileSnapshot,
     chat_inputs: &super::chat_inputs::Inputs,
+    terminal_inputs: &super::terminal_find_inputs::Inputs,
     font_size: f32,
     french: bool,
     tokens: &GpuiThemeTokens,
@@ -614,8 +622,15 @@ fn render_pane_tile(
         )
         .into_any_element()
     } else {
-        terminal_view::render_terminal_pane_body(tile, font_size, french, tokens, cx)
-            .into_any_element()
+        terminal_view::render_terminal_pane_body(
+            tile,
+            terminal_inputs,
+            font_size,
+            french,
+            tokens,
+            cx,
+        )
+        .into_any_element()
     };
 
     div()

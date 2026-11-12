@@ -695,13 +695,17 @@ pub(crate) enum GpuiAction {
     },
     TerminalOpenFind(Option<u64>),
     TerminalCloseFind(Option<u64>),
-    TerminalSetFindQuery {
+    ApplyNativeTerminalFindEdit {
         session_id: Option<u64>,
-        query: String,
+        instance_id: u64,
+        base: String,
+        text: String,
     },
-    TerminalStepFind {
+    NativeTerminalFindCommand {
         session_id: Option<u64>,
-        dir: isize,
+        instance_id: u64,
+        query: String,
+        step: Option<isize>,
     },
     TerminalDismissDeviceLogin(Option<u64>),
     TerminalOpenTesselUrl(String),
@@ -1668,6 +1672,35 @@ impl Tessel {
     }
 
     #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_terminal_find_fixture(
+        &mut self,
+    ) -> (u64, std::sync::mpsc::Receiver<Vec<u8>>) {
+        self.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let id = self.active_session.unwrap();
+        let receiver = self.replace_terminal_find_fixture(id);
+        self.claude_chats.retain(|c| c.pane != id);
+        self.chats.retain(|c| c.pane != id);
+        (id, receiver)
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn replace_terminal_find_fixture(
+        &mut self,
+        id: u64,
+    ) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (terminal, receiver) = crate::terminal::Terminal::native_find_fixture();
+        let session = self.sessions.iter_mut().find(|s| s.id == id).unwrap();
+        session.launch = Launch::Shell;
+        session.terminal = Some(terminal);
+        receiver
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_floating_find_fixture(&mut self) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (terminal, receiver) = crate::terminal::Terminal::native_find_fixture();
+        self.floating.install_find_fixture(terminal);
+        receiver
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn install_finder_input_fixture(&mut self, root: std::path::PathBuf) {
         self.finder = crate::finder_panel::Finder::fixture(root);
     }
@@ -1825,6 +1858,36 @@ impl Tessel {
             .collect()
     }
 
+    pub(crate) fn gpui_terminal_find_ids(&self) -> Vec<u64> {
+        self.sessions
+            .iter()
+            .filter_map(|s| s.terminal.as_ref()?.native_find_input().map(|v| v.0))
+            .chain(
+                self.floating
+                    .process_ref()
+                    .and_then(|t| t.native_find_input())
+                    .map(|v| v.0),
+            )
+            .collect()
+    }
+
+    pub(crate) fn gpui_terminal_find_input(&self, sid: Option<u64>) -> Option<(u64, &str)> {
+        if self.gpui_has_open_modal() {
+            return None;
+        }
+        let terminal = match sid {
+            Some(id) if self.view == View::Work && !self.floating.ui.is_open() => self
+                .sessions
+                .iter()
+                .find(|s| s.id == id && s.project == self.state.active_project)?
+                .terminal
+                .as_ref()?,
+            None if self.floating.ui.is_open() => self.floating.process_ref()?,
+            _ => return None,
+        };
+        terminal.native_find_input()
+    }
+
     pub(crate) fn gpui_editor_tool_document_id(&self) -> Option<u64> {
         if self.view != View::Files || self.gpui_has_open_modal() {
             return None;
@@ -1971,53 +2034,7 @@ impl Tessel {
                 true
             }
             GpuiFocusTarget::None | GpuiFocusTarget::Terminal(_) => false,
-            GpuiFocusTarget::TerminalFind(session_id) => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::TerminalStepFind {
-                        session_id,
-                        dir: if shift { -1 } else { 1 },
-                    });
-                    return true;
-                }
-                let mut cur = match session_id {
-                    Some(sid) => self
-                        .sessions
-                        .iter()
-                        .find(|s| s.id == sid)
-                        .and_then(|s| s.terminal.as_ref())
-                        .map(|t| t.gpui_find_query_str().to_owned())
-                        .unwrap_or_default(),
-                    None => self
-                        .floating
-                        .process_mut()
-                        .map(|t| t.gpui_find_query_str().to_owned())
-                        .unwrap_or_default(),
-                };
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
-                        session_id,
-                        query: cur,
-                    });
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
-                        session_id,
-                        query: cur,
-                    });
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::TerminalSetFindQuery {
-                        session_id,
-                        query: cur,
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::TerminalFind(_) => false,
             GpuiFocusTarget::ChatComposer(_) => false,
             GpuiFocusTarget::ChatQuestion { .. } => false,
             GpuiFocusTarget::EditorFind
@@ -4503,11 +4520,36 @@ impl Tessel {
             GpuiAction::TerminalCloseFind(session_id) => {
                 self.with_target_terminal(session_id, crate::terminal::Terminal::gpui_close_find);
             }
-            GpuiAction::TerminalSetFindQuery { session_id, query } => {
-                self.with_target_terminal(session_id, |t| t.gpui_find_set_query(query));
+            GpuiAction::ApplyNativeTerminalFindEdit {
+                session_id,
+                instance_id,
+                base,
+                text,
+            } => {
+                if text.len() <= 65536
+                    && self.gpui_terminal_find_input(session_id)
+                        == Some((instance_id, base.as_str()))
+                    && text != base
+                {
+                    self.with_target_terminal(session_id, |t| t.gpui_find_set_query(text));
+                }
             }
-            GpuiAction::TerminalStepFind { session_id, dir } => {
-                self.with_target_terminal(session_id, |t| t.gpui_find_step(dir));
+            GpuiAction::NativeTerminalFindCommand {
+                session_id,
+                instance_id,
+                query,
+                step,
+            } => {
+                if self.gpui_terminal_find_input(session_id) == Some((instance_id, query.as_str()))
+                {
+                    self.with_target_terminal(session_id, |t| {
+                        if let Some(delta) = step {
+                            t.gpui_find_step(delta)
+                        } else {
+                            t.gpui_close_find()
+                        }
+                    });
+                }
             }
             GpuiAction::TerminalDismissDeviceLogin(session_id) => {
                 self.with_target_terminal(
