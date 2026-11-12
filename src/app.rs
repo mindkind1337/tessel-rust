@@ -697,6 +697,7 @@ pub struct Tessel {
     chats: Vec<crate::chat::Chat>,
     claude_chats: Vec<crate::claude::Chat>,
     share: crate::share_panel::SharePanel,
+    share_tasks: crate::shared_task_apply::SnapshotCache,
     remote: crate::remote_panel::RemotePanel,
     status_bar: crate::status_strip::StatusBarState,
     status_telemetry: crate::status_metrics::StatusTelemetry,
@@ -922,6 +923,7 @@ impl Tessel {
             chats: Vec::new(),
             claude_chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
+            share_tasks: crate::shared_task_apply::SnapshotCache::default(),
             remote: crate::remote_panel::RemotePanel::default(),
             status_bar: Default::default(),
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn({
@@ -1353,7 +1355,7 @@ impl Tessel {
         }
         app
     }
-    fn save(&mut self) {
+    fn capture_runtime_state(&mut self) {
         self.refresh_launch_status();
         normalize_session_names(&mut self.sessions);
         self.state.next_pane = self.next_session;
@@ -1388,6 +1390,9 @@ impl Tessel {
             })
             .collect();
         self.state.sync_terminal_layouts(self.grid_room);
+    }
+    fn save(&mut self) {
+        self.capture_runtime_state();
         if let Some(s) = &self.store
             && let Err(e) = s.save(&self.state)
         {
@@ -8733,8 +8738,22 @@ impl Tessel {
             self.state.active_project,
             self.active_session,
         );
+        if let Some(cards) = self
+            .share_tasks
+            .update(&self.state, self.share.task_scope())
+        {
+            self.share.publish_tasks(cards);
+        }
         for cmd in cmds {
             match cmd {
+                crate::share::HostCommand::TaskMutation(command) => {
+                    self.capture_runtime_state();
+                    let state = &mut self.state;
+                    let store = self.store.as_ref();
+                    self.share.complete_task(command, |project, actor, op| {
+                        crate::shared_task_apply::commit(state, store, project, actor, op)
+                    });
+                }
                 crate::share::HostCommand::WriteTerminal { pane_id, bytes } => {
                     if let Some(session) = self.sessions.iter_mut().find(|s| s.id == pane_id)
                         && let Some(terminal) = &mut session.terminal

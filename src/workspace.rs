@@ -573,6 +573,8 @@ pub struct Task {
     pub project: u64,
     pub title: String,
     pub column: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1075,6 +1077,10 @@ impl Workspace {
                 || task.id >= self.next_id
                 || task.column > 3
                 || task.title.len() > 4096
+                || task
+                    .guest_by
+                    .as_ref()
+                    .is_some_and(|s| s.chars().count() > 40)
             {
                 return Err("Invalid task metadata.".into());
             }

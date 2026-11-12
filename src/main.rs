@@ -136,6 +136,7 @@ pub mod settings_pages_panel;
 mod settings_surface;
 pub mod share;
 pub mod share_panel;
+mod shared_task_apply;
 pub mod shortcuts;
 pub mod side_panels_model;
 pub mod side_panels_ui;

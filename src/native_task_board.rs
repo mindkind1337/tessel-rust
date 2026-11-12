@@ -238,24 +238,28 @@ mod tests {
     fn tasks() -> Vec<Task> {
         vec![
             Task {
+                guest_by: None,
                 id: 1,
                 project: 1,
                 title: "To do".into(),
                 column: 0,
             },
             Task {
+                guest_by: None,
                 id: 2,
                 project: 1,
                 title: "Done".into(),
                 column: 3,
             },
             Task {
+                guest_by: None,
                 id: 3,
                 project: 1,
                 title: "Done too".into(),
                 column: 3,
             },
             Task {
+                guest_by: None,
                 id: 4,
                 project: 2,
                 title: "Foreign".into(),

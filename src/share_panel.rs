@@ -203,6 +203,8 @@ pub struct SharePanel {
     pub guest_git_status: String,
     pub guest_new_task_title: String,
     pub guest_tasks: Vec<Value>,
+    guest_tasks_limited: bool,
+    guest_tasks_error: String,
 
     // Toolbar pill popover & knock modal state
     pill_popover_open: bool,
@@ -255,6 +257,8 @@ impl Default for SharePanel {
             guest_git_status: String::new(),
             guest_new_task_title: String::new(),
             guest_tasks: Vec::new(),
+            guest_tasks_limited: false,
+            guest_tasks_error: String::new(),
             pill_popover_open: false,
             pill_popover_just_opened: false,
             ask_draft: None,
@@ -394,6 +398,30 @@ impl SharePanel {
             .collect();
         host.sync_workspace_state(shared, panes, pages, active_project, active_pane);
         host.drain_commands()
+    }
+
+    pub fn publish_tasks(&self, cards: Vec<crate::share::SharedTask>) {
+        if let Some(host) = &self.host {
+            host.publish_tasks(cards);
+        }
+    }
+    pub fn task_scope(&self) -> Option<(Vec<u8>, Vec<u64>)> {
+        self.host.as_ref().map(crate::share::Host::task_scope)
+    }
+    pub fn complete_task(
+        &self,
+        command: crate::share::GuestTaskCommand,
+        commit: impl FnOnce(
+            u64,
+            &str,
+            &crate::share::GuestTaskOp,
+        ) -> Result<(bool, Vec<crate::share::SharedTask>), String>,
+    ) {
+        if let Some(host) = &self.host {
+            host.complete_task(command, commit);
+        } else {
+            command.reject();
+        }
     }
 
     /// Returns a map of `project_id -> Vec<guest_initials>` for the left sidebar `.osb-live` badge.
@@ -2816,12 +2844,28 @@ impl SharePanel {
                         "Refresh tasks"
                     })
                     .clicked()
-                    && let Ok(val) = sess.call_sync(
-                        json!({"op": "tasks.list", "projectId": self.guest_selected_project}),
-                        Duration::from_secs(3),
-                    )
                 {
-                    self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
+                    match sess.call_sync(
+                        json!({"op":"tasks.list", "projectId":self.guest_selected_project}),
+                        Duration::from_secs(3),
+                    ) {
+                        Ok(val) => {
+                            self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
+                            self.guest_tasks_limited = val["limited"].as_bool().unwrap_or(false);
+                            self.guest_tasks_error.clear();
+                        }
+                        Err(e) => {
+                            self.guest_tasks.clear();
+                            self.guest_tasks_error = e;
+                        }
+                    }
+                }
+                if self.guest_tasks_limited {
+                    ui.label(if french {
+                        "Affichage partiel : le tableau dépasse la limite de partage."
+                    } else {
+                        "Partial view: the board exceeds the sharing limit."
+                    });
                 }
                 for t in &self.guest_tasks {
                     ui.label(format!(
@@ -2832,32 +2876,24 @@ impl SharePanel {
                 }
                 if gs.rights.tasks {
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.guest_new_task_title)
-                                .desired_width(220.0_f32)
-                                .hint_text(if french {
-                                    "Nouvelle tâche…"
-                                } else {
-                                    "New task…"
-                                }),
-                        );
-                        if ui.button(if french { "Ajouter" } else { "Add" }).clicked()
-                            && !self.guest_new_task_title.trim().is_empty()
-                            && let Ok(val) = sess.call_sync(
-                                json!({
-                                    "op": "tasks.mutate",
-                                    "projectId": self.guest_selected_project,
-                                    "action": "add",
-                                    "title": self.guest_new_task_title.trim(),
-                                    "column": "todo"
-                                }),
-                                Duration::from_secs(3),
-                            )
-                        {
-                            self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
-                            self.guest_new_task_title.clear();
+                        ui.add(egui::TextEdit::singleline(&mut self.guest_new_task_title).char_limit(300)
+                            .desired_width(220.0).hint_text(if french { "Nouvelle tâche…" } else { "New task…" }));
+                        if ui.button(if french { "Ajouter" } else { "Add" }).clicked() && !self.guest_new_task_title.trim().is_empty() {
+                            match sess.call_sync(json!({"op":"tasks.mutate", "projectId":self.guest_selected_project,
+                                "action":"add", "title":self.guest_new_task_title.trim(), "column":"todo"}), Duration::from_secs(3)) {
+                                Ok(val) => {
+                                    self.guest_tasks = val["tasks"].as_array().cloned().unwrap_or_default();
+                                    self.guest_tasks_limited = val["limited"].as_bool().unwrap_or(false);
+                                    self.guest_new_task_title.clear();
+                                    self.guest_tasks_error.clear();
+                                }
+                                Err(e) => { self.guest_tasks_error = e; }
+                            }
                         }
                     });
+                }
+                if !self.guest_tasks_error.is_empty() {
+                    ui.colored_label(egui::Color32::LIGHT_RED, &self.guest_tasks_error);
                 }
             }
             GuestSubView::Pages => {

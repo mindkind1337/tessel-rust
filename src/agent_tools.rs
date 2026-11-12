@@ -109,6 +109,7 @@ pub fn execute(
             };
             let id = state.id()?;
             state.tasks.push(Task {
+                guest_by: None,
                 id,
                 project,
                 title: title.into(),

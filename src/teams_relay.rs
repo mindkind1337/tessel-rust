@@ -1638,6 +1638,7 @@ impl TeamsRelayHub {
                             && let Ok(id) = state.id()
                         {
                             state.tasks.push(crate::workspace::Task {
+                                guest_by: None,
                                 id,
                                 project: caller_project,
                                 title: title.to_owned(),

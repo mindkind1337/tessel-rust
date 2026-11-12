@@ -17,6 +17,9 @@ struct Backup {
 pub fn export(path: &Path, state: &Workspace) -> Result<()> {
     state.validate()?;
     let mut portable = state.clone();
+    for task in &mut portable.tasks {
+        task.guest_by = None;
+    }
     portable.quick_commands.clear();
     portable.custom_agents.clear();
     portable
@@ -72,6 +75,9 @@ pub fn import(path: &Path) -> Result<Workspace> {
     }
     // A portable file must never introduce launch commands or environment
     // secrets. Visibility is inert and remains portable.
+    for task in &mut backup.workspace.tasks {
+        task.guest_by = None;
+    }
     backup.workspace.quick_commands.clear();
     backup.workspace.custom_agents.clear();
     backup

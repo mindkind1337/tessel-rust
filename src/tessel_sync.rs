@@ -502,6 +502,13 @@ pub fn check_shrink_guard(prev_projects: usize, next_projects: usize) -> Option<
 /// before building a cloud sync bundle (`rust_schema = 1`).
 pub fn sanitize_workspace_json_for_sync(mut raw: Value) -> Value {
     if let Some(obj) = raw.as_object_mut() {
+        if let Some(tasks) = obj.get_mut("tasks").and_then(Value::as_array_mut) {
+            for task in tasks {
+                if let Some(task) = task.as_object_mut() {
+                    task.remove("guest_by");
+                }
+            }
+        }
         obj.remove("native_threads");
         obj.remove("chat_threads");
         obj.remove("claude_threads");

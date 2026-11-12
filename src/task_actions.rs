@@ -25,6 +25,7 @@ pub fn apply(
             }
             let id = state.id()?;
             state.tasks.push(Task {
+                guest_by: None,
                 id,
                 project,
                 title,
@@ -126,6 +127,7 @@ mod tests {
         let mut state = workspace();
         state.tasks = (0..10_000)
             .map(|n| Task {
+                guest_by: None,
                 id: n + 3,
                 project: 1,
                 title: "Existing".into(),
@@ -142,18 +144,21 @@ mod tests {
         let mut state = workspace();
         state.tasks = vec![
             Task {
+                guest_by: None,
                 id: 10,
                 project: 1,
                 title: "Alpha".into(),
                 column: 0,
             },
             Task {
+                guest_by: None,
                 id: 11,
                 project: 1,
                 title: "Beta".into(),
                 column: 3,
             },
             Task {
+                guest_by: None,
                 id: 12,
                 project: 2,
                 title: "Foreign".into(),

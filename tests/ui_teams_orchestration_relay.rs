@@ -56,6 +56,7 @@ mod workspace {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Task {
+        pub guest_by: Option<String>,
         pub id: u64,
         pub project: u64,
         pub title: String,
@@ -68,6 +69,7 @@ mod workspace {
         pub last_model: Option<()>,
         pub codex_seed: Option<()>,
         pub conversation_id: Option<String>,
+        pub profile_binding: Option<()>,
         pub launch_fingerprint: Option<String>,
         pub session_options: Option<serde_json::Value>,
         pub native_options: Option<serde_json::Value>,
@@ -129,6 +131,7 @@ use workspace::{SavedSession, Workspace};
 
 fn make_session(id: u64, project: u64, name: &str, agent: &str) -> SavedSession {
     SavedSession {
+        profile_binding: None,
         native_host: None,
         last_model: None,
         codex_seed: None,

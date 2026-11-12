@@ -1105,6 +1105,10 @@ pub struct SharedProject {
     pub path: PathBuf,
 }
 
+#[path = "share/task_board.rs"]
+mod task_board;
+pub use task_board::{GuestTaskCommand, GuestTaskOp, SharedTask};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharedPaneSnapshot {
     pub id: u64,
@@ -1123,6 +1127,7 @@ pub struct SharedBrowserPage {
 
 #[derive(Debug, Clone)]
 pub enum HostCommand {
+    TaskMutation(GuestTaskCommand),
     WriteTerminal {
         pane_id: u64,
         bytes: Vec<u8>,
@@ -1188,6 +1193,7 @@ struct GuestSlot {
 }
 
 struct HostInner {
+    task_board: task_board::TaskBoard,
     host_name: String,
     address: SocketAddr,
     cert_b64: String,
@@ -1392,6 +1398,7 @@ impl Host {
         );
 
         let mut inner_data = HostInner {
+            task_board: task_board::TaskBoard::default(),
             host_name: if host_name.trim().is_empty() {
                 "Host".into()
             } else {
@@ -1506,7 +1513,7 @@ impl Host {
                 canon_projects.push(proj);
             }
         }
-        if !canon_projects.is_empty() {
+        {
             let new_ids: Vec<u64> = canon_projects.iter().map(|p| p.id).collect();
             for inv in &mut guard.invites {
                 if inv.include_later {
@@ -2239,6 +2246,9 @@ fn cleanup_disconnected_guest(inner: &Arc<Mutex<HostInner>>, guest_id: &str, cou
 
 fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Value) -> Value {
     let op = req.get("op").and_then(Value::as_str).unwrap_or("");
+    if matches!(op, "tasks.list" | "tasks.mutate") {
+        return task_board::dispatch(inner, guest_id, req);
+    }
     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g_idx) = guard.guests.iter().position(|s| s.guest.id == guest_id) else {
         return json!({"ended": true, "reason": "removed", "error": "Removed from session."});
@@ -2749,95 +2759,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
             }
             "scm.push" | "scm.pull" | "scm.fetch" => {
                 Err("Push, pull and fetch stay exclusively with the host.".into())
-            }
-            "tasks.list" => {
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let tasks_path = proj.path.join(".tessel").join("live-share-tasks.json");
-                let items: Value = std::fs::read_to_string(&tasks_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_else(|| json!([]));
-                Ok(json!({"tasks": items}))
-            }
-            "tasks.mutate" => {
-                if !rights.tasks {
-                    return Err("Tasks permission is required to manage tasks.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let dir = proj.path.join(".tessel");
-                let _ = std::fs::create_dir_all(&dir);
-                let tasks_path = dir.join("live-share-tasks.json");
-                let mut items: Vec<Value> = std::fs::read_to_string(&tasks_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                let action = req.get("action").and_then(Value::as_str).unwrap_or("");
-                match action {
-                    "add" => {
-                        let title = req
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .trim();
-                        if title.is_empty() || items.len() >= 500 {
-                            return Err("Invalid task title.".into());
-                        }
-                        let col = req.get("column").and_then(Value::as_str).unwrap_or("todo");
-                        let id = format!("ls-task-{}", now_epoch_ms());
-                        items.push(json!({"id": id, "title": title, "column": col}));
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} added task: {title}"),
-                            format!("{guest_name} a ajouté une tâche : {title}"),
-                            false,
-                        );
-                    }
-                    "move" => {
-                        let tid = req.get("id").and_then(Value::as_str).unwrap_or("");
-                        let col = req.get("column").and_then(Value::as_str).unwrap_or("todo");
-                        if let Some(card) = items
-                            .iter_mut()
-                            .find(|c| c.get("id").and_then(Value::as_str) == Some(tid))
-                        {
-                            let title = card
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .unwrap_or(tid)
-                                .to_owned();
-                            card["column"] = json!(col);
-                            guard.record_action(
-                                &guest_name,
-                                proj.id,
-                                format!("{guest_name} moved “{title}” to {col}"),
-                                format!("{guest_name} a déplacé « {title} » vers {col}"),
-                                false,
-                            );
-                        }
-                    }
-                    "delete" => {
-                        let tid = req.get("id").and_then(Value::as_str).unwrap_or("");
-                        items.retain(|c| c.get("id").and_then(Value::as_str) != Some(tid));
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} deleted task {tid}"),
-                            format!("{guest_name} a supprimé la tâche {tid}"),
-                            false,
-                        );
-                    }
-                    _ => return Err("Unsupported task mutation.".into()),
-                }
-                if let Ok(bytes) = serde_json::to_vec_pretty(&items) {
-                    let _ = std::fs::write(&tasks_path, bytes);
-                }
-                Ok(json!({"tasks": items}))
             }
             "pages.list" => {
                 if !rights.pages_view {

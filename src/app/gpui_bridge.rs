@@ -1430,6 +1430,7 @@ impl Tessel {
             chats: Vec::new(),
             claude_chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
+            share_tasks: crate::shared_task_apply::SnapshotCache::default(),
             remote: crate::remote_panel::RemotePanel::default(),
             status_bar: Default::default(),
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn(telemetry_repaint),
@@ -7268,6 +7269,7 @@ mod panel_snapshot_tests {
         let pid = app.state.active_project.unwrap();
         app.state.tasks = (0..10_000)
             .map(|id| crate::workspace::Task {
+                guest_by: None,
                 id,
                 project: pid,
                 title: "existing".into(),
