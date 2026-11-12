@@ -1434,12 +1434,14 @@ fn render_image_stage(
 
 pub(crate) fn render_browser_stage(
     snapshot: &GpuiWorkspaceSnapshot,
+    browser_input: &super::browser_input::Input,
     tokens: &GpuiThemeTokens,
     _window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let french = snapshot.french;
     let b = &snapshot.browser;
+    let expected_address_input = browser_input.state().cloned();
     let can_show = snapshot.overlay_title.is_none() && !snapshot.floating.open;
 
     #[cfg(windows)]
@@ -1501,10 +1503,16 @@ pub(crate) fn render_browser_stage(
                     let y = f32::from(bounds.origin.y);
                     let w = f32::from(bounds.size.width);
                     let h = f32::from(bounds.size.height);
-                    let _ = view_entity.update(cx, |root, _| {
-                        root.app
+                    let _ = view_entity.update(cx, |root, cx| {
+                        if root
+                            .app
                             .browser
-                            .sync_gpui_bounds(x, y, w, h, scale, can_show, None, !can_show);
+                            .sync_gpui_bounds(x, y, w, h, scale, can_show, None, !can_show)
+                        {
+                            root.app.browser.cancel_native_address_edit();
+                            root.focus_input = FocusInputTarget::None;
+                            window.blur(cx);
+                        }
                     });
                 },
             )
@@ -1576,27 +1584,7 @@ pub(crate) fn render_browser_stage(
                         }))
                         .child(if french { "Actualiser" } else { "Reload" }),
                 )
-                .child(
-                    div()
-                        .id("browser-url-box")
-                        .flex_1()
-                        .px(px(8.0))
-                        .py(px(3.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.term)
-                        .border_1()
-                        .border_color(tokens.border_strong)
-                        .font_family(mono_font_family())
-                        .text_size(px(11.5))
-                        .text_color(tokens.text_strong)
-                        .truncate()
-                        .cursor_text()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.focus_input = FocusInputTarget::BrowserUrl;
-                            cx.notify();
-                        }))
-                        .child(SharedString::from(b.address.clone())),
-                )
+                .child(browser_input.render(french, tokens, cx))
                 .child(
                     div()
                         .id("browser-go")
@@ -1607,8 +1595,10 @@ pub(crate) fn render_browser_stage(
                         .text_size(px(11.0))
                         .text_color(gpui::rgb(0xFF_FF_FF))
                         .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::BrowserNavigate, cx);
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            if expected_address_input.as_ref() == root.browser_input.state() {
+                                super::browser_input::navigate(root, window, cx);
+                            }
                         }))
                         .child("Go"),
                 )

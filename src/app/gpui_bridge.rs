@@ -804,6 +804,14 @@ pub(crate) enum GpuiAction {
     FollowDocumentLink(String),
     // Embedded Browser Tab actions
     BrowserSetAddress(String),
+    BeginNativeBrowserAddress((u64, Option<u64>)),
+    CancelNativeBrowserAddress((u64, Option<u64>)),
+    NativeBrowserAddress {
+        scope: (u64, Option<u64>),
+        base: String,
+        text: String,
+        navigate: bool,
+    },
     BrowserNavigate,
     BrowserBack,
     BrowserForward,
@@ -1858,6 +1866,18 @@ impl Tessel {
             .collect()
     }
 
+    pub(crate) fn gpui_browser_address(&self) -> Option<((u64, Option<u64>), &str)> {
+        #[cfg(windows)]
+        if self.view == View::Browser && !self.gpui_has_open_modal() && !self.floating.ui.is_open()
+        {
+            return Some((
+                (self.browser.address_generation(), self.state.active_project),
+                self.browser.address_str(),
+            ));
+        }
+        None
+    }
+
     pub(crate) fn gpui_terminal_find_ids(&self) -> Vec<u64> {
         self.sessions
             .iter()
@@ -1974,7 +1994,7 @@ impl Tessel {
             View::Files => GpuiFocusTarget::EditorBody,
             View::Remote => GpuiFocusTarget::None,
             #[cfg(windows)]
-            View::Browser => GpuiFocusTarget::BrowserUrl,
+            View::Browser => GpuiFocusTarget::None,
         }
     }
 
@@ -2042,31 +2062,7 @@ impl Tessel {
             | GpuiFocusTarget::EditorGoto => false,
             // Only the native entity may edit document text; root focus must never append.
             GpuiFocusTarget::EditorBody => false,
-            GpuiFocusTarget::BrowserUrl => {
-                if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::BrowserNavigate);
-                    return true;
-                }
-                #[cfg(windows)]
-                let mut cur = self.browser.address_str().to_owned();
-                #[cfg(not(windows))]
-                let mut cur = String::new();
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::BrowserSetAddress(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::BrowserUrl => false,
             GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
             GpuiFocusTarget::HelpQuery => {
                 let mut cur = self.gpui_extra.help_query.clone();
@@ -4469,6 +4465,8 @@ impl Tessel {
             GpuiAction::CloseBrowserTab => {
                 #[cfg(windows)]
                 {
+                    self.browser.cancel_native_address_edit();
+                    self.browser.invalidate_address_input();
                     self.browser_tab_open = false;
                     self.browser.close_popups();
                     self.browser.visible(false);
@@ -5021,6 +5019,37 @@ impl Tessel {
                         }
                         Err(e) => self.error = e,
                     }
+                }
+            }
+            GpuiAction::BeginNativeBrowserAddress(scope) => {
+                if self.gpui_browser_address().map(|v| v.0) == Some(scope) {
+                    #[cfg(windows)]
+                    self.browser.begin_native_address_edit();
+                }
+            }
+            GpuiAction::CancelNativeBrowserAddress(scope) => {
+                if self.gpui_browser_address().map(|v| v.0) == Some(scope) {
+                    #[cfg(windows)]
+                    self.browser.cancel_native_address_edit();
+                }
+            }
+            GpuiAction::NativeBrowserAddress {
+                scope,
+                base,
+                text,
+                navigate,
+            } => {
+                if text.len() <= 8192 && self.gpui_browser_address() == Some((scope, base.as_str()))
+                {
+                    #[cfg(windows)]
+                    {
+                        self.browser.set_native_address_draft(text);
+                        if navigate {
+                            self.browser.navigate_now();
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    let _ = (text, navigate);
                 }
             }
             GpuiAction::BrowserSetAddress(addr) => {

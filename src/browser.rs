@@ -26,13 +26,26 @@ enum Event {
 
 pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<String>);
 
+fn next_address_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.try_update(
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+        |id| id.checked_add(1),
+    )
+    .expect("browser address identity exhausted")
+}
+
 pub struct Browser {
+    address_generation: u64,
     // Drop child OAuth popups first, then main view, then shared WebContext environment.
     popups: crate::browser_popup::win32::PopupManager,
     view: Option<WebView>,
     // Drop view before its environment.
     context: Option<WebContext>,
     address: String,
+    committed_address: String,
+    address_editing: bool,
     popup: Option<String>,
     error: String,
     downloads: VecDeque<downloads::Record>,
@@ -59,10 +72,13 @@ impl Default for Browser {
             .and_then(|d| d.download_dir().map(|p| p.join("Tessel Rust")))
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
         Self {
+            address_generation: next_address_generation(),
             popups: Default::default(),
             view: None,
             context: None,
             address: "https://example.com".into(),
+            committed_address: "https://example.com".into(),
+            address_editing: false,
             popup: None,
             error: String::new(),
             downloads: VecDeque::new(),
@@ -91,7 +107,7 @@ impl Browser {
     pub fn active_url(&self) -> Option<&str> {
         self.view
             .as_ref()
-            .map(|_| self.address.as_str())
+            .map(|_| self.committed_address.as_str())
             .filter(|u| !u.trim().is_empty())
     }
 
@@ -103,7 +119,43 @@ impl Browser {
         &self.address
     }
 
+    pub(crate) fn begin_native_address_edit(&mut self) {
+        self.address_editing = true;
+    }
+    pub(crate) fn cancel_native_address_edit(&mut self) {
+        if self.address_editing {
+            self.address = self.committed_address.clone();
+            self.address_editing = false;
+            self.invalidate_address_input();
+        }
+    }
+    fn observe_navigation(&mut self, address: String) {
+        self.committed_address = address.clone();
+        if !self.address_editing {
+            self.address_generation = next_address_generation();
+            self.address = address;
+        }
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn navigation_fixture(&mut self, address: &str) {
+        self.sender
+            .send(Event::Navigation(address.to_owned()))
+            .unwrap();
+        self.poll();
+    }
+    pub(crate) fn invalidate_address_input(&mut self) {
+        self.address_generation = next_address_generation();
+    }
+    pub(crate) fn address_generation(&self) -> u64 {
+        self.address_generation
+    }
+    pub(crate) fn set_native_address_draft(&mut self, address: String) {
+        self.address_editing = true;
+        self.address = address;
+    }
     pub fn set_address_str(&mut self, address: String) {
+        self.address_editing = false;
+        self.address_generation = next_address_generation();
         self.address = address;
     }
 
@@ -586,7 +638,10 @@ impl Browser {
             self.error = "Unsupported or oversized browser address.".into();
             return;
         };
+        self.address_generation = next_address_generation();
         self.address = address.clone();
+        self.committed_address = address.clone();
+        self.address_editing = false;
         self.error.clear();
         if let Some(view) = &self.view {
             self.error = view
@@ -603,11 +658,13 @@ impl Browser {
             match event {
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
-                Event::Navigation(address) => self.address = address,
+                Event::Navigation(address) => self.observe_navigation(address),
             }
         }
     }
     pub fn open_url(&mut self, url: &str) {
+        self.address_editing = false;
+        self.address_generation = next_address_generation();
         self.address = url.to_owned();
         if self.view.is_some() {
             self.navigate();

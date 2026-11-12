@@ -32,6 +32,7 @@ pub(crate) fn render_workspace_body(
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
     terminal_inputs: &super::terminal_find_inputs::Inputs,
+    browser_input: &super::browser_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     left_width_px: f32,
@@ -62,6 +63,7 @@ pub(crate) fn render_workspace_body(
                 editor_input,
                 chat_inputs,
                 terminal_inputs,
+                browser_input,
                 focus_input,
                 tokens,
                 stage_height_px,
@@ -87,6 +89,7 @@ fn render_center_column(
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
     terminal_inputs: &super::terminal_find_inputs::Inputs,
+    browser_input: &super::browser_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     stage_height_px: f32,
@@ -130,10 +133,14 @@ fn render_center_column(
                         cx,
                     )
                     .into_any_element(),
-                    GpuiCenterMode::BrowserTab => {
-                        editor_view::render_browser_stage(snapshot, tokens, window, cx)
-                            .into_any_element()
-                    }
+                    GpuiCenterMode::BrowserTab => editor_view::render_browser_stage(
+                        snapshot,
+                        browser_input,
+                        tokens,
+                        window,
+                        cx,
+                    )
+                    .into_any_element(),
                     GpuiCenterMode::RemoteSftp => {
                         render_remote_sftp_stage(snapshot, remote_inputs, focus_input, tokens, cx)
                             .into_any_element()

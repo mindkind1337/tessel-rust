@@ -3,6 +3,7 @@
 //! Provides a 1:1 CSS Flexbox + DirectWrite subpixel typography + `resvg` vector icon frontend
 //! while keeping the `eframe`/`egui` Compatibility renderer intact with automatic runtime fallback.
 
+mod browser_input;
 mod chat_inputs;
 pub(crate) mod chat_view;
 pub(crate) mod chrome;
@@ -96,6 +97,7 @@ pub(crate) struct TesselGpuiRoot {
     chat_inputs: chat_inputs::Inputs,
     search_inputs: search_inputs::Inputs,
     terminal_find_inputs: terminal_find_inputs::Inputs,
+    browser_input: browser_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -125,6 +127,16 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new(
+                "escape",
+                browser_input::Dismiss,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new(
+                "enter",
+                browser_input::Navigate,
+                Some("TesselBrowserAddress"),
+            ),
             gpui::KeyBinding::new(
                 "enter",
                 terminal_find_inputs::Next,
@@ -221,6 +233,7 @@ impl TesselGpuiRoot {
             chat_inputs: chat_inputs::Inputs::default(),
             search_inputs: search_inputs::Inputs::default(),
             terminal_find_inputs: terminal_find_inputs::Inputs::default(),
+            browser_input: browser_input::Input::default(),
             _poller_task: poller_task,
         }
     }
@@ -339,6 +352,11 @@ impl TesselGpuiRoot {
             .focused(window, cx)
             .or_else(|| self.editor_input.tools.focused(window, cx))
             .or_else(|| self.terminal_find_inputs.focused(window, cx))
+            .or_else(|| {
+                self.browser_input
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::BrowserUrl)
+            })
             .or_else(|| self.chat_inputs.focused(window, cx))
             .or_else(|| self.remote_inputs.focused(window, cx))
             .or_else(|| {
@@ -347,6 +365,9 @@ impl TesselGpuiRoot {
                     .then_some(FocusInputTarget::EditorBody)
             });
         if let Some(target) = native_target {
+            if target == FocusInputTarget::BrowserUrl && key != "enter" && key != "escape" {
+                browser_input::begin_edit(self, cx);
+            }
             self.focus_input = target;
             if !ctrl && !alt && key == "enter" && target == FocusInputTarget::RemoteRename {
                 self.dispatch(
@@ -357,6 +378,18 @@ impl TesselGpuiRoot {
             }
         }
 
+        if ctrl && !shift && key == "l" && self.app.gpui_browser_address().is_some() {
+            if let Some(input) = self.browser_input.state().cloned()
+                && input.update(cx, |s, cx| s.marked_text_range(window, cx).is_some())
+            {
+                return;
+            }
+            browser_input::begin_edit(self, cx);
+            self.focus_input = FocusInputTarget::BrowserUrl;
+            self.browser_input.select_all = true;
+            cx.notify();
+            return;
+        }
         if key == "f1" {
             self.dispatch(GpuiAction::OpenHelp, cx);
             return;
@@ -371,6 +404,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::EditorReplace
                         | FocusInputTarget::EditorGoto
                         | FocusInputTarget::TerminalFind(_)
+                        | FocusInputTarget::BrowserUrl
                 )
             )
         {
@@ -963,6 +997,30 @@ impl Render for TesselGpuiRoot {
         {
             self.focus_input = FocusInputTarget::None;
         }
+        let browser_was_focused = self.browser_input.focused(window, cx);
+        let previous_browser_input = self.browser_input.state().cloned();
+        if let Some((scope, text)) = self
+            .app
+            .gpui_browser_address()
+            .map(|(s, t)| (s, t.to_owned()))
+        {
+            self.browser_input.sync(scope, &text, cx);
+            if (self.browser_input.select_all
+                || (browser_was_focused
+                    && previous_browser_input.as_ref() != self.browser_input.state()))
+                && let Some(input) = self.browser_input.state().cloned()
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+                if std::mem::take(&mut self.browser_input.select_all) {
+                    input.update(cx, |s, cx| {
+                        let len = s.as_str().encode_utf16().count();
+                        s.set_selected_text_range(0..len, window, cx);
+                    });
+                }
+            }
+        } else if browser_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         self.terminal_find_inputs.begin_frame();
         let had_terminal_find_focus = self.terminal_find_inputs.focused(window, cx).is_some();
         self.terminal_find_inputs
@@ -1063,6 +1121,7 @@ impl Render for TesselGpuiRoot {
                 &self.editor_input,
                 &self.chat_inputs,
                 &self.terminal_find_inputs,
+                &self.browser_input,
                 focus_input,
                 &tokens,
                 self.left_width,
