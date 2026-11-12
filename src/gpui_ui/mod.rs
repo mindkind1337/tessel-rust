@@ -18,6 +18,7 @@ pub(crate) mod modals_view;
 mod question_inputs;
 pub(crate) mod remote_inputs;
 pub(crate) mod remote_view;
+mod scm_input;
 mod search_inputs;
 pub(crate) mod settings_view;
 pub(crate) mod sheet_view;
@@ -100,6 +101,7 @@ pub(crate) struct TesselGpuiRoot {
     terminal_find_inputs: terminal_find_inputs::Inputs,
     browser_input: browser_input::Input,
     modal_query_input: modal_query_input::Input,
+    scm_input: scm_input::Input,
     _poller_task: Task<()>,
 }
 
@@ -129,6 +131,8 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new("ctrl-enter", scm_input::Submit, Some("TesselScm")),
+            gpui::KeyBinding::new("escape", scm_input::Dismiss, Some("TesselScm")),
             gpui::KeyBinding::new(
                 "escape",
                 modal_query_input::Dismiss,
@@ -220,7 +224,7 @@ impl TesselGpuiRoot {
                     .await;
                 let ok = this.update(cx, |root, cx| {
                     let flagged = poll_flag.swap(false, Ordering::AcqRel);
-                    let worker_refresh = root.app.poll_for_gpui();
+                    let worker_refresh = root.poll_backend(cx);
                     if flagged || worker_refresh {
                         cx.notify();
                     }
@@ -247,8 +251,14 @@ impl TesselGpuiRoot {
             terminal_find_inputs: terminal_find_inputs::Inputs::default(),
             browser_input: browser_input::Input::default(),
             modal_query_input: modal_query_input::Input::default(),
+            scm_input: scm_input::Input::default(),
             _poller_task: poller_task,
         }
+    }
+
+    fn poll_backend(&mut self, cx: &mut Context<Self>) -> bool {
+        scm_input::flush(self, cx);
+        self.app.poll_for_gpui()
     }
 
     pub(crate) fn begin_drag(&mut self, drag: DragTarget, cx: &mut Context<Self>) {
@@ -272,6 +282,12 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        if !matches!(
+            &action,
+            GpuiAction::NativeScmEdit { .. } | GpuiAction::NativeScmTouch { .. }
+        ) {
+            scm_input::flush(self, cx);
+        }
         if matches!(
             &action,
             GpuiAction::Remote(crate::remote_panel::control::Command::Discard)
@@ -375,6 +391,11 @@ impl TesselGpuiRoot {
             .search_inputs
             .focused(window, cx)
             .or_else(|| self.modal_query_input.focused(window, cx))
+            .or_else(|| {
+                self.scm_input
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::ScmCommitMessage)
+            })
             .or_else(|| self.editor_input.tools.focused(window, cx))
             .or_else(|| self.terminal_find_inputs.focused(window, cx))
             .or_else(|| {
@@ -432,6 +453,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::BrowserUrl
                         | FocusInputTarget::HelpQuery
                         | FocusInputTarget::SettingsSearch
+                        | FocusInputTarget::ScmCommitMessage
                 )
             )
         {
@@ -824,7 +846,7 @@ impl Focusable for TesselGpuiRoot {
 
 impl Render for TesselGpuiRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.app.poll_for_gpui();
+        self.poll_backend(cx);
 
         let viewport = window.viewport_size();
         let viewport_w = f32::from(viewport.width).max(320.0);
@@ -1040,6 +1062,20 @@ impl Render for TesselGpuiRoot {
         } else if modal_was_focused {
             window.focus(&self.focus_handle, cx);
         }
+        let scm_was_focused = self.scm_input.focused(window, cx);
+        self.scm_input.retain(&self.app.gpui_scm_input_ids());
+        if let Some((scope, text)) = self.app.gpui_scm_input().map(|(s, t)| (s, t.to_owned())) {
+            self.scm_input.sync(scope, &text, cx);
+            if self.focus_input == FocusInputTarget::ScmCommitMessage
+                && let Some(input) = self.scm_input.state().cloned()
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            } else if scm_was_focused {
+                window.focus(&self.focus_handle, cx);
+            }
+        } else if scm_was_focused {
+            window.focus(&self.focus_handle, cx);
+        }
         let browser_was_focused = self.browser_input.focused(window, cx);
         let previous_browser_input = self.browser_input.state().cloned();
         if let Some((scope, text)) = self
@@ -1165,6 +1201,7 @@ impl Render for TesselGpuiRoot {
                 &self.chat_inputs,
                 &self.terminal_find_inputs,
                 &self.browser_input,
+                &self.scm_input,
                 focus_input,
                 &tokens,
                 self.left_width,

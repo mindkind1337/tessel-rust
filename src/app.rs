@@ -1770,18 +1770,20 @@ impl Tessel {
             .is_some_and(|discovery| discovery.poll());
         self.poll_host_import();
         self.sync_git_project();
-        let git_owner = self.git_result.pending_owner().cloned();
-        self.git_result.poll();
-        if !self.git_result.busy()
-            && let Some(owner) = git_owner
-        {
+        if let Some(completion) = self.git_result.poll() {
+            let owner = completion.owner;
             let was_commit = std::mem::take(&mut self.commit_in_flight);
+            self.gpui_extra
+                .scm_drafts
+                .complete(&owner, completion.success);
             self.scm_state.refresh_for(&owner);
             self.explorer_tree.refresh();
-            if self.git_result.output.starts_with("Error:") {
-                self.error = self.git_result.output.clone();
-            } else if was_commit {
-                self.scm_panel.clear_commit_message();
+            if self.gpui_scm_owner().as_ref() == Some(&owner) {
+                if !completion.success {
+                    self.error = self.git_result.output.clone();
+                } else if was_commit {
+                    self.scm_panel.clear_commit_message();
+                }
             }
         }
         self.scm_state.poll();
@@ -10418,10 +10420,19 @@ impl Tessel {
         }
     }
     fn sync_git_project(&mut self) {
+        self.gpui_extra.scm_drafts.retain(|owner| {
+            self.state
+                .projects
+                .iter()
+                .any(|p| p.id == owner.project && p.path == owner.root)
+        });
         let owner = self.state.active().map(|project| crate::git_result::Owner {
             project: project.id,
             root: project.path.clone(),
         });
+        if let Some(owner) = &owner {
+            self.gpui_extra.scm_drafts.ensure(owner);
+        }
         if self.scm_state.select(owner.clone()) {
             self.scm_panel.reset();
             self.pending_scm_discard = None;

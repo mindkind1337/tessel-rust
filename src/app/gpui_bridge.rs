@@ -21,6 +21,12 @@ pub(crate) type BuiltinAgentSettingRow = (String, String, bool, bool);
 pub(crate) type ProviderSecretRow = (String, String, bool);
 pub(crate) type ReviewBranchOption = (String, Option<PathBuf>);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeScmScope {
+    pub owner: crate::git_result::Owner,
+    pub id: u64,
+}
+
 pub(crate) struct GpuiExtraUiState {
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
@@ -33,7 +39,7 @@ pub(crate) struct GpuiExtraUiState {
     pub modal_input_generation: u64,
     pub help_query: String,
     pub settings_search: String,
-    pub scm_commit_msg: String,
+    pub scm_drafts: crate::scm_drafts::Drafts,
     pub new_task_title: String,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
@@ -67,7 +73,7 @@ impl Default for GpuiExtraUiState {
             modal_input_generation: 1,
             help_query: String::new(),
             settings_search: String::new(),
-            scm_commit_msg: String::new(),
+            scm_drafts: crate::scm_drafts::Drafts::default(),
             new_task_title: String::new(),
             new_ssh_alias: String::new(),
             new_ssh_folder: String::new(),
@@ -397,6 +403,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub scm_ahead: usize,
     pub scm_behind: usize,
     pub scm_busy: bool,
+    pub scm_commit_busy: bool,
     pub scm_commit_msg: String,
     pub scm_entries: Vec<crate::scm_changes_panel::ScmEntry>,
     pub scm_error: Option<String>,
@@ -852,6 +859,19 @@ pub(crate) enum GpuiAction {
     },
     ScmRefresh,
     ScmSetCommitMessage(String),
+    NativeScmEdit {
+        scope: NativeScmScope,
+        base: String,
+        text: String,
+    },
+    NativeScmTouch {
+        scope: NativeScmScope,
+        base: String,
+    },
+    NativeScmSubmit {
+        scope: NativeScmScope,
+        base: String,
+    },
     ScmCommit,
     ScmStage(Vec<String>),
     ScmUnstage(Vec<String>),
@@ -1593,6 +1613,60 @@ impl Tessel {
         self.command_palette.open
     }
 
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_scm_pending_fixture(&mut self) -> mpsc::Sender<Result<String, String>> {
+        self.sync_git_project();
+        let owner = self.gpui_scm_owner().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        assert!(self.git_result.start(owner.clone(), receiver));
+        self.gpui_extra.scm_drafts.submitted(&owner);
+        self.commit_in_flight = true;
+        sender
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_scm_status_fixture(&mut self) {
+        self.sync_git_project();
+        let owner = self.gpui_scm_owner().unwrap();
+        let capture = crate::git::scoped_status(&owner.root).unwrap();
+        self.scm_state.result = Some(Ok(crate::scm_changes_panel::parse_porcelain_v2_status(
+            &capture.output.bytes,
+            crate::scm_changes_panel::STATUS_ENTRIES_MAX,
+        )));
+    }
+
+    pub(crate) fn gpui_scm_input(&self) -> Option<(NativeScmScope, &str)> {
+        if self.gpui_has_open_modal()
+            || !self.state.panels.right_open
+            || self.state.panels.right_tab != SideTab::Changes
+        {
+            return None;
+        }
+        self.gpui_scm_draft()
+            .map(|(owner, id, text)| (NativeScmScope { owner, id }, text))
+    }
+    pub(crate) fn gpui_scm_can_submit(&self) -> bool {
+        !self.git_result.busy() && self.scm_state.validate_commit().is_ok()
+    }
+    pub(crate) fn gpui_scm_busy(&self) -> bool {
+        self.gpui_scm_owner()
+            .is_some_and(|owner| self.gpui_extra.scm_drafts.pending(&owner))
+    }
+    pub(crate) fn gpui_scm_input_ids(&self) -> Vec<u64> {
+        self.gpui_extra.scm_drafts.ids()
+    }
+
+    pub(crate) fn gpui_scm_owner(&self) -> Option<crate::git_result::Owner> {
+        self.state.active().map(|p| crate::git_result::Owner {
+            project: p.id,
+            root: p.path.clone(),
+        })
+    }
+    pub(crate) fn gpui_scm_draft(&self) -> Option<(crate::git_result::Owner, u64, &str)> {
+        let owner = self.gpui_scm_owner()?;
+        let (id, text) = self.gpui_extra.scm_drafts.input(&owner)?;
+        Some((owner, id, text))
+    }
+
     pub(crate) fn gpui_modal_query(&self) -> Option<((u64, GpuiFocusTarget), &str)> {
         if self.gpui_has_aux_modal() {
             return None;
@@ -2105,23 +2179,7 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::ScmCommitMessage => {
-                if lower == "enter" && !shift {
-                    self.apply_gpui_action(GpuiAction::ScmCommit);
-                    return true;
-                }
-                let mut cur = self.gpui_extra.scm_commit_msg.clone();
-                if lower == "enter" && shift {
-                    cur.push('\n');
-                    self.apply_gpui_action(GpuiAction::ScmSetCommitMessage(cur));
-                    true
-                } else if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
-                    self.apply_gpui_action(GpuiAction::ScmSetCommitMessage(cur));
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::ScmCommitMessage => false,
             GpuiFocusTarget::TaskNewTitle => {
                 if lower == "enter" {
                     self.apply_gpui_action(GpuiAction::TasksAddFromDraft);
@@ -3513,6 +3571,7 @@ impl Tessel {
     }
 
     fn build_side_panels_snapshot(&mut self, french: bool) -> GpuiSidePanelsSnapshot {
+        self.sync_git_project();
         use crate::side_panels_model::{
             build_conversation_threads, build_dashboard, filter_and_sort_task_history,
             filter_sessions, now_unix_ms,
@@ -3611,7 +3670,12 @@ impl Tessel {
             scm_ahead: scm_ahead as usize,
             scm_behind: scm_behind as usize,
             scm_busy: self.commit_in_flight || self.git_result.busy(),
-            scm_commit_msg: self.gpui_extra.scm_commit_msg.clone(),
+            scm_commit_busy: self.gpui_scm_busy(),
+            scm_commit_msg: self
+                .gpui_scm_draft()
+                .map(|v| v.2)
+                .unwrap_or_default()
+                .to_owned(),
             scm_entries,
             scm_error,
             commits_open: self.side_panels_ui.commits_open,
@@ -5226,21 +5290,51 @@ impl Tessel {
                 self.scm_state.refresh();
                 self.refresh_scm_commits();
             }
+            GpuiAction::NativeScmEdit { scope, base, text } => {
+                if text.len() <= 65536
+                    && self.gpui_scm_input() == Some((scope.clone(), base.as_str()))
+                {
+                    self.gpui_extra.scm_drafts.set(&scope.owner, text);
+                }
+            }
+            GpuiAction::NativeScmTouch { scope, base } => {
+                if self.gpui_scm_input() == Some((scope.clone(), base.as_str())) {
+                    self.gpui_extra.scm_drafts.touch(&scope.owner, scope.id);
+                }
+            }
+            GpuiAction::NativeScmSubmit { scope, base } => {
+                if self.gpui_scm_input() == Some((scope, base.as_str())) && base.len() <= 65536 {
+                    self.apply_gpui_action(GpuiAction::ScmCommit);
+                }
+            }
             GpuiAction::ScmSetCommitMessage(msg) => {
-                self.gpui_extra.scm_commit_msg = msg;
+                if let Some(owner) = self.gpui_scm_owner() {
+                    self.gpui_extra.scm_drafts.set(&owner, msg);
+                }
             }
             GpuiAction::ScmCommit => {
-                let message = self.gpui_extra.scm_commit_msg.trim().to_owned();
-                if message.is_empty() {
-                    self.error = tr("Enter a commit message.").into();
-                } else if !self.git_result.busy() {
-                    if let Err(err) = self.scm_state.validate_commit() {
-                        self.error = err;
-                    } else {
-                        self.commit_in_flight = true;
-                        self.gpui_extra.scm_commit_msg.clear();
-                        self.git_start_work(move |root| crate::git::commit_staged(&root, &message));
+                self.sync_git_project();
+                let draft = self
+                    .gpui_scm_draft()
+                    .map(|(o, _, t)| (o, t.trim().to_owned()));
+                if let Some((owner, message)) = draft {
+                    if message.is_empty() {
+                        self.error = tr("Enter a commit message.").into();
+                    } else if !self.git_result.busy() {
+                        if let Err(err) = self.scm_state.validate_commit() {
+                            self.error = err;
+                        } else {
+                            self.git_start_work(move |root| {
+                                crate::git::commit_staged(&root, &message)
+                            });
+                            if self.git_result.pending_owner() == Some(&owner) {
+                                self.commit_in_flight = true;
+                                self.gpui_extra.scm_drafts.submitted(&owner);
+                            }
+                        }
                     }
+                } else {
+                    self.error = tr("Select a project first.").into();
                 }
             }
             GpuiAction::ScmStage(paths) => {

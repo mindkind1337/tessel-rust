@@ -587,6 +587,20 @@ pub(crate) struct ProcessJob(windows::Win32::Foundation::HANDLE);
 unsafe impl Send for ProcessJob {}
 #[cfg(windows)]
 impl ProcessJob {
+    /// Let intentionally detached children survive a normal parent exit.
+    pub(crate) fn disarm(&mut self) -> Result<(), String> {
+        use windows::Win32::System::JobObjects::*;
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            SetInformationJobObject(
+                self.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            )
+            .map_err(|_| "Cannot release process cleanup".to_string())
+        }
+    }
     pub(crate) fn attach(process: std::os::windows::io::RawHandle) -> Result<Self, String> {
         use windows::{
             Win32::{Foundation::HANDLE, System::JobObjects::*},

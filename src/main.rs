@@ -116,6 +116,7 @@ mod remote_panel;
 mod remote_tree_watch;
 pub mod rich_previews;
 pub mod scm_changes_panel;
+mod scm_drafts;
 mod scm_state;
 pub mod session_option_picker_ui;
 pub mod settings_extra_model;

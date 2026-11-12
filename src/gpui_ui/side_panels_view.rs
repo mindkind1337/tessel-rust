@@ -36,6 +36,7 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
 
 pub(crate) fn render_side_panel_tab_body(
     snapshot: &GpuiWorkspaceSnapshot,
+    scm_input: &super::scm_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -45,7 +46,7 @@ pub(crate) fn render_side_panel_tab_body(
     match snapshot.side_panel.tab {
         SideTab::Dashboard => render_dashboard_tab(sp, focus_input, french, tokens, cx),
         SideTab::Files => render_explorer_tab(sp, focus_input, french, tokens, cx),
-        SideTab::Changes => render_scm_changes_tab(sp, focus_input, french, tokens, cx),
+        SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
         SideTab::Tasks => render_tasks_board_tab(sp, focus_input, french, tokens, cx),
         SideTab::TaskHistory => render_task_history_tab(sp, focus_input, french, tokens, cx),
         SideTab::History => render_sessions_history_tab(sp, focus_input, french, tokens, cx),
@@ -639,7 +640,7 @@ fn render_explorer_tab(
 
 fn render_scm_changes_tab(
     sp: &GpuiSidePanelsSnapshot,
-    focus_input: FocusInputTarget,
+    scm_input: &super::scm_input::Input,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -742,41 +743,17 @@ fn render_scm_changes_tab(
                 ),
         );
 
-    let commit_row = div()
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .child(div().flex_1().child(render_focus_input_box(
-            "gpui-scm-commit-msg",
-            FocusInputTarget::ScmCommitMessage,
-            focus_input == FocusInputTarget::ScmCommitMessage,
-            &sp.scm_commit_msg,
-            if french {
-                "Message de commit…"
-            } else {
-                "Commit message…"
-            },
-            tokens,
-            cx,
-        )))
-        .child(
-            div()
-                .id("gpui-scm-commit-btn")
-                .px(px(10.0))
-                .h(px(28.0))
-                .rounded(px(tokens.radius_px))
-                .bg(tokens.accent)
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(11.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens.accent_fg)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.dispatch_action(GpuiAction::ScmCommit, cx);
-                }))
-                .child("Commit"),
-        );
+    let commit_row = scm_input.render(
+        sp.scm_commit_busy,
+        !sp.scm_busy
+            && sp
+                .scm_entries
+                .iter()
+                .any(|e| e.area == ScmArea::Staged && !e.is_conflict()),
+        french,
+        tokens,
+        cx,
+    );
 
     let mut changes_scroll = div()
         .id("gpui-scm-changes-scroll")

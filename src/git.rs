@@ -5,7 +5,7 @@ use std::{
     io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -54,13 +54,24 @@ pub fn unstage_files(root: &Path, paths: &[String]) -> Result<String> {
 }
 
 pub fn commit_staged(root: &Path, message: &str) -> Result<String> {
-    if message.trim().is_empty() {
-        return Err("Enter a commit message.".into());
-    }
     if message.len() > OUTPUT_LIMIT {
         return Err("Commit message exceeds the size limit.".into());
     }
-    let out = run(root, &["commit", "-F", "-"], Some(message.as_bytes()))?;
+    let cleaned: String = message
+        .chars()
+        .filter(|c| *c != '\r' && *c != '\0')
+        .collect();
+    let message = cleaned.trim();
+    if message.is_empty() {
+        return Err("Enter a commit message.".into());
+    }
+    let out = run_bytes_with_timeout(
+        root,
+        &["commit", "-F", "-"],
+        Some(message.as_bytes()),
+        Duration::from_secs(180),
+    )?
+    .text();
     let trimmed = out.trim();
     if trimmed.is_empty() {
         Ok("Committed staged changes.".into())
@@ -417,6 +428,14 @@ pub fn project_relative_path<'a>(prefix: &str, repository_path: &'a str) -> Opti
 /// Preserve NUL-delimited paths and expose truncation separately from stdout.
 /// Structured callers must disable bulk actions when `truncated` is true.
 pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
+    run_bytes_with_timeout(root, args, input, Duration::from_secs(20))
+}
+fn run_bytes_with_timeout(
+    root: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Capture> {
     let mut command = Command::new("git");
     command
         .current_dir(root)
@@ -426,7 +445,13 @@ pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Cap
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
+        // Suspend before attaching the job so hooks cannot escape during startup.
+        command.creation_flags(0x08000000 | 0x00000004);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
     let mut child = command
         .stdin(Stdio::piped())
@@ -434,6 +459,15 @@ pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Cap
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    let cleanup = match GitProcessCleanup::attach(&child) {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let mut cleanup = Some(cleanup);
     let mut stdin = child.stdin.take().ok_or("Missing Git input pipe")?;
     let input = input.unwrap_or_default().to_vec();
     let (input_tx, input_result) = mpsc::channel();
@@ -442,48 +476,163 @@ pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Cap
     });
     let stdout = child.stdout.take().ok_or("Missing Git output pipe")?;
     let stderr = child.stderr.take().ok_or("Missing Git error pipe")?;
-    let (out_tx, out) = mpsc::channel();
-    let (err_tx, err) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = out_tx.send(drain(stdout));
-    });
-    thread::spawn(move || {
-        let _ = err_tx.send(drain(stderr));
-    });
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let out = PipeCapture::start(stdout);
+    let err = PipeCapture::start(stderr);
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(s)) => break Ok(s),
+            Ok(Some(s)) => {
+                // Successful or refused Git can intentionally start a detached helper.
+                if cleanup.as_mut().unwrap().disarm().is_err() {
+                    // Preserve the real Git result even when OS cleanup cannot be released.
+                    eprintln!("Git process cleanup could not be disarmed");
+                }
+                break Ok(s);
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
+                // Kill the group before reaping its leader: the PID cannot be reused yet.
+                drop(cleanup.take());
                 let _ = child.kill();
                 let _ = child.wait();
-                break Err("Git timed out after 20 seconds.".to_string());
+                break Err(format!(
+                    "Git timed out after {} seconds.",
+                    timeout.as_secs()
+                ));
             }
-            Err(e) => break Err(e.to_string()),
+            Err(e) => {
+                drop(cleanup.take());
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(e.to_string());
+            }
         }
     };
-    // Do not wait on pipe readers after a timeout: a hook may retain inherited handles.
+    // On normal exit the group is disarmed; detached helpers retain their lifetime.
+    drop(cleanup);
     let status = status?;
-    let output = out
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| "Git output timed out (a child may still hold the pipe)")?
-        .map_err(|error| format!("Git output could not be read: {error}"))?;
-    let errors = err
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| "Git error output timed out")?
-        .map_err(|error| format!("Git error output could not be read: {error}"))?;
+    // A background hook may retain a pipe after Git has already completed.
+    // Report the actual exit status, with an explicitly incomplete capture.
+    let pipe_deadline = deadline.min(Instant::now() + Duration::from_secs(1));
+    let mut output = out.finish(pipe_deadline);
+    let errors = err.finish(pipe_deadline);
     if !status.success() {
         return Err(errors.text());
     }
-    input_result
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| "Git input timed out")?
-        .map_err(|error| format!("Git input could not be written: {error}"))?;
+    if !matches!(
+        input_result.recv_timeout(pipe_deadline.saturating_duration_since(Instant::now())),
+        Ok(Ok(()))
+    ) {
+        output.truncated = true;
+    }
     Ok(output)
 }
 
+/// Owns only the process group created for this Git invocation.
+struct GitProcessCleanup {
+    #[cfg(windows)]
+    _job: crate::remote::ProcessJob,
+    #[cfg(unix)]
+    pid: libc::pid_t,
+    #[cfg(unix)]
+    armed: bool,
+}
+impl GitProcessCleanup {
+    fn disarm(&mut self) -> Result<()> {
+        #[cfg(windows)]
+        self._job.disarm()?;
+        #[cfg(unix)]
+        {
+            self.armed = false;
+        }
+        Ok(())
+    }
+    fn attach(child: &std::process::Child) -> Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let job = crate::remote::ProcessJob::attach(child.as_raw_handle())
+                .map_err(|_| "Cannot establish Git process cleanup".to_string())?;
+            resume_git_thread(child.id())?;
+            Ok(Self { _job: job })
+        }
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                pid: child.id() as libc::pid_t,
+                armed: true,
+            })
+        }
+    }
+}
+#[cfg(unix)]
+impl Drop for GitProcessCleanup {
+    fn drop(&mut self) {
+        // This child was spawned into its own group with process_group(0).
+        if self.armed {
+            unsafe {
+                libc::kill(-self.pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn resume_git_thread(pid: u32) -> Result<()> {
+    use windows::Win32::{
+        Foundation::{CloseHandle, ERROR_NO_MORE_FILES, HANDLE},
+        System::{Diagnostics::ToolHelp::*, Threading::*},
+    };
+    struct Handle(HANDLE);
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+    // std::process does not expose the primary thread handle on stable Rust.
+    // A CREATE_SUSPENDED process has not run user code; enumerate its sole thread
+    // while retaining the Child process handle (preventing process-ID reuse).
+    unsafe {
+        let snapshot = Handle(
+            CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+                .map_err(|_| "Cannot inspect suspended Git process")?,
+        );
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        Thread32First(snapshot.0, &mut entry).map_err(|_| "Cannot locate Git thread")?;
+        let mut thread_id = None;
+        loop {
+            if entry.th32OwnerProcessID == pid && thread_id.replace(entry.th32ThreadID).is_some() {
+                return Err("Unexpected threads in suspended Git process".into());
+            }
+            if let Err(error) = Thread32Next(snapshot.0, &mut entry) {
+                if error.code() != ERROR_NO_MORE_FILES.to_hresult() {
+                    return Err("Cannot enumerate suspended Git threads".into());
+                }
+                break;
+            }
+        }
+        let thread = Handle(
+            OpenThread(
+                THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION,
+                false,
+                thread_id.ok_or("Missing suspended Git thread")?,
+            )
+            .map_err(|_| "Cannot open suspended Git thread")?,
+        );
+        if GetProcessIdOfThread(thread.0) != pid || ResumeThread(thread.0) != 1 {
+            return Err("Cannot resume protected Git process".into());
+        }
+    }
+    Ok(())
+}
+
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
+#[derive(Default)]
 pub struct Capture {
     pub bytes: Vec<u8>,
     pub truncated: bool,
@@ -492,16 +641,54 @@ impl Capture {
     fn text(&self) -> String {
         let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
         if self.truncated {
-            text.push_str("\n[Git output truncated at 2 MiB.]\n");
+            text.push_str("\n[Git output incomplete or truncated at 2 MiB.]\n");
         }
         text
     }
 }
-fn drain(mut reader: impl Read) -> std::io::Result<Capture> {
-    let mut capture = Capture {
-        bytes: Vec::new(),
-        truncated: false,
-    };
+struct PipeCapture {
+    done: mpsc::Receiver<std::io::Result<()>>,
+    capture: Arc<Mutex<Option<Capture>>>,
+}
+impl PipeCapture {
+    fn start(reader: impl Read + Send + 'static) -> Self {
+        let capture = Arc::new(Mutex::new(Some(Capture::default())));
+        let shared = Arc::clone(&capture);
+        let (tx, done) = mpsc::channel();
+        thread::spawn(move || {
+            let result = drain_chunks(reader, |bytes| {
+                if let Some(capture) = shared.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    append_capture(capture, bytes);
+                }
+            });
+            let _ = tx.send(result);
+        });
+        Self { done, capture }
+    }
+    fn finish(self, deadline: Instant) -> Capture {
+        let complete = matches!(
+            self.done
+                .recv_timeout(deadline.saturating_duration_since(Instant::now())),
+            Ok(Ok(()))
+        );
+        let mut capture = self
+            .capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap_or_default();
+        capture.truncated |= !complete;
+        capture
+    }
+}
+fn append_capture(capture: &mut Capture, bytes: &[u8]) {
+    let room = OUTPUT_LIMIT.saturating_sub(capture.bytes.len());
+    capture.truncated |= bytes.len() > room;
+    capture
+        .bytes
+        .extend_from_slice(&bytes[..bytes.len().min(room)]);
+}
+fn drain_chunks(mut reader: impl Read, mut consume: impl FnMut(&[u8])) -> std::io::Result<()> {
     let mut buffer = [0; 8192];
     loop {
         let n = match reader.read(&mut buffer) {
@@ -509,17 +696,83 @@ fn drain(mut reader: impl Read) -> std::io::Result<Capture> {
             result => result?,
         };
         if n == 0 {
-            return Ok(capture);
+            return Ok(());
         }
-        let room = OUTPUT_LIMIT.saturating_sub(capture.bytes.len());
-        capture.truncated |= n > room;
-        capture.bytes.extend_from_slice(&buffer[..n.min(room)]);
+        consume(&buffer[..n]);
     }
+}
+#[cfg(test)]
+fn drain(reader: impl Read) -> std::io::Result<Capture> {
+    let mut capture = Capture::default();
+    drain_chunks(reader, |bytes| append_capture(&mut capture, bytes))?;
+    Ok(capture)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn normal_git_exit_keeps_intentionally_detached_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        run_bytes_with_timeout(dir.path(),
+            &["-c", "alias.cleanup-test=!f() { (sleep 1; printf survived > hook-survived) </dev/null >/dev/null 2>&1 & }; f", "cleanup-test"],
+            None, Duration::from_secs(5)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !dir.path().join("hook-survived").exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(dir.path().join("hook-survived").exists());
+    }
+
+    #[test]
+    fn successful_git_with_inherited_pipe_keeps_status_and_marks_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let output = run_bytes_with_timeout(
+            dir.path(),
+            &[
+                "-c",
+                "alias.cleanup-test=!f() { printf original; (sleep 10; printf late) & }; f",
+                "cleanup-test",
+            ],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(6));
+        assert_eq!(output.bytes, b"original");
+        assert!(output.truncated);
+        // Let the finite fixture finish and release its inherited pipes.
+        thread::sleep(Duration::from_secs(10));
+    }
+
+    #[test]
+    fn timed_out_git_kills_inherited_hook_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let result = run_bytes_with_timeout(
+            dir.path(),
+            &[
+                "-c",
+                "alias.cleanup-test=!f() { printf started > hook-started; (sleep 2; printf escaped > hook-escaped) & sleep 10; }; f",
+                "cleanup-test",
+            ],
+            None,
+            Duration::from_secs(1),
+        );
+        assert!(result.err().unwrap().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(
+            dir.path().join("hook-started").exists(),
+            "fixture never ran"
+        );
+        thread::sleep(Duration::from_millis(1500));
+        assert!(
+            !dir.path().join("hook-escaped").exists(),
+            "descendant survived cleanup"
+        );
+    }
+
     #[test]
     fn large_output_is_drained_but_never_presented_as_complete() {
         let data = vec![b'x'; OUTPUT_LIMIT + 37];
@@ -531,7 +784,7 @@ mod tests {
         assert!(
             capture
                 .text()
-                .ends_with("[Git output truncated at 2 MiB.]\n")
+                .ends_with("[Git output incomplete or truncated at 2 MiB.]\n")
         );
         let exact = drain(std::io::Cursor::new(vec![b'x'; OUTPUT_LIMIT])).unwrap();
         assert!(!exact.truncated);
