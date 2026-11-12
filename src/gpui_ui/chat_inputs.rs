@@ -1,0 +1,513 @@
+//! Native drafts are scoped to a live provider instance, never just a pane number.
+use super::{FocusInputTarget, TesselGpuiRoot};
+use crate::app::gpui_bridge::{GpuiAction, GpuiWorkspaceSnapshot};
+use gpui::{App, AppContext, Context, Entity, Focusable, Subscription, Window};
+use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
+use std::collections::HashMap;
+
+gpui::actions!(tessel_chat_composer, [Submit]);
+
+struct Binding {
+    id: u64,
+    state: Entity<EditableTextState>,
+    synced: String,
+    too_long: bool,
+    _changed: Subscription,
+}
+
+#[derive(Default)]
+pub(crate) struct Inputs {
+    bindings: HashMap<u64, Binding>,
+}
+
+impl Inputs {
+    pub fn focused(&self, window: &Window, cx: &App) -> Option<FocusInputTarget> {
+        self.bindings.iter().find_map(|(pane, binding)| {
+            binding
+                .state
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+                .then_some(FocusInputTarget::ChatComposer(*pane))
+        })
+    }
+
+    pub fn get(&self, pane: u64) -> Option<&Entity<EditableTextState>> {
+        self.bindings.get(&pane).map(|b| &b.state)
+    }
+
+    pub fn sync(
+        &mut self,
+        snapshot: &GpuiWorkspaceSnapshot,
+        open: &[(u64, u64)],
+        cx: &mut Context<TesselGpuiRoot>,
+    ) {
+        self.bindings
+            .retain(|pane, b| open.contains(&(*pane, b.id)));
+        for tile in &snapshot.tiles {
+            let Some(chat) = &tile.native_chat else {
+                continue;
+            };
+            let pane = tile.session_id;
+            let id = chat.composer_id;
+            if self.bindings.get(&pane).is_some_and(|b| {
+                b.id == id
+                    && (b.state.read(cx).as_str() == chat.composer
+                        || (b.too_long && b.synced == chat.composer))
+            }) {
+                continue;
+            }
+            // A successful send or external replacement retires the old undo history.
+            let state = cx
+                .new(|cx| EditableTextState::new(StringStorage::from(chat.composer.as_str()), cx));
+            let changed = cx.subscribe(&state, move |root, state, _: &TextChanged, cx| {
+                let Some(b) = root.chat_inputs.bindings.get(&pane) else {
+                    return;
+                };
+                if !root.app.gpui_chat_input_allowed(pane)
+                    || b.id != id
+                    || b.state != state
+                    || root.effective_focus_target() != FocusInputTarget::ChatComposer(pane)
+                {
+                    return;
+                }
+                let base = b.synced.clone();
+                let too_long = state.read(cx).as_str().len() > 128 * 1024;
+                if let Some(b) = root.chat_inputs.bindings.get_mut(&pane) {
+                    b.too_long = too_long;
+                }
+                if too_long {
+                    cx.notify();
+                    return;
+                }
+                let text = state.read(cx).as_str().to_owned();
+                if base == text {
+                    return;
+                }
+                root.dispatch(
+                    GpuiAction::ApplyNativeChatEdit {
+                        pane_id: pane,
+                        instance_id: id,
+                        base,
+                        text,
+                    },
+                    cx,
+                );
+                if let Some((current_id, text)) = root.app.gpui_chat_composer(pane)
+                    && current_id == id
+                    && let Some(b) = root.chat_inputs.bindings.get_mut(&pane)
+                {
+                    b.synced = text.to_owned();
+                }
+            });
+            self.bindings.insert(
+                pane,
+                Binding {
+                    id,
+                    state,
+                    synced: chat.composer.clone(),
+                    too_long: false,
+                    _changed: changed,
+                },
+            );
+        }
+    }
+
+    pub fn render(
+        &self,
+        pane: u64,
+        placeholder: &'static str,
+        font_size: f32,
+        french: bool,
+        tokens: &super::theme::GpuiThemeTokens,
+        cx: &mut Context<TesselGpuiRoot>,
+    ) -> gpui::AnyElement {
+        use gpui::{
+            InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+            div, prelude::FluentBuilder, px,
+        };
+        use gpui_ce_elements::editable_text::text_area;
+        let Some(binding) = self.bindings.get(&pane) else {
+            return gpui::div().into_any_element();
+        };
+        let expected_id = binding.id;
+        let area = text_area(("native-chat-composer", pane))
+            .state(binding.state.downgrade())
+            .placeholder(placeholder)
+            .key_context("EditableText TesselChatComposer")
+            .on_action(cx.listener(move |root, _: &Submit, window, cx| {
+                submit(root, pane, expected_id, window, cx)
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |root, _, _, cx| {
+                    root.focus_input = FocusInputTarget::ChatComposer(pane);
+                    root.dispatch(GpuiAction::FocusSession(pane), cx);
+                }),
+            )
+            .w_full()
+            .min_h(px(44.))
+            .max_h(px(120.))
+            .overflow_y_scroll()
+            .px(px(10.))
+            .py(px(7.))
+            .text_size(px(font_size - 0.5))
+            .text_color(tokens.text_strong);
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(area)
+            .when(binding.too_long, |el| {
+                el.child(
+                    div()
+                        .px(px(10.))
+                        .pb(px(7.))
+                        .text_size(px(11.))
+                        .text_color(tokens.warn)
+                        .child(if french {
+                            "Message trop long (128 Kio maximum). Raccourcissez le brouillon."
+                        } else {
+                            "Message too long (128 KiB maximum). Shorten the draft."
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+}
+
+pub(crate) fn submit(
+    root: &mut TesselGpuiRoot,
+    pane: u64,
+    expected_id: u64,
+    window: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    use gpui::EntityInputHandler;
+    if !root.app.gpui_chat_input_allowed(pane) {
+        return;
+    }
+    let Some(b) = root.chat_inputs.bindings.get(&pane) else {
+        return;
+    };
+    let id = b.id;
+    if id != expected_id {
+        return;
+    }
+    let state = b.state.clone();
+    let base = b.synced.clone();
+    if state.update(cx, |s, cx| s.marked_text_range(window, cx).is_some()) {
+        return;
+    }
+    if state.read(cx).as_str().len() > 128 * 1024 {
+        if let Some(b) = root.chat_inputs.bindings.get_mut(&pane) {
+            b.too_long = true;
+        }
+        cx.notify();
+        return;
+    }
+    let text = state.read(cx).as_str().to_owned();
+    // Flush native edits before sending, even if TextChanged is still queued.
+    root.dispatch(
+        GpuiAction::ApplyNativeChatEdit {
+            pane_id: pane,
+            instance_id: id,
+            base,
+            text: text.clone(),
+        },
+        cx,
+    );
+    if let Some((current_id, current)) = root.app.gpui_chat_composer(pane)
+        && current_id == id
+        && let Some(b) = root.chat_inputs.bindings.get_mut(&pane)
+    {
+        b.synced = current.to_owned();
+    }
+    root.dispatch(
+        GpuiAction::NativeChatSend {
+            pane_id: pane,
+            instance_id: id,
+            text,
+        },
+        cx,
+    );
+}
+
+#[cfg(all(test, feature = "visual-test"))]
+mod tests {
+    use super::*;
+    use gpui::{EntityInputHandler, TestAppContext};
+
+    fn register(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            use gpui_ce_elements::editable_text::actions::{
+                DEFAULT_INPUT_CONTEXT, default_bindings,
+            };
+            cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+        });
+    }
+
+    #[gpui::test]
+    fn native_chat_cursor_selection_newline_offline_and_ime(cx: &mut TestAppContext) {
+        register(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app
+                .apply_gpui_action(GpuiAction::AddProjectPath(project));
+            root.app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            root
+        });
+        cx.refresh().unwrap();
+        let pane = view
+            .update(cx, |root, window, cx| {
+                let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+                assert_eq!(
+                    root.chat_inputs.focused(window, cx),
+                    Some(FocusInputTarget::ChatComposer(pane))
+                );
+                root.chat_inputs.get(pane).unwrap().update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "A😀Z", window, cx);
+                });
+                pane
+            })
+            .unwrap();
+        cx.run_until_parked();
+        view.update(cx, |root, window, cx| {
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "A😀Z");
+            root.chat_inputs.get(pane).unwrap().update(cx, |s, cx| {
+                s.set_selected_text_range(1..3, window, cx);
+                s.paste(gpui::ClipboardItem::new_string("é".into()), window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(view.into(), "shift-enter");
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "Aé\nZ");
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "enter");
+        view.update(cx, |root, window, cx| {
+            // No transport: send must retain the draft, never insert another newline.
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "Aé\nZ");
+            let input = root.chat_inputs.get(pane).unwrap().clone();
+            input.update(cx, |s, cx| {
+                s.replace_and_mark_text_in_range(Some(0..1), "日", None, window, cx);
+            });
+            let error = root.app.gpui_snapshot(960., 640., 4.).tiles[0]
+                .native_chat
+                .as_ref()
+                .unwrap()
+                .error
+                .clone();
+            let expected_id = root.app.gpui_chat_composer(pane).unwrap().0;
+            submit(root, pane, expected_id, window, cx);
+            assert_eq!(
+                root.app.gpui_snapshot(960., 640., 4.).tiles[0]
+                    .native_chat
+                    .as_ref()
+                    .unwrap()
+                    .error,
+                error
+            );
+            input.update(cx, |s, cx| {
+                assert!(s.marked_text_range(window, cx).is_some());
+                s.replace_text_in_range(None, "日本", window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "日本é\nZ");
+            assert!(!root.app.gpui_handle_text_target_key(
+                FocusInputTarget::ChatComposer(pane),
+                "x",
+                Some("x"),
+                false,
+                None
+            ));
+        })
+        .unwrap();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+        cx.run_until_parked();
+        cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Redo);
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "日本é\nZ")
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn native_chat_submit_flushes_once_and_retires_sent_history(cx: &mut TestAppContext) {
+        register(cx);
+        for launch in [GpuiAction::LaunchCodexChat, GpuiAction::LaunchClaudeChat] {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                root.app
+                    .apply_gpui_action(GpuiAction::AddProjectPath(project));
+                root.app.apply_gpui_action(launch);
+                root
+            });
+            cx.refresh().unwrap();
+            let (pane, old, old_id, outgoing) = view
+                .update(cx, |root, window, cx| {
+                    let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+                    let outgoing = root.app.gpui_chat_sender_for_test(pane);
+                    let old_id = root.app.gpui_chat_composer(pane).unwrap().0;
+                    let old = root.chat_inputs.get(pane).unwrap().clone();
+                    old.update(cx, |s, cx| {
+                        s.replace_text_in_range(None, "É😀 original\nsecond line", window, cx)
+                    });
+                    // Do not drain TextChanged first: Submit itself must flush the native draft.
+                    submit(root, pane, old_id, window, cx);
+                    assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "");
+                    assert_ne!(root.app.gpui_chat_composer(pane).unwrap().0, old_id);
+                    (pane, old, old_id, outgoing)
+                })
+                .unwrap();
+            let sent = outgoing.try_recv().unwrap();
+            let text = sent
+                .pointer("/params/input/0/text")
+                .or_else(|| sent.pointer("/message/content/0/text"))
+                .unwrap()
+                .as_str()
+                .unwrap();
+            assert_eq!(text, "É😀 original\nsecond line");
+            assert!(outgoing.try_recv().is_err());
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                assert_ne!(root.chat_inputs.get(pane), Some(&old));
+                old.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "late old event", window, cx)
+                });
+                submit(root, pane, old_id, window, cx);
+                assert!(outgoing.try_recv().is_err());
+            })
+            .unwrap();
+            cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+            cx.run_until_parked();
+            view.update(cx, |root, _, _| {
+                assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "")
+            })
+            .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn native_chat_oversized_paste_is_retained_until_shortened(cx: &mut TestAppContext) {
+        register(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app
+                .apply_gpui_action(GpuiAction::AddProjectPath(project));
+            root.app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            root
+        });
+        cx.refresh().unwrap();
+        let (pane, input) = view
+            .update(cx, |root, window, cx| {
+                let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+                let input = root.chat_inputs.get(pane).unwrap().clone();
+                input.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, &"x".repeat(128 * 1024 + 1), window, cx)
+                });
+                (pane, input)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert_eq!(root.chat_inputs.get(pane), Some(&input));
+            assert!(root.chat_inputs.bindings[&pane].too_long);
+            assert_eq!(input.read(cx).as_str().len(), 128 * 1024 + 1);
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "");
+            input.update(cx, |s, cx| {
+                s.replace_text_in_range(Some(0..128 * 1024 + 1), "shortened", window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.chat_inputs.get(pane), Some(&input));
+            assert!(!root.chat_inputs.bindings[&pane].too_long);
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "shortened");
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn native_chat_retires_entities_on_conversation_reset_and_blurs_floating(
+        cx: &mut TestAppContext,
+    ) {
+        register(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app
+                .apply_gpui_action(GpuiAction::AddProjectPath(project));
+            root.app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            root
+        });
+        cx.refresh().unwrap();
+        let (pane, old, id) = view
+            .update(cx, |root, window, cx| {
+                let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+                let old = root.chat_inputs.get(pane).unwrap().clone();
+                let id = root.app.gpui_chat_composer(pane).unwrap().0;
+                old.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "kept", window, cx)
+                });
+                (pane, old, id)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::ChatNewConversation(pane), cx)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert_ne!(root.app.gpui_chat_composer(pane).unwrap().0, id);
+            assert_ne!(root.chat_inputs.get(pane).unwrap(), &old);
+            old.update(cx, |s, cx| {
+                s.replace_text_in_range(None, "stale", window, cx)
+            });
+            root.app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+                pane_id: pane,
+                instance_id: id,
+                base: "kept".into(),
+                text: "stale".into(),
+            });
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "kept");
+            root.focus_input = FocusInputTarget::None;
+            root.app.set_floating_input_fixture(true);
+            cx.notify();
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(root.chat_inputs.focused(window, cx).is_none())
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "x");
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "kept")
+        })
+        .unwrap();
+    }
+}

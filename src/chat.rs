@@ -36,11 +36,19 @@ pub struct NativeChatViewSnapshot {
     pub error: String,
     pub model: String,
     pub effort: String,
+    pub composer_id: u64,
     pub composer: String,
     pub messages: Vec<(String, String)>,
     pub approval: Option<NativeChatApprovalView>,
     pub questions: Vec<QuestionView>,
     pub questions_can_submit: bool,
+}
+
+pub(crate) fn next_composer_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .expect("chat composer identity exhausted")
 }
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
@@ -170,6 +178,9 @@ pub struct Chat {
     next_id: u64,
     pub status: String,
     pub error: String,
+    #[cfg(all(test, feature = "visual-test"))]
+    test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    composer_id: u64,
     composer: String,
     transcript: VecDeque<(String, String)>,
     history: VecDeque<(String, String)>,
@@ -238,6 +249,9 @@ impl Chat {
             next_id: 1,
             status: "Not connected".into(),
             error: String::new(),
+            #[cfg(all(test, feature = "visual-test"))]
+            test_outgoing: None,
+            composer_id: crate::chat::next_composer_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
             history: VecDeque::new(),
@@ -270,6 +284,13 @@ impl Chat {
     fn request(&mut self, method: &str, params: Value) -> Result<(), String> {
         let id = self.next_id;
         self.next_id += 1;
+        #[cfg(all(test, feature = "visual-test"))]
+        if let Some(tx) = &self.test_outgoing {
+            tx.try_send(json!({"id":id,"method":method,"params":params}))
+                .map_err(|_| "Synthetic transport unavailable".to_owned())?;
+            self.pending.insert(id, (method.into(), Instant::now()));
+            return Ok(());
+        }
         self.rpc
             .as_ref()
             .ok_or("Codex is not connected")?
@@ -1040,6 +1061,7 @@ impl Chat {
             error: self.error.clone(),
             model: self.options.model.clone(),
             effort: self.options.effort.clone(),
+            composer_id: self.composer_id,
             composer: self.composer.clone(),
             messages,
             approval,
@@ -1075,12 +1097,29 @@ impl Chat {
         }
     }
 
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn ready_sender_for_test(&mut self) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        self.test_outgoing = Some(tx);
+        self.ready = true;
+        self.thread_id = Some("synthetic-thread".into());
+        rx
+    }
+
+    pub(crate) fn composer_state(&self) -> (u64, &str) {
+        (self.composer_id, &self.composer)
+    }
+
     pub fn gpui_set_composer(&mut self, text: String) {
         self.composer = text;
     }
 
     pub fn gpui_send_message(&mut self) {
+        let had_draft = !self.composer.is_empty();
         self.send_message();
+        if had_draft && self.composer.is_empty() {
+            self.composer_id = next_composer_id();
+        }
     }
 
     pub fn gpui_set_model(&mut self, model: String) {

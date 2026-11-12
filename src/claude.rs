@@ -27,6 +27,9 @@ pub struct Chat {
     pub options: crate::native_chat_options::Options,
     pub defaults: Option<Value>,
     pub options_commit: bool,
+    #[cfg(all(test, feature = "visual-test"))]
+    test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    composer_id: u64,
     composer: String,
     transcript: VecDeque<(String, String)>,
     approvals: VecDeque<Approval>,
@@ -118,6 +121,9 @@ impl Chat {
             options: Default::default(),
             defaults: None,
             options_commit: false,
+            #[cfg(all(test, feature = "visual-test"))]
+            test_outgoing: None,
+            composer_id: crate::chat::next_composer_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
             approvals: VecDeque::new(),
@@ -197,6 +203,7 @@ impl Chat {
             error: self.error.clone(),
             model: self.options.model.clone(),
             effort: self.options.effort.clone(),
+            composer_id: self.composer_id,
             composer: self.composer.clone(),
             messages: self.transcript.iter().cloned().collect(),
             approval,
@@ -219,6 +226,7 @@ impl Chat {
 
     pub fn gpui_new_conversation(&mut self) {
         if self.transport.is_none() {
+            self.composer_id = crate::chat::next_composer_id();
             self.saved_session = None;
             self.resume.clear();
             self.transcript.clear();
@@ -241,6 +249,19 @@ impl Chat {
         }
     }
 
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn ready_sender_for_test(&mut self) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        self.test_outgoing = Some(tx);
+        self.ready = true;
+        self.session = "synthetic-session".into();
+        rx
+    }
+
+    pub(crate) fn composer_state(&self) -> (u64, &str) {
+        (self.composer_id, &self.composer)
+    }
+
     pub fn gpui_set_composer(&mut self, text: String) {
         self.composer = text;
     }
@@ -248,6 +269,8 @@ impl Chat {
     pub fn gpui_send_message(&mut self) {
         if let Err(e) = self.begin() {
             self.error = e;
+        } else {
+            self.composer_id = crate::chat::next_composer_id();
         }
     }
 
@@ -332,6 +355,12 @@ impl Chat {
         }
     }
     fn send(&self, value: Value) -> Result<(), String> {
+        #[cfg(all(test, feature = "visual-test"))]
+        if let Some(tx) = &self.test_outgoing {
+            return tx
+                .try_send(value)
+                .map_err(|_| "Synthetic transport unavailable".to_owned());
+        }
         self.transport
             .as_ref()
             .ok_or("Claude is not connected")?

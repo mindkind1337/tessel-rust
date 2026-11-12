@@ -223,21 +223,13 @@ fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
         Some("claude")
     );
 
-    // Type into composer via headless focus input handler
-    assert!(app.gpui_handle_text_target_key(
-        GpuiFocusTarget::ChatComposer(pane_id),
-        "h",
-        Some("Hello GPUI"),
-        false,
-        None,
-    ));
-    assert!(app.gpui_handle_text_target_key(
-        GpuiFocusTarget::ChatComposer(pane_id),
-        "enter",
-        None,
-        true,
-        None,
-    ));
+    let instance_id = app.gpui_chat_composer(pane_id).unwrap().0;
+    app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+        pane_id,
+        instance_id,
+        base: String::new(),
+        text: "Hello GPUI\n".into(),
+    });
     let snap2 = app.gpui_snapshot(960.0, 640.0, 4.0);
     assert_eq!(
         snap2.tiles[0]
@@ -788,4 +780,58 @@ fn gpui_modals_palette_finder_launch_notes_teams_and_popovers_roundtrip() {
     );
     app.apply_gpui_action(GpuiAction::CloseOverlays);
     assert!(!app.gpui_has_open_modal());
+}
+
+#[test]
+fn gpui_native_chat_draft_guards_scope_size_and_stale_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+    app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+    app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+    let pane = app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+    let id = app.gpui_chat_composer(pane).unwrap().0;
+    app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+        pane_id: pane,
+        instance_id: id,
+        base: String::new(),
+        text: "draft".into(),
+    });
+    for (instance_id, base, text) in [
+        (id, "", "stale".into()),
+        (id + 1, "draft", "other instance".into()),
+        (id, "draft", "x".repeat(128 * 1024 + 1)),
+    ] {
+        app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+            pane_id: pane,
+            instance_id,
+            base: base.into(),
+            text,
+        });
+        assert_eq!(app.gpui_chat_composer(pane), Some((id, "draft")));
+    }
+    // A stale send cannot even enter the backend (which would set an offline error).
+    app.apply_gpui_action(GpuiAction::NativeChatSend {
+        pane_id: pane,
+        instance_id: id,
+        text: "old".into(),
+    });
+    assert!(
+        app.gpui_snapshot(960., 640., 4.).tiles[0]
+            .native_chat
+            .as_ref()
+            .unwrap()
+            .error
+            .is_empty()
+    );
+    app.apply_gpui_action(GpuiAction::OpenHelp);
+    assert!(!app.gpui_chat_input_allowed(pane));
+    app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+        pane_id: pane,
+        instance_id: id,
+        base: "draft".into(),
+        text: "hidden".into(),
+    });
+    assert_eq!(app.gpui_chat_composer(pane), Some((id, "draft")));
 }

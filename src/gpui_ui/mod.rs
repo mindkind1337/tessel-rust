@@ -3,6 +3,7 @@
 //! Provides a 1:1 CSS Flexbox + DirectWrite subpixel typography + `resvg` vector icon frontend
 //! while keeping the `eframe`/`egui` Compatibility renderer intact with automatic runtime fallback.
 
+mod chat_inputs;
 pub(crate) mod chat_view;
 pub(crate) mod chrome;
 mod editor_indent;
@@ -87,6 +88,7 @@ pub(crate) struct TesselGpuiRoot {
     presented_images: crate::gpui_pixels::PresentedImages,
     remote_inputs: remote_inputs::Inputs,
     editor_input: editor_input::Input,
+    chat_inputs: chat_inputs::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -116,6 +118,12 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
+            gpui::KeyBinding::new("enter", chat_inputs::Submit, Some("TesselChatComposer")),
+            gpui::KeyBinding::new(
+                "shift-enter",
+                gpui_ce_elements::editable_text::actions::Enter,
+                Some("TesselChatComposer"),
+            ),
             gpui::KeyBinding::new("tab", editor_input::Indent, Some("TesselLocalEditor")),
             gpui::KeyBinding::new(
                 "shift-tab",
@@ -154,6 +162,7 @@ impl TesselGpuiRoot {
             presented_images: crate::gpui_pixels::PresentedImages::default(),
             remote_inputs: remote_inputs::Inputs::default(),
             editor_input: editor_input::Input::default(),
+            chat_inputs: chat_inputs::Inputs::default(),
             _poller_task: poller_task,
         }
     }
@@ -245,11 +254,15 @@ impl TesselGpuiRoot {
         let shift = ks.modifiers.shift;
         let alt = ks.modifiers.alt;
         let key = ks.key.as_str();
-        let native_target = self.remote_inputs.focused(window, cx).or_else(|| {
-            self.editor_input
-                .focused(window, cx)
-                .then_some(FocusInputTarget::EditorBody)
-        });
+        let native_target = self
+            .chat_inputs
+            .focused(window, cx)
+            .or_else(|| self.remote_inputs.focused(window, cx))
+            .or_else(|| {
+                self.editor_input
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::EditorBody)
+            });
         if let Some(target) = native_target {
             self.focus_input = target;
             if !ctrl && !alt && key == "enter" && target == FocusInputTarget::RemoteRename {
@@ -511,6 +524,12 @@ impl TesselGpuiRoot {
             return;
         }
         let target = self.effective_focus_target();
+        if let FocusInputTarget::ChatComposer(pane) = target {
+            if let Some(input) = self.chat_inputs.get(pane) {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            }
+            return;
+        }
         if target == FocusInputTarget::EditorBody {
             if let Some(doc) = self.app.gpui_editor_document()
                 && let Some(input) = self.editor_input.get(doc.instance_id())
@@ -704,6 +723,34 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        let chat_target = match self.effective_focus_target() {
+            FocusInputTarget::ChatComposer(pane)
+                if snapshot.center_mode == GpuiCenterMode::WorkGrid
+                    && !self.app.gpui_has_open_modal()
+                    && snapshot
+                        .tiles
+                        .iter()
+                        .any(|t| t.session_id == pane && t.native_chat.is_some()) =>
+            {
+                Some(pane)
+            }
+            _ => None,
+        };
+        if self.chat_inputs.focused(window, cx).is_some()
+            && self.chat_inputs.focused(window, cx)
+                != chat_target.map(FocusInputTarget::ChatComposer)
+        {
+            window.focus(&self.focus_handle, cx);
+        }
+        if !self.app.gpui_has_open_modal() {
+            self.chat_inputs
+                .sync(&snapshot, &self.app.gpui_chat_composer_ids(), cx);
+            if let Some(pane) = chat_target
+                && let Some(input) = self.chat_inputs.get(pane)
+            {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            }
+        }
         let native_doc = snapshot.active_document.as_ref().filter(|doc| {
             snapshot.center_mode == GpuiCenterMode::DocumentEditor
                 && !doc.preview_mode
@@ -807,6 +854,7 @@ impl Render for TesselGpuiRoot {
                 &snapshot,
                 &self.remote_inputs,
                 &self.editor_input,
+                &self.chat_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,

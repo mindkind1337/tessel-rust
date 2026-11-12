@@ -692,11 +692,17 @@ pub(crate) enum GpuiAction {
     ChatInterrupt(u64),
     ChatNewConversation(u64),
     ChatLoadOlder(u64),
-    ChatSetComposer {
+    ApplyNativeChatEdit {
         pane_id: u64,
+        instance_id: u64,
+        base: String,
         text: String,
     },
-    ChatSend(u64),
+    NativeChatSend {
+        pane_id: u64,
+        instance_id: u64,
+        text: String,
+    },
     ChatSetModel {
         pane_id: u64,
         model: String,
@@ -1608,6 +1614,57 @@ impl Tessel {
         }
     }
 
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn gpui_chat_sender_for_test(
+        &mut self,
+        pane: u64,
+    ) -> std::sync::mpsc::Receiver<serde_json::Value> {
+        if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane) {
+            c.ready_sender_for_test()
+        } else {
+            self.claude_chats
+                .iter_mut()
+                .find(|c| c.pane == pane)
+                .unwrap()
+                .ready_sender_for_test()
+        }
+    }
+
+    // Input-only lookup: never clone transcripts on a keystroke. Validate the current
+    // session provider, since old backend objects may outlive a renderer switch.
+    pub(crate) fn gpui_chat_composer(&self, pane_id: u64) -> Option<(u64, &str)> {
+        let session = self.sessions.iter().find(|s| s.id == pane_id)?;
+        match session.launch {
+            Launch::CodexChat => self
+                .chats
+                .iter()
+                .find(|c| c.pane == pane_id)
+                .map(|c| c.composer_state()),
+            Launch::ClaudeChat => self
+                .claude_chats
+                .iter()
+                .find(|c| c.pane == pane_id)
+                .map(|c| c.composer_state()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn gpui_chat_input_allowed(&self, pane_id: u64) -> bool {
+        self.view == View::Work
+            && !self.gpui_has_open_modal()
+            && self
+                .sessions
+                .iter()
+                .any(|s| s.id == pane_id && s.project == self.state.active_project)
+    }
+
+    pub(crate) fn gpui_chat_composer_ids(&self) -> Vec<(u64, u64)> {
+        self.sessions
+            .iter()
+            .filter_map(|s| self.gpui_chat_composer(s.id).map(|(id, _)| (s.id, id)))
+            .collect()
+    }
+
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
         (self.view == View::Files && !self.gpui_has_open_modal())
             .then(|| self.documents.get(self.active_document))
@@ -1774,44 +1831,7 @@ impl Tessel {
                     false
                 }
             }
-            GpuiFocusTarget::ChatComposer(pane_id) => {
-                let mut cur = self
-                    .chats
-                    .iter()
-                    .find(|c| c.pane == pane_id)
-                    .map(|c| c.gpui_snapshot().composer)
-                    .or_else(|| {
-                        self.claude_chats
-                            .iter()
-                            .find(|c| c.pane == pane_id)
-                            .map(|c| c.gpui_snapshot().composer)
-                    })
-                    .unwrap_or_default();
-                if lower == "enter" && !shift {
-                    self.apply_gpui_action(GpuiAction::ChatSend(pane_id));
-                    return true;
-                }
-                if lower == "enter" && shift {
-                    cur.push('\n');
-                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
-                    return true;
-                }
-                if let Some(p) = pasted {
-                    cur.push_str(&p);
-                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
-                    true
-                } else if lower == "backspace" {
-                    let _ = cur.pop();
-                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
-                    true
-                } else if let Some(txt) = printable {
-                    cur.push_str(txt);
-                    self.apply_gpui_action(GpuiAction::ChatSetComposer { pane_id, text: cur });
-                    true
-                } else {
-                    false
-                }
-            }
+            GpuiFocusTarget::ChatComposer(_) => false,
             GpuiFocusTarget::ChatQuestion { pane_id, q_idx } => {
                 let mut cur = self
                     .chats
@@ -4506,18 +4526,52 @@ impl Tessel {
                     c.gpui_load_older();
                 }
             }
-            GpuiAction::ChatSetComposer { pane_id, text } => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_set_composer(text);
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_set_composer(text);
+            GpuiAction::ApplyNativeChatEdit {
+                pane_id,
+                instance_id,
+                base,
+                text,
+            } => {
+                if self.gpui_chat_input_allowed(pane_id)
+                    && text.len() <= 128 * 1024
+                    && self.gpui_chat_composer(pane_id) == Some((instance_id, base.as_str()))
+                {
+                    if let Some(c) = self
+                        .chats
+                        .iter_mut()
+                        .find(|c| c.pane == pane_id && c.composer_state().0 == instance_id)
+                    {
+                        c.gpui_set_composer(text);
+                    } else if let Some(c) = self
+                        .claude_chats
+                        .iter_mut()
+                        .find(|c| c.pane == pane_id && c.composer_state().0 == instance_id)
+                    {
+                        c.gpui_set_composer(text);
+                    }
                 }
             }
-            GpuiAction::ChatSend(pane_id) => {
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_send_message();
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_send_message();
+            GpuiAction::NativeChatSend {
+                pane_id,
+                instance_id,
+                text,
+            } => {
+                if self.gpui_chat_input_allowed(pane_id)
+                    && self.gpui_chat_composer(pane_id) == Some((instance_id, text.as_str()))
+                {
+                    if let Some(c) = self
+                        .chats
+                        .iter_mut()
+                        .find(|c| c.pane == pane_id && c.composer_state().0 == instance_id)
+                    {
+                        c.gpui_send_message();
+                    } else if let Some(c) = self
+                        .claude_chats
+                        .iter_mut()
+                        .find(|c| c.pane == pane_id && c.composer_state().0 == instance_id)
+                    {
+                        c.gpui_send_message();
+                    }
                 }
             }
             GpuiAction::ChatSetModel { pane_id, model } => {

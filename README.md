@@ -114,6 +114,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Native Claude chat
 
+- Native Codex and Claude chat composers support cursor movement, selection, clipboard operations, undo/redo and IME composition. Enter sends and Shift+Enter inserts a line break; failed sends preserve the draft. Stale events from a replaced conversation cannot edit or send the current draft. Drafts over 128 KiB remain editable with a size warning; Claude retains its existing 64 KiB send limit. Structured question fields still await native input integration.
+
 - Claude provider in a native project grid pane, using the installed Claude Code CLI and its existing sign-in. Tessel does not copy the CLI's tokens.
 - Streamed text, explicit connection and resume, model selection, persisted session IDs, interruption and process-tree shutdown on Windows. Workspace restore never starts Claude automatically.
 - Tool permission requests show their original arguments with Allow once / Deny. Interrupted, cancelled, duplicate or mismatched-session requests cannot gain approval. Project customizations, hooks and external MCP servers are disabled for this connection; the CLI's default permission mode remains active.

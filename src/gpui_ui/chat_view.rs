@@ -20,11 +20,13 @@ use gpui::{
 pub(crate) fn render_native_chat_pane_body(
     pane_id: u64,
     chat: &NativeChatViewSnapshot,
+    chat_inputs: &super::chat_inputs::Inputs,
     font_size: f32,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
+    let composer_id = chat.composer_id;
     let provider_title = if chat.provider == "claude" {
         if french {
             "Claude · chat natif"
@@ -222,11 +224,6 @@ pub(crate) fn render_native_chat_pane_body(
     } else {
         "Ask the agent… (Enter to send, Shift+Enter for newline)"
     };
-    let composer_text = if chat.composer.is_empty() {
-        composer_placeholder.to_owned()
-    } else {
-        chat.composer.clone()
-    };
 
     div()
         .id(("native-chat-root", pane_id))
@@ -418,27 +415,19 @@ pub(crate) fn render_native_chat_pane_body(
                     div()
                         .id(("chat-composer-box", pane_id))
                         .flex_1()
-                        .min_h(px(44.0))
-                        .max_h(px(120.0))
-                        .overflow_y_scroll()
-                        .px(px(10.0))
-                        .py(px(7.0))
+                        .min_w_0()
                         .rounded(px(tokens.radius_px))
                         .bg(tokens.term)
                         .border_1()
                         .border_color(tokens.border_strong)
-                        .text_size(px(font_size - 0.5))
-                        .text_color(if chat.composer.is_empty() {
-                            tokens.text_dim
-                        } else {
-                            tokens.text_strong
-                        })
-                        .cursor_text()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.focus_input = FocusInputTarget::ChatComposer(pane_id);
-                            root.dispatch(GpuiAction::FocusSession(pane_id), cx);
-                        }))
-                        .child(SharedString::from(composer_text)),
+                        .child(chat_inputs.render(
+                            pane_id,
+                            composer_placeholder,
+                            font_size,
+                            french,
+                            tokens,
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -459,8 +448,8 @@ pub(crate) fn render_native_chat_pane_body(
                             tokens.text_dim
                         })
                         .cursor_pointer()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.dispatch(GpuiAction::ChatSend(pane_id), cx);
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            super::chat_inputs::submit(root, pane_id, composer_id, window, cx);
                         }))
                         .child(if french { "Envoyer" } else { "Send" }),
                 ),
