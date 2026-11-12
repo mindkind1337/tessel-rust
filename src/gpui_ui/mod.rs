@@ -77,6 +77,7 @@ pub(crate) struct TesselGpuiRoot {
     pub(crate) right_width: f32,
     pub(crate) active_drag: Option<DragTarget>,
     repaint_flag: Arc<AtomicBool>,
+    presented_images: crate::gpui_pixels::PresentedImages,
     _poller_task: Task<()>,
 }
 
@@ -133,6 +134,7 @@ impl TesselGpuiRoot {
             right_width: RIGHT_PANEL_DEFAULT_WIDTH_PX,
             active_drag: None,
             repaint_flag,
+            presented_images: crate::gpui_pixels::PresentedImages::default(),
             _poller_task: poller_task,
         }
     }
@@ -635,6 +637,18 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        // Every new img() preview must participate here so discarded images leave the GPU atlas.
+        let media = match snapshot.center_mode {
+            GpuiCenterMode::DocumentEditor => snapshot
+                .active_document
+                .as_ref()
+                .and_then(|doc| doc.media_pixels.clone()),
+            GpuiCenterMode::RemoteSftp => snapshot.remote.pixels.clone(),
+            _ => None,
+        };
+        for retired in self.presented_images.replace(media) {
+            cx.drop_image(retired, Some(window));
+        }
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
 

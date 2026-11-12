@@ -6,7 +6,7 @@ use crate::{
 };
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px, uniform_list,
+    StatefulInteractiveElement, Styled, div, img, prelude::FluentBuilder as _, px, uniform_list,
 };
 
 fn button(
@@ -437,6 +437,77 @@ pub(crate) fn render(
                         cx,
                     )),
             );
+        } else if remote.pdf.is_some() || remote.pixels.is_some() {
+            if let Some((page, pages, scale, busy, _, error)) = &remote.pdf {
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(button(
+                            "remote-pdf-prev",
+                            if fr { "Précédent" } else { "Previous" },
+                            Command::PdfPage(-1),
+                            !busy && *page > 0,
+                            tokens,
+                            cx,
+                        ))
+                        .when(*pages > 0, |el| {
+                            el.child(SharedString::from(format!("Page {} / {}", page + 1, pages)))
+                        })
+                        .child(button(
+                            "remote-pdf-next",
+                            if fr { "Suivant" } else { "Next" },
+                            Command::PdfPage(1),
+                            !busy && page + 1 < *pages,
+                            tokens,
+                            cx,
+                        ))
+                        .child(button(
+                            "remote-pdf-minus",
+                            "−",
+                            Command::PdfZoom(-0.25),
+                            !busy && *scale > 0.5,
+                            tokens,
+                            cx,
+                        ))
+                        .child(SharedString::from(format!("{:.0}%", scale * 100.)))
+                        .child(button(
+                            "remote-pdf-plus",
+                            "+",
+                            Command::PdfZoom(0.25),
+                            !busy && *scale < 3.,
+                            tokens,
+                            cx,
+                        )),
+                );
+                if *busy {
+                    body = body.child(if fr {
+                        "Chargement de la page…"
+                    } else {
+                        "Loading page…"
+                    });
+                }
+                if !error.is_empty() {
+                    body = body.child(SharedString::from(error.clone()));
+                }
+            }
+            if let Some(image) = &remote.pixels {
+                let size = image.size(0);
+                body = body.child(
+                    div()
+                        .id("remote-media-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .overflow_scroll()
+                        .child(
+                            img(image.clone())
+                                .w(px(size.width.0 as f32))
+                                .h(px(size.height.0 as f32)),
+                        ),
+                );
+            }
         } else {
             body = body.child(SharedString::from(format!(
                 "{} · {size} B",
@@ -446,6 +517,9 @@ pub(crate) fn render(
                     "Binary file — download the original to open it"
                 }
             )));
+        }
+        if !remote.preview_error.is_empty() {
+            body = body.child(SharedString::from(remote.preview_error.clone()));
         }
     }
     body

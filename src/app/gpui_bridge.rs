@@ -1012,6 +1012,11 @@ impl Tessel {
             let mut app = Self::new_for_gpui_in_dir(override_dir, false, repaint_cb);
             app.view = View::Remote;
             app.remote = crate::remote_panel::RemotePanel::text_fixture();
+            if std::env::args().any(|arg| arg == "--remote-pdf-fixture") {
+                app.remote = crate::remote_panel::RemotePanel::pdf_fixture();
+            } else if std::env::args().any(|arg| arg == "--remote-image-fixture") {
+                app.remote = crate::remote_panel::RemotePanel::fixture();
+            }
             if std::env::args().any(|arg| arg == "--french-fixture") {
                 app.state.language = crate::i18n::Language::French;
             }
@@ -1349,7 +1354,7 @@ impl Tessel {
     pub(crate) fn poll_for_gpui(&mut self) -> bool {
         // These workers use channels rather than the terminal repaint callback.
         // Keep their visible view updating through the frame that consumes completion.
-        let refresh = (self.view == View::Remote && self.remote.busy())
+        let refresh = (self.view == View::Remote && self.remote.gpui_needs_frame())
             || !self.document_pending.is_empty()
             || (self.view == View::Files
                 && self

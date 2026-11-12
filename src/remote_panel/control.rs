@@ -20,6 +20,8 @@ pub(crate) enum Command {
     Save,
     Discard,
     Download,
+    PdfPage(isize),
+    PdfZoom(f32),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -37,6 +39,9 @@ pub(crate) struct Snapshot {
     pub rename: Option<(String, String)>,
     pub delete: Option<String>,
     pub document: Option<(String, Option<String>, usize)>,
+    pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
+    pub pdf: Option<crate::pdf::PdfSummaryTuple>,
+    pub preview_error: String,
 }
 
 impl RemotePanel {
@@ -58,8 +63,55 @@ impl RemotePanel {
         });
         panel
     }
-    pub(crate) fn snapshot(&self, hosts: &[Host]) -> Snapshot {
+    pub(crate) fn gpui_needs_frame(&self) -> bool {
+        self.busy()
+            || self
+                .document
+                .as_ref()
+                .and_then(|doc| doc.preview.as_ref())
+                .and_then(|doc| doc.pdf.as_ref())
+                .is_some_and(crate::pdf::PdfView::is_rendering)
+    }
+
+    #[cfg(feature = "visual-test")]
+    pub(crate) fn pdf_fixture() -> Self {
+        let mut panel = Self::fixture();
+        let original = crate::pdf::fixture();
+        panel.document = Some(RemoteDocument {
+            path: "/demo/original.pdf".into(),
+            preview: prepare_preview("original.pdf", &original).unwrap().ok(),
+            original,
+            text: None,
+            preview_error: String::new(),
+        });
+        panel
+    }
+
+    pub(crate) fn snapshot(&mut self, hosts: &[Host]) -> Snapshot {
+        let mut pdf = None;
+        let mut pixels = None;
+        if let Some(preview) = self.document.as_mut().and_then(|doc| doc.preview.as_mut()) {
+            if let Some(view) = &mut preview.pdf {
+                pdf = Some(view.gpui_poll_summary());
+                pixels = view.gpui_image();
+            } else {
+                if preview.gpui_image.is_none() {
+                    preview.gpui_image = preview
+                        .image
+                        .as_ref()
+                        .and_then(crate::gpui_pixels::from_color_image);
+                }
+                pixels = preview.gpui_image.clone();
+            }
+        }
         Snapshot {
+            pdf,
+            pixels,
+            preview_error: self
+                .document
+                .as_ref()
+                .map(|doc| doc.preview_error.clone())
+                .unwrap_or_default(),
             hosts: hosts.iter().map(|h| h.alias.clone()).collect(),
             selected: self.selected,
             connected: self.host.as_ref().map(|h| h.alias.clone()),
@@ -94,6 +146,26 @@ impl RemotePanel {
         }
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         match command {
+            Command::PdfPage(delta) => {
+                if let Some(pdf) = self
+                    .document
+                    .as_mut()
+                    .and_then(|doc| doc.preview.as_mut())
+                    .and_then(|doc| doc.pdf.as_mut())
+                {
+                    pdf.step_page(delta);
+                }
+            }
+            Command::PdfZoom(delta) => {
+                if let Some(pdf) = self
+                    .document
+                    .as_mut()
+                    .and_then(|doc| doc.preview.as_mut())
+                    .and_then(|doc| doc.pdf.as_mut())
+                {
+                    pdf.step_zoom(delta);
+                }
+            }
             Command::Edit(text) => {
                 if text.len() <= 2 * 1024 * 1024
                     && let Some(doc) = &mut self.document
@@ -236,6 +308,45 @@ impl RemotePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_media_keeps_original_bytes_and_caches_native_pixels() {
+        let image = image::RgbaImage::from_fn(2, 1, |x, _| {
+            image::Rgba(if x == 0 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            })
+        });
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let original = encoded.into_inner();
+        let mut panel = RemotePanel {
+            document: Some(RemoteDocument {
+                path: "/fixture/colors.png".into(),
+                preview: prepare_preview("colors.png", &original)
+                    .unwrap()
+                    .unwrap()
+                    .into(),
+                original: original.clone(),
+                text: None,
+                preview_error: String::new(),
+            }),
+            ..Default::default()
+        };
+        let first = panel.snapshot(&[]).pixels.unwrap();
+        assert_eq!(
+            first.as_bytes(0).unwrap(),
+            &[0, 0, 255, 255, 255, 0, 0, 255]
+        );
+        panel.command(Command::PdfPage(1), &[]); // no PDF, never mutates image bytes
+        let second = panel.snapshot(&[]).pixels.unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(panel.document.as_ref().unwrap().original, original);
+        assert!(!panel.snapshot(&[]).dirty);
+    }
 
     fn text_panel() -> RemotePanel {
         let (sender, receiver) = mpsc::channel();

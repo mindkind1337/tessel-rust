@@ -8286,7 +8286,7 @@ dependencies = [
 [[package]]
 name = "tessel-host"
 version = "0.1.1"
-source = "git+https://github.com/mindkind1337/tessel-host?rev=23b62ac09d70776d03fc4d91c2d8512c3c7addb8#23b62ac09d70776d03fc4d91c2d8512c3c7addb8"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=78db68d61556bfa59a058080cf9270a8f47301b0#78db68d61556bfa59a058080cf9270a8f47301b0"
 dependencies = [
  "libc",
  "serde",
@@ -8300,7 +8300,7 @@ dependencies = [
 [[package]]
 name = "tessel-host-client"
 version = "0.1.1"
-source = "git+https://github.com/mindkind1337/tessel-host?rev=23b62ac09d70776d03fc4d91c2d8512c3c7addb8#23b62ac09d70776d03fc4d91c2d8512c3c7addb8"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=78db68d61556bfa59a058080cf9270a8f47301b0#78db68d61556bfa59a058080cf9270a8f47301b0"
 dependencies = [
  "serde",
  "serde_json",
@@ -8311,7 +8311,7 @@ dependencies = [
 [[package]]
 name = "tessel-host-protocol"
 version = "0.1.1"
-source = "git+https://github.com/mindkind1337/tessel-host?rev=23b62ac09d70776d03fc4d91c2d8512c3c7addb8#23b62ac09d70776d03fc4d91c2d8512c3c7addb8"
+source = "git+https://github.com/mindkind1337/tessel-host?rev=78db68d61556bfa59a058080cf9270a8f47301b0#78db68d61556bfa59a058080cf9270a8f47301b0"
 dependencies = [
  "base64 0.22.1",
  "serde",
