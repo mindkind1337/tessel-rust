@@ -72,6 +72,8 @@ mod git;
 mod git_result;
 mod gpui_pixels;
 pub mod gpui_ui;
+mod guest_file_editor;
+mod guest_file_listing;
 mod guest_task_board;
 pub mod help_panel;
 mod host_actions;

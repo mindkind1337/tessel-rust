@@ -2542,6 +2542,7 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
                 Ok(json!({
                     "name": target.file_name().unwrap_or_default().to_string_lossy(),
                     "data": B64.encode(bytes),
+                    "readOnly": !rights.edit || (is_agent_instruction_or_protected_file(Path::new(relative)) && !rights.r#type),
                 }))
             }
             "files.write" => {
@@ -2968,9 +2969,6 @@ pub struct GuestSnapshot {
     pub host_active_project: Option<u64>,
     pub host_active_pane: Option<u64>,
     pub last_pane_output: Option<(u64, String, String)>,
-    pub entries: Vec<Value>,
-    pub current_path: String,
-    pub downloaded_file: Option<(String, Vec<u8>)>,
     pub last_error: String,
 }
 
@@ -3016,9 +3014,6 @@ impl GuestSession {
             host_active_project: None,
             host_active_pane: None,
             last_pane_output: None,
-            entries: Vec::new(),
-            current_path: String::new(),
-            downloaded_file: None,
             last_error: String::new(),
         };
         let state = Arc::new(Mutex::new(snap));
@@ -3318,13 +3313,6 @@ fn run_guest_worker(
         &host_name,
         &json!({"op": "workspace.snapshot"}),
     );
-    let _ = perform_guest_rpc(
-        &mut tls,
-        &state,
-        &stop,
-        &host_name,
-        &json!({"op": "files.list", "path": ""}),
-    );
 
     let mut last_poll = Instant::now();
     while !stop.is_stopped() {
@@ -3474,20 +3462,6 @@ fn perform_guest_rpc(
                 }
                 g.host_active_project = result.get("hostActiveProject").and_then(Value::as_u64);
                 g.host_active_pane = result.get("hostActivePane").and_then(Value::as_u64);
-            }
-            "files.list" => {
-                g.current_path = payload
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                g.entries = result["entries"].as_array().cloned().unwrap_or_default();
-            }
-            "files.read" => {
-                let name = result["name"].as_str().unwrap_or("download.bin").to_owned();
-                if let Ok(bytes) = B64.decode(result["data"].as_str().unwrap_or("")) {
-                    g.downloaded_file = Some((name, bytes));
-                }
             }
             "term.output" | "term.subscribe" => {
                 if let (Some(pid), Some(title), Some(output)) = (

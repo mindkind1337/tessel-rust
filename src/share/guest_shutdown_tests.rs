@@ -193,9 +193,6 @@ fn empty_state() -> Arc<Mutex<GuestSnapshot>> {
         host_active_project: None,
         host_active_pane: None,
         last_pane_output: None,
-        entries: vec![],
-        current_path: String::new(),
-        downloaded_file: None,
         last_error: String::new(),
     }))
 }

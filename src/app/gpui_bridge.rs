@@ -1525,7 +1525,7 @@ impl Tessel {
     pub(crate) fn poll_for_gpui(&mut self) -> bool {
         // These workers use channels rather than the terminal repaint callback.
         // Keep their visible view updating through the frame that consumes completion.
-        let refresh = self.share.guest_tasks_busy()
+        let refresh = self.share.guest_requests_busy()
             || (self.state.panels.right_open
                 && self.state.panels.right_tab == SideTab::Files
                 && self.explorer_tree.gpui_needs_frame())

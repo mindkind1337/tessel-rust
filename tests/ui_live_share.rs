@@ -1,4 +1,10 @@
 #[allow(dead_code)]
+#[path = "../src/guest_file_editor.rs"]
+mod guest_file_editor;
+#[allow(dead_code)]
+#[path = "../src/guest_file_listing.rs"]
+mod guest_file_listing;
+#[allow(dead_code)]
 #[path = "../src/guest_task_board.rs"]
 mod guest_task_board;
 #[allow(dead_code)]
@@ -484,7 +490,7 @@ fn compatibility_guest_board_add_is_pending_without_waiting_for_host_commit() {
     panel.set_guest_session(guest);
     panel.guest_sub_view = share_panel::GuestSubView::Tasks;
     let scope = loop {
-        panel.poll_guest_tasks();
+        panel.poll_guest_requests();
         let board = panel.guest_task_snapshot();
         if let Some(scope) = board.scope
             && !board.pending
@@ -531,4 +537,264 @@ fn compatibility_guest_board_add_is_pending_without_waiting_for_host_commit() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn guest_file_fixture() -> (tempfile::TempDir, Host, SharePanel) {
+    let dir = tempfile::Builder::new()
+        .prefix("tessel-files-fixture-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let projects: Vec<_> = (1..=2)
+        .map(|id| {
+            let path = dir.path().join(format!("p{id}"));
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("a.txt"), format!("A in {id}")).unwrap();
+            std::fs::write(path.join("b.txt"), format!("B in {id}")).unwrap();
+            std::fs::write(path.join("AGENTS.md"), "Instructions").unwrap();
+            SharedProject {
+                id,
+                name: format!("Project {id}"),
+                path,
+            }
+        })
+        .collect();
+    let host = Host::start_multi(
+        projects,
+        "Fixture".into(),
+        InviteSpec::default(),
+        ShareSettings::default(),
+        vec![],
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1".parse().unwrap(),
+    )
+    .unwrap();
+    host.publish_tasks(vec![]);
+    let guest = GuestSession::connect(host.invitation.clone(), "Fixture".into(), "b8".repeat(32));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(LiveShareAsk::Join { key, .. }) = host.snapshot().asks.first() {
+            host.answer_ask(share::AskAnswer::Join {
+                key: key.clone(),
+                allow: true,
+                projects: vec![1, 2],
+                rights: ShareRights::collaborate(),
+                trust: false,
+            });
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut panel = SharePanel::default();
+    panel.set_guest_session(guest);
+    panel.guest_sub_view = share_panel::GuestSubView::Files;
+    loop {
+        panel.poll_guest_requests();
+        if panel.guest_task_snapshot().scope.is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    (dir, host, panel)
+}
+fn await_guest_document(
+    panel: &mut SharePanel,
+    key: &guest_file_editor::Key,
+) -> guest_file_editor::Document {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        panel.poll_guest_requests();
+        if let Some(doc) = panel.guest_file_document().filter(|d| &d.key == key) {
+            return doc;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "file read failed: {:?}",
+            panel.guest_file_notice()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+fn draw_guest_files(
+    ctx: &egui::Context,
+    panel: &mut SharePanel,
+    events: Vec<Event>,
+) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 1000.))),
+            focused: true,
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            panel.show_dialog_modal(ctx, &[], false);
+        },
+    )
+}
+#[test]
+fn compatibility_guest_file_reads_and_saves_exact_project_and_path() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let a = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    let b = guest_file_editor::Key {
+        scope,
+        path: "b.txt".into(),
+    };
+    assert!(panel.open_guest_file(a.clone()));
+    assert_eq!(await_guest_document(&mut panel, &a).text.as_str(), "A in 1");
+    assert!(panel.open_guest_file(b.clone()));
+    assert_eq!(await_guest_document(&mut panel, &b).text.as_str(), "B in 1");
+    assert!(panel.edit_guest_file(&b, "Edited B only".into()));
+    let ctx = egui::Context::default();
+    let _ = draw_guest_files(&ctx, &mut panel, vec![]);
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    let save = find_text_center(&output.shapes, "Save").unwrap_or_else(|| {
+        panic!(
+            "missing Save; document={:?}; notice={:?}; text={:?}",
+            panel.guest_file_document(),
+            panel.guest_file_notice(),
+            painted_texts(&output.shapes)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+        )
+    });
+    draw_guest_files(&ctx, &mut panel, click_events(save));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        panel.poll_guest_requests();
+        if panel.guest_file_notice() == Some(guest_file_editor::Notice::Saved) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "save failed: {:?}",
+            panel.guest_file_notice()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p1/b.txt")).unwrap(),
+        "Edited B only"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p1/a.txt")).unwrap(),
+        "A in 1"
+    );
+    let protected = guest_file_editor::Key {
+        scope,
+        path: "AGENTS.md".into(),
+    };
+    panel.open_guest_file(protected.clone());
+    await_guest_document(&mut panel, &protected);
+    assert!(!panel.edit_guest_file(&protected, "forbidden".into()));
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestProject {
+            session: scope.session,
+            project: 2,
+        },
+        &[],
+    );
+    let other = guest_file_editor::Key {
+        scope: guest_task_board::Scope {
+            session: scope.session,
+            project: 2,
+        },
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(other.clone());
+    assert_eq!(
+        await_guest_document(&mut panel, &other).text.as_str(),
+        "A in 2"
+    );
+}
+#[test]
+fn compatibility_guest_file_disconnect_keeps_draft_and_requires_confirmed_discard() {
+    let (_dir, _host, mut panel) = guest_file_fixture();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let key = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(key.clone());
+    await_guest_document(&mut panel, &key);
+    panel.edit_guest_file(&key, "Keep this draft".into());
+    panel.apply_gpui_share_action(share_panel::ShareGpuiAction::DisconnectGuest, &[]);
+    panel.poll_guest_requests();
+    let ctx = egui::Context::default();
+    let _ = draw_guest_files(&ctx, &mut panel, vec![]);
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(has_text_containing(&output.shapes, "Keep this draft"));
+    let close = find_text_center(&output.shapes, "Close file").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(close));
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(has_text_containing(
+        &output.shapes,
+        "Discard this unsaved draft?"
+    ));
+    let keep = find_text_center(&output.shapes, "Keep draft").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(keep));
+    assert_eq!(
+        panel.guest_file_document().unwrap().text.as_str(),
+        "Keep this draft"
+    );
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    let close = find_text_center(&output.shapes, "Close file").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(close));
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    let discard = find_text_center(&output.shapes, "Discard draft").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(discard));
+    assert!(panel.guest_file_document().is_none());
+}
+
+#[test]
+fn compatibility_guest_file_paste_is_never_silently_truncated() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let key = guest_file_editor::Key {
+        scope: panel.guest_task_snapshot().scope.unwrap(),
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(key.clone());
+    await_guest_document(&mut panel, &key);
+    let ctx = egui::Context::default();
+    let _ = draw_guest_files(&ctx, &mut panel, vec![]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while panel.guest_requests_busy() {
+        panel.poll_guest_requests();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for _ in 0..3 {
+        draw_guest_files(&ctx, &mut panel, vec![]);
+    }
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    let text = find_text_center(&out.shapes, "A in 1").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(text));
+    assert!(
+        ctx.memory(|m| m.focused()).is_some(),
+        "text click at {text:?} did not focus editor"
+    );
+    let pasted = format!("{}END_OF_PASTE", "x".repeat(200 * 1024));
+    draw_guest_files(&ctx, &mut panel, vec![Event::Paste(pasted.clone())]);
+    let doc = panel.guest_file_document().unwrap();
+    assert_eq!(doc.text.len(), pasted.len() + "A in 1".len());
+    assert!(doc.text.contains(&pasted));
+    assert_eq!(
+        panel.guest_file_notice(),
+        Some(guest_file_editor::Notice::TooLarge)
+    );
+    panel.save_guest_file(&key);
+    assert_eq!(
+        panel.guest_file_notice(),
+        Some(guest_file_editor::Notice::TooLarge)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p1/a.txt")).unwrap(),
+        "A in 1"
+    );
 }

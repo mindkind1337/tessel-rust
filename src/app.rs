@@ -1820,7 +1820,7 @@ impl Tessel {
         }
     }
     fn poll(&mut self) -> bool {
-        let mut native_changed = self.share.poll_guest_tasks();
+        let mut native_changed = self.share.poll_guest_requests();
         let mut completed_switches = Vec::new();
         for session in &mut self.sessions {
             if let Some(pending) = &session.restarting

@@ -14,9 +14,6 @@ fn guest_request_full_queue_returns_immediately_and_retains_reply_receiver() {
         host_active_project: Some(1),
         host_active_pane: None,
         last_pane_output: None,
-        entries: vec![],
-        current_path: String::new(),
-        downloaded_file: None,
         last_error: String::new(),
     };
     let (tx, rx) = mpsc::sync_channel(1);

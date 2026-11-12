@@ -196,8 +196,10 @@ pub struct SharePanel {
     pub guest_selected_project: Option<u64>,
     pub guest_selected_pane: Option<u64>,
     pub guest_term_input: String,
-    pub guest_editor_path: Option<String>,
-    pub guest_editor_text: String,
+    guest_file_editor: crate::guest_file_editor::Editor,
+    guest_file_listing: crate::guest_file_listing::Listing,
+    guest_files_scope: Option<crate::guest_task_board::Scope>,
+    confirm_guest_file_discard: bool,
     pub guest_new_file_name: String,
     pub guest_commit_msg: String,
     pub guest_git_status: String,
@@ -247,8 +249,10 @@ impl Default for SharePanel {
             guest_selected_project: None,
             guest_selected_pane: None,
             guest_term_input: String::new(),
-            guest_editor_path: None,
-            guest_editor_text: String::new(),
+            guest_file_editor: Default::default(),
+            guest_file_listing: Default::default(),
+            guest_files_scope: None,
+            confirm_guest_file_discard: false,
             guest_new_file_name: String::new(),
             guest_commit_msg: String::new(),
             guest_git_status: String::new(),
@@ -343,6 +347,10 @@ impl SharePanel {
     /// Injects an active [`GuestSession`] directly.
     pub fn set_guest_session(&mut self, session: GuestSession) {
         self.guest_task_board.bind(None, false);
+        self.guest_file_editor.bind(None, false);
+        self.guest_file_listing.bind(None);
+        self.guest_files_scope = None;
+        self.confirm_guest_file_discard = false;
         self.guest_selected_project = None;
         self.guest_session = Some(session);
         self.tab = DialogTab::Join;
@@ -351,8 +359,10 @@ impl SharePanel {
     pub fn guest_task_input(&self) -> Option<(crate::guest_task_board::Scope, &str)> {
         self.guest_task_board.input()
     }
-    pub fn guest_tasks_busy(&self) -> bool {
+    pub fn guest_requests_busy(&self) -> bool {
         self.guest_task_board.busy()
+            || self.guest_file_editor.busy()
+            || self.guest_file_listing.busy()
     }
     pub fn guest_task_snapshot(&self) -> crate::guest_task_board::Snapshot {
         self.guest_task_board.snapshot()
@@ -395,9 +405,11 @@ impl SharePanel {
             g.rights.tasks,
         )
     }
-    pub fn poll_guest_tasks(&mut self) -> bool {
+    pub fn poll_guest_requests(&mut self) -> bool {
         let mut changed = self.poll_guest_scope();
         changed |= self.guest_task_board.poll(Instant::now());
+        changed |= self.guest_file_editor.poll(Instant::now());
+        changed |= self.guest_file_listing.poll(Instant::now());
         if self.guest_task_board.take_reconcile()
             && let Some(scope) = self.guest_task_snapshot().scope
         {
@@ -421,7 +433,25 @@ impl SharePanel {
     }
     fn poll_guest_scope(&mut self) -> bool {
         let (scope, writable) = self.current_guest_scope();
-        self.guest_task_board.bind(scope, writable)
+        let mut changed = self.guest_task_board.bind(scope, writable);
+        let rights = self
+            .guest_session
+            .as_ref()
+            .map(GuestSession::snapshot)
+            .map(|g| g.rights)
+            .unwrap_or_else(ShareRights::view_only);
+        let file_writable = rights.edit
+            && (rights.r#type
+                || self.guest_file_editor.document.as_ref().is_none_or(|d| {
+                    !share::is_agent_instruction_or_protected_file(Path::new(&d.key.path))
+                }));
+        changed |= self.guest_file_editor.bind(scope, file_writable);
+        changed |= self.guest_file_listing.bind(scope);
+        if self.guest_files_scope != scope {
+            self.confirm_guest_file_discard = false;
+        }
+        self.guest_files_scope = scope;
+        changed
     }
     pub fn edit_guest_task_draft(
         &mut self,
@@ -442,7 +472,7 @@ impl SharePanel {
         {
             self.follow_host = false;
             self.guest_selected_project = Some(project);
-            self.poll_guest_tasks();
+            self.poll_guest_requests();
         }
     }
 
@@ -2534,7 +2564,7 @@ impl SharePanel {
     // -----------------------------------------------------------------------
 
     fn render_join_tab(&mut self, ui: &mut Ui, french: bool) {
-        self.poll_guest_tasks();
+        self.poll_guest_requests();
         let recovery = self.guest_task_snapshot();
         if recovery.scope.is_none() && !recovery.draft.is_empty() {
             ui.label(if french {
@@ -2556,6 +2586,9 @@ impl SharePanel {
             if let Some(notice) = recovery.notice {
                 ui.colored_label(Color32::LIGHT_RED, notice.text(french));
             }
+        }
+        if self.guest_files_scope.is_none() {
+            self.render_guest_file_editor(ui, french);
         }
         let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
 
@@ -2673,7 +2706,7 @@ impl SharePanel {
 
     fn render_guest_tasks(&mut self, ui: &mut Ui, french: bool) {
         use crate::guest_task_board::Action;
-        self.poll_guest_tasks();
+        self.poll_guest_requests();
         let board = self.guest_task_snapshot();
         let Some(scope) = board.scope else {
             return;
@@ -2763,7 +2796,7 @@ impl SharePanel {
         sas_code: &str,
         french: bool,
     ) {
-        self.poll_guest_tasks();
+        self.poll_guest_requests();
 
         ui.horizontal_wrapped(|ui| {
             ui.strong(if french {
@@ -2844,6 +2877,10 @@ impl SharePanel {
             self.render_guest_tasks(ui, french);
             return;
         }
+        if self.guest_sub_view == GuestSubView::Files {
+            self.render_guest_files(ui, french);
+            return;
+        }
         let Some(sess) = &self.guest_session else {
             return;
         };
@@ -2920,96 +2957,7 @@ impl SharePanel {
                     }
                 }
             }
-            GuestSubView::Files => {
-                ui.horizontal(|ui| {
-                    if !gs.current_path.is_empty()
-                        && ui
-                            .small_button(if french {
-                                ".. Dossier parent"
-                            } else {
-                                ".. Parent"
-                            })
-                            .clicked()
-                    {
-                        let parent = Path::new(&gs.current_path)
-                            .parent()
-                            .map(|p| p.to_string_lossy().replace('\\', "/"))
-                            .unwrap_or_default();
-                        sess.send_async(json!({
-                            "op": "files.list",
-                            "projectId": self.guest_selected_project,
-                            "path": parent,
-                        }));
-                    }
-                    if ui
-                        .small_button(if french { "Actualiser" } else { "Refresh" })
-                        .clicked()
-                    {
-                        sess.send_async(json!({
-                            "op": "files.list",
-                            "projectId": self.guest_selected_project,
-                            "path": gs.current_path,
-                        }));
-                    }
-                });
-
-                for entry in &gs.entries {
-                    let is_dir = entry["directory"].as_bool().unwrap_or(false);
-                    let name = entry["name"].as_str().unwrap_or("");
-                    let path = entry["path"].as_str().unwrap_or("");
-                    if ui
-                        .button(format!("{} {name}", if is_dir { "▸" } else { "·" }))
-                        .clicked()
-                    {
-                        if is_dir {
-                            sess.send_async(json!({
-                                "op": "files.list",
-                                "projectId": self.guest_selected_project,
-                                "path": path,
-                            }));
-                        } else {
-                            self.guest_editor_path = Some(path.to_owned());
-                            sess.send_async(json!({
-                                "op": "files.read",
-                                "projectId": self.guest_selected_project,
-                                "path": path,
-                            }));
-                        }
-                    }
-                }
-
-                if let Some((name, bytes)) = &gs.downloaded_file
-                    && let Ok(text) = std::str::from_utf8(bytes)
-                {
-                    ui.separator();
-                    ui.strong(name);
-                    if gs.rights.edit {
-                        if self.guest_editor_text.is_empty() {
-                            self.guest_editor_text = text.to_owned();
-                        }
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.guest_editor_text)
-                                .code_editor()
-                                .desired_rows(6)
-                                .desired_width(f32::INFINITY),
-                        );
-                        if let Some(rel_path) = &self.guest_editor_path
-                            && ui
-                                .button(if french { "Enregistrer" } else { "Save" })
-                                .clicked()
-                        {
-                            sess.send_async(json!({
-                                "op": "files.write",
-                                "projectId": self.guest_selected_project,
-                                "path": rel_path,
-                                "data": B64.encode(self.guest_editor_text.as_bytes()),
-                            }));
-                        }
-                    } else {
-                        ui.add(egui::Label::new(RichText::new(text).monospace()).selectable(true));
-                    }
-                }
-            }
+            GuestSubView::Files => unreachable!("files rendered before session borrow"),
             GuestSubView::Git => {
                 if ui
                     .small_button(if french {
@@ -3723,3 +3671,6 @@ impl SharePanel {
         }
     }
 }
+
+#[path = "share_panel/guest_files.rs"]
+mod guest_files;

@@ -397,3 +397,8 @@ At b223 the Compatibility cache was an unscoped `Vec<Value>`; following a new pr
 Native visual access was rechecked on 2026-11-12: the Computer Use inventory reports an unavailable native pipe (OS error 2) and browser access host. No active application was restarted or used for acceptance; visual parity remains unverified.
 
 The subsequent nonblocking-controller work adds a scoped project selector and Refresh/Add board to both Join dialogs, using native GPUI text input. This does not yet unify guest projects with the main sidebar/task board or provide all card controls. Controller, loopback TLS, Compatibility Add and native input regression tests pass; pixel-level acceptance remains pending.
+
+
+## Scoped guest files (2026-11-12)
+
+The Compatibility Files view now uses project/session/path-scoped asynchronous reads, listings and save acknowledgements. Unsaved or uncertain drafts remain available for copying after disconnect or project changes, with explicit discard confirmation. This fixes the historical shared-text cache that could reuse file A text when saving file B. Native guest file tabs, chunked transfers, version-conflict detection and real visual acceptance remain pending; this is not full file-workspace parity.
