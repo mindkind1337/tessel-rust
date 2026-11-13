@@ -129,7 +129,81 @@ fn rename_new(_from: &Path, _to: &Path) -> Result<()> {
     Err("Atomic no-overwrite rename is currently supported on Windows only".into())
 }
 
+fn check_unlinked_entry(grant: &Grant, relative: &str) -> Result<()> {
+    let mut path = grant.project.path.clone();
+    for component in Path::new(relative).components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err("Invalid file entry.".into());
+        }
+        path.push(component);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| "Cannot verify file entry")?;
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 != 0
+        };
+        #[cfg(not(windows))]
+        let linked = metadata.file_type().is_symlink();
+        if linked || metadata.file_type().is_symlink() {
+            return Err("Linked entries cannot be moved or recycled by a guest.".into());
+        }
+    }
+    Ok(())
+}
+// A directory operation affects its descendants too. Refuse an incomplete walk.
+fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
+    let started = Instant::now();
+    let mut pending = vec![target.to_path_buf()];
+    let mut examined = 0usize;
+    while let Some(path) = pending.pop() {
+        examined += 1;
+        if examined > 10_000 || started.elapsed() > Duration::from_secs(2) {
+            return Err("Directory is too large to verify for a guest operation.".into());
+        }
+        let relative = path
+            .strip_prefix(&grant.project.path)
+            .map_err(|_| "Invalid project scope")?;
+        if private_path(relative)
+            || (grant.hide && secret_or_dot_path(relative))
+            || (!grant.rights.r#type && is_agent_instruction_or_protected_file(relative))
+        {
+            return Err("Directory contains private or protected items.".into());
+        }
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|_| "Cannot verify directory contents")?;
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 != 0
+        };
+        #[cfg(not(windows))]
+        let linked = metadata.file_type().is_symlink();
+        if linked || metadata.file_type().is_symlink() {
+            return Err("Linked items cannot be changed by a guest directory operation.".into());
+        }
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(&path).map_err(|_| "Cannot verify directory contents")? {
+                if examined + pending.len() >= 10_000 || started.elapsed() > Duration::from_secs(2)
+                {
+                    return Err("Directory is too large to verify for a guest operation.".into());
+                }
+                pending.push(entry.map_err(|_| "Cannot verify directory entry")?.path());
+            }
+        }
+    }
+    Ok(())
+}
 fn apply(grant: &Grant, req: &Value, revalidate: &mut dyn FnMut() -> Result<()>) -> Result<Action> {
+    apply_with_recycler(grant, req, revalidate, &mut |path| {
+        crate::native_recycle::send_path_to_recycle_bin(path)
+    })
+}
+fn apply_with_recycler(
+    grant: &Grant,
+    req: &Value,
+    revalidate: &mut dyn FnMut() -> Result<()>,
+    recycle: &mut dyn FnMut(&Path) -> Result<()>,
+) -> Result<Action> {
     let rights = grant.rights;
     let hide_ignored = grant.hide;
     let guest_name = &grant.name;
@@ -216,9 +290,8 @@ fn apply(grant: &Grant, req: &Value, revalidate: &mut dyn FnMut() -> Result<()>)
                 return Err("Agent instructions require Type permission.".into());
             }
             let src = share_path_checked(&proj.path, from_rel, hide_ignored)?;
-            if src.is_dir() && !rights.r#type {
-                return Err("Type permission is required to rename a directory that may contain agent instructions.".into());
-            }
+            check_unlinked_entry(grant, from_rel)?;
+            check_descendants(grant, &src)?;
             let dst = share_new_path_checked(&proj.path, to_rel, hide_ignored)?;
             if dst.exists() {
                 return Err("Destination already exists.".into());
@@ -242,15 +315,13 @@ fn apply(grant: &Grant, req: &Value, revalidate: &mut dyn FnMut() -> Result<()>)
                 return Err("Agent instructions require Type permission.".into());
             }
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
+            check_unlinked_entry(grant, relative)?;
+            check_descendants(grant, &target)?;
             revalidate()?;
-            if target.is_dir() {
-                std::fs::remove_dir(&target).map_err(|e| e.to_string())?;
-            } else {
-                std::fs::remove_file(&target).map_err(|e| e.to_string())?;
-            }
+            recycle(&target)?;
             Ok(Action {
-                en: format!("{guest_name} deleted {relative}"),
-                fr: format!("{guest_name} a supprimé {relative}"),
+                en: format!("{guest_name} moved {relative} to the Recycle Bin"),
+                fr: format!("{guest_name} a mis {relative} à la corbeille"),
                 flagged,
             })
         }
@@ -417,8 +488,8 @@ mod tests {
             .map(|a| a.summary_fr)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!actions.contains("corbeille"));
-        assert!(actions.contains("supprimé"));
+        assert!(actions.contains("corbeille"));
+        assert!(!actions.contains("supprimé"));
     }
     #[test]
     fn rename_refuses_a_destination_created_after_validation() {
@@ -441,6 +512,142 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("source.txt")).unwrap(),
             "source"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_entry_never_recycles_its_target() {
+        use std::os::windows::process::CommandExt;
+        let (dir, host) = fixture();
+        let target = dir.path().join("target");
+        let link = dir.path().join("linked");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), "safe").unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "synthetic junction creation failed"
+        );
+        let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
+        let result = apply_with_recycler(
+            &grant,
+            &json!({"op":"files.delete","path":"linked"}),
+            &mut || Ok(()),
+            &mut |_| panic!("junction target must not reach recycler"),
+        );
+        std::fs::remove_dir(&link).unwrap();
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+            "safe"
+        );
+    }
+    #[test]
+    fn ci_configuration_requires_type_even_when_dot_files_are_visible() {
+        let (dir, host) = fixture();
+        {
+            let mut guard = host.inner.lock().unwrap();
+            guard.settings.hide_ignored = false;
+            guard.guests[0].guest.rights.r#type = false;
+        }
+        std::fs::create_dir_all(dir.path().join(".github/workflows")).unwrap();
+        for path in [
+            ".github/workflows/build.yml",
+            ".gitlab-ci.yml",
+            "Jenkinsfile",
+            "azure-pipelines.yml",
+            "bitbucket-pipelines.yml",
+            ".drone.yml",
+        ] {
+            assert!(
+                dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.create","path":path})
+                )
+                .get("error")
+                .is_some()
+            );
+            std::fs::write(dir.path().join(path), "owner config").unwrap();
+            assert!(
+                dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.write","path":path,"data":B64.encode(b"changed")})
+                )
+                .get("error")
+                .is_some()
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join(path)).unwrap(),
+                "owner config"
+            );
+        }
+        let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
+        assert!(check_descendants(&grant, &dir.path().join(".github")).is_err());
+    }
+    #[test]
+    fn recycler_failure_keeps_bytes_and_does_not_record_success() {
+        let (dir, host) = fixture();
+        let target = dir.path().join("keep.txt");
+        std::fs::write(&target, "recoverable").unwrap();
+        let req = json!({"op":"files.delete","path":"keep.txt"});
+        let result = run_authorized(&host.inner, "guest", &req, |grant, check| {
+            apply_with_recycler(grant, &req, check, &mut |_| {
+                Err("Recycle operation cancelled".into())
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "recoverable");
+        assert!(host.snapshot().recent_actions.is_empty());
+    }
+    #[test]
+    fn directory_recycling_checks_descendants_and_routes_the_whole_folder() {
+        let (dir, host) = fixture();
+        let folder = dir.path().join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("ordinary.txt"), "payload").unwrap();
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = false;
+        let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
+        let req = json!({"op":"files.delete","path":"folder"});
+        let mut requested = None;
+        apply_with_recycler(&grant, &req, &mut || Ok(()), &mut |path| {
+            requested = Some(path.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(requested.unwrap(), folder.canonicalize().unwrap());
+        for name in ["AGENTS.md", ".env", "vault.dat"] {
+            std::fs::write(folder.join(name), "keep").unwrap();
+            let result = apply_with_recycler(&grant, &req, &mut || Ok(()), &mut |_| {
+                panic!("private descendant reached recycling")
+            });
+            assert!(result.is_err());
+            std::fs::remove_file(folder.join(name)).unwrap();
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_directory_rename_needs_edit_but_not_type() {
+        let (dir, host) = fixture();
+        std::fs::create_dir(dir.path().join("ordinary")).unwrap();
+        std::fs::write(dir.path().join("ordinary/note.txt"), "safe").unwrap();
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = false;
+        let response = dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.rename","path":"ordinary","to":"renamed"}),
+        );
+        assert_eq!(response["result"]["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("renamed/note.txt")).unwrap(),
+            "safe"
         );
     }
     #[test]

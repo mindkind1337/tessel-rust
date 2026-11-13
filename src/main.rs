@@ -101,6 +101,7 @@ pub mod native_host_install;
 pub mod native_host_manager;
 mod native_host_panel;
 pub mod native_host_transport;
+mod native_recycle;
 mod native_task_board;
 mod office;
 pub mod palette;

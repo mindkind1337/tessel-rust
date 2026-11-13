@@ -728,6 +728,15 @@ pub fn is_agent_instruction_or_protected_file(relative: &Path) -> bool {
                 | ".envrc"
                 | "lefthook.yml"
                 | "lefthook-local.yml"
+                | ".github"
+                | ".gitlab-ci.yml"
+                | ".circleci"
+                | "azure-pipelines.yml"
+                | "azure-pipelines.yaml"
+                | "bitbucket-pipelines.yml"
+                | "jenkinsfile"
+                | ".drone.yml"
+                | ".drone.yaml"
         ) || lower.starts_with(".lintstagedrc")
             || lower.starts_with("lint-staged.config.")
             || lower.starts_with("commitlint")

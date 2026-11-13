@@ -20,6 +20,9 @@ mod icons;
 #[path = "../src/layout_broadcast_ui.rs"]
 mod layout_broadcast_ui;
 #[allow(dead_code)]
+#[path = "../src/native_recycle.rs"]
+mod native_recycle;
+#[allow(dead_code)]
 #[path = "../src/pane_grid.rs"]
 mod pane_grid;
 #[cfg(windows)]
