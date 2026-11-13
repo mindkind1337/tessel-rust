@@ -789,7 +789,8 @@ fn list_dir_entries(root: &Path, path: &Path) -> Result<Vec<DirEntryInfo>> {
 
 fn share_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Result<PathBuf> {
     let rel = Path::new(relative);
-    if rel.is_absolute()
+    if relative.trim().is_empty()
+        || rel.is_absolute()
         || rel
             .components()
             .any(|c| !matches!(c, std::path::Component::Normal(_)))
@@ -2317,6 +2318,12 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     if matches!(op, "tasks.list" | "tasks.mutate") {
         return task_board::dispatch(inner, guest_id, req);
     }
+    if matches!(
+        op,
+        "files.write" | "files.create" | "files.rename" | "files.delete"
+    ) {
+        return guest_file_mutations::dispatch(inner, guest_id, req);
+    }
     if matches!(op, "files.list" | "files.read") {
         return guest_file_reads::dispatch(inner, guest_id, req);
     }
@@ -2339,7 +2346,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     let rights = guard.guests[g_idx].guest.rights;
     let guest_name = guard.guests[g_idx].guest.name.clone();
     let allowed_projects = guard.guests[g_idx].guest.projects.clone();
-    let hide_ignored = guard.settings.hide_ignored;
 
     let res: Result<Value> = (|| -> Result<Value> {
         match op {
@@ -2556,142 +2562,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
                     guard.commands.push_back(HostCommand::ClosePane { pane_id });
                     Ok(json!({"closed": true}))
                 }
-            }
-            "files.write" => {
-                if !rights.edit {
-                    return Err("Edit permission is required to save files.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let flagged = is_agent_instruction_or_protected_file(Path::new(relative));
-                if flagged && !rights.r#type {
-                    return Err(
-                        "Agent instructions and .gitignore require Type permission to edit.".into(),
-                    );
-                }
-                let target = if proj.path.join(relative).exists() {
-                    share_path_checked(&proj.path, relative, hide_ignored)?
-                } else {
-                    share_new_path_checked(&proj.path, relative, hide_ignored)?
-                };
-                let data_b64 = req.get("data").and_then(Value::as_str).unwrap_or("");
-                let bytes = B64.decode(data_b64).map_err(|_| "Invalid file payload")?;
-                if bytes.len() > 2 * 1024 * 1024 {
-                    return Err("Live Share file write limit is 2 MiB.".into());
-                }
-                let parent = target.parent().ok_or("Missing parent folder")?;
-                let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-                tmp.write_all(&bytes).map_err(|e| e.to_string())?;
-                tmp.as_file().sync_all().map_err(|e| e.to_string())?;
-                tmp.persist(&target).map_err(|e| e.to_string())?;
-                guard.record_action(
-                    &guest_name,
-                    proj.id,
-                    format!("{guest_name} saved {relative}"),
-                    format!("{guest_name} a enregistré {relative}"),
-                    flagged,
-                );
-                Ok(json!({"ok": true}))
-            }
-            "files.create" => {
-                if !rights.edit {
-                    return Err("Edit permission is required to create files.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let is_dir = req
-                    .get("directory")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let flagged = is_agent_instruction_or_protected_file(Path::new(relative));
-                if flagged && !rights.r#type {
-                    return Err("Agent instructions require Type permission.".into());
-                }
-                let target = share_new_path_checked(&proj.path, relative, hide_ignored)?;
-                if target.exists() {
-                    return Err("Path already exists.".into());
-                }
-                if is_dir {
-                    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
-                } else {
-                    std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&target)
-                        .map_err(|e| e.to_string())?;
-                }
-                guard.record_action(
-                    &guest_name,
-                    proj.id,
-                    format!("{guest_name} created {relative}"),
-                    format!("{guest_name} a créé {relative}"),
-                    flagged,
-                );
-                Ok(json!({"ok": true}))
-            }
-            "files.rename" => {
-                if !rights.edit {
-                    return Err("Edit permission is required to rename files.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let from_rel = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let to_rel = req.get("to").and_then(Value::as_str).unwrap_or("");
-                let flagged = is_agent_instruction_or_protected_file(Path::new(from_rel))
-                    || is_agent_instruction_or_protected_file(Path::new(to_rel));
-                if flagged && !rights.r#type {
-                    return Err("Agent instructions require Type permission.".into());
-                }
-                let src = share_path_checked(&proj.path, from_rel, hide_ignored)?;
-                let dst = share_new_path_checked(&proj.path, to_rel, hide_ignored)?;
-                if dst.exists() {
-                    return Err("Destination already exists.".into());
-                }
-                std::fs::rename(&src, &dst).map_err(|e| e.to_string())?;
-                guard.record_action(
-                    &guest_name,
-                    proj.id,
-                    format!("{guest_name} renamed {from_rel} to {to_rel}"),
-                    format!("{guest_name} a renommé {from_rel} en {to_rel}"),
-                    flagged,
-                );
-                Ok(json!({"ok": true}))
-            }
-            "files.delete" => {
-                if !rights.edit {
-                    return Err("Edit permission is required to delete files.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let flagged = is_agent_instruction_or_protected_file(Path::new(relative));
-                if flagged && !rights.r#type {
-                    return Err("Agent instructions require Type permission.".into());
-                }
-                let target = share_path_checked(&proj.path, relative, hide_ignored)?;
-                if target.is_dir() {
-                    std::fs::remove_dir(&target).map_err(|e| e.to_string())?;
-                } else {
-                    std::fs::remove_file(&target).map_err(|e| e.to_string())?;
-                }
-                guard.record_action(
-                    &guest_name,
-                    proj.id,
-                    format!("{guest_name} deleted {relative}"),
-                    format!("{guest_name} a mis {relative} à la corbeille"),
-                    flagged,
-                );
-                Ok(json!({"ok": true}))
             }
             "pages.list" => {
                 if !rights.pages_view {
@@ -3646,3 +3516,6 @@ mod guest_git_config;
 
 #[path = "share/guest_file_reads.rs"]
 mod guest_file_reads;
+
+#[path = "share/guest_file_mutations.rs"]
+mod guest_file_mutations;
