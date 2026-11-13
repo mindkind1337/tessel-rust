@@ -701,6 +701,14 @@ pub fn secret_or_dot_path(path: &Path) -> bool {
             || name.contains("credentials")
             || name.ends_with(".env")
             || name.contains(".env.")
+            || [".p8", ".ppk", ".jks", ".keystore", ".tfvars"]
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+            || name.contains(".tfstate")
+            || ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            || (name.starts_with("service-account") && name.ends_with(".json"))
     })
 }
 

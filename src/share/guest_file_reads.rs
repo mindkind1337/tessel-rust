@@ -233,6 +233,46 @@ mod tests {
         );
     }
     #[test]
+    fn secret_name_families_are_hidden_from_listing_and_direct_reads() {
+        let (dir, host) = fixture();
+        let names = [
+            "private.p8",
+            "putty.ppk",
+            "java.jks",
+            "android.keystore",
+            "production.tfvars",
+            "terraform.tfstate.backup",
+            "id_ecdsa",
+            "id_dsa",
+            "id_rsa_backup",
+            "id_ed25519_old",
+            "service-account-prod.json",
+            "SERVICE-ACCOUNT.JSON",
+        ];
+        for name in names {
+            std::fs::write(dir.path().join(name), "synthetic secret").unwrap();
+            let response = dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"files.read","projectId":1,"path":name}),
+            );
+            assert!(response.get("error").is_some(), "{name}: {response}");
+        }
+        std::fs::write(dir.path().join("service-account-guide.md"), "public").unwrap();
+        let response = dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.list","projectId":1}),
+        );
+        let entries = response["result"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "{response}");
+        assert_eq!(entries[0]["name"], "service-account-guide.md");
+        for name in names {
+            assert!(secret_or_dot_path(&Path::new("nested").join(name)));
+        }
+    }
+
+    #[test]
     fn extracted_file_reads_preserve_contents_protection_and_limits() {
         let (dir, host) = fixture();
         std::fs::write(dir.path().join("visible.txt"), "synthetic").unwrap();
