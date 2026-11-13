@@ -1,9 +1,15 @@
 #[allow(dead_code)]
+#[path = "../src/git/process.rs"]
+mod git;
+#[allow(dead_code)]
 #[path = "../src/guest_file_editor.rs"]
 mod guest_file_editor;
 #[allow(dead_code)]
 #[path = "../src/guest_file_listing.rs"]
 mod guest_file_listing;
+#[allow(dead_code)]
+#[path = "../src/guest_git.rs"]
+mod guest_git;
 #[allow(dead_code)]
 #[path = "../src/guest_task_board.rs"]
 mod guest_task_board;
@@ -16,6 +22,10 @@ mod layout_broadcast_ui;
 #[allow(dead_code)]
 #[path = "../src/pane_grid.rs"]
 mod pane_grid;
+#[cfg(windows)]
+#[allow(dead_code)]
+#[path = "../src/process_job.rs"]
+mod process_job;
 #[allow(dead_code)]
 #[path = "../src/project_panel.rs"]
 mod project_panel;
@@ -797,4 +807,38 @@ fn compatibility_guest_file_paste_is_never_silently_truncated() {
         std::fs::read_to_string(dir.path().join("p1/a.txt")).unwrap(),
         "A in 1"
     );
+}
+
+#[test]
+fn compatibility_guest_git_draft_cannot_cross_projects_and_survives_leave() {
+    let (_dir, _host, mut panel) = guest_file_fixture();
+    panel.guest_sub_view = share_panel::GuestSubView::Git;
+    let scope = panel.guest_git_snapshot().scope.unwrap();
+    assert!(panel.edit_guest_commit(scope, "Keep my commit message".into()));
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestProject {
+            session: scope.session,
+            project: 2,
+        },
+        &[],
+    );
+    let other = panel.guest_git_snapshot().scope.unwrap();
+    assert_ne!(scope, other);
+    assert!(!panel.request_guest_git(other, guest_git::Action::Commit));
+    assert_eq!(panel.guest_git_snapshot().draft, "Keep my commit message");
+    panel.apply_gpui_share_action(share_panel::ShareGpuiAction::DisconnectGuest, &[]);
+    panel.poll_guest_requests();
+    let ctx = egui::Context::default();
+    for _ in 0..3 {
+        draw_guest_files(&ctx, &mut panel, vec![]);
+    }
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(has_text_containing(&out.shapes, "Keep my commit message"));
+    let discard = find_text_center(&out.shapes, "Discard message").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(discard));
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(!panel.guest_git_snapshot().draft.is_empty());
+    let confirm = find_text_center(&out.shapes, "Confirm discard").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(confirm));
+    assert!(panel.guest_git_snapshot().draft.is_empty());
 }

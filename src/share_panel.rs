@@ -201,8 +201,8 @@ pub struct SharePanel {
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
     pub guest_new_file_name: String,
-    pub guest_commit_msg: String,
-    pub guest_git_status: String,
+    guest_git: crate::guest_git::Controller,
+    confirm_guest_git_discard: bool,
     guest_task_board: crate::guest_task_board::Controller,
 
     // Toolbar pill popover & knock modal state
@@ -254,8 +254,8 @@ impl Default for SharePanel {
             guest_files_scope: None,
             confirm_guest_file_discard: false,
             guest_new_file_name: String::new(),
-            guest_commit_msg: String::new(),
-            guest_git_status: String::new(),
+            guest_git: Default::default(),
+            confirm_guest_git_discard: false,
             guest_task_board: Default::default(),
             pill_popover_open: false,
             pill_popover_just_opened: false,
@@ -349,6 +349,8 @@ impl SharePanel {
         self.guest_task_board.bind(None, false);
         self.guest_file_editor.bind(None, false);
         self.guest_file_listing.bind(None);
+        self.guest_git.bind(None, false);
+        self.confirm_guest_git_discard = false;
         self.guest_files_scope = None;
         self.confirm_guest_file_discard = false;
         self.guest_selected_project = None;
@@ -363,6 +365,7 @@ impl SharePanel {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
+            || self.guest_git.busy()
     }
     pub fn guest_task_snapshot(&self) -> crate::guest_task_board::Snapshot {
         self.guest_task_board.snapshot()
@@ -410,6 +413,7 @@ impl SharePanel {
         changed |= self.guest_task_board.poll(Instant::now());
         changed |= self.guest_file_editor.poll(Instant::now());
         changed |= self.guest_file_listing.poll(Instant::now());
+        changed |= self.guest_git.poll(Instant::now());
         if self.guest_task_board.take_reconcile()
             && let Some(scope) = self.guest_task_snapshot().scope
         {
@@ -447,6 +451,7 @@ impl SharePanel {
                 }));
         changed |= self.guest_file_editor.bind(scope, file_writable);
         changed |= self.guest_file_listing.bind(scope);
+        changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
             self.confirm_guest_file_discard = false;
         }
@@ -2589,6 +2594,9 @@ impl SharePanel {
         }
         if self.guest_files_scope.is_none() {
             self.render_guest_file_editor(ui, french);
+            if self.guest_git.snapshot().draft_scope.is_some() {
+                self.render_guest_git(ui, french);
+            }
         }
         let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
 
@@ -2881,6 +2889,10 @@ impl SharePanel {
             self.render_guest_files(ui, french);
             return;
         }
+        if self.guest_sub_view == GuestSubView::Git {
+            self.render_guest_git(ui, french);
+            return;
+        }
         let Some(sess) = &self.guest_session else {
             return;
         };
@@ -2958,47 +2970,7 @@ impl SharePanel {
                 }
             }
             GuestSubView::Files => unreachable!("files rendered before session borrow"),
-            GuestSubView::Git => {
-                if ui
-                    .small_button(if french {
-                        "Actualiser git status"
-                    } else {
-                        "Refresh git status"
-                    })
-                    .clicked()
-                    && let Ok(val) = sess.call_sync(
-                        json!({"op": "scm.status", "projectId": self.guest_selected_project}),
-                        Duration::from_secs(3),
-                    )
-                {
-                    self.guest_git_status = val["status"].as_str().unwrap_or_default().to_owned();
-                }
-                if !self.guest_git_status.is_empty() {
-                    ui.monospace(&self.guest_git_status);
-                }
-                if gs.rights.git {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.guest_commit_msg)
-                                .desired_width(240.0_f32)
-                                .hint_text(if french {
-                                    "Message de commit…"
-                                } else {
-                                    "Commit message…"
-                                }),
-                        );
-                        if ui.button("Commit").clicked() && !self.guest_commit_msg.trim().is_empty()
-                        {
-                            sess.send_async(json!({
-                                "op": "scm.commit",
-                                "projectId": self.guest_selected_project,
-                                "message": self.guest_commit_msg.trim(),
-                            }));
-                            self.guest_commit_msg.clear();
-                        }
-                    });
-                }
-            }
+            GuestSubView::Git => unreachable!("Git rendered before session borrow"),
             GuestSubView::Tasks => unreachable!("task board rendered before session borrow"),
             GuestSubView::Pages => {
                 for pg in &gs.pages {
@@ -3674,3 +3646,6 @@ impl SharePanel {
 
 #[path = "share_panel/guest_files.rs"]
 mod guest_files;
+
+#[path = "share_panel/guest_git.rs"]
+mod guest_git;

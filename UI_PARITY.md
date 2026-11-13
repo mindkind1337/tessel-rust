@@ -402,3 +402,8 @@ The subsequent nonblocking-controller work adds a scoped project selector and Re
 ## Scoped guest files (2026-11-12)
 
 The Compatibility Files view now uses project/session/path-scoped asynchronous reads, listings and save acknowledgements. Unsaved or uncertain drafts remain available for copying after disconnect or project changes, with explicit discard confirmation. This fixes the historical shared-text cache that could reuse file A text when saving file B. Native guest file tabs, chunked transfers, version-conflict detection and real visual acceptance remain pending; this is not full file-workspace parity.
+
+
+## Guest Changes and transport follow-up (2026-11-12)
+
+The Compatibility Changes view now uses a session/project-scoped async Git controller instead of blocking status and unacknowledged commits. Message recovery, explicit discard, unknown outcomes, hidden counts and partial responses are integrated. The host executes hardened bounded Git outside the authority mutex and revalidates current access around execution. Native guest Changes tabs and full stage/discard/diff/history controls remain incomplete. The shared local Git process runner retains its behavior; the guest runner additionally clears inherited Git environment overrides. Runtime cancellation has a short-I/O-slice fallback for Windows reads that did not wake on socket shutdown. These are functional/safety improvements, not evidence of pixel-level parity.

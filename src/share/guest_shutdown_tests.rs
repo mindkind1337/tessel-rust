@@ -262,3 +262,59 @@ fn guest_shutdown_cancelled_before_worker_start_makes_no_connection() {
         matches!(&state.lock().unwrap().phase, GuestPhase::Ended {reason,..} if reason == "left")
     );
 }
+
+#[test]
+fn guest_shutdown_read_observes_cancel_without_socket_shutdown() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    // Deliberately do not register a cancellation clone: this exercises the
+    // fallback when an OS does not wake an already pending read on shutdown.
+    let stop = Arc::new(GuestStop::default());
+    let mut stream = DeadlineStream::new(socket, Duration::from_secs(15));
+    stream.stop = Some(stop.clone());
+    let (ready, ready_rx) = mpsc::sync_channel(1);
+    let (done, done_rx) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        ready.send(()).unwrap();
+        done.send(stream.read(&mut [0; 1]).unwrap_err().kind())
+            .unwrap();
+    });
+    ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    thread::sleep(Duration::from_millis(150));
+    stop.cancel();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        std::io::ErrorKind::ConnectionAborted
+    );
+    worker.join().unwrap();
+}
+#[test]
+fn guest_shutdown_short_io_slices_preserve_data_and_global_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut stream = DeadlineStream::new(socket, Duration::from_secs(2));
+    stream.stop = Some(Arc::new(GuestStop::default()));
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(350));
+        peer.write_all(b"x").unwrap();
+        peer
+    });
+    let mut byte = [0];
+    assert_eq!(stream.read(&mut byte).unwrap(), 1);
+    assert_eq!(byte, b"x"[0..1]);
+    let _peer = sender.join().unwrap();
+    stream.reset_deadline(Duration::from_millis(250));
+    let start = Instant::now();
+    assert_eq!(
+        stream.read(&mut byte).unwrap_err().kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    assert!(start.elapsed() < Duration::from_secs(1));
+    stream.stop.as_ref().unwrap().cancel();
+    assert_eq!(
+        stream.write(b"no").unwrap_err().kind(),
+        std::io::ErrorKind::ConnectionAborted
+    );
+}

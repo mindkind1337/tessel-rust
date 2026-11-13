@@ -143,6 +143,9 @@ fn authorize(
     project: Option<u64>,
     mutate: bool,
 ) -> Result<(u64, String)> {
+    if guard.stopped.load(Ordering::SeqCst) {
+        return Err("Sharing has stopped.".into());
+    }
     let idx = guard
         .guests
         .iter()

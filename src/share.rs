@@ -16,7 +16,6 @@ use std::{
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -516,18 +515,26 @@ pub fn derive_sas_code(
 struct DeadlineStream {
     stream: TcpStream,
     deadline: Instant,
+    stop: Option<Arc<GuestStop>>,
 }
 impl DeadlineStream {
     fn new(stream: TcpStream, timeout: Duration) -> Self {
         Self {
             stream,
             deadline: Instant::now() + timeout,
+            stop: None,
         }
     }
     fn reset_deadline(&mut self, timeout: Duration) {
         self.deadline = Instant::now() + timeout;
     }
     fn remaining(&self) -> std::io::Result<Duration> {
+        if self.stop.as_ref().is_some_and(|stop| stop.is_stopped()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "Guest session cancelled",
+            ));
+        }
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             Err(std::io::Error::new(
@@ -535,20 +542,43 @@ impl DeadlineStream {
                 "Share request deadline reached",
             ))
         } else {
-            Ok(remaining)
+            Ok(if self.stop.is_some() {
+                remaining.min(Duration::from_millis(100))
+            } else {
+                remaining
+            })
         }
+    }
+    fn retry_slice(&self, error: &std::io::Error) -> bool {
+        self.stop.is_some()
+            && matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::Interrupted
+            )
     }
 }
 impl Read for DeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.set_read_timeout(Some(self.remaining()?))?;
-        self.stream.read(buf)
+        loop {
+            self.stream.set_read_timeout(Some(self.remaining()?))?;
+            match self.stream.read(buf) {
+                Err(error) if self.retry_slice(&error) => continue,
+                result => return result,
+            }
+        }
     }
 }
 impl Write for DeadlineStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stream.set_write_timeout(Some(self.remaining()?))?;
-        self.stream.write(buf)
+        loop {
+            self.stream.set_write_timeout(Some(self.remaining()?))?;
+            match self.stream.write(buf) {
+                Err(error) if self.retry_slice(&error) => continue,
+                result => return result,
+            }
+        }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         self.stream.flush()
@@ -688,7 +718,30 @@ pub fn is_agent_instruction_or_protected_file(relative: &Path) -> bool {
                 | ".gitattributes"
                 | ".cursorrules"
                 | ".windsurfrules"
-        )
+                | ".husky"
+                | ".githooks"
+                | ".claude"
+                | ".vscode"
+                | ".pre-commit-config.yaml"
+                | ".gitmodules"
+                | ".mcp.json"
+                | ".envrc"
+                | "lefthook.yml"
+                | "lefthook-local.yml"
+        ) || lower.starts_with(".lintstagedrc")
+            || lower.starts_with("lint-staged.config.")
+            || lower.starts_with("commitlint")
+            || matches!(
+                lower.as_str(),
+                "pre-commit"
+                    | "prepare-commit-msg"
+                    | "commit-msg"
+                    | "post-commit"
+                    | "post-checkout"
+                    | "post-index-change"
+                    | "reference-transaction"
+                    | "pre-auto-gc"
+            )
     })
 }
 
@@ -1196,6 +1249,7 @@ struct GuestSlot {
 }
 
 struct HostInner {
+    stopped: Arc<AtomicBool>,
     task_board: task_board::TaskBoard,
     host_name: String,
     address: SocketAddr,
@@ -1400,7 +1454,9 @@ impl Host {
             listener.local_addr().map_err(|e| e.to_string())?.port(),
         );
 
+        let stop = Arc::new(AtomicBool::new(false));
         let mut inner_data = HostInner {
+            stopped: Arc::clone(&stop),
             task_board: task_board::TaskBoard::default(),
             host_name: if host_name.trim().is_empty() {
                 "Host".into()
@@ -1434,7 +1490,6 @@ impl Host {
         let invitation = root_inv.invitation.clone();
         let inner = Arc::new(Mutex::new(inner_data));
 
-        let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let clients = Arc::new(AtomicUsize::new(0));
         let inner_worker = Arc::clone(&inner);
@@ -2262,7 +2317,13 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     if matches!(op, "tasks.list" | "tasks.mutate") {
         return task_board::dispatch(inner, guest_id, req);
     }
+    if op.starts_with("scm.") {
+        return guest_git_dispatch::dispatch(inner, guest_id, req);
+    }
     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.stopped.load(Ordering::SeqCst) {
+        return json!({"ended":true,"reason":"stopped","error":"Sharing has stopped."});
+    }
     let Some(g_idx) = guard.guests.iter().position(|s| s.guest.id == guest_id) else {
         return json!({"ended": true, "reason": "removed", "error": "Removed from session."});
     };
@@ -2681,99 +2742,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
                 );
                 Ok(json!({"ok": true}))
             }
-            "scm.status" => {
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let out = run_git_bounded(&proj.path, &["status", "--porcelain=v1"])?;
-                Ok(json!({"status": out}))
-            }
-            "scm.diff" => {
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let out = if relative.is_empty() {
-                    run_git_bounded(&proj.path, &["diff"])?
-                } else {
-                    let _ = share_path_checked(&proj.path, relative, hide_ignored)?;
-                    run_git_bounded(&proj.path, &["diff", "--", relative])?
-                };
-                Ok(json!({"diff": out}))
-            }
-            "scm.stage" | "scm.unstage" | "scm.discard" | "scm.commit" => {
-                if !rights.git {
-                    return Err("Git permission is required to stage, discard or commit.".into());
-                }
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                match op {
-                    "scm.stage" => {
-                        let rel = req.get("path").and_then(Value::as_str).unwrap_or("");
-                        let _ = share_new_path_checked(&proj.path, rel, hide_ignored)?;
-                        run_git_bounded(&proj.path, &["add", "--", rel])?;
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} staged {rel}"),
-                            format!("{guest_name} a indexé {rel}"),
-                            false,
-                        );
-                    }
-                    "scm.unstage" => {
-                        let rel = req.get("path").and_then(Value::as_str).unwrap_or("");
-                        let _ = share_new_path_checked(&proj.path, rel, hide_ignored)?;
-                        run_git_bounded(&proj.path, &["reset", "-q", "HEAD", "--", rel])?;
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} unstaged {rel}"),
-                            format!("{guest_name} a retiré {rel} de l'index"),
-                            false,
-                        );
-                    }
-                    "scm.discard" => {
-                        let rel = req.get("path").and_then(Value::as_str).unwrap_or("");
-                        let _ = share_path_checked(&proj.path, rel, hide_ignored)?;
-                        run_git_bounded(&proj.path, &["checkout", "--", rel])?;
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} discarded changes in {rel}"),
-                            format!("{guest_name} a abandonné les modifications de {rel}"),
-                            false,
-                        );
-                    }
-                    "scm.commit" => {
-                        let msg = req
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .trim();
-                        if msg.is_empty() || msg.len() > 2000 {
-                            return Err("Enter a commit message.".into());
-                        }
-                        // Guest commits ALWAYS run with `--no-verify` so host git hooks cannot be triggered!
-                        run_git_bounded(&proj.path, &["commit", "--no-verify", "-m", msg])?;
-                        guard.record_action(
-                            &guest_name,
-                            proj.id,
-                            format!("{guest_name} committed “{msg}”"),
-                            format!("{guest_name} a fait un commit « {msg} »"),
-                            false,
-                        );
-                    }
-                    _ => {}
-                }
-                Ok(json!({"ok": true}))
-            }
-            "scm.push" | "scm.pull" | "scm.fetch" => {
-                Err("Push, pull and fetch stay exclusively with the host.".into())
-            }
             "pages.list" => {
                 if !rights.pages_view {
                     return Err("Pages permission is required to view browser pages.".into());
@@ -2854,30 +2822,6 @@ fn handle_readonly_op(root: &Path, request: &Value, hide_ignored: bool) -> Resul
     }
 }
 
-fn run_git_bounded(cwd: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(cwd);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-    let out = cmd.output().map_err(|e| format!("Git failed: {e}"))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        return Err(if stderr.is_empty() {
-            "Git command failed.".into()
-        } else {
-            stderr
-        });
-    }
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    if text.len() > 256 * 1024 {
-        text.truncate(256 * 1024);
-    }
-    Ok(text)
-}
-
 // ---------------------------------------------------------------------------
 // 7. One-Shot Legacy `request` & Persistent Duplex `GuestSession`
 // ---------------------------------------------------------------------------
@@ -2895,7 +2839,7 @@ fn make_pinned_tls_client(
 fn make_cancellable_pinned_tls_client(
     invitation: &Invitation,
     connect_timeout: Duration,
-    stop: Option<&GuestStop>,
+    stop: Option<&Arc<GuestStop>>,
 ) -> Result<(
     rustls::StreamOwned<rustls::ClientConnection, DeadlineStream>,
     Vec<u8>,
@@ -2927,10 +2871,9 @@ fn make_cancellable_pinned_tls_client(
         rustls::pki_types::ServerName::try_from("tessel-rust").map_err(|_| "Invalid TLS name")?,
     )
     .map_err(|e| e.to_string())?;
-    let tls = rustls::StreamOwned::new(
-        connection,
-        DeadlineStream::new(stream, Duration::from_secs(15)),
-    );
+    let mut transport = DeadlineStream::new(stream, Duration::from_secs(15));
+    transport.stop = stop.cloned();
+    let tls = rustls::StreamOwned::new(connection, transport);
     Ok((tls, cert))
 }
 
@@ -3741,3 +3684,11 @@ mod guest_shutdown_tests;
 #[cfg(test)]
 #[path = "share/knock_departure_tests.rs"]
 mod knock_departure_tests;
+
+#[path = "share/guest_git_dispatch.rs"]
+mod guest_git_dispatch;
+#[path = "share/guest_git_host.rs"]
+mod guest_git_host;
+
+#[path = "share/guest_git_config.rs"]
+mod guest_git_config;

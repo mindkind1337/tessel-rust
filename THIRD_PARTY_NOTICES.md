@@ -317,3 +317,6 @@ The embedded task-card artwork catalog (`src/agent_brand_assets.json`), its shar
 ## Guest-facing task text
 
 `src/share/guest_text.rs` adapts Tessel `src/main/liveShare/shareChat.js` under the existing MIT attribution above. `scripts/extract_guest_text_reference.mjs` records the source SHA256 and synthetic comparison vectors only; no live profile, account, transcript or credential is included. The Rust task-title boundary additionally scrubs the complete bounded title before final clipping, masks encoded URI user information before decoding, and handles mixed quotation marks in paths.
+
+
+The guest Git safety policy in `src/share/guest_git_host.rs`, its reference fixtures, and the protected-path additions in `src/share.rs` adapt Tessel's `src/main/gitSafety.js`, `src/main/liveShare/shareScope.js` and `src/main/liveShare/shareRequests.js` under the existing Orca/Tessel MIT attribution above (Copyright (c) 2026 Lovecast Inc.). The Rust authority adapter, bounded runner integration and mutable-configuration origin guard add independent safety checks; no repository credentials or user configuration are bundled.

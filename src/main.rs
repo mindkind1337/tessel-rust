@@ -74,6 +74,7 @@ mod gpui_pixels;
 pub mod gpui_ui;
 mod guest_file_editor;
 mod guest_file_listing;
+mod guest_git;
 mod guest_task_board;
 pub mod help_panel;
 mod host_actions;
@@ -115,6 +116,8 @@ pub mod pane_model_worker;
 pub mod pane_session_model;
 mod pdf;
 mod preview;
+#[cfg(windows)]
+mod process_job;
 pub mod project_panel;
 pub mod prompt_before;
 mod regional_date;
