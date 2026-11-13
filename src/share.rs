@@ -2317,6 +2317,9 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     if matches!(op, "tasks.list" | "tasks.mutate") {
         return task_board::dispatch(inner, guest_id, req);
     }
+    if matches!(op, "files.list" | "files.read") {
+        return guest_file_reads::dispatch(inner, guest_id, req);
+    }
     if op.starts_with("scm.") {
         return guest_git_dispatch::dispatch(inner, guest_id, req);
     }
@@ -2553,58 +2556,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
                     guard.commands.push_back(HostCommand::ClosePane { pane_id });
                     Ok(json!({"closed": true}))
                 }
-            }
-            "files.list" => {
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let target = if relative.is_empty() {
-                    proj.path.clone()
-                } else {
-                    share_path_checked(&proj.path, relative, hide_ignored)?
-                };
-                let entries = list_dir_entries(&proj.path, &target)?;
-                let filtered: Vec<Value> = entries
-                    .into_iter()
-                    .filter(|e| {
-                        let rel = e.path.strip_prefix(&proj.path).unwrap_or(&e.path);
-                        !private_path(rel) && !(hide_ignored && secret_or_dot_path(rel))
-                    })
-                    .map(|e| {
-                        let rel = e
-                            .path
-                            .strip_prefix(&proj.path)
-                            .unwrap_or(&e.path)
-                            .to_string_lossy()
-                            .replace('\\', "/");
-                        json!({"name": e.name, "path": rel, "directory": e.directory})
-                    })
-                    .collect();
-                Ok(json!({"entries": filtered, "readOnly": !rights.edit}))
-            }
-            "files.read" => {
-                let proj = guard.find_shared_project_for_guest(
-                    g_idx,
-                    req.get("projectId").and_then(Value::as_u64),
-                )?;
-                let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
-                let target = share_path_checked(&proj.path, relative, hide_ignored)?;
-                let mut bytes = Vec::new();
-                std::fs::File::open(&target)
-                    .map_err(|_| "File unavailable")?
-                    .take((MAX_FILE + 1) as u64)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| "File read failed")?;
-                if bytes.len() > MAX_FILE {
-                    return Err("Guest file limit is 8 MiB.".into());
-                }
-                Ok(json!({
-                    "name": target.file_name().unwrap_or_default().to_string_lossy(),
-                    "data": B64.encode(bytes),
-                    "readOnly": !rights.edit || (is_agent_instruction_or_protected_file(Path::new(relative)) && !rights.r#type),
-                }))
             }
             "files.write" => {
                 if !rights.edit {
@@ -3692,3 +3643,6 @@ mod guest_git_host;
 
 #[path = "share/guest_git_config.rs"]
 mod guest_git_config;
+
+#[path = "share/guest_file_reads.rs"]
+mod guest_file_reads;
