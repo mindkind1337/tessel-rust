@@ -707,41 +707,16 @@ pub fn secret_or_dot_path(path: &Path) -> bool {
 /// Files that steer agents or git hooks (`CLAUDE.md`, `AGENTS.md`, `.gitignore`, `.cursorrules`, etc.).
 /// Editing these requires `rights.r#type` in addition to `rights.edit`, and flags the guest action!
 pub fn is_agent_instruction_or_protected_file(relative: &Path) -> bool {
-    relative.components().any(|part| {
-        let lower = part.as_os_str().to_string_lossy().to_lowercase();
-        matches!(
-            lower.as_str(),
-            "claude.md"
-                | "agents.md"
-                | "gemini.md"
-                | ".gitignore"
-                | ".gitattributes"
-                | ".cursorrules"
-                | ".windsurfrules"
-                | ".husky"
-                | ".githooks"
-                | ".claude"
-                | ".vscode"
-                | ".pre-commit-config.yaml"
-                | ".gitmodules"
-                | ".mcp.json"
-                | ".envrc"
-                | "lefthook.yml"
-                | "lefthook-local.yml"
-                | ".github"
-                | ".gitlab-ci.yml"
-                | ".circleci"
-                | "azure-pipelines.yml"
-                | "azure-pipelines.yaml"
-                | "bitbucket-pipelines.yml"
-                | "jenkinsfile"
-                | ".drone.yml"
-                | ".drone.yaml"
-        ) || lower.starts_with(".lintstagedrc")
-            || lower.starts_with("lint-staged.config.")
-            || lower.starts_with("commitlint")
-            || matches!(
-                lower.as_str(),
+    let normalized = relative.to_string_lossy().replace('\\', "/");
+    protected_paths::is_protected(&normalized, &[])
+        || relative.components().any(|part| {
+            // Preserve the existing conservative hook-name guard until per-project
+            // core.hooksPath discovery supplies the complete dynamic policy.
+            matches!(
+                part.as_os_str()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .as_str(),
                 "pre-commit"
                     | "prepare-commit-msg"
                     | "commit-msg"
@@ -751,7 +726,7 @@ pub fn is_agent_instruction_or_protected_file(relative: &Path) -> bool {
                     | "reference-transaction"
                     | "pre-auto-gc"
             )
-    })
+        })
 }
 
 #[derive(Clone)]
@@ -3528,3 +3503,6 @@ mod guest_file_reads;
 
 #[path = "share/guest_file_mutations.rs"]
 mod guest_file_mutations;
+
+#[path = "share/protected_paths.rs"]
+mod protected_paths;

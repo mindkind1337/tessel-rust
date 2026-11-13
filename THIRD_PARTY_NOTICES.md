@@ -320,3 +320,5 @@ The embedded task-card artwork catalog (`src/agent_brand_assets.json`), its shar
 
 
 The guest Git safety policy in `src/share/guest_git_host.rs`, its reference fixtures, and the protected-path additions in `src/share.rs` adapt Tessel's `src/main/gitSafety.js`, `src/main/liveShare/shareScope.js` and `src/main/liveShare/shareRequests.js` under the existing Orca/Tessel MIT attribution above (Copyright (c) 2026 Lovecast Inc.). The Rust authority adapter, bounded runner integration and mutable-configuration origin guard add independent safety checks; no repository credentials or user configuration are bundled.
+
+The protected-path catalogue in `src/share/protected_paths.rs` and its synthetic differential extractor adapt Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above. The fixture records the source hash and synthetic paths only.

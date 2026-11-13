@@ -559,12 +559,19 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".github/workflows")).unwrap();
         for path in [
             ".github/workflows/build.yml",
+            ".codex/settings.json",
+            ".agents/skills/example/SKILL.md",
+            "opencode.json",
+            ".clinerules",
+            ".forgejo/workflows/check.yml",
+            "Jenkinsfile.production",
             ".gitlab-ci.yml",
             "Jenkinsfile",
             "azure-pipelines.yml",
             "bitbucket-pipelines.yml",
             ".drone.yml",
         ] {
+            std::fs::create_dir_all(dir.path().join(path).parent().unwrap()).unwrap();
             assert!(
                 dispatch(
                     &host.inner,

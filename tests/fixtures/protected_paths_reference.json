@@ -1,0 +1,2688 @@
+{
+  "source": "src/main/liveShare/shareScope.js",
+  "sha256": "1a9b0b714a3efe2ac60c340e3972c0fca14b583009a84931d3b8f30b5d92533a",
+  "cases": [
+    {
+      "input": ".claude",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".claude/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CLAUDE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".claude-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".codex",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".codex/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CODEX/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".codex-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gemini",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gemini/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GEMINI/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gemini-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cursor",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cursor/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CURSOR/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cursor-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".vscode",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".vscode/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.VSCODE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".vscode-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".husky",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".husky/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.HUSKY/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".husky-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".githooks",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".githooks/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITHOOKS/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".githooks-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".tessel",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".tessel/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.TESSEL/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".tessel-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".opencode",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".opencode/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.OPENCODE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".opencode-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".continue",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".continue/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CONTINUE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".continue-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".windsurf",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".windsurf/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.WINDSURF/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".windsurf-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".kiro",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".kiro/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.KIRO/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".kiro-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".grok",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".grok/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GROK/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".grok-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".agents",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".agents/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AGENTS/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".agents-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".muse",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".muse/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.MUSE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".muse-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".crush",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".crush/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CRUSH/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".crush-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".roo",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".roo/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.ROO/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".roo-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cline",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cline/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CLINE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cline-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".amazonq",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".amazonq/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AMAZONQ/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".amazonq-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDER/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".goose",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".goose/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GOOSE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".goose-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".qwen",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".qwen/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.QWEN/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".qwen-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".kimi",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".kimi/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.KIMI/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".kimi-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".amp",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".amp/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AMP/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".amp-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".junie",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".junie/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.JUNIE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".junie-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".augment",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".augment/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AUGMENT/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".augment-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".copilot",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".copilot/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.COPILOT/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".copilot-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".zed",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".zed/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.ZED/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".zed-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".github",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".github/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITHUB/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".github-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitlab",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitlab/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITLAB/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitlab-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".circleci",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".circleci/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CIRCLECI/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".circleci-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".buildkite",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".buildkite/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.BUILDKITE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".buildkite-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".woodpecker",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".woodpecker/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.WOODPECKER/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".woodpecker-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".azure-pipelines",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".azure-pipelines/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AZURE-PIPELINES/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".azure-pipelines-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".forgejo",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".forgejo/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.FORGEJO/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".forgejo-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitea",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitea/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITEA/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitea-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".semaphore",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".semaphore/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.SEMAPHORE/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".semaphore-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".builds",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".builds/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.BUILDS/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".builds-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".tekton",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".tekton/settings.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.TEKTON/config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".tekton-other/file.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".mcp.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.MCP.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".mcp.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".mcp.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".envrc",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.ENVRC",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".envrc.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".envrc/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitignore",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITIGNORE",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitignore.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitignore/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitattributes",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITATTRIBUTES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitattributes.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitattributes/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitmodules",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITMODULES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitmodules.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitmodules/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".pre-commit-config.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.PRE-COMMIT-CONFIG.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".pre-commit-config.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".pre-commit-config.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".pre-commit-hooks.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.PRE-COMMIT-HOOKS.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".pre-commit-hooks.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".pre-commit-hooks.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitlab-ci.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITLAB-CI.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitlab-ci.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitlab-ci.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitlab-ci.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GITLAB-CI.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".gitlab-ci.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".gitlab-ci.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "jenkinsfile",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/JENKINSFILE",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "jenkinsfile.backup",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "jenkinsfile/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "azure-pipelines.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/AZURE-PIPELINES.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "azure-pipelines.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "azure-pipelines.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "azure-pipelines.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/AZURE-PIPELINES.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "azure-pipelines.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "azure-pipelines.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "bitbucket-pipelines.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/BITBUCKET-PIPELINES.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "bitbucket-pipelines.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "bitbucket-pipelines.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.DRONE.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".drone.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.DRONE.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".drone.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".travis.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.TRAVIS.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".travis.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".travis.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "appveyor.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/APPVEYOR.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "appveyor.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "appveyor.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".appveyor.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.APPVEYOR.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".appveyor.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".appveyor.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".woodpecker.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.WOODPECKER.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".woodpecker.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".woodpecker.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".woodpecker.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.WOODPECKER.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".woodpecker.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".woodpecker.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CLOUDBUILD.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "cloudbuild.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CLOUDBUILD.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "cloudbuild.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildspec.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/BUILDSPEC.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "buildspec.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildspec.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "codemagic.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CODEMAGIC.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "codemagic.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "codemagic.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "bitrise.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/BITRISE.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "bitrise.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "bitrise.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.star",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.DRONE.STAR",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".drone.star.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".drone.star/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cirrus.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CIRRUS.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cirrus.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cirrus.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cirrus.star",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CIRRUS.STAR",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cirrus.star.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cirrus.star/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".build.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.BUILD.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".build.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".build.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildkite.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/BUILDKITE.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "buildkite.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildkite.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildkite.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/BUILDKITE.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "buildkite.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "buildkite.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".buildkite.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.BUILDKITE.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".buildkite.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".buildkite.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".buildkite.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.BUILDKITE.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".buildkite.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".buildkite.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CLOUDBUILD.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "cloudbuild.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "cloudbuild.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "codefresh.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CODEFRESH.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "codefresh.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "codefresh.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "netlify.toml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/NETLIFY.TOML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "netlify.toml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "netlify.toml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "vercel.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/VERCEL.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "vercel.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "vercel.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "claude.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CLAUDE.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "claude.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "claude.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "agents.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/AGENTS.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "agents.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "agents.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "gemini.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/GEMINI.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "gemini.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "gemini.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cursorrules",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CURSORRULES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cursorrules.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cursorrules/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".windsurfrules",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.WINDSURFRULES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".windsurfrules.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".windsurfrules/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".clinerules",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CLINERULES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".clinerules.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".clinerules/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "copilot-instructions.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/COPILOT-INSTRUCTIONS.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "copilot-instructions.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "copilot-instructions.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".goosehints",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GOOSEHINTS",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".goosehints.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".goosehints/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".roomodes",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.ROOMODES",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".roomodes.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".roomodes/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "qwen.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/QWEN.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "qwen.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "qwen.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "grok.md",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/GROK.MD",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "grok.md.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "grok.md/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "opencode.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/OPENCODE.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "opencode.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "opencode.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "opencode.jsonc",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/OPENCODE.JSONC",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "opencode.jsonc.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "opencode.jsonc/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "crush.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CRUSH.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "crush.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "crush.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".crush.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CRUSH.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".crush.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".crush.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.conf.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDER.CONF.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider.conf.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.conf.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.conf.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDER.CONF.YAML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider.conf.yaml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.conf.yaml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.model.settings.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDER.MODEL.SETTINGS.YML",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider.model.settings.yml.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.model.settings.yml/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.model.metadata.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDER.MODEL.METADATA.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aider.model.metadata.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aider.model.metadata.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aiderignore",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.AIDERIGNORE",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".aiderignore.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".aiderignore/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cursorignore",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CURSORIGNORE",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".cursorignore.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".cursorignore/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".geminiignore",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.GEMINIIGNORE",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".geminiignore.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".geminiignore/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".continuerc.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/.CONTINUERC.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".continuerc.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": ".continuerc.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "continue.config.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "nested/CONTINUE.CONFIG.JSON",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "continue.config.json.backup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "continue.config.json/ordinary.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "applypatch-msg",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "applypatch-msg",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/applypatch-msg",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-applypatch",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-applypatch",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-applypatch",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-applypatch",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-applypatch",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-applypatch",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-commit",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-commit",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-commit",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-merge-commit",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-merge-commit",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-merge-commit",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "prepare-commit-msg",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "prepare-commit-msg",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/prepare-commit-msg",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "commit-msg",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "commit-msg",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/commit-msg",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-commit",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-commit",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-commit",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-rebase",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-rebase",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-rebase",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-checkout",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-checkout",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-checkout",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-merge",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-merge",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-merge",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-push",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-push",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-push",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-receive",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-receive",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-receive",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "update",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "update",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/update",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "proc-receive",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "proc-receive",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/proc-receive",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-receive",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-receive",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-receive",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-update",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-update",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-update",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "reference-transaction",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "reference-transaction",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/reference-transaction",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "push-to-checkout",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "push-to-checkout",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/push-to-checkout",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "pre-auto-gc",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "pre-auto-gc",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/pre-auto-gc",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-rewrite",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-rewrite",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-rewrite",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "sendemail-validate",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "sendemail-validate",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/sendemail-validate",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "fsmonitor-watchman",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "fsmonitor-watchman",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/fsmonitor-watchman",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "p4-changelist",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "p4-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/p4-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "p4-prepare-changelist",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "p4-prepare-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/p4-prepare-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "p4-post-changelist",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "p4-post-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/p4-post-changelist",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "p4-pre-submit",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "p4-pre-submit",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/p4-pre-submit",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "post-index-change",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "post-index-change",
+      "extra": [
+        ""
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/post-index-change",
+      "extra": [
+        ""
+      ],
+      "expected": false
+    },
+    {
+      "input": "lefthook.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".lefthook.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "lefthook-local.yaml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".lefthook-local.yml",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".lintstagedrc",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".lintstagedrc.json",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".lintstagedrcbackup",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "lint-staged.config.cjs",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "lint-staged.config.mts",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "lint-staged.config.json",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "commitlint.config.ts",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": ".commitlintrc",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "commitlint-notes.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "Jenkinsfile.production",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "Jenkinsfile.md",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "Jenkinsfile.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "Jenkinsfile.rst",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "Jenkinsfile.adoc",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "Jenkinsfile.md.groovy",
+      "extra": [],
+      "expected": true
+    },
+    {
+      "input": "jenkinsfiles.txt",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "README.md",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "src/main.rs",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "",
+      "extra": [],
+      "expected": false
+    },
+    {
+      "input": "custom/hooks",
+      "extra": [
+        "custom/hooks"
+      ],
+      "expected": true
+    },
+    {
+      "input": "custom/hooks/pre-commit",
+      "extra": [
+        "custom/hooks"
+      ],
+      "expected": true
+    },
+    {
+      "input": "custom/hooks-other/pre-commit",
+      "extra": [
+        "custom/hooks"
+      ],
+      "expected": false
+    },
+    {
+      "input": "CUSTOM/HOOKS/run",
+      "extra": [
+        "custom/hooks"
+      ],
+      "expected": true
+    },
+    {
+      "input": "nested/custom/hooks/run",
+      "extra": [
+        "custom/hooks"
+      ],
+      "expected": false
+    }
+  ]
+}
