@@ -109,6 +109,8 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
     match req.get("op").and_then(Value::as_str).unwrap_or("") {
         "files.list" => {
             let proj = &grant.project;
+            // This guard is independent of ignore visibility and Edit/Type permissions.
+            super::guest_git_host::HostGit::new(&proj.path).repository()?;
             let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
             let target = if relative.is_empty() {
                 proj.path.clone()
@@ -492,6 +494,9 @@ mod tests {
             .env("USERPROFILE", home.path())
             .env("XDG_CONFIG_HOME", home.path())
             .env("APPDATA", home.path());
+        if probe == "repository_scope_probe" {
+            child.env("LC_ALL", "fr_CA.UTF-8").env("LANGUAGE", "fr");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -511,6 +516,93 @@ mod tests {
     fn real_home_hook_scope_is_expanded_by_git() {
         run_isolated_probe("home_hook_scope_probe");
     }
+    #[test]
+    fn real_repository_scope_refuses_bare_metadata_and_broken_repositories() {
+        run_isolated_probe("repository_scope_probe");
+    }
+    #[test]
+    fn repository_scope_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        assert_eq!(std::env::var("LC_ALL").unwrap(), "fr_CA.UTF-8");
+        assert_eq!(std::env::var("LANGUAGE").unwrap(), "fr");
+        let timeout = Duration::from_secs(10);
+        // Outside the checkout: a genuine ordinary folder, not a subfolder of its repo.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(
+            crate::git::run_guest_repository(plain.path(), timeout).unwrap(),
+            crate::git::GuestRepository::Plain
+        );
+        let (dir, host) = fixture();
+        empty_repo(dir.path());
+        assert!(matches!(
+            crate::git::run_guest_repository(dir.path(), timeout).unwrap(),
+            crate::git::GuestRepository::Worktree(_)
+        ));
+        assert!(crate::git::run_guest_repository(&dir.path().join(".git"), timeout).is_err());
+        let git_dir = dunce::canonicalize(dir.path().join(".git")).unwrap();
+        assert!(git_dir.starts_with(dunce::canonicalize(dir.path()).unwrap()));
+        std::fs::remove_dir_all(&git_dir).unwrap();
+        // A bare repository has no .git directory, so filename-based detection misses it.
+        for name in ["objects", "refs", "hooks"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+        std::fs::write(dir.path().join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            dir.path().join("config"),
+            "[core]\n repositoryformatversion = 0\n bare = true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("hooks/pre-receive"),
+            "synthetic hook; never execute",
+        )
+        .unwrap();
+        assert!(crate::git::run_guest_repository(dir.path(), timeout).is_err());
+        for hide in [false, true] {
+            {
+                let mut inner = host.inner.lock().unwrap();
+                inner.settings.hide_ignored = hide;
+                inner.guests[0].guest.rights.r#type = true;
+            }
+            for request in [
+                json!({"op":"files.list","path":""}),
+                json!({"op":"files.read","path":"config"}),
+                json!({"op":"files.read","path":"hooks/pre-receive"}),
+            ] {
+                assert!(
+                    dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some(),
+                    "{request}"
+                );
+            }
+            for request in [
+                json!({"op":"files.write","path":"config","expectHash":file_version::hash(&std::fs::read(dir.path().join("config")).unwrap()),"data":B64.encode(b"changed")}),
+                json!({"op":"files.create","path":"hooks/post-receive"}),
+                json!({"op":"files.rename","path":"hooks/pre-receive","to":"hooks/post-receive"}),
+                json!({"op":"files.delete","path":"hooks/pre-receive"}),
+            ] {
+                assert!(
+                    super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some(),
+                    "{request}"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("hooks/pre-receive")).unwrap(),
+            "synthetic hook; never execute"
+        );
+        assert!(!dir.path().join("hooks/post-receive").exists());
+        assert!(host.snapshot().recent_actions.is_empty());
+        let broken = tempfile::tempdir().unwrap();
+        std::fs::write(broken.path().join(".git"), "gitdir: missing\n").unwrap();
+        assert!(crate::git::run_guest_repository(broken.path(), timeout).is_err());
+    }
+
     #[test]
     fn home_hook_scope_probe() {
         if std::env::var_os(IGNORE_PROBE).is_none() {

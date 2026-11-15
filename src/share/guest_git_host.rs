@@ -54,6 +54,13 @@ impl<'a> HostGit<'a> {
             deadline: Instant::now() + Duration::from_secs(10),
         }
     }
+    pub(super) fn repository(&mut self) -> Result<crate::git::GuestRepository> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Repository scope check timed out.".into());
+        }
+        crate::git::run_guest_repository(self.root, remaining)
+    }
     pub(super) fn ignored(
         &mut self,
         prefix: &[String],

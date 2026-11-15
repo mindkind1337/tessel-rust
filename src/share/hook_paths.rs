@@ -2,23 +2,18 @@
 use super::guest_git_host::{GitRun, HostGit};
 use super::*;
 pub(super) fn discover(root: &Path, roots: &[PathBuf]) -> Result<Vec<String>> {
-    let mut repository = false;
-    for parent in root.ancestors() {
-        match std::fs::symlink_metadata(parent.join(".git")) {
-            Ok(_) => {
-                repository = true;
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err("Cannot verify Git hooks scope.".into()),
-        }
+    let mut git = HostGit::new(root);
+    match git.repository()? {
+        crate::git::GuestRepository::Plain => Ok(Vec::new()),
+        crate::git::GuestRepository::Worktree(top) => discover_with(&mut git, root, roots, &top),
     }
-    if !repository {
-        return Ok(Vec::new());
-    }
-    discover_with(&mut HostGit::new(root), root, roots)
 }
-fn discover_with(git: &mut dyn GitRun, root: &Path, roots: &[PathBuf]) -> Result<Vec<String>> {
+fn discover_with(
+    git: &mut dyn GitRun,
+    root: &Path,
+    roots: &[PathBuf],
+    top: &Path,
+) -> Result<Vec<String>> {
     // `config --list` does not execute hooks. Do not replace core.hooksPath here:
     // that would conceal the real value which determines guest write permissions.
     let output = git.run(
@@ -56,21 +51,8 @@ fn discover_with(git: &mut dyn GitRun, root: &Path, roots: &[PathBuf]) -> Result
     if value.len() > 4096 {
         return Err("Git hooks path is too long.".into());
     }
-    let top = git.run(
-        &["-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel"],
-        None,
-    )?;
-    if top.truncated {
-        return Err("Incomplete Git repository scope.".into());
-    }
-    let top = std::str::from_utf8(&top.bytes)
-        .map_err(|_| "Invalid Git repository scope")?
-        .trim();
-    if !Path::new(top).is_absolute() {
-        return Err("Invalid Git repository scope.".into());
-    }
     let value = expand_path(git, value)?;
-    resolve_scope(root, Path::new(top), &value)
+    resolve_scope(root, top, &value)
 }
 // Convert the already validated value, rather than trusting a second config value
 // that might have changed in between. Argument vectors preserve spaces/quotes; no shell.
@@ -139,7 +121,6 @@ mod tests {
     use crate::git::Capture;
     struct FixtureGit {
         config: Vec<u8>,
-        top: Vec<u8>,
         truncated: bool,
         calls: usize,
     }
@@ -158,11 +139,7 @@ mod tests {
             }
             assert!(!args.iter().any(|s| s.starts_with("core.hooksPath=")));
             Ok(Capture {
-                bytes: if args.contains(&"config") {
-                    self.config.clone()
-                } else {
-                    self.top.clone()
-                },
+                bytes: self.config.clone(),
                 truncated: self.truncated,
             })
         }
@@ -179,11 +156,10 @@ mod tests {
                 "{origin}\0core.hookspath\nold\0{origin}\0core.hookspath\nsub/missing/hooks\0"
             )
             .into_bytes(),
-            top: top.to_string_lossy().as_bytes().to_vec(),
             truncated: false,
             calls: 0,
         };
-        let scope = discover_with(&mut git, &root, std::slice::from_ref(&root)).unwrap();
+        let scope = discover_with(&mut git, &root, std::slice::from_ref(&root), top).unwrap();
         assert_eq!(scope, vec!["missing/hooks"]);
         assert!(protects(Path::new("missing/hooks/run"), &scope));
         assert!(!protects(Path::new("missing/hooks-other/run"), &scope));
@@ -202,21 +178,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut git = FixtureGit {
             config: vec![],
-            top: vec![],
             truncated: false,
             calls: 0,
         };
         assert!(
-            discover_with(&mut git, root.path(), &[])
+            discover_with(&mut git, root.path(), &[], root.path())
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(git.calls, 1);
         git.truncated = true;
-        assert!(discover_with(&mut git, root.path(), &[]).is_err());
+        assert!(discover_with(&mut git, root.path(), &[], root.path()).is_err());
         git.truncated = false;
         git.config = b"file:broken\0core.hookspath\nfolder".to_vec();
-        assert!(discover_with(&mut git, root.path(), &[]).is_err());
+        assert!(discover_with(&mut git, root.path(), &[], root.path()).is_err());
     }
 }
 

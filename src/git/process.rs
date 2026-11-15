@@ -1,7 +1,7 @@
 //! Bounded Git process execution, independent of application UI or workspace state.
 use std::{
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -60,7 +60,29 @@ fn run_bytes_config(
     guest: bool,
     allow_no_match: bool,
 ) -> Result<Capture> {
+    let completed = run_captured(root, args, input, timeout, guest, false)?;
+    if !completed.status.success() && !(allow_no_match && completed.status.code() == Some(1)) {
+        return Err(completed.errors.text());
+    }
+    Ok(completed.output)
+}
+struct Completed {
+    status: std::process::ExitStatus,
+    output: Capture,
+    errors: Capture,
+}
+fn run_captured(
+    root: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    guest: bool,
+    english: bool,
+) -> Result<Completed> {
     let mut command = Command::new("git");
+    if english {
+        command.env("LC_ALL", "C").env("LANGUAGE", "C");
+    }
     if guest {
         for (key, _) in std::env::vars_os() {
             if key
@@ -151,16 +173,81 @@ fn run_bytes_config(
     let pipe_deadline = deadline.min(Instant::now() + Duration::from_secs(1));
     let mut output = out.finish(pipe_deadline);
     let errors = err.finish(pipe_deadline);
-    if !status.success() && !(allow_no_match && status.code() == Some(1)) {
-        return Err(errors.text());
-    }
     if !matches!(
         input_result.recv_timeout(pipe_deadline.saturating_duration_since(Instant::now())),
         Ok(Ok(()))
     ) {
         output.truncated = true;
     }
-    Ok(output)
+    Ok(Completed {
+        status,
+        output,
+        errors,
+    })
+}
+
+/// Classification is based on one fixed Git command, never on a `.git` filename guess.
+#[derive(Debug, PartialEq, Eq)]
+pub enum GuestRepository {
+    Plain,
+    Worktree(PathBuf),
+}
+pub fn run_guest_repository(root: &Path, timeout: Duration) -> Result<GuestRepository> {
+    let done = run_captured(
+        root,
+        &[
+            "-c",
+            "core.fsmonitor=false",
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--is-bare-repository",
+            "--is-inside-git-dir",
+            "--show-toplevel",
+        ],
+        None,
+        timeout,
+        true,
+        true,
+    )
+    .map_err(|_| "Cannot verify shared repository scope")?;
+    classify_repository(
+        done.status.success(),
+        done.status.code(),
+        &done.output,
+        &done.errors,
+    )
+}
+fn classify_repository(
+    success: bool,
+    code: Option<i32>,
+    output: &Capture,
+    errors: &Capture,
+) -> Result<GuestRepository> {
+    const NOT_REPO: &str = "fatal: not a git repository (or any of the parent directories): .git";
+    if output.truncated || errors.truncated || output.bytes.len() > 8192 {
+        return Err("Incomplete repository scope response.".into());
+    }
+    if !success {
+        // Broken gitdir links, dubious ownership, bare repos, inaccessible config,
+        // and timeouts are NOT evidence of an ordinary folder.
+        if code == Some(128)
+            && output.bytes.is_empty()
+            && std::str::from_utf8(&errors.bytes).ok().map(str::trim_end) == Some(NOT_REPO)
+        {
+            return Ok(GuestRepository::Plain);
+        }
+        return Err("The shared folder is not a verified Git worktree.".into());
+    }
+    let text = std::str::from_utf8(&output.bytes).map_err(|_| "Invalid repository scope")?;
+    let lines: Vec<_> = text.lines().collect();
+    if lines.len() != 4 || lines[..3] != ["true", "false", "false"] || !errors.bytes.is_empty() {
+        return Err("Git metadata directories and bare repositories cannot be shared.".into());
+    }
+    let top = PathBuf::from(lines[3]);
+    if !top.is_absolute() {
+        return Err("Invalid repository root.".into());
+    }
+    Ok(GuestRepository::Worktree(top))
 }
 
 /// Owns only the process group created for this Git invocation.
@@ -346,3 +433,58 @@ pub(super) fn drain(reader: impl Read) -> std::io::Result<Capture> {
 #[cfg(test)]
 #[path = "process_env_tests.rs"]
 mod environment_tests;
+
+#[cfg(test)]
+mod repository_tests {
+    use super::*;
+    fn cap(bytes: &[u8]) -> Capture {
+        Capture {
+            bytes: bytes.to_vec(),
+            truncated: false,
+        }
+    }
+    #[test]
+    fn repository_classification_requires_complete_unambiguous_evidence() {
+        let empty = cap(b"");
+        let absent = cap(b"fatal: not a git repository (or any of the parent directories): .git\n");
+        assert_eq!(
+            classify_repository(false, Some(128), &empty, &absent).unwrap(),
+            GuestRepository::Plain
+        );
+        let root = std::env::current_dir().unwrap();
+        let valid = cap(format!("true\nfalse\nfalse\n{}\n", root.display()).as_bytes());
+        assert_eq!(
+            classify_repository(true, Some(0), &valid, &empty).unwrap(),
+            GuestRepository::Worktree(root)
+        );
+        for err in [
+            b"fatal: not a git repository: missing".as_slice(),
+            b"fatal: detected dubious ownership",
+            b"fatal: this operation must be run in a work tree",
+            b"warning\nfatal: not a git repository (or any of the parent directories): .git",
+        ] {
+            assert!(classify_repository(false, Some(128), &empty, &cap(err)).is_err());
+        }
+        assert!(classify_repository(false, Some(1), &empty, &absent).is_err());
+        assert!(
+            classify_repository(false, Some(128), &cap(b"false\ntrue\ntrue\n"), &absent).is_err()
+        );
+        for out in [
+            b"false\ntrue\ntrue\n/bare\n".as_slice(),
+            b"false\nfalse\ntrue\n/gitdir\n",
+            b"true\nfalse\nfalse\nrelative\n",
+            b"true\nfalse\nfalse\n",
+            &[255],
+            b"",
+        ] {
+            assert!(classify_repository(true, Some(0), &cap(out), &empty).is_err());
+        }
+        let mut truncated = absent;
+        truncated.truncated = true;
+        assert!(classify_repository(false, Some(128), &empty, &truncated).is_err());
+        assert!(classify_repository(true, Some(0), &valid, &cap(b"warning")).is_err());
+        let mut partial = valid;
+        partial.truncated = true;
+        assert!(classify_repository(true, Some(0), &partial, &empty).is_err());
+    }
+}

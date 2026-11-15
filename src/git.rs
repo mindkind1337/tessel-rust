@@ -426,7 +426,10 @@ pub fn project_relative_path<'a>(prefix: &str, repository_path: &'a str) -> Opti
 mod process;
 #[cfg(test)]
 use process::drain;
-pub use process::{Capture, run_bytes, run_guest_bytes, run_guest_check_ignore};
+pub use process::{
+    Capture, GuestRepository, run_bytes, run_guest_bytes, run_guest_check_ignore,
+    run_guest_repository,
+};
 use process::{OUTPUT_LIMIT, run_bytes_with_timeout};
 
 #[cfg(test)]

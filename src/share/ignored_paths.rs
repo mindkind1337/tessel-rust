@@ -54,20 +54,11 @@ impl IgnoredPaths {
         }
         let seen = state.entry(root.clone()).or_default();
         let mut current_hits = HashSet::new();
-        let mut repository = false;
-        for parent in root.ancestors() {
-            match std::fs::symlink_metadata(parent.join(".git")) {
-                Ok(_) => {
-                    repository = true;
-                    break;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err("Cannot verify repository scope.".into()),
-            }
-        }
-        if repository && !paths.is_empty() {
+        let mut git = super::guest_git_host::HostGit::new(&root);
+        if matches!(git.repository()?, crate::git::GuestRepository::Worktree(_))
+            && !paths.is_empty()
+        {
             let (_owner, hooks) = super::guest_git_dispatch::private_hooks()?;
-            let mut git = super::guest_git_host::HostGit::new(&root);
             let prefix = super::guest_git_host::prepare_prefix(&mut git, &root, roots, &hooks)?;
             let mut input = Vec::new();
             for path in paths {
