@@ -1,7 +1,8 @@
 //! File mutations run outside the host authority lock and recheck before applying.
 //! A filesystem operation already launched may finish after revocation; its response
-//! is then withheld. Descriptor-relative access and version conflicts are separate work.
+//! is then withheld. Descriptor-relative access remains separate work; version checks are optimistic.
 use super::*;
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_WRITES: AtomicUsize = AtomicUsize::new(0);
 struct WriteSlot;
 impl WriteSlot {
@@ -289,15 +290,32 @@ fn apply_with_recycler(
             if bytes.len() > 2 * 1024 * 1024 {
                 return Err("Live Share file write limit is 2 MiB.".into());
             }
+            // Serialize guest saves through the final check and replacement. Host processes
+            // can still race that boundary: descriptor/CAS confinement is separate work.
+            let _save = SAVE_LOCK
+                .try_lock()
+                .map_err(|_| "Guest saves are busy. Try again later.")?;
+            let expected = match req.get("expectHash") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) => Some(s.as_str()),
+                Some(_) => return Err(file_version::CONFLICT.into()),
+            };
             let parent = target.parent().ok_or("Missing parent folder")?;
             let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
+            file_version::check(&target, expected)?;
             let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
             tmp.write_all(&bytes).map_err(|e| e.to_string())?;
             tmp.as_file().sync_all().map_err(|e| e.to_string())?;
             let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
-            tmp.persist(&target).map_err(|e| e.to_string())?;
+            if file_version::check(&target, expected)? {
+                tmp.persist(&target).map_err(|e| e.to_string())?;
+            } else {
+                // A newly appeared destination must never be overwritten.
+                tmp.persist_noclobber(&target)
+                    .map_err(|_| file_version::CONFLICT)?;
+            }
             Ok(Action {
                 en: format!("{guest_name} saved {relative}"),
                 fr: format!("{guest_name} a enregistré {relative}"),
@@ -408,8 +426,7 @@ pub(super) fn check_hook_change_during_save(
     inner: &Arc<Mutex<HostInner>>,
     mut change: impl FnMut(),
 ) -> Result<Value> {
-    let req =
-        json!({"op":"files.write","path":"post-commit","data":B64.encode(b"must not persist")});
+    let req = json!({"op":"files.write","path":"post-commit","expectHash":file_version::hash(&std::fs::read(inner.lock().unwrap().shared_projects[0].path.join("post-commit")).unwrap()),"data":B64.encode(b"must not persist")});
     let mut changed = false;
     run_authorized(inner, "guest", &req, |grant, check| {
         apply(grant, &req, &mut || {
@@ -460,6 +477,98 @@ mod tests {
     }
 
     #[test]
+    fn stale_versions_and_mid_save_changes_keep_host_content() {
+        let (dir, host) = fixture();
+        let target = dir.path().join("document.txt");
+        std::fs::write(&target, b"first").unwrap();
+        let read = super::super::guest_file_reads::dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.read","path":"document.txt"}),
+        );
+        assert_eq!(read["result"]["hash"], file_version::hash(b"first"));
+        let req = json!({"op":"files.write","path":"document.txt","expectHash":read["result"]["hash"],"data":B64.encode(b"guest")});
+        std::fs::write(&target, b"other").unwrap(); // Same length is not the same version.
+        assert!(
+            dispatch(&host.inner, "guest", &req)["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("File conflict:")
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"other");
+        std::fs::remove_file(&target).unwrap();
+        assert!(dispatch(&host.inner, "guest", &req).get("error").is_some());
+        assert!(!target.exists());
+        std::fs::write(&target, b"first").unwrap();
+        let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
+        let mut count = 0;
+        let result = apply(&grant, &req, &mut || {
+            count += 1;
+            if count == 2 {
+                std::fs::write(&target, b"owner").unwrap();
+            }
+            Ok(())
+        });
+        assert!(result.err().unwrap().starts_with("File conflict:"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"owner");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(host.snapshot().recent_actions.is_empty());
+        for expected in [
+            Value::Null,
+            json!(false),
+            json!("bad"),
+            json!("0".repeat(64)),
+        ] {
+            let mut invalid = req.clone();
+            invalid["expectHash"] = expected;
+            assert!(
+                dispatch(&host.inner, "guest", &invalid)
+                    .get("error")
+                    .is_some()
+            );
+        }
+        let mut current = req;
+        current["expectHash"] = json!(file_version::hash(b"owner"));
+        assert_eq!(
+            dispatch(&host.inner, "guest", &current)["result"]["ok"],
+            true
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"guest");
+        let new_target = dir.path().join("new.txt");
+        let create = json!({"op":"files.write","path":"new.txt","data":B64.encode(b"guest")});
+        let mut checks = 0;
+        let appeared = apply(&grant, &create, &mut || {
+            checks += 1;
+            if checks == 2 {
+                std::fs::write(&new_target, b"appeared").unwrap();
+            }
+            Ok(())
+        });
+        assert!(appeared.err().unwrap().starts_with("File conflict:"));
+        assert_eq!(std::fs::read(&new_target).unwrap(), b"appeared");
+        std::fs::remove_file(&new_target).unwrap();
+        assert_eq!(
+            dispatch(&host.inner, "guest", &create)["result"]["ok"],
+            true
+        );
+        assert_eq!(std::fs::read(&new_target).unwrap(), b"guest");
+        // The version check is bounded even if the host replaces a small file with a huge one.
+        std::fs::File::create(&target)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            dispatch(&host.inner, "guest", &current)
+                .get("error")
+                .is_some()
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().len(),
+            8 * 1024 * 1024 + 1
+        );
+    }
+
+    #[test]
     fn empty_mutation_paths_never_target_the_shared_root_or_its_parent() {
         let (dir, host) = fixture();
         let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
@@ -503,7 +612,7 @@ mod tests {
         std::fs::write(dir.path().join("existing.txt"), "original").unwrap();
         let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
         for req in [
-            json!({"op":"files.write","path":"existing.txt","data":B64.encode(b"replacement")}),
+            json!({"op":"files.write","path":"existing.txt","expectHash":file_version::hash(b"original"),"data":B64.encode(b"replacement")}),
             json!({"op":"files.create","path":"new.txt"}),
             json!({"op":"files.rename","path":"existing.txt","to":"new.txt"}),
             json!({"op":"files.delete","path":"existing.txt"}),
@@ -549,7 +658,7 @@ mod tests {
         let (dir, host) = fixture();
         for req in [
             json!({"op":"files.create","path":"one.txt"}),
-            json!({"op":"files.write","path":"one.txt","data":B64.encode(b"saved")}),
+            json!({"op":"files.write","path":"one.txt","expectHash":file_version::hash(b""),"data":B64.encode(b"saved")}),
             json!({"op":"files.rename","path":"one.txt","to":"two.txt"}),
         ] {
             assert_eq!(dispatch(&host.inner, "guest", &req)["result"]["ok"], true);
@@ -708,7 +817,7 @@ mod tests {
         let written = dispatch(
             &host.inner,
             "guest",
-            &json!({"op":"files.write","path":"alias/workflows/existing.yml","data":B64.encode(b"approved")}),
+            &json!({"op":"files.write","path":"alias/workflows/existing.yml","expectHash":file_version::hash(&std::fs::read(dir.path().join("alias/workflows/existing.yml")).unwrap()),"data":B64.encode(b"approved")}),
         );
         std::fs::remove_dir(&link).unwrap();
         assert_eq!(written["result"]["ok"], true, "{written}");

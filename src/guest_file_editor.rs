@@ -5,6 +5,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     sync::{
         Arc,
@@ -52,6 +53,7 @@ pub enum Notice {
     ReadOnly,
     TooLarge,
     Saved,
+    Conflict,
     Host(String),
 }
 impl Notice {
@@ -64,6 +66,7 @@ impl Notice {
             (Self::UnsavedDraft,true)=>"Un brouillon non enregistré est conservé. Revenez à son projet pour l’enregistrer, copiez-le ou abandonnez-le avant d’ouvrir un autre fichier.", (Self::UnsavedDraft,false)=>"An unsaved draft is kept. Return to its project to save it, copy it, or discard it before opening another file.",
             (Self::ReadOnly,true)=>"Ce fichier ou cette action n’est plus accessible.", (Self::ReadOnly,false)=>"This file or action is no longer available.",
             (Self::TooLarge,true)=>"L’édition invitée est limitée à 180 Kio par enregistrement.", (Self::TooLarge,false)=>"Guest editing is limited to 180 KiB per save.",
+            (Self::Conflict,true)=>"Le fichier a changé chez l’hôte. Votre brouillon est conservé. Copiez-le avant de recharger le fichier.", (Self::Conflict,false)=>"The host file changed. Your draft is kept. Copy it before reloading the file.",
             (Self::Saved,true)=>"Fichier enregistré.", (Self::Saved,false)=>"File saved.",
             (Self::Host(text),_)=>return text.clone(),
         }.into()
@@ -232,7 +235,7 @@ impl Editor {
             return true;
         }
         let text = document.text.clone();
-        let payload = json!({"op":"files.write","projectId":key.scope.project,"path":key.path,"data":B64.encode(text.as_bytes())});
+        let payload = json!({"op":"files.write","projectId":key.scope.project,"path":key.path,"data":B64.encode(text.as_bytes()),"expectHash":format!("{:x}", Sha256::digest(document.baseline.as_bytes()))});
         match send(payload) {
             Ok(receiver) => {
                 self.notice = None;
@@ -260,7 +263,11 @@ impl Editor {
         let value = match result {
             Some(Ok(value)) => value,
             Some(Err(GuestRpcError::Host(error))) => {
-                self.notice = Some(Notice::Host(guest_text::task_title(&error, "", 200)));
+                self.notice = Some(if saving && error.starts_with("File conflict:") {
+                    Notice::Conflict
+                } else {
+                    Notice::Host(guest_text::task_title(&error, "", 200))
+                });
                 return true;
             }
             Some(Err(GuestRpcError::Transport(_))) | None => {

@@ -326,3 +326,5 @@ The protected-path catalogue in `src/share/protected_paths.rs` and its synthetic
 The secret-name policy in `src/share/secret_names.rs`, `scripts/extract_secret_names_reference.mjs`, and its synthetic fixture adapt Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above. The per-share ignored-path history follows the same reference semantics while using the independent bounded Rust Git runner. No private files or Git configuration are bundled.
 
 `src/share/hook_paths.rs` adapts the configured hook-folder scope semantics from Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above, with independent bounded discovery, configuration-origin validation and pre-mutation rechecking. Tests contain synthetic paths and configuration only.
+
+The optimistic guest-save version contract in `src/share/file_version.rs` and `src/guest_file_editor.rs` follows Tessel `src/main/liveShare/shareRequests.js` (`fs.write`, `expectHash`) under the existing MIT attribution above. The bounded hashing and guest-save serialization are implemented independently in Rust; tests use synthetic content only.

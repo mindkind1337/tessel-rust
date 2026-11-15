@@ -3321,7 +3321,7 @@ mod tests {
         // 2. Ordinary file edit succeeds with `Collaborate`, but `AGENTS.md` is refused without `type`!
         guest
             .call_sync(
-                json!({"op": "files.write", "path": "hello.txt", "data": B64.encode(b"updated")}),
+                json!({"op": "files.write", "path": "hello.txt", "expectHash": file_version::hash(b"shared"), "data": B64.encode(b"updated")}),
                 Duration::from_secs(3),
             )
             .unwrap();
@@ -3422,5 +3422,7 @@ mod ignored_paths;
 #[path = "share/secret_names.rs"]
 mod secret_names;
 
+#[path = "share/file_version.rs"]
+mod file_version;
 #[path = "share/hook_paths.rs"]
 mod hook_paths;

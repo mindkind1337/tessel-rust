@@ -168,6 +168,7 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             }
             Ok(json!({
                 "name": target.file_name().unwrap_or_default().to_string_lossy(),
+                "hash": file_version::hash(&bytes),
                 "data": B64.encode(bytes),
                 "readOnly": !rights.edit || ((hook_paths::protects(Path::new(relative), &hooks) || hook_paths::protects(target.strip_prefix(&proj.path).map_err(|_| "Invalid project scope")?, &hooks)) && !rights.r#type),
             }))
@@ -580,7 +581,7 @@ mod tests {
         let response = super::super::guest_file_mutations::dispatch(
             &host.inner,
             "guest",
-            &json!({"op":"files.write","path":"container/hooks/launch.sh","data":B64.encode(b"approved")}),
+            &json!({"op":"files.write","path":"container/hooks/launch.sh","expectHash":file_version::hash(&std::fs::read(dir.path().join("container/hooks/launch.sh")).unwrap()),"data":B64.encode(b"approved")}),
         );
         assert_eq!(response["result"]["ok"], true, "{response}");
         assert!(host.snapshot().recent_actions.last().unwrap().flagged);

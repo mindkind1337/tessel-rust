@@ -244,3 +244,42 @@ fn readonly_preview_is_utf8_bounded_without_truncating_document() {
     assert!(text.starts_with(preview));
     assert_eq!(document.text.as_str(), text);
 }
+
+#[test]
+fn conflict_preserves_draft_and_saves_use_the_acknowledged_baseline() {
+    use sha2::{Digest, Sha256};
+    let hash = |s: &str| format!("{:x}", Sha256::digest(s.as_bytes()));
+    let now = Instant::now();
+    let mut editor = Editor::default();
+    let a = key(1, "a.txt");
+    loaded(&mut editor, a.clone(), "\u{feff}original\r\n", now);
+    editor.edit(&a, "first draft".into());
+    let (tx, rx) = mpsc::sync_channel(1);
+    editor.save(&a, now, |p| {
+        assert_eq!(p["expectHash"], hash("\u{feff}original\r\n"));
+        Ok(rx)
+    });
+    editor.edit(&a, "later draft".into());
+    tx.send(Ok(json!({"ok":true}))).unwrap();
+    editor.poll(now);
+    let (tx, rx) = mpsc::sync_channel(1);
+    editor.save(&a, now, |p| {
+        assert_eq!(p["expectHash"], hash("first draft"));
+        Ok(rx)
+    });
+    tx.send(Err(guest_rpc::GuestRpcError::Host(
+        "File conflict: host changed".into(),
+    )))
+    .unwrap();
+    editor.poll(now);
+    assert_eq!(editor.notice, Some(Notice::Conflict));
+    assert_eq!(
+        editor.document.as_ref().unwrap().text.as_str(),
+        "later draft"
+    );
+    assert!(editor.document.as_ref().unwrap().dirty());
+    editor.open(key(1, "other.txt"), now, |_| {
+        panic!("must keep conflicted draft")
+    });
+    assert_eq!(editor.notice, Some(Notice::UnsavedDraft));
+}
