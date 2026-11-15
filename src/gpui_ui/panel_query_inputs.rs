@@ -287,6 +287,12 @@ fn clear(
         });
         flush(root, cx);
     }
+    if !matches(root, token) {
+        root.focus_input = FocusInputTarget::None;
+        w.focus(&root.focus_handle, cx);
+        cx.notify();
+        return;
+    }
     root.focus_input = token.0.target;
     w.focus(&token.1.read(cx).focus_handle(cx), cx);
     cx.notify();
@@ -346,6 +352,41 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+
+    #[gpui::test]
+    fn sessions_modal_native_query_escape_restores_root_focus(cx: &mut TestAppContext) {
+        bindings(cx);
+        for history_visible in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                root.app.install_sessions_modal_fixture(history_visible);
+                root.focus_input = FocusInputTarget::SessionsQuery;
+                root
+            });
+            cx.refresh().unwrap();
+            view.update(cx, |root, w, cx| {
+                let token = (
+                    root.app.gpui_panel_query_input().unwrap().0,
+                    root.panel_query_inputs.state().unwrap().clone(),
+                );
+                token.1.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "fixture 😀", w, cx)
+                });
+                clear(root, &token, w, cx, true);
+                assert!(token.1.read(cx).as_str().is_empty());
+                assert!(root.app.gpui_snapshot(960., 640., 4.).modals.sessions_open);
+                clear(root, &token, w, cx, true);
+                assert!(!root.app.gpui_snapshot(960., 640., 4.).modals.sessions_open);
+                assert!(root.focus_handle.is_focused(w));
+                assert_eq!(root.focus_input, FocusInputTarget::None);
+                assert!(!matches(root, &token));
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+        }
     }
 
     #[gpui::test]

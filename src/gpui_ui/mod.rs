@@ -1460,6 +1460,7 @@ impl Render for TesselGpuiRoot {
                 &self.search_inputs,
                 &self.modal_query_input,
                 &self.task_card_input,
+                &self.panel_query_inputs,
                 focus_input,
                 &tokens,
                 cx,

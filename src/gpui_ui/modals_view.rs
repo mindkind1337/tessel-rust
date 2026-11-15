@@ -35,11 +35,13 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
     gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_active_modals_and_popovers(
     snapshot: &GpuiWorkspaceSnapshot,
     search_inputs: &super::search_inputs::Inputs,
     modal_query: &super::modal_query_input::Input,
     task_card_input: &super::task_card_input::Inputs,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -92,6 +94,14 @@ pub(crate) fn render_active_modals_and_popovers(
     }
     if m.notes_open {
         layers.push(render_notes_modal(m, focus_input, french, tokens, cx));
+    }
+    if m.sessions_open {
+        layers.push(render_sessions_modal(
+            snapshot,
+            panel_query_inputs,
+            tokens,
+            cx,
+        ));
     }
     if m.review_open {
         layers.push(render_review_modal(m, french, tokens, cx));
@@ -1740,6 +1750,55 @@ fn render_github_modal(
 // ---------------------------------------------------------------------------
 // 8. NotesPanel Modal (`.tessel/notes.md`)
 // ---------------------------------------------------------------------------
+
+fn render_sessions_modal(
+    snapshot: &GpuiWorkspaceSnapshot,
+    inputs: &super::panel_query_inputs::Inputs,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let close = GpuiAction::SidePanels(SidePanelsAction::CloseSessionsModal);
+    let body = super::side_panels_view::render_sessions_history_tab(
+        &snapshot.side_panels,
+        inputs,
+        snapshot.french,
+        tokens,
+        cx,
+    );
+    modal_backdrop(
+        "gpui-sessions-backdrop",
+        tokens,
+        close.clone(),
+        div()
+            .id("gpui-sessions-card")
+            .w(px(720.0))
+            .h(px(620.0))
+            .max_w_full()
+            .max_h_full()
+            .p(px(14.0))
+            .rounded(px(tokens.radius_px + 3.0))
+            .bg(tokens.panel)
+            .border_1()
+            .border_color(tokens.border_strong)
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+            .child(modal_header(
+                if snapshot.french {
+                    "Conversations passées"
+                } else {
+                    "Past Conversations"
+                },
+                tokens,
+                close,
+                cx,
+            ))
+            .child(div().flex_1().min_h_0().child(body))
+            .into_any_element(),
+        cx,
+    )
+}
 
 fn render_notes_modal(
     m: &GpuiModalsSnapshot,

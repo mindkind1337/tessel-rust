@@ -62,6 +62,8 @@ pub(crate) fn render_side_panel_tab_body(
             cx,
         ),
         SideTab::TaskHistory => render_task_history_tab(sp, panel_query_inputs, french, tokens, cx),
+        // One native input entity cannot appear in two places in the same frame.
+        SideTab::History if snapshot.modals.sessions_open => div().into_any_element(),
         SideTab::History => render_sessions_history_tab(sp, panel_query_inputs, french, tokens, cx),
         SideTab::Conversations => {
             render_conversations_tab(sp, panel_query_inputs, french, tokens, cx)
@@ -1787,7 +1789,7 @@ fn render_task_history_tab(
 // 6. `SideTab::History` (`SessionHistoryPanel.vue`)
 // ---------------------------------------------------------------------------
 
-fn render_sessions_history_tab(
+pub(crate) fn render_sessions_history_tab(
     sp: &GpuiSidePanelsSnapshot,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,

@@ -617,6 +617,7 @@ pub(crate) struct GpuiModalsSnapshot {
     pub github_issues: Vec<crate::dialogs_toolbar_model::GhIssue>,
     pub github_error: String,
     pub notes_open: bool,
+    pub sessions_open: bool,
     pub notes_text: String,
     pub notes_dirty: bool,
     pub review_open: bool,
@@ -1529,8 +1530,9 @@ impl Tessel {
             || (self.state.panels.right_open
                 && self.state.panels.right_tab == SideTab::Files
                 && self.explorer_tree.gpui_needs_frame())
-            || (self.state.panels.right_open
-                && self.state.panels.right_tab == SideTab::History
+            || ((self.side_panels_ui.sessions_modal_open
+                || (self.state.panels.right_open
+                    && self.state.panels.right_tab == SideTab::History))
                 && self.gpui_extra.session_query.pending())
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
             || (self.state.panels.right_open
@@ -1699,6 +1701,15 @@ impl Tessel {
     }
 
     #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_sessions_modal_fixture(&mut self, history_visible: bool) {
+        self.state.panels.right_open = history_visible;
+        self.state.panels.right_tab = SideTab::History;
+        self.side_panels_ui.sessions_modal_open = true;
+        // Empty synthetic discovery must never fall back to real user profiles.
+        self.gpui_extra.session_discovery.request(None, vec![], 50);
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn install_scm_pending_fixture(&mut self) -> mpsc::Sender<Result<String, String>> {
         self.sync_git_project();
         let owner = self.gpui_scm_owner().unwrap();
@@ -1721,7 +1732,17 @@ impl Tessel {
 
     fn gpui_panel_query_context(
         &self,
-    ) -> Option<(GpuiFocusTarget, Option<crate::git_result::Owner>)> {
+    ) -> Option<(GpuiFocusTarget, Option<crate::git_result::Owner>, bool)> {
+        if self.side_panels_ui.sessions_modal_open {
+            if self.command_palette.open
+                || self.finder.is_open()
+                || self.overlay.is_some()
+                || self.gpui_has_aux_modal_except_sessions()
+            {
+                return None;
+            }
+            return Some((GpuiFocusTarget::SessionsQuery, self.gpui_scm_owner(), true));
+        }
         if self.gpui_has_open_modal() || !self.state.panels.right_open {
             return None;
         }
@@ -1733,7 +1754,7 @@ impl Tessel {
             SideTab::Conversations => GpuiFocusTarget::ConversationsQuery,
             _ => return None,
         };
-        Some((target, self.gpui_scm_owner()))
+        Some((target, self.gpui_scm_owner(), false))
     }
     pub(crate) fn gpui_panel_query_input(&self) -> Option<(NativePanelQueryScope, &str)> {
         let target = self.gpui_panel_query_context()?.0;
@@ -1891,10 +1912,14 @@ impl Tessel {
         self.overlay.is_some() || self.gpui_has_aux_modal()
     }
     fn gpui_has_aux_modal(&self) -> bool {
+        self.side_panels_ui.sessions_modal_open || self.gpui_has_aux_modal_except_sessions()
+    }
+    fn gpui_has_aux_modal_except_sessions(&self) -> bool {
         self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
-            || self.side_panels_ui.any_modal_open()
+            || self.side_panels_ui.notes_modal_open
+            || self.side_panels_ui.review_modal_open
             || self.worktree_cleanup.is_some()
             || self.teams_ui.manager_project.is_some()
             || !self.teams_hub.approval_prompts.is_empty()
@@ -3872,7 +3897,9 @@ impl Tessel {
             self.state.projects.iter().map(|p| p.path.clone()).collect();
         let agent_filter = (!self.side_panels_ui.sessions_agent_filter.is_empty())
             .then_some(self.side_panels_ui.sessions_agent_filter.as_str());
-        let past_sessions = if visible == Some(SideTab::History) {
+        let sessions_visible =
+            visible == Some(SideTab::History) || self.side_panels_ui.sessions_modal_open;
+        let past_sessions = if sessions_visible {
             self.gpui_extra
                 .session_query
                 .update(
@@ -3895,7 +3922,7 @@ impl Tessel {
         };
         let sessions_loading =
             self.gpui_extra.session_query.pending() || self.side_panels_ui.sessions_loading;
-        let sessions_limited = visible == Some(SideTab::History)
+        let sessions_limited = sessions_visible
             && (self.gpui_extra.session_query.limited() || self.side_panels_ui.sessions_limited);
 
         let threads = if visible == Some(SideTab::Conversations) {
@@ -4546,6 +4573,7 @@ impl Tessel {
             github_issues: self.dialogs_toolbar_ui.github_issues.clone(),
             github_error: self.dialogs_toolbar_ui.github_error.clone(),
             notes_open: self.side_panels_ui.notes_modal_open,
+            sessions_open: self.side_panels_ui.sessions_modal_open,
             notes_text: self.side_panels_ui.notes.text.clone(),
             notes_dirty: self.side_panels_ui.notes.is_dirty(),
             review_open: self.side_panels_ui.review_modal_open,
@@ -5585,6 +5613,12 @@ impl Tessel {
                 }
             }
             GpuiAction::NativePanelQueryExitFullscreen { scope, base } => {
+                if scope.target == GpuiFocusTarget::SessionsQuery
+                    && self.side_panels_ui.sessions_modal_open
+                    && self.gpui_panel_query_input() == Some((scope, base.as_str()))
+                {
+                    self.side_panels_ui.sessions_modal_open = false;
+                }
                 if (base.is_empty() || scope.target == GpuiFocusTarget::TaskNewTitle)
                     && scope.target != GpuiFocusTarget::SessionsQuery
                     && self.gpui_panel_query_input() == Some((scope, base.as_str()))
@@ -7396,6 +7430,74 @@ mod panel_snapshot_tests {
         assert_eq!(app.gpui_extra.panel_query_generation, generation);
         assert_eq!(app.state.tasks.len(), 10_000);
         assert!(!app.error.is_empty());
+    }
+
+    #[test]
+    fn sessions_modal_keeps_queries_available_without_opening_the_side_panel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.state.panels.right_open = false;
+        app.state.panels.right_tab = SideTab::Files;
+        app.past_sessions_cache
+            .push(crate::side_panels_model::SessionHistoryEntry {
+                profile_label: String::new(),
+                profile_binding: None,
+                id: "synthetic".into(),
+                agent_id: "test".into(),
+                title: "Fixture".into(),
+                folder: dir.path().to_path_buf(),
+                updated_at_ms: 0,
+                file_path: None,
+                open_pane_id: None,
+                transcript_snippet: None,
+            });
+        app.side_panels_ui.sessions_modal_open = true;
+        assert!(app.gpui_has_open_modal());
+        assert_eq!(app.build_side_panels_snapshot(false).past_sessions.len(), 1);
+        let scope = app.gpui_panel_query_input().unwrap().0;
+        assert_eq!(scope.target, GpuiFocusTarget::SessionsQuery);
+        app.apply_gpui_action(GpuiAction::NativePanelQueryEdit {
+            scope,
+            base: String::new(),
+            text: "Fixture".into(),
+        });
+        assert_eq!(app.side_panels_ui.sessions_query, "Fixture");
+        assert!(!app.state.panels.right_open);
+        app.side_panels_ui.notes_modal_open = true;
+        assert!(app.gpui_panel_query_input().is_none());
+        app.side_panels_ui.notes_modal_open = false;
+        app.apply_gpui_action(GpuiAction::SidePanels(
+            crate::side_panels_ui::SidePanelsAction::CloseSessionsModal,
+        ));
+        assert!(app.gpui_panel_query_input().is_none());
+        assert!(
+            app.build_side_panels_snapshot(false)
+                .past_sessions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sessions_modal_close_invalidates_delayed_edits_before_returning_to_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.state.panels.right_open = true;
+        app.state.panels.right_tab = SideTab::History;
+        app.side_panels_ui.sessions_modal_open = true;
+        let scope = app.gpui_panel_query_input().unwrap().0;
+        app.apply_gpui_action(GpuiAction::NativePanelQueryExitFullscreen {
+            scope,
+            base: String::new(),
+        });
+        assert!(!app.side_panels_ui.sessions_modal_open);
+        assert!(app.state.panels.right_open);
+        assert_ne!(app.gpui_panel_query_input().unwrap().0, scope);
+        app.apply_gpui_action(GpuiAction::NativePanelQueryEdit {
+            scope,
+            base: String::new(),
+            text: "obsolete".into(),
+        });
+        assert!(app.side_panels_ui.sessions_query.is_empty());
     }
 
     #[test]
