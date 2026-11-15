@@ -110,6 +110,46 @@ impl Repo {
     }
 }
 #[test]
+fn real_guest_discard_never_recurses_into_host_submodules() {
+    let mut source = Repo::new();
+    source.write("note.txt", "committed");
+    source.baseline();
+    let mut parent = Repo::new();
+    let source_path = source.git.root.to_string_lossy().into_owned();
+    parent.command(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "--",
+        &source_path,
+        "sub",
+    ]);
+    parent.baseline();
+    parent.command(&["config", "submodule.recurse", "true"]);
+    parent.write("sub/note.txt", "local edits");
+    // Positive control: host configuration genuinely expands ordinary checkout.
+    parent.command(&["checkout", "--", "sub"]);
+    assert_eq!(
+        std::fs::read_to_string(parent.git.root.join("sub/note.txt")).unwrap(),
+        "committed"
+    );
+    parent.write("sub/note.txt", "local edits");
+    let head_before = parent.command(&["-C", "sub", "rev-parse", "HEAD"]);
+    parent
+        .request("scm.discard", json!({"path":"sub"}))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(parent.git.root.join("sub/note.txt")).unwrap(),
+        "local edits"
+    );
+    assert_eq!(
+        parent.command(&["-C", "sub", "rev-parse", "HEAD"]),
+        head_before
+    );
+}
+
+#[test]
 fn real_guest_git_never_runs_hooks_fsmonitor_or_signing_program() {
     let mut repo = Repo::new();
     repo.write("visible.txt", "before");

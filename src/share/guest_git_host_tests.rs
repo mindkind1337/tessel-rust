@@ -97,6 +97,7 @@ fn fixed_prefix_turns_off_hooks_signing_transport_and_helpers() {
         "credential.helper=",
         "core.sshCommand=ssh",
         "core.alternateRefsCommand=",
+        "submodule.recurse=false",
         "--literal-pathspecs",
     ] {
         assert!(prefix.contains(needle), "missing {needle} in {prefix}");

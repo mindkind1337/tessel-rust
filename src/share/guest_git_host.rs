@@ -174,6 +174,8 @@ pub(super) fn hardening_prefix(risky: &[String], hooks_dir: &Path) -> Vec<String
     add(&mut out, "diff.external", "");
     add(&mut out, "gc.auto", "0");
     add(&mut out, "maintenance.auto", "false");
+    // A path-limited checkout/reset must not mutate nested repositories.
+    add(&mut out, "submodule.recurse", "false");
     add(&mut out, "core.alternateRefsCommand", "");
     add(&mut out, "core.sshCommand", "ssh");
     add(&mut out, "credential.helper", "");

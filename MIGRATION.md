@@ -1167,3 +1167,9 @@ Darwin's Vue review identified another Git layout: HEAD plus commondir is suffic
 Validation: the full serial Live Share suite passes 126/126 (204.78s), including all sixteen marker combinations, prospective formation in either order, marker concurrency, and a real Git linked layout under an ordinary worktree. The descriptor and index/attribute transaction limitations remain open.
 
 Strict all-target/all-feature Clippy passes (1m07s) on the final tree, including the submodule follow-up. Halley approved the signature and concurrency changes.
+
+## Guest Git submodule recursion (2026-11-15)
+
+The fixed guest Git prefix now forces submodule.recurse=false independently of discovered configuration. A path-limited discard must not restore files inside an initialized submodule because the host enabled recursion. A synthetic positive-control fixture demonstrates that ordinary checkout with host recurse=true overwrites the submodule's local edit, then checks that the guest request preserves both that edit and its HEAD. Local file transport is enabled only in fixture setup.
+
+Validation: all 27 guest Git host tests pass (9.97s), including the new real-submodule fixture. This follows the 126-case serial Live Share run for commondir; that product code was unchanged. Strict all-target/all-feature Clippy passes on the final combined tree (1m07s), formatting and diff checks pass, and Halley approved both deltas.
