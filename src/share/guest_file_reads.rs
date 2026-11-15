@@ -532,6 +532,92 @@ mod tests {
         run_isolated_probe("repository_scope_probe");
     }
     #[test]
+    fn linked_repository_metadata_is_never_shared() {
+        run_isolated_probe("linked_repository_probe");
+    }
+    #[test]
+    fn linked_repository_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        let (dir, host) = fixture();
+        empty_repo(dir.path());
+        crate::git::run_guest_bytes(
+            dir.path(),
+            &["init", "--bare", "--template=", "common-store"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let linked = dir.path().join("linked");
+        std::fs::create_dir_all(linked.join("sub")).unwrap();
+        std::fs::write(linked.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(linked.join("commondir"), "../common-store\n").unwrap();
+        // Git actually follows this layout, even without local objects/refs.
+        let proof = crate::git::run_guest_bytes(
+            &linked.join("sub"),
+            &["config", "--get", "core.bare"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(proof.bytes).unwrap().trim(), "true");
+        assert!(
+            super::super::guest_git_host::HostGit::new(&linked.join("sub"))
+                .repository()
+                .is_err()
+        );
+        for hide in [false, true] {
+            {
+                let mut inner = host.inner.lock().unwrap();
+                inner.settings.hide_ignored = hide;
+                inner.guests[0].guest.rights.r#type = true;
+            }
+            for path in ["linked/HEAD", "linked/commondir"] {
+                assert!(
+                    dispatch(
+                        &host.inner,
+                        "guest",
+                        &json!({"op":"files.read","path":path})
+                    )
+                    .get("error")
+                    .is_some()
+                );
+            }
+            assert!(
+                dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.list","path":"linked/sub"})
+                )
+                .get("error")
+                .is_some()
+            );
+            let listing = dispatch(&host.inner, "guest", &json!({"op":"files.list","path":""}));
+            let entries = listing["result"]["entries"]
+                .as_array()
+                .expect("root listing available");
+            assert!(
+                !entries
+                    .iter()
+                    .any(|e| e["name"] == "linked" || e["name"] == "common-store")
+            );
+            for request in [
+                json!({"op":"files.create","path":"linked/config"}),
+                json!({"op":"files.rename","path":"linked","to":"moved"}),
+            ] {
+                assert!(
+                    super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some()
+                );
+            }
+        }
+        assert!(!linked.join("config").exists());
+        assert!(host.snapshot().recent_actions.is_empty());
+    }
+
+    #[test]
     fn nested_bare_metadata_is_never_shared() {
         run_isolated_probe("nested_bare_probe");
     }

@@ -13,8 +13,12 @@ pub(super) fn marker(name: &std::ffi::OsStr) -> u8 {
         "head" => 1,
         "objects" => 2,
         "refs" => 4,
+        "commondir" => 8,
         _ => 0,
     }
+}
+fn signature(mask: u8) -> bool {
+    mask & 1 != 0 && (mask & 6 == 6 || mask & 8 != 0)
 }
 pub(super) struct Scan {
     root: PathBuf,
@@ -50,7 +54,7 @@ impl Scan {
             self.entries += 1;
             self.budget()?;
             mask |= marker(&entry.map_err(|_| PRIVATE)?.file_name());
-            if mask == 7 {
+            if signature(mask) {
                 break;
             }
         }
@@ -89,7 +93,7 @@ impl Scan {
             } else {
                 0
             };
-            if (self.mask(&real)? | extra) == 7 {
+            if signature(self.mask(&real)? | extra) {
                 return Ok(true);
             }
             match parts.next() {
@@ -205,6 +209,35 @@ mod tests {
         assert!(ensure(root, &partial.join("REFS"), true).is_err());
         assert!(!partial.join("REFS").exists());
     }
+    #[test]
+    fn linked_git_metadata_needs_only_head_and_commondir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let partial = root.join("linked");
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("HEAD"), "synthetic").unwrap();
+        assert!(ensure(root, &partial, false).is_ok());
+        assert!(ensure(root, &partial.join("CommonDir"), true).is_err());
+        // Content and type never weaken a structural privacy boundary.
+        std::fs::create_dir(partial.join("CommonDir")).unwrap();
+        std::fs::write(partial.join("config"), "not read").unwrap();
+        assert!(ensure(root, &partial.join("config"), false).is_err());
+        assert!(
+            Scan::new(root)
+                .unwrap()
+                .hidden_existing_ancestors(&partial.join("deleted"))
+                .unwrap()
+        );
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("commondir"), "../not-followed").unwrap();
+        assert!(ensure(root, &other, false).is_ok());
+        assert!(ensure(root, &other.join("hEaD"), true).is_err());
+        for mask in 0..16 {
+            assert_eq!(signature(mask), matches!(mask, 7 | 9 | 11 | 13 | 15));
+        }
+    }
+
     #[test]
     fn uncertain_or_unbounded_metadata_scans_never_allow_access() {
         let dir = tempfile::tempdir().unwrap();

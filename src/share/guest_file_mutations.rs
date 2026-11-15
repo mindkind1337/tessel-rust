@@ -522,6 +522,9 @@ mod tests {
             json!({"op":"files.create","path":"partial/refs","directory":true}),
             json!({"op":"files.write","path":"partial/REFS","data":B64.encode(b"synthetic")}),
             json!({"op":"files.rename","path":"ordinary","to":"partial/refs"}),
+            json!({"op":"files.create","path":"partial/commondir"}),
+            json!({"op":"files.write","path":"partial/CommonDir","data":B64.encode(b"../target")}),
+            json!({"op":"files.rename","path":"ordinary","to":"partial/commondir"}),
         ] {
             assert!(
                 dispatch(&host.inner, "guest", &request)
@@ -538,6 +541,7 @@ mod tests {
         let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
         let first = json!({"op":"files.create","path":"race/objects","directory":true});
         let second = json!({"op":"files.create","path":"race/refs","directory":true});
+        let common = json!({"op":"files.create","path":"race/commondir"});
         let mut attempted = false;
         apply(&grant, &first, &mut || {
             attempted = true;
@@ -546,12 +550,18 @@ mod tests {
                 competing.err().unwrap(),
                 "Repository marker changes are busy."
             );
+            assert_eq!(
+                apply(&grant, &common, &mut || Ok(())).err().unwrap(),
+                "Repository marker changes are busy."
+            );
             Ok(())
         })
         .unwrap();
         assert!(attempted);
         assert!(race.join("objects").is_dir());
         assert!(!race.join("refs").exists());
+        assert!(apply(&grant, &common, &mut || Ok(())).is_err());
+        assert!(!race.join("commondir").exists());
         assert!(apply(&grant, &second, &mut || Ok(())).is_err());
         assert!(!race.join("refs").exists());
     }
