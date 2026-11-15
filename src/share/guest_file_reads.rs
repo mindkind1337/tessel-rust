@@ -156,6 +156,7 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
             check_path(grant, relative, &target)?;
+            let hooks = hook_paths::discover(&proj.path, &grant.roots)?;
             let mut bytes = Vec::new();
             std::fs::File::open(&target)
                 .map_err(|_| "File unavailable")?
@@ -168,7 +169,7 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             Ok(json!({
                 "name": target.file_name().unwrap_or_default().to_string_lossy(),
                 "data": B64.encode(bytes),
-                "readOnly": !rights.edit || ((is_agent_instruction_or_protected_file(Path::new(relative)) || is_agent_instruction_or_protected_file(target.strip_prefix(&proj.path).map_err(|_| "Invalid project scope")?)) && !rights.r#type),
+                "readOnly": !rights.edit || ((hook_paths::protects(Path::new(relative), &hooks) || hook_paths::protects(target.strip_prefix(&proj.path).map_err(|_| "Invalid project scope")?, &hooks)) && !rights.r#type),
             }))
         }
         _ => Err("Unsupported guest file read.".into()),
@@ -458,12 +459,12 @@ mod tests {
     }
     #[test]
     fn real_ignore_rules_stick_across_edits_and_cover_legacy_and_mutations() {
+        run_isolated_probe("isolated_ignore_probe");
+    }
+    fn run_isolated_probe(probe: &str) {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(".gitconfig"), "").unwrap();
-        let test = format!(
-            "{}::isolated_ignore_probe",
-            module_path!().split_once("::").unwrap().1
-        );
+        let test = format!("{}::{probe}", module_path!().split_once("::").unwrap().1);
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child.env_clear();
         for name in [
@@ -499,6 +500,94 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    #[test]
+    fn hook_scope_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        let (dir, host) = fixture();
+        empty_repo(dir.path());
+        let configure = |value: &str| {
+            std::fs::write(
+                dir.path().join(".git/config"),
+                format!(
+                    "[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = {value}\n"
+                ),
+            )
+            .unwrap()
+        };
+        std::fs::create_dir_all(dir.path().join("container/hooks")).unwrap();
+        std::fs::create_dir(dir.path().join("container/hooks-other")).unwrap();
+        for path in [
+            "container/hooks/launch.sh",
+            "container/hooks-other/plain",
+            "post-commit",
+            "ordinary.txt",
+        ] {
+            std::fs::write(dir.path().join(path), "original").unwrap();
+        }
+        configure("container/hooks");
+        let read = |path: &str| {
+            dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"files.read","path":path}),
+            )
+        };
+        assert_eq!(
+            read("container/hooks/launch.sh")["result"]["readOnly"],
+            true
+        );
+        assert_eq!(read("post-commit")["result"]["readOnly"], false);
+        assert_eq!(
+            read("container/hooks-other/plain")["result"]["readOnly"],
+            false
+        );
+        for request in [
+            json!({"op":"files.write","path":"container/hooks/launch.sh","data":B64.encode(b"bad")}),
+            json!({"op":"files.create","path":"container/hooks/new"}),
+            json!({"op":"files.rename","path":"ordinary.txt","to":"container/hooks/new"}),
+            json!({"op":"files.delete","path":"container"}),
+        ] {
+            assert!(
+                super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request)
+                    .get("error")
+                    .is_some(),
+                "{request}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("container/hooks/launch.sh")).unwrap(),
+            b"original"
+        );
+        configure(".");
+        assert_eq!(read("post-commit")["result"]["readOnly"], true);
+        assert_eq!(read("ordinary.txt")["result"]["readOnly"], false);
+        configure("container/hooks");
+        let changed =
+            super::super::guest_file_mutations::check_hook_change_during_save(&host.inner, || {
+                configure(".")
+            });
+        assert!(changed.unwrap_err().contains("hooks scope changed"));
+        assert_eq!(
+            std::fs::read(dir.path().join("post-commit")).unwrap(),
+            b"original"
+        );
+        configure("container/hooks");
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = true;
+        let response = super::super::guest_file_mutations::dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.write","path":"container/hooks/launch.sh","data":B64.encode(b"approved")}),
+        );
+        assert_eq!(response["result"]["ok"], true, "{response}");
+        assert!(host.snapshot().recent_actions.last().unwrap().flagged);
+    }
+    #[test]
+    fn real_hook_scope_gates_reads_mutations_and_root_hook_names() {
+        run_isolated_probe("hook_scope_probe");
     }
 
     #[test]

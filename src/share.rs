@@ -700,27 +700,9 @@ pub fn secret_name_path(path: &Path) -> bool {
 
 /// Files that steer agents or git hooks (`CLAUDE.md`, `AGENTS.md`, `.gitignore`, `.cursorrules`, etc.).
 /// Editing these requires `rights.r#type` in addition to `rights.edit`, and flags the guest action!
+/// Built-in rules only; host file operations also apply the configured hook scope.
 pub fn is_agent_instruction_or_protected_file(relative: &Path) -> bool {
-    let normalized = relative.to_string_lossy().replace('\\', "/");
-    protected_paths::is_protected(&normalized, &[])
-        || relative.components().any(|part| {
-            // Preserve the existing conservative hook-name guard until per-project
-            // core.hooksPath discovery supplies the complete dynamic policy.
-            matches!(
-                part.as_os_str()
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "pre-commit"
-                    | "prepare-commit-msg"
-                    | "commit-msg"
-                    | "post-commit"
-                    | "post-checkout"
-                    | "post-index-change"
-                    | "reference-transaction"
-                    | "pre-auto-gc"
-            )
-        })
+    protected_paths::is_protected(&relative.to_string_lossy().replace('\\', "/"), &[])
 }
 
 #[derive(Clone)]
@@ -3439,3 +3421,6 @@ mod ignored_paths;
 
 #[path = "share/secret_names.rs"]
 mod secret_names;
+
+#[path = "share/hook_paths.rs"]
+mod hook_paths;

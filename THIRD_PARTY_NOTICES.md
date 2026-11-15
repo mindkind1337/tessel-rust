@@ -324,3 +324,5 @@ The guest Git safety policy in `src/share/guest_git_host.rs`, its reference fixt
 The protected-path catalogue in `src/share/protected_paths.rs` and its synthetic differential extractor adapt Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above. The fixture records the source hash and synthetic paths only.
 
 The secret-name policy in `src/share/secret_names.rs`, `scripts/extract_secret_names_reference.mjs`, and its synthetic fixture adapt Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above. The per-share ignored-path history follows the same reference semantics while using the independent bounded Rust Git runner. No private files or Git configuration are bundled.
+
+`src/share/hook_paths.rs` adapts the configured hook-folder scope semantics from Tessel `src/main/liveShare/shareScope.js` under the existing MIT attribution above, with independent bounded discovery, configuration-origin validation and pre-mutation rechecking. Tests contain synthetic paths and configuration only.

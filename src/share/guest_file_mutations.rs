@@ -160,7 +160,7 @@ fn check_unlinked_entry(grant: &Grant, relative: &str) -> Result<()> {
     Ok(())
 }
 // A directory operation affects its descendants too. Refuse an incomplete walk.
-fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
+fn check_descendants(grant: &Grant, target: &Path, hooks: &[String]) -> Result<()> {
     let started = Instant::now();
     let mut pending = vec![target.to_path_buf()];
     let mut examined = 0usize;
@@ -175,7 +175,7 @@ fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
             .map_err(|_| "Invalid project scope")?;
         if private_path(relative)
             || (grant.hide && secret_name_path(relative))
-            || (!grant.rights.r#type && is_agent_instruction_or_protected_file(relative))
+            || (!grant.rights.r#type && hook_paths::protects(relative, hooks))
         {
             return Err("Directory contains private or protected items.".into());
         }
@@ -217,7 +217,10 @@ fn check_ignored(grant: &Grant, paths: &[String]) -> Result<()> {
     }
     Ok(())
 }
-fn check_request_paths(grant: &Grant, req: &Value) -> Result<bool> {
+fn check_request_paths(grant: &Grant, req: &Value, hooks: &[String]) -> Result<bool> {
+    if hook_paths::discover(&grant.project.path, &grant.roots)? != hooks {
+        return Err("Git hooks scope changed; refresh before changing files.".into());
+    }
     let mut flagged = false;
     let mut privacy_paths = Vec::new();
     for key in ["path", "to"] {
@@ -230,8 +233,8 @@ fn check_request_paths(grant: &Grant, req: &Value) -> Result<bool> {
             let real_rel = resolved
                 .strip_prefix(&grant.project.path)
                 .map_err(|_| "Invalid project scope")?;
-            flagged |= is_agent_instruction_or_protected_file(Path::new(relative))
-                || is_agent_instruction_or_protected_file(real_rel);
+            flagged |= hook_paths::protects(Path::new(relative), hooks)
+                || hook_paths::protects(real_rel, hooks);
             if flagged && !grant.rights.r#type {
                 return Err("Agent instructions require Type permission.".into());
             }
@@ -259,6 +262,7 @@ fn apply_with_recycler(
     revalidate: &mut dyn FnMut() -> Result<()>,
     recycle: &mut dyn FnMut(&Path) -> Result<()>,
 ) -> Result<Action> {
+    let hooks = hook_paths::discover(&grant.project.path, &grant.roots)?;
     let rights = grant.rights;
     let hide_ignored = grant.hide;
     let guest_name = &grant.name;
@@ -286,12 +290,12 @@ fn apply_with_recycler(
                 return Err("Live Share file write limit is 2 MiB.".into());
             }
             let parent = target.parent().ok_or("Missing parent folder")?;
-            let flagged = check_request_paths(grant, req)? || flagged;
+            let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
             let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
             tmp.write_all(&bytes).map_err(|e| e.to_string())?;
             tmp.as_file().sync_all().map_err(|e| e.to_string())?;
-            let flagged = check_request_paths(grant, req)? || flagged;
+            let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
             tmp.persist(&target).map_err(|e| e.to_string())?;
             Ok(Action {
@@ -318,7 +322,7 @@ fn apply_with_recycler(
             if target.exists() {
                 return Err("Path already exists.".into());
             }
-            let flagged = check_request_paths(grant, req)? || flagged;
+            let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
             if is_dir {
                 std::fs::create_dir(&target).map_err(|e| e.to_string())?;
@@ -349,12 +353,12 @@ fn apply_with_recycler(
             }
             let src = share_path_checked(&proj.path, from_rel, hide_ignored)?;
             check_unlinked_entry(grant, from_rel)?;
-            check_descendants(grant, &src)?;
+            check_descendants(grant, &src, &hooks)?;
             let dst = share_new_path_checked(&proj.path, to_rel, hide_ignored)?;
             if dst.exists() {
                 return Err("Destination already exists.".into());
             }
-            let flagged = check_request_paths(grant, req)? || flagged;
+            let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
             rename_new(&src, &dst)?;
             Ok(Action {
@@ -375,8 +379,8 @@ fn apply_with_recycler(
             }
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
             check_unlinked_entry(grant, relative)?;
-            check_descendants(grant, &target)?;
-            let flagged = check_request_paths(grant, req)? || flagged;
+            check_descendants(grant, &target, &hooks)?;
+            let flagged = check_request_paths(grant, req, &hooks)? || flagged;
             revalidate()?;
             recycle(&target)?;
             Ok(Action {
@@ -397,6 +401,26 @@ pub(super) fn dispatch(inner: &Arc<Mutex<HostInner>>, guest: &str, req: &Value) 
         Ok(value) => json!({"result":value}),
         Err(error) => json!({"error":error}),
     }
+}
+
+#[cfg(test)]
+pub(super) fn check_hook_change_during_save(
+    inner: &Arc<Mutex<HostInner>>,
+    mut change: impl FnMut(),
+) -> Result<Value> {
+    let req =
+        json!({"op":"files.write","path":"post-commit","data":B64.encode(b"must not persist")});
+    let mut changed = false;
+    run_authorized(inner, "guest", &req, |grant, check| {
+        apply(grant, &req, &mut || {
+            check()?;
+            if !changed {
+                change();
+                changed = true;
+            }
+            Ok(())
+        })
+    })
 }
 
 #[cfg(test)]
@@ -743,7 +767,7 @@ mod tests {
             );
         }
         let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
-        assert!(check_descendants(&grant, &dir.path().join(".github")).is_err());
+        assert!(check_descendants(&grant, &dir.path().join(".github"), &[]).is_err());
     }
     #[test]
     fn recycler_failure_keeps_bytes_and_does_not_record_success() {

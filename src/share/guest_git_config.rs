@@ -172,7 +172,7 @@ fn guest_writable(path: &Path, shared_roots: &[PathBuf]) -> Result<bool> {
     Ok(false)
 }
 
-fn comparison_path(path: &Path) -> PathBuf {
+pub(super) fn comparison_path(path: &Path) -> PathBuf {
     let normalized = lexical_normalize(path);
     #[cfg(windows)]
     {
@@ -196,7 +196,7 @@ fn under_any(candidate: &Path, roots: &[PathBuf]) -> bool {
 
 /// Resolve `.`/`..` without touching the filesystem. `..` that would climb above the start
 /// is kept literally so an escaping path never collapses to look contained.
-fn lexical_normalize(path: &Path) -> PathBuf {
+pub(super) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -214,7 +214,7 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 
 /// Canonicalize the deepest existing ancestor of `path` and re-append the non-existent
 /// tail, so an include target that does not exist yet still resolves through real symlinks.
-fn canonical_existing_prefix(path: &Path) -> Option<PathBuf> {
+pub(super) fn canonical_existing_prefix(path: &Path) -> Option<PathBuf> {
     let mut current = path;
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     loop {
