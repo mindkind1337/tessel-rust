@@ -47,7 +47,7 @@ fn discover_with(git: &mut dyn GitRun, root: &Path, roots: &[PathBuf]) -> Result
     for pair in fields.as_chunks::<2>().0 {
         let (key, value) = pair[1].split_once('\n').unwrap_or((pair[1], ""));
         if key.eq_ignore_ascii_case("core.hookspath") {
-            configured = Some(value.trim());
+            configured = Some(value);
         }
     }
     let Some(value) = configured.filter(|v| !v.is_empty()) else {
@@ -69,7 +69,39 @@ fn discover_with(git: &mut dyn GitRun, root: &Path, roots: &[PathBuf]) -> Result
     if !Path::new(top).is_absolute() {
         return Err("Invalid Git repository scope.".into());
     }
-    resolve_scope(root, Path::new(top), value)
+    let value = expand_path(git, value)?;
+    resolve_scope(root, Path::new(top), &value)
+}
+// Convert the already validated value, rather than trusting a second config value
+// that might have changed in between. Argument vectors preserve spaces/quotes; no shell.
+// config --path asks Git itself to expand ~ and %(prefix), including on older Git.
+fn expand_path(git: &mut dyn GitRun, value: &str) -> Result<String> {
+    let setting = format!("core.hooksPath={value}");
+    let output = git.run(
+        &[
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            &setting,
+            "config",
+            "--path",
+            "--null",
+            "--get",
+            "core.hooksPath",
+        ],
+        None,
+    )?;
+    if output.truncated {
+        return Err("Incomplete Git hooks path.".into());
+    }
+    let path = std::str::from_utf8(&output.bytes)
+        .map_err(|_| "Invalid Git hooks path")?
+        .strip_suffix('\0')
+        .ok_or("Invalid Git hooks path")?;
+    if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+        return Err("Invalid Git hooks path.".into());
+    }
+    Ok(path.into())
 }
 fn resolve_scope(root: &Path, top: &Path, value: &str) -> Result<Vec<String>> {
     use super::guest_git_config::{canonical_existing_prefix, comparison_path, lexical_normalize};
@@ -114,6 +146,16 @@ mod tests {
     impl GitRun for FixtureGit {
         fn run(&mut self, args: &[&str], _: Option<&[u8]>) -> Result<Capture> {
             self.calls += 1;
+            if args.contains(&"--path") {
+                let value = args
+                    .iter()
+                    .find_map(|a| a.strip_prefix("core.hooksPath="))
+                    .unwrap();
+                return Ok(Capture {
+                    bytes: format!("{value}\0").into_bytes(),
+                    truncated: false,
+                });
+            }
             assert!(!args.iter().any(|s| s.starts_with("core.hooksPath=")));
             Ok(Capture {
                 bytes: if args.contains(&"config") {
@@ -175,5 +217,70 @@ mod tests {
         git.truncated = false;
         git.config = b"file:broken\0core.hookspath\nfolder".to_vec();
         assert!(discover_with(&mut git, root.path(), &[]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+    use crate::git::Capture;
+    struct Expanded {
+        output: Vec<u8>,
+        truncated: bool,
+        fail: bool,
+    }
+    impl GitRun for Expanded {
+        fn run(&mut self, args: &[&str], _: Option<&[u8]>) -> Result<Capture> {
+            assert_eq!(
+                args,
+                &[
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "core.hooksPath=~/captured folder",
+                    "config",
+                    "--path",
+                    "--null",
+                    "--get",
+                    "core.hooksPath"
+                ]
+            );
+            if self.fail {
+                return Err("Git path expansion failed".into());
+            }
+            Ok(Capture {
+                bytes: self.output.clone(),
+                truncated: self.truncated,
+            })
+        }
+    }
+    #[test]
+    fn expansion_uses_captured_value_and_rejects_uncertain_results() {
+        let mut git = Expanded {
+            output: b"/home/owner/captured folder\0".to_vec(),
+            truncated: false,
+            fail: false,
+        };
+        assert_eq!(
+            expand_path(&mut git, "~/captured folder").unwrap(),
+            "/home/owner/captured folder"
+        );
+        for bytes in [
+            vec![],
+            vec![0],
+            b"unterminated".to_vec(),
+            b"one\0two\0".to_vec(),
+            vec![255, 0],
+            [vec![b'x'; 4097], vec![0]].concat(),
+        ] {
+            git.output = bytes;
+            assert!(expand_path(&mut git, "~/captured folder").is_err());
+        }
+        git.output = b"valid\0".to_vec();
+        git.truncated = true;
+        assert!(expand_path(&mut git, "~/captured folder").is_err());
+        git.truncated = false;
+        git.fail = true;
+        assert!(expand_path(&mut git, "~/captured folder").is_err());
     }
 }

@@ -463,7 +463,11 @@ mod tests {
         run_isolated_probe("isolated_ignore_probe");
     }
     fn run_isolated_probe(probe: &str) {
-        let home = tempfile::tempdir().unwrap();
+        // Keep synthetic HOME under the isolated checkout, away from user data.
+        let home = tempfile::Builder::new()
+            .prefix("synthetic-share-home-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
         std::fs::write(home.path().join(".gitconfig"), "").unwrap();
         let test = format!("{}::{probe}", module_path!().split_once("::").unwrap().1);
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
@@ -501,6 +505,77 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    #[test]
+    fn real_home_hook_scope_is_expanded_by_git() {
+        run_isolated_probe("home_hook_scope_probe");
+    }
+    #[test]
+    fn home_hook_scope_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        // HOME belongs exclusively to the parent test's temporary fixture.
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let project = tempfile::Builder::new()
+            .prefix("hook-home-project-")
+            .tempdir_in(&home)
+            .unwrap();
+        let root = project.path();
+        empty_repo(root);
+        let (_dir, host) = fixture();
+        {
+            let mut inner = host.inner.lock().unwrap();
+            inner.shared_projects[0].path = root.canonicalize().unwrap();
+            inner.guests[0].guest.rights.r#type = false;
+        }
+        std::fs::create_dir(root.join("hooks space")).unwrap();
+        std::fs::create_dir_all(root.join("~/hooks space")).unwrap();
+        for path in ["hooks space/run", "~/hooks space/run"] {
+            std::fs::write(root.join(path), "synthetic").unwrap();
+        }
+        let config = root.join(".git/config");
+        std::fs::write(
+            &config,
+            format!("[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = ~/{}/hooks space\n", root.file_name().unwrap().to_str().unwrap()),
+        )
+        .unwrap();
+        let read = |path| {
+            dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"files.read","path":path}),
+            )
+        };
+        let actual = read("hooks space/run");
+        assert_eq!(actual["result"]["readOnly"], true, "{actual}");
+        assert_eq!(read("~/hooks space/run")["result"]["readOnly"], false);
+        let req = json!({"op":"files.write","path":"hooks space/run","expectHash":file_version::hash(b"synthetic"),"data":B64.encode(b"changed")});
+        assert!(
+            super::super::guest_file_mutations::dispatch(&host.inner, "guest", &req)
+                .get("error")
+                .is_some()
+        );
+        assert_eq!(
+            std::fs::read(root.join("hooks space/run")).unwrap(),
+            b"synthetic"
+        );
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = true;
+        assert_eq!(
+            super::super::guest_file_mutations::dispatch(&host.inner, "guest", &req)["result"]["ok"],
+            true
+        );
+        assert!(host.snapshot().recent_actions.last().unwrap().flagged);
+        // Invalid config must not silently make the protected file writable.
+        std::fs::write(&config, "[invalid").unwrap();
+        assert!(read("hooks space/run").get("error").is_some());
+        // A broken .git indirection is not treated as an ordinary non-repository.
+        let git_dir = dunce::canonicalize(root.join(".git")).unwrap();
+        assert!(git_dir.starts_with(dunce::canonicalize(root).unwrap()));
+        std::fs::remove_dir_all(&git_dir).unwrap();
+        std::fs::write(root.join(".git"), "gitdir: missing-git-dir\n").unwrap();
+        assert!(read("hooks space/run").get("error").is_some());
     }
 
     #[test]
