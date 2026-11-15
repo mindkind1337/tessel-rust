@@ -765,6 +765,7 @@ fn share_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Result
     if private_path(stripped) || (hide_ignored && secret_name_path(stripped)) {
         return Err("Private path is not shared.".into());
     }
+    git_metadata::ensure(root, &root.join(rel), false)?;
     Ok(resolved)
 }
 
@@ -800,6 +801,7 @@ fn share_new_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Re
     if private_path(resolved) || (hide_ignored && secret_name_path(resolved)) {
         return Err("Private path is not shared.".into());
     }
+    git_metadata::ensure(root, &root.join(rel), true)?;
     Ok(candidate)
 }
 
@@ -3421,6 +3423,9 @@ mod ignored_paths;
 
 #[path = "share/secret_names.rs"]
 mod secret_names;
+
+#[path = "share/git_metadata.rs"]
+mod git_metadata;
 
 #[path = "share/file_version.rs"]
 mod file_version;

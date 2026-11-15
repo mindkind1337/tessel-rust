@@ -3,6 +3,9 @@
 //! is then withheld. Descriptor-relative access remains separate work; version checks are optimistic.
 use super::*;
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
+// Two marker-forming requests must not each observe an incomplete signature and
+// together create metadata. Ordinary file mutations retain their existing quota.
+static METADATA_MARKER_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_WRITES: AtomicUsize = AtomicUsize::new(0);
 struct WriteSlot;
 impl WriteSlot {
@@ -166,6 +169,7 @@ fn check_descendants(grant: &Grant, target: &Path, hooks: &[String]) -> Result<(
     let mut pending = vec![target.to_path_buf()];
     let mut examined = 0usize;
     let mut paths = Vec::new();
+    let mut metadata_scan = git_metadata::Scan::new(&grant.project.path)?;
     while let Some(path) = pending.pop() {
         examined += 1;
         if examined > 10_000 || started.elapsed() > Duration::from_secs(2) {
@@ -175,6 +179,7 @@ fn check_descendants(grant: &Grant, target: &Path, hooks: &[String]) -> Result<(
             .strip_prefix(&grant.project.path)
             .map_err(|_| "Invalid project scope")?;
         if private_path(relative)
+            || metadata_scan.hidden(&path, false)?
             || (grant.hide && secret_name_path(relative))
             || (!grant.rights.r#type && hook_paths::protects(relative, hooks))
         {
@@ -231,6 +236,19 @@ fn check_request_paths(grant: &Grant, req: &Value, hooks: &[String]) -> Result<b
             } else {
                 share_new_path_checked(&grant.project.path, relative, grant.hide)?
             };
+            let prospective = match req.get("op").and_then(Value::as_str) {
+                Some("files.write" | "files.create") => key == "path",
+                Some("files.rename") => key == "to",
+                _ => false,
+            };
+            if prospective {
+                git_metadata::ensure(
+                    &grant.project.path,
+                    &grant.project.path.join(relative),
+                    true,
+                )?;
+                git_metadata::ensure(&grant.project.path, &resolved, true)?;
+            }
             let real_rel = resolved
                 .strip_prefix(&grant.project.path)
                 .map_err(|_| "Invalid project scope")?;
@@ -263,6 +281,23 @@ fn apply_with_recycler(
     revalidate: &mut dyn FnMut() -> Result<()>,
     recycle: &mut dyn FnMut(&Path) -> Result<()>,
 ) -> Result<Action> {
+    let marker_destination = match req.get("op").and_then(Value::as_str) {
+        Some("files.write" | "files.create") => req.get("path"),
+        Some("files.rename") => req.get("to"),
+        _ => None,
+    }
+    .and_then(Value::as_str)
+    .and_then(|path| Path::new(path).file_name())
+    .is_some_and(|name| git_metadata::marker(name) != 0);
+    let _marker_guard = if marker_destination {
+        Some(
+            METADATA_MARKER_LOCK
+                .try_lock()
+                .map_err(|_| "Repository marker changes are busy.")?,
+        )
+    } else {
+        None
+    };
     let hooks = hook_paths::discover(&grant.project.path, &grant.roots)?;
     let rights = grant.rights;
     let hide_ignored = grant.hide;
@@ -474,6 +509,51 @@ mod tests {
             },
         });
         (dir, host)
+    }
+
+    #[test]
+    fn guests_cannot_complete_metadata_even_with_competing_marker_changes() {
+        let (dir, host) = fixture();
+        let partial = dir.path().join("partial");
+        std::fs::create_dir_all(partial.join("objects")).unwrap();
+        std::fs::write(partial.join("HEAD"), "synthetic").unwrap();
+        std::fs::write(dir.path().join("ordinary"), "ordinary").unwrap();
+        for request in [
+            json!({"op":"files.create","path":"partial/refs","directory":true}),
+            json!({"op":"files.write","path":"partial/REFS","data":B64.encode(b"synthetic")}),
+            json!({"op":"files.rename","path":"ordinary","to":"partial/refs"}),
+        ] {
+            assert!(
+                dispatch(&host.inner, "guest", &request)
+                    .get("error")
+                    .is_some(),
+                "{request}"
+            );
+        }
+        assert!(dir.path().join("ordinary").exists());
+        assert!(!partial.join("refs").exists());
+        let race = dir.path().join("race");
+        std::fs::create_dir(&race).unwrap();
+        std::fs::write(race.join("HEAD"), "synthetic").unwrap();
+        let grant = authorize(&host.inner.lock().unwrap(), "guest", Some(1)).unwrap();
+        let first = json!({"op":"files.create","path":"race/objects","directory":true});
+        let second = json!({"op":"files.create","path":"race/refs","directory":true});
+        let mut attempted = false;
+        apply(&grant, &first, &mut || {
+            attempted = true;
+            let competing = apply(&grant, &second, &mut || Ok(()));
+            assert_eq!(
+                competing.err().unwrap(),
+                "Repository marker changes are busy."
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert!(attempted);
+        assert!(race.join("objects").is_dir());
+        assert!(!race.join("refs").exists());
+        assert!(apply(&grant, &second, &mut || Ok(())).is_err());
+        assert!(!race.join("refs").exists());
     }
 
     #[test]

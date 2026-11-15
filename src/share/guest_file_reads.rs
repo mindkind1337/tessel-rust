@@ -120,13 +120,24 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             if !relative.is_empty() {
                 check_path(grant, relative, &target)?;
             }
+            git_metadata::ensure(&proj.path, &target, false)?;
             let entries = list_dir_entries(&proj.path, &target)?;
-            let filtered: Vec<Value> = entries
+            let mut scan = git_metadata::Scan::new(&proj.path)?;
+            let mut visible = Vec::new();
+            for entry in entries {
+                let rel = entry
+                    .path
+                    .strip_prefix(&proj.path)
+                    .map_err(|_| "Invalid project scope")?;
+                if private_path(rel) || (hide_ignored && secret_name_path(rel)) {
+                    continue;
+                }
+                if !scan.hidden(&entry.path, false)? {
+                    visible.push(entry);
+                }
+            }
+            let filtered: Vec<Value> = visible
                 .into_iter()
-                .filter(|e| {
-                    let rel = e.path.strip_prefix(&proj.path).unwrap_or(&e.path);
-                    !private_path(rel) && !(hide_ignored && secret_name_path(rel))
-                })
                 .map(|e| {
                     let rel = e
                         .path
@@ -520,6 +531,183 @@ mod tests {
     fn real_repository_scope_refuses_bare_metadata_and_broken_repositories() {
         run_isolated_probe("repository_scope_probe");
     }
+    #[test]
+    fn nested_bare_metadata_is_never_shared() {
+        run_isolated_probe("nested_bare_probe");
+    }
+    #[test]
+    fn nested_bare_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        let (dir, host) = fixture();
+        empty_repo(dir.path());
+        let bare = dir.path().join("repos").join("service");
+        std::fs::create_dir_all(bare.join("hooks")).unwrap();
+        std::fs::write(bare.join("config"), "[core]\n bare = true\n").unwrap();
+        std::fs::write(
+            bare.join("hooks/pre-receive"),
+            "synthetic hook; never execute",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("ordinary.txt"), "ordinary").unwrap();
+        crate::git::run_guest_bytes(
+            dir.path(),
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "add",
+                "-f",
+                "--",
+                "repos/service/config",
+                "repos/service/hooks/pre-receive",
+                "ordinary.txt",
+            ],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        for child in ["objects", "refs"] {
+            std::fs::create_dir_all(bare.join(child)).unwrap();
+        }
+        std::fs::write(
+            bare.join("hooks/pre-receive"),
+            "synthetic hook; changed; never execute",
+        )
+        .unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let result = std::process::Command::new("cmd")
+                .args(["/D", "/C", "mklink", "/J"])
+                .arg(dir.path().join("hook_alias"))
+                .arg(bare.join("hooks"))
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "junction fixture: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        for hide in [false, true] {
+            {
+                let mut inner = host.inner.lock().unwrap();
+                inner.settings.hide_ignored = hide;
+                inner.guests[0].guest.rights.r#type = true;
+            }
+            let status = super::super::guest_git_dispatch::dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"scm.status"}),
+            );
+            assert!(status.get("error").is_none(), "{status}");
+            assert!(!status.to_string().contains("repos/service"), "{status}");
+            let diff = super::super::guest_git_dispatch::dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"scm.diff"}),
+            );
+            assert!(diff.get("error").is_none(), "{diff}");
+            assert!(!diff.to_string().contains("synthetic hook"), "{diff}");
+            let commit = super::super::guest_git_dispatch::dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"scm.commit","message":"synthetic"}),
+            );
+            assert!(
+                commit
+                    .to_string()
+                    .contains("Unstage changes outside this project"),
+                "{commit}"
+            );
+            #[cfg(windows)]
+            {
+                let request = json!({"op":"files.read","path":"hook_alias/pre-receive"});
+                assert!(
+                    dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some()
+                );
+                let request = json!({"op":"files.create","path":"hook_alias/post-receive"});
+                assert!(
+                    super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some()
+                );
+                let list = dispatch(&host.inner, "guest", &json!({"op":"files.list","path":""}));
+                assert!(
+                    !list["result"]["entries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|e| e["name"] == "hook_alias")
+                );
+            }
+            for path in ["repos/service/config", "repos/service/hooks/pre-receive"] {
+                let result = dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.read","path":path}),
+                );
+                assert!(
+                    result.get("error").is_some(),
+                    "metadata must not be readable: {path}"
+                );
+            }
+            assert!(
+                dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.list","path":"repos/service"})
+                )
+                .get("error")
+                .is_some()
+            );
+            let list = dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":"files.list","path":"repos"}),
+            );
+            assert!(
+                list["result"]["entries"].as_array().unwrap().is_empty(),
+                "{list}"
+            );
+            assert!(
+                dispatch(
+                    &host.inner,
+                    "guest",
+                    &json!({"op":"files.read","path":"ordinary.txt"})
+                )
+                .get("result")
+                .is_some()
+            );
+            for request in [
+                json!({"op":"files.write","path":"repos/service/config","expectHash":file_version::hash(b"[core]\n bare = true\n"),"data":B64.encode(b"changed")}),
+                json!({"op":"files.create","path":"repos/service/hooks/post-receive"}),
+                json!({"op":"files.rename","path":"repos/service/hooks/pre-receive","to":"ordinary-hook"}),
+                json!({"op":"files.delete","path":"repos"}),
+                json!({"op":"files.rename","path":"repos","to":"moved"}),
+            ] {
+                assert!(
+                    super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request)
+                        .get("error")
+                        .is_some(),
+                    "{request}"
+                );
+            }
+        }
+        #[cfg(windows)]
+        std::fs::remove_dir(dir.path().join("hook_alias")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(bare.join("hooks/pre-receive")).unwrap(),
+            "synthetic hook; changed; never execute"
+        );
+        assert!(host.snapshot().recent_actions.is_empty());
+    }
+
     #[test]
     fn repository_scope_probe() {
         if std::env::var_os(IGNORE_PROBE).is_none() {

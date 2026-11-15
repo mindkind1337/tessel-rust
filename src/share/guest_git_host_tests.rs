@@ -149,6 +149,53 @@ fn named_runners_are_neutralized_with_required_off() {
 }
 
 #[test]
+fn nested_metadata_is_filtered_from_scm_even_without_ignore_hiding() {
+    let dir = project();
+    let bare = dir.path().join("service");
+    std::fs::create_dir_all(bare.join("objects")).unwrap();
+    std::fs::create_dir_all(bare.join("refs")).unwrap();
+    std::fs::write(bare.join("HEAD"), "synthetic").unwrap();
+    std::fs::write(bare.join("config"), "synthetic private metadata").unwrap();
+    let hooks = tempfile::tempdir().unwrap();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut git = FakeGit::new(log.clone())
+        .on(
+            "status -z",
+            b" M service/config\0 D ordinary-deleted.txt\0 D service/deleted\0",
+        )
+        .on("--cached --no-renames --name-only", b"service/config\0");
+    let out = dispatch_with(
+        &mut git,
+        dir.path(),
+        true,
+        false,
+        "scm.status",
+        &json!({}),
+        hooks.path(),
+        &mut no_revalidate(),
+    )
+    .unwrap();
+    assert_eq!(out["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(out["entries"][0]["path"], "ordinary-deleted.txt");
+    let err = dispatch_with(
+        &mut git,
+        dir.path(),
+        true,
+        false,
+        "scm.commit",
+        &json!({"message":"synthetic"}),
+        hooks.path(),
+        &mut no_revalidate(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("Unstage changes outside this project"),
+        "{err}"
+    );
+    assert!(log.borrow().is_empty());
+}
+
+#[test]
 fn status_and_diff_hide_private_and_out_of_project_names() {
     let (rows, hidden) = parse_status(
         b" M a.txt\0 M .env\0 M src/main.rs\0R  new.txt\0.git/config\0",

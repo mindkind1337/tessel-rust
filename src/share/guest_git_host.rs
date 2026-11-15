@@ -508,17 +508,24 @@ fn dispatch_with_roots(
     hooks_dir: &Path,
     revalidate: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Value> {
+    let metadata = |paths: &[String], mut hidden: Vec<bool>| -> Result<Vec<bool>> {
+        let mut scan = super::git_metadata::Scan::new(root)?;
+        for (path, hidden) in paths.iter().zip(&mut hidden) {
+            *hidden |= scan.hidden_existing_ancestors(&root.join(path))?;
+        }
+        Ok(hidden)
+    };
     let sticky = |paths: &[String]| -> Result<Vec<bool>> {
         if hide_ignored && let Some(history) = history {
-            return history.hidden(root, shared_roots, paths);
+            return metadata(paths, history.hidden(root, shared_roots, paths)?);
         }
-        Ok(vec![false; paths.len()])
+        metadata(paths, vec![false; paths.len()])
     };
     let commit_hidden = |paths: &[String]| -> Result<Vec<bool>> {
         if hide_ignored && let Some(history) = history {
-            return history.hidden_for_git(root, shared_roots, paths);
+            return metadata(paths, history.hidden_for_git(root, shared_roots, paths)?);
         }
-        Ok(vec![false; paths.len()])
+        metadata(paths, vec![false; paths.len()])
     };
     let prefix = prepare_prefix(git, root, shared_roots, hooks_dir)?;
 
