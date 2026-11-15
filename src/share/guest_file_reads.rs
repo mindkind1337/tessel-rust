@@ -27,6 +27,8 @@ impl Drop for ReadSlot {
     }
 }
 struct Grant {
+    ignored: Arc<ignored_paths::IgnoredPaths>,
+    roots: Vec<PathBuf>,
     project: SharedProject,
     rights: ShareRights,
     hide: bool,
@@ -47,6 +49,12 @@ fn authorize(inner: &HostInner, guest: &str, project: Option<u64>) -> Result<Gra
         return Err("Guest session is not active.".into());
     }
     Ok(Grant {
+        ignored: inner.ignored_paths.clone(),
+        roots: inner
+            .shared_projects
+            .iter()
+            .map(|p| p.path.clone())
+            .collect(),
         project: inner.find_shared_project_for_guest(index, project)?,
         rights: slot.guest.rights,
         hide: inner.settings.hide_ignored,
@@ -65,7 +73,8 @@ fn run_authorized(
     let result = read(&grant);
     let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
     let current = authorize(&guard, guest, Some(grant.project.id))?;
-    if current.project.path != grant.project.path
+    if current.roots != grant.roots
+        || current.project.path != grant.project.path
         || current.hide != grant.hide
         || current.rights != grant.rights
     {
@@ -73,6 +82,26 @@ fn run_authorized(
     }
     result
         .map_err(|error| guest_text::task_title(&error, &grant.project.path.to_string_lossy(), 300))
+}
+fn check_path(grant: &Grant, relative: &str, target: &Path) -> Result<()> {
+    let paths = [
+        relative.replace('\\', "/"),
+        target
+            .strip_prefix(&grant.project.path)
+            .map_err(|_| "Invalid project scope")?
+            .to_string_lossy()
+            .replace('\\', "/"),
+    ];
+    if grant.hide
+        && grant
+            .ignored
+            .hidden(&grant.project.path, &grant.roots, &paths)?
+            .into_iter()
+            .any(|v| v)
+    {
+        return Err("File unavailable".into());
+    }
+    Ok(())
 }
 fn read(grant: &Grant, req: &Value) -> Result<Value> {
     let rights = grant.rights;
@@ -86,12 +115,15 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             } else {
                 share_path_checked(&proj.path, relative, hide_ignored)?
             };
+            if !relative.is_empty() {
+                check_path(grant, relative, &target)?;
+            }
             let entries = list_dir_entries(&proj.path, &target)?;
             let filtered: Vec<Value> = entries
                 .into_iter()
                 .filter(|e| {
                     let rel = e.path.strip_prefix(&proj.path).unwrap_or(&e.path);
-                    !private_path(rel) && !(hide_ignored && secret_or_dot_path(rel))
+                    !private_path(rel) && !(hide_ignored && secret_name_path(rel))
                 })
                 .map(|e| {
                     let rel = e
@@ -103,12 +135,27 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
                     json!({"name": e.name, "path": rel, "directory": e.directory})
                 })
                 .collect();
+            let filtered = if grant.hide {
+                let paths: Vec<String> = filtered
+                    .iter()
+                    .map(|e| e["path"].as_str().unwrap().to_string())
+                    .collect();
+                let hidden = grant.ignored.hidden(&proj.path, &grant.roots, &paths)?;
+                filtered
+                    .into_iter()
+                    .zip(hidden)
+                    .filter_map(|(entry, hide)| (!hide).then_some(entry))
+                    .collect::<Vec<_>>()
+            } else {
+                filtered
+            };
             Ok(json!({"entries": filtered, "readOnly": !rights.edit}))
         }
         "files.read" => {
             let proj = &grant.project;
             let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
+            check_path(grant, relative, &target)?;
             let mut bytes = Vec::new();
             std::fs::File::open(&target)
                 .map_err(|_| "File unavailable")?
@@ -121,7 +168,7 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             Ok(json!({
                 "name": target.file_name().unwrap_or_default().to_string_lossy(),
                 "data": B64.encode(bytes),
-                "readOnly": !rights.edit || (is_agent_instruction_or_protected_file(Path::new(relative)) && !rights.r#type),
+                "readOnly": !rights.edit || ((is_agent_instruction_or_protected_file(Path::new(relative)) || is_agent_instruction_or_protected_file(target.strip_prefix(&proj.path).map_err(|_| "Invalid project scope")?)) && !rights.r#type),
             }))
         }
         _ => Err("Unsupported guest file read.".into()),
@@ -135,6 +182,65 @@ pub(super) fn dispatch(inner: &Arc<Mutex<HostInner>>, guest: &str, req: &Value) 
     match result {
         Ok(value) => json!({"result":value}),
         Err(error) => json!({"error":error}),
+    }
+}
+
+fn legacy_grant(inner: &HostInner, token: &[u8]) -> Result<Grant> {
+    if inner.stopped.load(Ordering::SeqCst) {
+        return Err("Sharing stopped".into());
+    }
+    let invite = inner
+        .invites
+        .iter()
+        .find(|inv| {
+            token.len() == 32
+                && bool::from(token.ct_eq(&inv.token_bytes))
+                && inv.status(now_epoch_ms()) == InviteStatus::Live
+        })
+        .ok_or("Invalid invitation")?;
+    let project = inner
+        .shared_projects
+        .iter()
+        .find(|p| invite.projects.contains(&p.id))
+        .ok_or("No shared project")?;
+    Ok(Grant {
+        project: project.clone(),
+        rights: ShareRights::view_only(),
+        hide: inner.settings.hide_ignored,
+        roots: inner
+            .shared_projects
+            .iter()
+            .map(|p| p.path.clone())
+            .collect(),
+        ignored: inner.ignored_paths.clone(),
+    })
+}
+pub(super) fn dispatch_legacy(inner: &Arc<Mutex<HostInner>>, token: &[u8], req: &Value) -> Value {
+    let result: Result<Value> = (|| {
+        let grant = legacy_grant(&inner.lock().unwrap_or_else(|e| e.into_inner()), token)?;
+        let _slot = ReadSlot::acquire()?;
+        let op = match req.get("operation").and_then(Value::as_str) {
+            Some("list") => "files.list",
+            Some("read") => "files.read",
+            _ => return Err("Unsupported operation".into()),
+        };
+        let result = read(
+            &grant,
+            &json!({"op":op,"path":req.get("path").and_then(Value::as_str).unwrap_or("")}),
+        );
+        let current = legacy_grant(&inner.lock().unwrap_or_else(|e| e.into_inner()), token)?;
+        if current.project.id != grant.project.id
+            || current.project.path != grant.project.path
+            || current.roots != grant.roots
+            || current.hide != grant.hide
+        {
+            return Err("Shared scope changed".into());
+        }
+        result
+    })();
+    match result {
+        Ok(value) => json!({"result":value}),
+        Err(_) => json!({"error":"Request unavailable or not allowed by this share."}),
     }
 }
 
@@ -172,6 +278,227 @@ mod tests {
             },
         });
         (dir, host)
+    }
+
+    const IGNORE_PROBE: &str = "TESSEL_SYNTHETIC_IGNORE_PROBE";
+    fn empty_repo(root: &Path) {
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::create_dir_all(root.join(".git/refs/heads")).unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            root.join(".git/config"),
+            "[core]\n repositoryformatversion = 0\n bare = false\n",
+        )
+        .unwrap();
+    }
+    #[test]
+    fn isolated_ignore_probe() {
+        if std::env::var_os(IGNORE_PROBE).is_none() {
+            return;
+        }
+        let (dir, host) = fixture();
+        empty_repo(dir.path());
+        std::fs::write(dir.path().join(".gitignore"), "*.log\nhidden/\n").unwrap();
+        std::fs::write(dir.path().join("trace.log"), "private").unwrap();
+        std::fs::write(dir.path().join("private[1].log"), "bracket secret").unwrap();
+        std::fs::write(dir.path().join("literal[1].txt"), "public").unwrap();
+        std::fs::create_dir(dir.path().join("hidden")).unwrap();
+        std::fs::write(dir.path().join("hidden/item.txt"), "private").unwrap();
+        let rpc = |op: &str, path: &str| {
+            dispatch(
+                &host.inner,
+                "guest",
+                &json!({"op":op,"projectId":1,"path":path}),
+            )
+        };
+        assert!(rpc("files.read", "literal[1].txt").get("result").is_some());
+        assert!(rpc("files.read", "trace.log").get("error").is_some());
+        assert!(rpc("files.read", "private[1].log").get("error").is_some());
+        let listing = rpc("files.list", "");
+        let entries = listing["result"]["entries"].as_array().unwrap();
+        let listed: Vec<_> = entries
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, vec![".gitignore", "literal[1].txt"], "{listing}");
+        for name in [".editorconfig", ".env.example", "prod.env.sample"] {
+            std::fs::write(dir.path().join(name), "example").unwrap();
+            assert!(rpc("files.read", name).get("result").is_some(), "{name}");
+        }
+        std::fs::write(dir.path().join(".env.local"), "private").unwrap();
+        assert!(rpc("files.read", ".env.local").get("error").is_some());
+        let token = host.inner.lock().unwrap().invites[0].token_bytes;
+        assert!(
+            dispatch_legacy(
+                &host.inner,
+                &token,
+                &json!({"operation":"read","path":"trace.log"})
+            )
+            .get("error")
+            .is_some()
+        );
+        for request in [
+            json!({"op":"files.write","path":"trace.log","data":B64.encode(b"changed")}),
+            json!({"op":"files.create","path":"new.log"}),
+            json!({"op":"files.rename","path":"hidden","to":"moved"}),
+            json!({"op":"files.delete","path":"hidden"}),
+        ] {
+            let result =
+                super::super::guest_file_mutations::dispatch(&host.inner, "guest", &request);
+            assert!(result.get("error").is_some(), "{request}: {result}");
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("trace.log")).unwrap(),
+            b"private"
+        );
+        assert!(dir.path().join("hidden/item.txt").exists());
+        std::fs::write(dir.path().join(".gitignore"), "").unwrap();
+        assert!(rpc("files.read", "trace.log").get("error").is_some());
+        assert!(rpc("files.read", "private[1].log").get("error").is_some());
+        assert!(rpc("files.read", "hidden/item.txt").get("error").is_some());
+        host.set_hide_ignored(false);
+        assert!(rpc("files.read", "trace.log").get("result").is_some());
+        host.set_hide_ignored(true);
+        assert!(rpc("files.read", "trace.log").get("error").is_some());
+        assert!(rpc("files.read", "private[1].log").get("error").is_some());
+        let fresh = ignored_paths::IgnoredPaths::default();
+        assert_eq!(
+            fresh
+                .hidden(dir.path(), &[dir.path().into()], &["trace.log".into()])
+                .unwrap(),
+            vec![false]
+        );
+        std::fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+        std::fs::write(dir.path().join("never-seen[2].log"), "never listed secret").unwrap();
+        // The host may force a previously hidden file into the index. Every SCM
+        // surface must retain the earlier privacy decision for this share.
+        crate::git::run_guest_bytes(
+            dir.path(),
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "add",
+                "-f",
+                "--",
+                "trace.log",
+                "private[1].log",
+                "never-seen[2].log",
+            ],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("private[1].log"), "changed bracket secret").unwrap();
+        let scm = |request: Value| {
+            super::super::guest_git_dispatch::dispatch(&host.inner, "guest", &request)
+        };
+        let raw_status = crate::git::run_guest_bytes(
+            dir.path(),
+            &["-c", "core.fsmonitor=false", "status", "--porcelain=v1"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(String::from_utf8_lossy(&raw_status.bytes).contains("never-seen[2].log"));
+        let status = scm(json!({"op":"scm.status","projectId":1}));
+        assert!(status.get("result").is_some(), "{status}");
+        assert!(!status.to_string().contains("private[1].log"));
+        assert!(!status.to_string().contains("trace.log"));
+        assert!(status.to_string().contains("never-seen[2].log"));
+        for request in [
+            json!({"op":"scm.diff"}),
+            json!({"op":"scm.diff","path":"private[1].log"}),
+        ] {
+            let diff = scm(request);
+            assert_eq!(diff["result"]["diff"], "", "{diff}");
+        }
+        for op in ["scm.stage", "scm.unstage", "scm.discard"] {
+            let result = scm(json!({"op":op,"path":"private[1].log"}));
+            assert!(result.get("error").is_some(), "{op}: {result}");
+        }
+        // Leave ONLY the never-observed tracked file staged: rejection must come
+        // from --no-index, not an older sticky decision or a missing Git identity.
+        crate::git::run_guest_bytes(
+            dir.path(),
+            &["rm", "--cached", "-f", "--", "trace.log", "private[1].log"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let commit = scm(json!({"op":"scm.commit","message":"must not include hidden files"}));
+        assert!(
+            commit["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unstage changes outside"),
+            "{commit}"
+        );
+        assert!(
+            rpc("files.read", "never-seen[2].log")
+                .get("result")
+                .is_some()
+        );
+        assert!(commit.get("error").is_some(), "{commit}");
+        assert!(!dir.path().join(".git/refs/heads/main").exists());
+        std::fs::write(dir.path().join(".git/config"), "[broken").unwrap();
+        assert!(rpc("files.read", "literal[1].txt").get("error").is_some());
+        assert!(rpc("files.list", "").get("error").is_some());
+        empty_repo(dir.path());
+        assert!(rpc("files.read", "literal[1].txt").get("result").is_some());
+        host.inner.lock().unwrap().invites[0].projects.clear();
+        assert!(
+            dispatch_legacy(
+                &host.inner,
+                &token,
+                &json!({"operation":"read","path":"literal[1].txt"})
+            )
+            .get("error")
+            .is_some()
+        );
+    }
+    #[test]
+    fn real_ignore_rules_stick_across_edits_and_cover_legacy_and_mutations() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".gitconfig"), "").unwrap();
+        let test = format!(
+            "{}::isolated_ignore_probe",
+            module_path!().split_once("::").unwrap().1
+        );
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.env_clear();
+        for name in [
+            "PATH",
+            "SystemRoot",
+            "WINDIR",
+            "COMSPEC",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                child.env(name, value);
+            }
+        }
+        child
+            .args(["--exact", &test, "--nocapture"])
+            .env(IGNORE_PROBE, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("XDG_CONFIG_HOME", home.path())
+            .env("APPDATA", home.path());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            child.creation_flags(0x08000000);
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 
     #[test]
@@ -268,7 +595,7 @@ mod tests {
         assert_eq!(entries.len(), 1, "{response}");
         assert_eq!(entries[0]["name"], "service-account-guide.md");
         for name in names {
-            assert!(secret_or_dot_path(&Path::new("nested").join(name)));
+            assert!(secret_name_path(&Path::new("nested").join(name)));
         }
     }
 

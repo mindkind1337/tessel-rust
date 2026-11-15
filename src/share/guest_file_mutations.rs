@@ -29,6 +29,8 @@ impl Drop for WriteSlot {
     }
 }
 struct Grant {
+    ignored: Arc<ignored_paths::IgnoredPaths>,
+    roots: Vec<PathBuf>,
     project: SharedProject,
     rights: ShareRights,
     hide: bool,
@@ -58,6 +60,12 @@ fn authorize(inner: &HostInner, guest: &str, project: Option<u64>) -> Result<Gra
         return Err("Edit permission is required to change files.".into());
     }
     Ok(Grant {
+        ignored: inner.ignored_paths.clone(),
+        roots: inner
+            .shared_projects
+            .iter()
+            .map(|p| p.path.clone())
+            .collect(),
         project: inner.find_shared_project_for_guest(index, project)?,
         rights: slot.guest.rights,
         hide: inner.settings.hide_ignored,
@@ -66,7 +74,8 @@ fn authorize(inner: &HostInner, guest: &str, project: Option<u64>) -> Result<Gra
 }
 fn validate(inner: &HostInner, guest: &str, grant: &Grant) -> Result<()> {
     let current = authorize(inner, guest, Some(grant.project.id))?;
-    if current.project.path != grant.project.path
+    if current.roots != grant.roots
+        || current.project.path != grant.project.path
         || current.rights != grant.rights
         || current.hide != grant.hide
     {
@@ -155,6 +164,7 @@ fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
     let started = Instant::now();
     let mut pending = vec![target.to_path_buf()];
     let mut examined = 0usize;
+    let mut paths = Vec::new();
     while let Some(path) = pending.pop() {
         examined += 1;
         if examined > 10_000 || started.elapsed() > Duration::from_secs(2) {
@@ -164,11 +174,12 @@ fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
             .strip_prefix(&grant.project.path)
             .map_err(|_| "Invalid project scope")?;
         if private_path(relative)
-            || (grant.hide && secret_or_dot_path(relative))
+            || (grant.hide && secret_name_path(relative))
             || (!grant.rights.r#type && is_agent_instruction_or_protected_file(relative))
         {
             return Err("Directory contains private or protected items.".into());
         }
+        paths.push(relative.to_string_lossy().replace('\\', "/"));
         let metadata =
             std::fs::symlink_metadata(&path).map_err(|_| "Cannot verify directory contents")?;
         #[cfg(windows)]
@@ -191,7 +202,51 @@ fn check_descendants(grant: &Grant, target: &Path) -> Result<()> {
             }
         }
     }
+    check_ignored(grant, &paths)?;
     Ok(())
+}
+fn check_ignored(grant: &Grant, paths: &[String]) -> Result<()> {
+    if grant.hide
+        && grant
+            .ignored
+            .hidden(&grant.project.path, &grant.roots, paths)?
+            .into_iter()
+            .any(|v| v)
+    {
+        return Err("File unavailable".into());
+    }
+    Ok(())
+}
+fn check_request_paths(grant: &Grant, req: &Value) -> Result<bool> {
+    let mut flagged = false;
+    let mut privacy_paths = Vec::new();
+    for key in ["path", "to"] {
+        if let Some(relative) = req.get(key).and_then(Value::as_str) {
+            let resolved = if grant.project.path.join(relative).exists() {
+                share_path_checked(&grant.project.path, relative, grant.hide)?
+            } else {
+                share_new_path_checked(&grant.project.path, relative, grant.hide)?
+            };
+            let real_rel = resolved
+                .strip_prefix(&grant.project.path)
+                .map_err(|_| "Invalid project scope")?;
+            flagged |= is_agent_instruction_or_protected_file(Path::new(relative))
+                || is_agent_instruction_or_protected_file(real_rel);
+            if flagged && !grant.rights.r#type {
+                return Err("Agent instructions require Type permission.".into());
+            }
+            privacy_paths.push(relative.replace('\\', "/"));
+            privacy_paths.push(
+                resolved
+                    .strip_prefix(&grant.project.path)
+                    .map_err(|_| "Invalid project scope")?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    check_ignored(grant, &privacy_paths)?;
+    Ok(flagged)
 }
 fn apply(grant: &Grant, req: &Value, revalidate: &mut dyn FnMut() -> Result<()>) -> Result<Action> {
     apply_with_recycler(grant, req, revalidate, &mut |path| {
@@ -231,10 +286,12 @@ fn apply_with_recycler(
                 return Err("Live Share file write limit is 2 MiB.".into());
             }
             let parent = target.parent().ok_or("Missing parent folder")?;
+            let flagged = check_request_paths(grant, req)? || flagged;
             revalidate()?;
             let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
             tmp.write_all(&bytes).map_err(|e| e.to_string())?;
             tmp.as_file().sync_all().map_err(|e| e.to_string())?;
+            let flagged = check_request_paths(grant, req)? || flagged;
             revalidate()?;
             tmp.persist(&target).map_err(|e| e.to_string())?;
             Ok(Action {
@@ -261,6 +318,7 @@ fn apply_with_recycler(
             if target.exists() {
                 return Err("Path already exists.".into());
             }
+            let flagged = check_request_paths(grant, req)? || flagged;
             revalidate()?;
             if is_dir {
                 std::fs::create_dir(&target).map_err(|e| e.to_string())?;
@@ -296,6 +354,7 @@ fn apply_with_recycler(
             if dst.exists() {
                 return Err("Destination already exists.".into());
             }
+            let flagged = check_request_paths(grant, req)? || flagged;
             revalidate()?;
             rename_new(&src, &dst)?;
             Ok(Action {
@@ -317,6 +376,7 @@ fn apply_with_recycler(
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
             check_unlinked_entry(grant, relative)?;
             check_descendants(grant, &target)?;
+            let flagged = check_request_paths(grant, req)? || flagged;
             revalidate()?;
             recycle(&target)?;
             Ok(Action {
@@ -546,6 +606,92 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(target.join("keep.txt")).unwrap(),
             "safe"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_parent_cannot_hide_a_secret_destination() {
+        use std::os::windows::process::CommandExt;
+        let (dir, host) = fixture();
+        let target = dir.path().join(".ssh");
+        let link = dir.path().join("alias");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("existing.txt"), "private").unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let root = host.inner.lock().unwrap().shared_projects[0].path.clone();
+        let new_result = share_new_path_checked(&root, "alias/new.txt", true);
+        let existing_result = share_new_path_checked(&root, "alias/existing.txt", true);
+        std::fs::remove_dir(&link).unwrap();
+        assert!(new_result.is_err());
+        assert!(existing_result.is_err());
+        assert!(!target.join("new.txt").exists());
+        assert_eq!(
+            std::fs::read(target.join("existing.txt")).unwrap(),
+            b"private"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn protected_parent_alias_requires_type_and_keeps_audit_flag() {
+        use std::os::windows::process::CommandExt;
+        let (dir, host) = fixture();
+        let target = dir.path().join(".github");
+        let link = dir.path().join("alias");
+        std::fs::create_dir_all(target.join("workflows")).unwrap();
+        std::fs::write(target.join("workflows/existing.yml"), "owner config").unwrap();
+        std::fs::write(dir.path().join("ordinary.txt"), "safe").unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = false;
+        for request in [
+            json!({"op":"files.create","path":"alias/workflows/new.yml"}),
+            json!({"op":"files.write","path":"alias/workflows/existing.yml","data":B64.encode(b"changed")}),
+            json!({"op":"files.rename","path":"ordinary.txt","to":"alias/workflows/renamed.yml"}),
+        ] {
+            assert!(
+                dispatch(&host.inner, "guest", &request)
+                    .get("error")
+                    .is_some(),
+                "{request}"
+            );
+        }
+        let read = super::super::guest_file_reads::dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.read","path":"alias/workflows/existing.yml"}),
+        );
+        assert_eq!(read["result"]["readOnly"], true, "{read}");
+        assert_eq!(
+            std::fs::read(target.join("workflows/existing.yml")).unwrap(),
+            b"owner config"
+        );
+        assert!(dir.path().join("ordinary.txt").exists());
+        assert!(!target.join("workflows/new.yml").exists());
+        host.inner.lock().unwrap().guests[0].guest.rights.r#type = true;
+        let written = dispatch(
+            &host.inner,
+            "guest",
+            &json!({"op":"files.write","path":"alias/workflows/existing.yml","data":B64.encode(b"approved")}),
+        );
+        std::fs::remove_dir(&link).unwrap();
+        assert_eq!(written["result"]["ok"], true, "{written}");
+        assert!(host.snapshot().recent_actions.last().unwrap().flagged);
+        assert_eq!(
+            std::fs::read(target.join("workflows/existing.yml")).unwrap(),
+            b"approved"
         );
     }
     #[test]

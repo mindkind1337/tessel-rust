@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import crypto from 'node:crypto';
+const source = fs.readFileSync(process.argv[2] ?? 'C:/Tessel/src/main/liveShare/shareScope.js', 'utf8');
+const start = source.indexOf('const SECRET_EXACT');
+const end = source.indexOf('export const isSecretRel', start);
+if (start < 0 || end < 0) throw new Error('Reference boundary changed');
+const context = {};
+vm.runInNewContext("const lower = (s) => String(s || '').toLowerCase();\n" + source.slice(start, end).replaceAll('export ', '') + '\nthis.check = isSecretName;', context);
+const seeds = ['', '.env', '.env.', '.env.local', 'prod.env', 'prod.env.local', '.editorconfig', '.prettierrc', '.eslintrc', '.gitignore', '.npmrc', '.pypirc', '.netrc', '.git-credentials', '.aws', '.ssh', '.docker', '.kube', '.gnupg', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa', 'identity.txt', 'credentials.json', 'credentials-prod.json', 'credentials.txt', 'mycredentials.json', 'service-account.json', 'service-account-prod.json', 'service-account-guide.md', 'secret.json', 'secrets.yaml', 'secret.', 'secretary.txt', 'terraform.tfstate', 'terraform.tfstate.backup', 'about-tfstate.txt'];
+for (const suffix of ['pem','key','p12','pfx','p8','ppk','jks','keystore','kdbx','tfvars']) seeds.push(`private.${suffix}`, `private.${suffix}.txt`);
+for (const base of ['.env', '.env.local', 'prod.env', '.env.']) for (const suffix of ['example','sample','template','examples']) seeds.push(`${base}.${suffix}`);
+for (const base of ['id_rsa','id_ed25519','id_ecdsa','id_dsa']) seeds.push(`${base}.pub`, `${base}_backup`);
+const names = [...new Set(seeds.flatMap(n => [n, n.toUpperCase()]))];
+const fixture = {source: 'src/main/liveShare/shareScope.js', sha256: crypto.createHash('sha256').update(source).digest('hex'), cases: names.map(name => ({name, secret: context.check(name)}))};
+fs.writeFileSync('tests/fixtures/secret_names_reference.json', JSON.stringify(fixture, null, 2) + '\n');
+console.log(`${fixture.cases.length} reference names`);

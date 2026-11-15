@@ -21,7 +21,7 @@ pub(super) fn run_bytes_with_timeout(
     input: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Capture> {
-    run_bytes_config(root, args, input, timeout, false)
+    run_bytes_config(root, args, input, timeout, false, false)
 }
 pub fn run_guest_bytes(
     root: &Path,
@@ -29,7 +29,28 @@ pub fn run_guest_bytes(
     input: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Capture> {
-    run_bytes_config(root, args, input, timeout, true)
+    run_bytes_config(root, args, input, timeout, true, false)
+}
+/// Exit 1 means no ignored paths only for this fixed check-ignore command.
+pub fn run_guest_check_ignore(
+    root: &Path,
+    prefix: &[&str],
+    input: &[u8],
+    no_index: bool,
+    timeout: Duration,
+) -> Result<Capture> {
+    // check-ignore treats stdin as literal names and rejects --literal-pathspecs.
+    let mut args: Vec<&str> = prefix
+        .iter()
+        .copied()
+        .filter(|arg| *arg != "--literal-pathspecs")
+        .collect();
+    args.push("check-ignore");
+    if no_index {
+        args.push("--no-index");
+    }
+    args.extend(["-z", "--stdin"]);
+    run_bytes_config(root, &args, Some(input), timeout, true, true)
 }
 fn run_bytes_config(
     root: &Path,
@@ -37,6 +58,7 @@ fn run_bytes_config(
     input: Option<&[u8]>,
     timeout: Duration,
     guest: bool,
+    allow_no_match: bool,
 ) -> Result<Capture> {
     let mut command = Command::new("git");
     if guest {
@@ -129,7 +151,7 @@ fn run_bytes_config(
     let pipe_deadline = deadline.min(Instant::now() + Duration::from_secs(1));
     let mut output = out.finish(pipe_deadline);
     let errors = err.finish(pipe_deadline);
-    if !status.success() {
+    if !status.success() && !(allow_no_match && status.code() == Some(1)) {
         return Err(errors.text());
     }
     if !matches!(

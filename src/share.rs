@@ -693,23 +693,9 @@ pub fn private_path(path: &Path) -> bool {
     })
 }
 
-pub fn secret_or_dot_path(path: &Path) -> bool {
-    path.components().any(|part| {
-        let name = part.as_os_str().to_string_lossy().to_lowercase();
-        name.starts_with('.')
-            || name.starts_with("secret")
-            || name.contains("credentials")
-            || name.ends_with(".env")
-            || name.contains(".env.")
-            || [".p8", ".ppk", ".jks", ".keystore", ".tfvars"]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-            || name.contains(".tfstate")
-            || ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]
-                .iter()
-                .any(|prefix| name.starts_with(prefix))
-            || (name.starts_with("service-account") && name.ends_with(".json"))
-    })
+pub fn secret_name_path(path: &Path) -> bool {
+    path.components()
+        .any(|part| secret_names::is_secret_name(&part.as_os_str().to_string_lossy()))
 }
 
 /// Files that steer agents or git hooks (`CLAUDE.md`, `AGENTS.md`, `.gitignore`, `.cursorrules`, etc.).
@@ -789,12 +775,12 @@ fn share_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Result
     {
         return Err("Only relative project paths are accepted.".into());
     }
-    if private_path(rel) || (hide_ignored && secret_or_dot_path(rel)) {
+    if private_path(rel) || (hide_ignored && secret_name_path(rel)) {
         return Err("Private path is not shared.".into());
     }
     let resolved = confined_path(root, &root.join(rel))?;
     let stripped = resolved.strip_prefix(root).unwrap_or(&resolved);
-    if private_path(stripped) || (hide_ignored && secret_or_dot_path(stripped)) {
+    if private_path(stripped) || (hide_ignored && secret_name_path(stripped)) {
         return Err("Private path is not shared.".into());
     }
     Ok(resolved)
@@ -810,7 +796,7 @@ fn share_new_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Re
     {
         return Err("Only relative project paths are accepted.".into());
     }
-    if private_path(rel) || (hide_ignored && secret_or_dot_path(rel)) {
+    if private_path(rel) || (hide_ignored && secret_name_path(rel)) {
         return Err("Private path is not shared.".into());
     }
     let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
@@ -820,7 +806,19 @@ fn share_new_path_checked(root: &Path, relative: &str, hide_ignored: bool) -> Re
         confined_path(root, &root.join(parent_rel))?
     };
     let file_name = rel.file_name().ok_or("Invalid file name.")?;
-    Ok(parent_abs.join(file_name))
+    let candidate = parent_abs.join(file_name);
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => return share_path_checked(root, relative, hide_ignored),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("Cannot verify destination.".into()),
+    }
+    let resolved = candidate
+        .strip_prefix(root)
+        .map_err(|_| "Invalid project scope")?;
+    if private_path(resolved) || (hide_ignored && secret_name_path(resolved)) {
+        return Err("Private path is not shared.".into());
+    }
+    Ok(candidate)
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,6 +1240,7 @@ struct GuestSlot {
 }
 
 struct HostInner {
+    ignored_paths: Arc<ignored_paths::IgnoredPaths>,
     stopped: Arc<AtomicBool>,
     task_board: task_board::TaskBoard,
     host_name: String,
@@ -1449,6 +1448,7 @@ impl Host {
 
         let stop = Arc::new(AtomicBool::new(false));
         let mut inner_data = HostInner {
+            ignored_paths: Arc::new(ignored_paths::IgnoredPaths::default()),
             stopped: Arc::clone(&stop),
             task_board: task_board::TaskBoard::default(),
             host_name: if host_name.trim().is_empty() {
@@ -1998,39 +1998,7 @@ fn serve_connection(
 
     // Mode 1: One-shot legacy request (`{"token", "operation", "path"}`)
     if first.get("mode").and_then(Value::as_str) != Some("session") {
-        let response = {
-            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
-            if stop.load(Ordering::Relaxed) {
-                json!({"error":"Sharing stopped."})
-            } else {
-                let now_ms = now_epoch_ms();
-                let matched = guard.invites.iter().find(|inv| {
-                    supplied.len() == 32
-                        && bool::from(supplied.as_slice().ct_eq(&inv.token_bytes))
-                        && inv.status(now_ms) == InviteStatus::Live
-                });
-                if let Some(inv) = matched {
-                    let hide_ignored = guard.settings.hide_ignored;
-                    let proj = guard
-                        .shared_projects
-                        .iter()
-                        .find(|p| inv.projects.contains(&p.id))
-                        .or_else(|| guard.shared_projects.first());
-                    if let Some(proj) = proj {
-                        match handle_readonly_op(&proj.path, &first, hide_ignored) {
-                            Ok(result) => json!({"result":result}),
-                            Err(_) => {
-                                json!({"error":"Request unavailable or not allowed by this share."})
-                            }
-                        }
-                    } else {
-                        json!({"error":"No shared project available."})
-                    }
-                } else {
-                    json!({"error":"Invitation expired or invalid."})
-                }
-            }
-        };
+        let response = guest_file_reads::dispatch_legacy(&inner, &supplied, &first);
         if !stop.load(Ordering::Relaxed) {
             let _ = write_frame(&mut tls, &response);
         }
@@ -2583,55 +2551,6 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     match res {
         Ok(val) => json!({"result": val}),
         Err(err) => json!({"error": err}),
-    }
-}
-
-fn handle_readonly_op(root: &Path, request: &Value, hide_ignored: bool) -> Result<Value> {
-    let operation = request
-        .get("operation")
-        .and_then(Value::as_str)
-        .ok_or("Missing operation")?;
-    let relative = request.get("path").and_then(Value::as_str).unwrap_or("");
-    let path = if relative.is_empty() {
-        root.to_owned()
-    } else {
-        share_path_checked(root, relative, hide_ignored)?
-    };
-    match operation {
-        "list" => {
-            let entries = list_dir_entries(root, &path)?;
-            let filtered: Vec<Value> = entries
-                .into_iter()
-                .filter(|e| {
-                    let rel = e.path.strip_prefix(root).unwrap_or(&e.path);
-                    !private_path(rel) && !(hide_ignored && secret_or_dot_path(rel))
-                })
-                .map(|e| {
-                    json!({
-                        "name": e.name,
-                        "path": e.path.strip_prefix(root).unwrap_or(&e.path).to_string_lossy(),
-                        "directory": e.directory
-                    })
-                })
-                .collect();
-            Ok(json!({"entries": filtered, "readOnly": true}))
-        }
-        "read" => {
-            let mut bytes = Vec::new();
-            std::fs::File::open(&path)
-                .map_err(|_| "File unavailable")?
-                .take((MAX_FILE + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "File read failed")?;
-            if bytes.len() > MAX_FILE {
-                return Err("Guest download limit is 8 MiB.".into());
-            }
-            Ok(json!({
-                "name": path.file_name().unwrap_or_default().to_string_lossy(),
-                "data": B64.encode(bytes)
-            }))
-        }
-        _ => Err("Read-only share: operation is not permitted.".into()),
     }
 }
 
@@ -3514,3 +3433,9 @@ mod guest_file_mutations;
 
 #[path = "share/protected_paths.rs"]
 mod protected_paths;
+
+#[path = "share/ignored_paths.rs"]
+mod ignored_paths;
+
+#[path = "share/secret_names.rs"]
+mod secret_names;

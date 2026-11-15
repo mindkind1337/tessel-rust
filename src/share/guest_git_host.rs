@@ -23,7 +23,7 @@
 //! may finish after revocation; an uncertain result is never retried automatically.
 
 use super::{
-    guest_text, private_path, secret_or_dot_path, share_new_path_checked, share_path_checked,
+    guest_text, private_path, secret_name_path, share_new_path_checked, share_path_checked,
 };
 use crate::git::Capture;
 use serde_json::{Value, json};
@@ -46,6 +46,26 @@ pub(super) trait GitRun {
 pub(super) struct HostGit<'a> {
     pub root: &'a Path,
     deadline: Instant,
+}
+impl<'a> HostGit<'a> {
+    pub(super) fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            deadline: Instant::now() + Duration::from_secs(10),
+        }
+    }
+    pub(super) fn ignored(
+        &mut self,
+        prefix: &[String],
+        input: &[u8],
+        no_index: bool,
+    ) -> Result<Capture> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Guest ignore check timed out.".into());
+        }
+        crate::git::run_guest_check_ignore(self.root, &borrow(prefix), input, no_index, remaining)
+    }
 }
 impl GitRun for HostGit<'_> {
     fn run(&mut self, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
@@ -235,7 +255,7 @@ pub(super) fn filter_visible(paths: &[String], hide_ignored: bool) -> (Vec<Strin
     let mut hidden = 0usize;
     for p in paths {
         let rel = Path::new(p);
-        if !safe_relative(p) || private_path(rel) || (hide_ignored && secret_or_dot_path(rel)) {
+        if !safe_relative(p) || private_path(rel) || (hide_ignored && secret_name_path(rel)) {
             hidden += 1;
         } else {
             visible.push(p.clone());
@@ -273,7 +293,7 @@ pub(super) fn parse_status(
     };
     let bad = |p: &str| {
         let rel = Path::new(p);
-        private_path(rel) || (hide_ignored && secret_or_dot_path(rel))
+        private_path(rel) || (hide_ignored && secret_name_path(rel))
     };
     while let Some(entry) = fields.next() {
         let bytes = entry.as_bytes();
@@ -338,6 +358,7 @@ fn staged_within_project(
     prefix: &[String],
     show_prefix: &str,
     hide_ignored: bool,
+    sticky: &dyn Fn(&[String]) -> Result<Vec<bool>>,
 ) -> Result<bool> {
     let mut args = prefix.to_vec();
     args.extend(["diff", "--cached", "--no-renames", "--name-only", "-z"].map(String::from));
@@ -346,6 +367,7 @@ fn staged_within_project(
         return Err("Incomplete Git index scope.".into());
     }
     let text = std::str::from_utf8(&out.bytes).map_err(|_| "Unsupported Git index path")?;
+    let mut paths = Vec::new();
     for path in text.split('\0').filter(|s| !s.is_empty()) {
         let Some(rel) = path.strip_prefix(show_prefix) else {
             return Ok(false); // outside the project
@@ -353,12 +375,13 @@ fn staged_within_project(
         if rel.is_empty() || rel == ".." || rel.starts_with("../") || rel.contains("/../") {
             return Ok(false);
         }
+        paths.push(rel.to_owned());
         let r = Path::new(rel);
-        if private_path(r) || (hide_ignored && secret_or_dot_path(r)) {
+        if private_path(r) || (hide_ignored && secret_name_path(r)) {
             return Ok(false);
         }
     }
-    Ok(true)
+    Ok(!sticky(&paths)?.into_iter().any(|hide| hide))
 }
 
 fn bounded_err(root: &Path, message: &str) -> String {
@@ -372,6 +395,7 @@ fn bounded_err(root: &Path, message: &str) -> String {
 pub(super) fn dispatch(
     root: &Path,
     shared_roots: &[PathBuf],
+    history: &super::ignored_paths::IgnoredPaths,
     git_right: bool,
     hide_ignored: bool,
     op: &str,
@@ -387,6 +411,7 @@ pub(super) fn dispatch(
         &mut git,
         root,
         shared_roots,
+        Some(history),
         git_right,
         hide_ignored,
         op,
@@ -412,6 +437,7 @@ pub(super) fn dispatch_with(
         git,
         root,
         &[root.to_path_buf()],
+        None,
         git_right,
         hide_ignored,
         op,
@@ -420,18 +446,12 @@ pub(super) fn dispatch_with(
         revalidate,
     )
 }
-#[allow(clippy::too_many_arguments)]
-fn dispatch_with_roots(
+pub(super) fn prepare_prefix(
     git: &mut dyn GitRun,
     root: &Path,
     shared_roots: &[PathBuf],
-    git_right: bool,
-    hide_ignored: bool,
-    op: &str,
-    req: &Value,
     hooks_dir: &Path,
-    revalidate: &mut dyn FnMut() -> Result<()>,
-) -> Result<Value> {
+) -> Result<Vec<String>> {
     // Read the program-running settings once, with hooks already off for this read too.
     let base = hardening_prefix(&[], hooks_dir);
     let mut cfg = base.clone();
@@ -465,7 +485,35 @@ fn dispatch_with_roots(
         return Err("Git configuration origins are incomplete.".into());
     }
     super::guest_git_config::validate_config_origins(&origins.bytes, root, shared_roots)?;
-    let prefix = hardening_prefix(&risky, hooks_dir);
+    Ok(hardening_prefix(&risky, hooks_dir))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_with_roots(
+    git: &mut dyn GitRun,
+    root: &Path,
+    shared_roots: &[PathBuf],
+    history: Option<&super::ignored_paths::IgnoredPaths>,
+    git_right: bool,
+    hide_ignored: bool,
+    op: &str,
+    req: &Value,
+    hooks_dir: &Path,
+    revalidate: &mut dyn FnMut() -> Result<()>,
+) -> Result<Value> {
+    let sticky = |paths: &[String]| -> Result<Vec<bool>> {
+        if hide_ignored && let Some(history) = history {
+            return history.hidden(root, shared_roots, paths);
+        }
+        Ok(vec![false; paths.len()])
+    };
+    let commit_hidden = |paths: &[String]| -> Result<Vec<bool>> {
+        if hide_ignored && let Some(history) = history {
+            return history.hidden_for_git(root, shared_roots, paths);
+        }
+        Ok(vec![false; paths.len()])
+    };
+    let prefix = prepare_prefix(git, root, shared_roots, hooks_dir)?;
 
     let run = |git: &mut dyn GitRun, tail: &[&str]| -> Result<Capture> {
         let mut args = prefix.clone();
@@ -490,7 +538,32 @@ fn dispatch_with_roots(
                 ],
             )
             .map_err(|e| bounded_err(root, &e))?;
-            let (rows, hidden) = parse_status(&out.bytes, &show, hide_ignored);
+            let (rows, mut hidden) = parse_status(&out.bytes, &show, hide_ignored);
+            let paths: Vec<String> = rows
+                .iter()
+                .flat_map(|row| {
+                    [row["path"].as_str(), row["from"].as_str()]
+                        .into_iter()
+                        .flatten()
+                        .map(str::to_owned)
+                })
+                .collect();
+            let blocked: std::collections::HashSet<String> = paths
+                .iter()
+                .zip(sticky(&paths)?)
+                .filter_map(|(p, hide)| hide.then_some(p.clone()))
+                .collect();
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .filter(|row| {
+                    let hide = [row["path"].as_str(), row["from"].as_str()]
+                        .into_iter()
+                        .flatten()
+                        .any(|p| blocked.contains(p));
+                    hidden += usize::from(hide);
+                    !hide
+                })
+                .collect();
             // A reconstructed porcelain string of the visible rows only, for the protocol's
             // {status} shape; control characters neutralized, capped.
             let mut truncated = out.truncated
@@ -547,6 +620,15 @@ fn dispatch_with_roots(
                 let rel = checked_rel(root, req, hide_ignored, true)?;
                 (vec![rel], 0)
             };
+            let mut hidden = hidden;
+            let visible: Vec<String> = visible
+                .iter()
+                .zip(sticky(&visible)?)
+                .filter_map(|(p, hide)| {
+                    hidden += usize::from(hide);
+                    (!hide).then_some(p.clone())
+                })
+                .collect();
             if visible.is_empty() {
                 return Ok(json!({"diff": "", "hidden": hidden, "truncated": false}));
             }
@@ -580,6 +662,9 @@ fn dispatch_with_roots(
             match op {
                 "scm.stage" => {
                     let rel = checked_rel(root, req, hide_ignored, true)?;
+                    if sticky(std::slice::from_ref(&rel))?[0] {
+                        return Err("File unavailable".into());
+                    }
                     if has_filter_attr(git, &prefix, &rel).map_err(|e| bounded_err(root, &e))? {
                         return Err(
                             "This file is handled by a git filter and cannot be staged by a guest."
@@ -591,12 +676,18 @@ fn dispatch_with_roots(
                 }
                 "scm.unstage" => {
                     let rel = checked_rel(root, req, hide_ignored, true)?;
+                    if sticky(std::slice::from_ref(&rel))?[0] {
+                        return Err("File unavailable".into());
+                    }
                     revalidate()?;
                     run(git, &["reset", "-q", "HEAD", "--", &rel])
                         .map_err(|e| bounded_err(root, &e))?;
                 }
                 "scm.discard" => {
                     let rel = checked_rel(root, req, hide_ignored, false)?;
+                    if sticky(std::slice::from_ref(&rel))?[0] {
+                        return Err("File unavailable".into());
+                    }
                     if has_filter_attr(git, &prefix, &rel).map_err(|e| bounded_err(root, &e))? {
                         return Err("This file is handled by a git filter and cannot be restored by a guest.".into());
                     }
@@ -613,7 +704,7 @@ fn dispatch_with_roots(
                         return Err("Enter a commit message.".into());
                     }
                     let show = project_prefix(git, &prefix).map_err(|e| bounded_err(root, &e))?;
-                    if !staged_within_project(git, &prefix, &show, hide_ignored)
+                    if !staged_within_project(git, &prefix, &show, hide_ignored, &commit_hidden)
                         .map_err(|e| bounded_err(root, &e))?
                     {
                         return Err(

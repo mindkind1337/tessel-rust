@@ -27,6 +27,7 @@ impl Drop for GitSlot {
     }
 }
 struct Grant {
+    history: Arc<ignored_paths::IgnoredPaths>,
     project: SharedProject,
     hide: bool,
     git: bool,
@@ -52,6 +53,7 @@ fn authorize(guard: &HostInner, guest: &str, project: Option<u64>, mutate: bool)
         return Err("Git permission is required.".into());
     }
     Ok(Grant {
+        history: guard.ignored_paths.clone(),
         project: guard.find_shared_project_for_guest(index, project)?,
         hide: guard.settings.hide_ignored,
         git: slot.guest.rights.git,
@@ -124,7 +126,7 @@ fn run_authorized(
     }
     Ok(value)
 }
-fn private_hooks() -> Result<(tempfile::TempDir, PathBuf)> {
+pub(super) fn private_hooks() -> Result<(tempfile::TempDir, PathBuf)> {
     let owner = tempfile::Builder::new()
         .prefix("tessel-empty-hooks-")
         .tempdir()
@@ -141,6 +143,7 @@ pub(super) fn dispatch(inner: &Arc<Mutex<HostInner>>, guest: &str, req: &Value) 
         guest_git_host::dispatch(
             &grant.project.path,
             &grant.roots,
+            &grant.history,
             grant.git,
             grant.hide,
             req.get("op").and_then(Value::as_str).unwrap_or(""),

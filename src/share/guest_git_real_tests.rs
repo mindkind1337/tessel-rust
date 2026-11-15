@@ -284,6 +284,7 @@ fn real_guest_git_refuses_config_editable_in_another_shared_project() {
         &mut repo.git,
         &root,
         &roots,
+        None,
         true,
         true,
         "scm.status",
