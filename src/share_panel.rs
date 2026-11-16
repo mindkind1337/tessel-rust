@@ -215,16 +215,13 @@ pub struct SharePanel {
 
 impl Default for SharePanel {
     fn default() -> Self {
-        let mut id_bytes = [0u8; 32];
-        let _ = getrandom::fill(&mut id_bytes);
-        let guest_identity_hex: String = id_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let default_user = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_else(|_| "Host".into());
         Self {
             host: None,
             guest_session: None,
-            guest_identity_hex,
+            guest_identity_hex: String::new(),
             tab: DialogTab::Share,
             host_sub_tab: HostSubTab::Overview,
             people_view: PeopleViewMode::List,
@@ -266,6 +263,41 @@ impl Default for SharePanel {
 }
 
 impl SharePanel {
+    fn ensure_guest_identity_with(
+        &mut self,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+    ) -> Result<String, String> {
+        if self.guest_identity_hex.is_empty() {
+            let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
+            fill(&mut bytes[..])?;
+            self.guest_identity_hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        }
+        Ok(self.guest_identity_hex.clone())
+    }
+
+    fn join_session(&mut self) {
+        self.join_session_with(|bytes| {
+            getrandom::fill(bytes)
+                .map_err(|_| "Secure random generation failed; Live Share was not joined.".into())
+        });
+    }
+
+    fn join_session_with(&mut self, fill: impl FnOnce(&mut [u8]) -> Result<(), String>) {
+        let prepared = Invitation::decode(self.join_code.trim()).and_then(|invitation| {
+            self.ensure_guest_identity_with(fill)
+                .map(|identity| (invitation, identity))
+        });
+        match prepared {
+            Ok((invitation, identity)) => {
+                let session = GuestSession::connect(invitation, self.guest_name.clone(), identity);
+                self.set_guest_session(session);
+                self.join_code.clear();
+                self.error.clear();
+            }
+            Err(error) => self.error = error,
+        }
+    }
+
     #[must_use]
     pub fn hosting(&self) -> bool {
         self.host.is_some()
@@ -2640,19 +2672,7 @@ impl SharePanel {
                     )
                     .clicked()
                 {
-                    match Invitation::decode(&self.join_code) {
-                        Ok(inv) => {
-                            let sess = GuestSession::connect(
-                                inv,
-                                self.guest_name.clone(),
-                                self.guest_identity_hex.clone(),
-                            );
-                            self.set_guest_session(sess);
-                            self.join_code.clear();
-                            self.error.clear();
-                        }
-                        Err(e) => self.error = e,
-                    }
+                    self.join_session();
                 }
             }
             Some(GuestPhase::Connecting) => {
@@ -3533,19 +3553,7 @@ impl SharePanel {
             }
             ShareGpuiAction::SetJoinCode(code) => self.join_code = code,
             ShareGpuiAction::SetGuestName(name) => self.guest_name = name,
-            ShareGpuiAction::JoinSession => match Invitation::decode(self.join_code.trim()) {
-                Ok(inv) => {
-                    let gs = GuestSession::connect(
-                        inv,
-                        self.guest_name.clone(),
-                        self.guest_identity_hex.clone(),
-                    );
-                    self.set_guest_session(gs);
-                    self.join_code.clear();
-                    self.error.clear();
-                }
-                Err(e) => self.error = e,
-            },
+            ShareGpuiAction::JoinSession => self.join_session(),
             ShareGpuiAction::DisconnectGuest => {
                 self.guest_session = None;
             }
@@ -3649,3 +3657,53 @@ mod guest_files;
 
 #[path = "share_panel/guest_git.rs"]
 mod guest_git;
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn guest_entropy_failure_keeps_invitation_without_starting_a_session() {
+        use base64::Engine as _;
+        let invitation: Invitation = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "address": "127.0.0.1:1",
+            "certificate": "",
+            "token": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x11; 32]),
+        }))
+        .unwrap();
+        let code = invitation.encode().unwrap();
+        Invitation::decode(&code).expect("fixture must reach the entropy check");
+        let mut panel = SharePanel {
+            join_code: code.clone(),
+            ..Default::default()
+        };
+        assert!(panel.guest_identity_hex.is_empty());
+        panel.join_session_with(|bytes| {
+            bytes.fill(0xA5);
+            Err("Synthetic entropy failure".into())
+        });
+        assert!(panel.error.contains("entropy"), "{}", panel.error);
+        assert!(panel.guest_identity_hex.is_empty());
+        assert!(panel.guest_session.is_none());
+        assert_eq!(panel.join_code, code);
+        let identity = panel
+            .ensure_guest_identity_with(|bytes| {
+                bytes.fill(0xBB);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(identity, "bb".repeat(32));
+        assert_eq!(
+            panel
+                .ensure_guest_identity_with(|_| panic!("reuse cached identity"))
+                .unwrap(),
+            identity
+        );
+        assert!(panel.guest_session.is_none());
+        panel.join_code = "invalid".into();
+        panel.join_session_with(|_| panic!("invalid invitations do not request randomness"));
+        assert!(panel.guest_session.is_none());
+        assert_eq!(panel.guest_identity_hex, identity);
+    }
+}

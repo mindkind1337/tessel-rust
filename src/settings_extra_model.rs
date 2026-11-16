@@ -609,6 +609,18 @@ pub fn add_managed_account(
     provider: &str,
     label: &str,
 ) -> Result<ManagedAccount, String> {
+    add_managed_account_with(data_dir, provider, label, |bytes| {
+        getrandom::fill(bytes)
+            .map_err(|_| "Secure random generation failed; no account was created.".into())
+    })
+}
+
+fn add_managed_account_with(
+    data_dir: &Path,
+    provider: &str,
+    label: &str,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<ManagedAccount, String> {
     let trimmed = label.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 80 || trimmed.chars().any(char::is_control) {
         return Err("Account label must be 1–80 printable characters.".into());
@@ -618,7 +630,7 @@ pub fn add_managed_account(
         return Err("Maximum managed accounts reached (32).".into());
     }
     let mut raw = [0u8; 8];
-    let _ = getrandom::fill(&mut raw);
+    fill(&mut raw)?;
     let mut id = String::with_capacity(20);
     id.push_str("acct-");
     for b in raw {
@@ -627,7 +639,19 @@ pub fn add_managed_account(
     }
     let profile_dir = managed_account_profile_dir(data_dir, provider, &id)
         .ok_or("Invalid managed account path.")?;
-    fs::create_dir_all(&profile_dir).map_err(|e| e.to_string())?;
+    if roster.accounts.iter().any(|account| account.id == id) {
+        return Err("Account identifier already exists; retry creating the account.".into());
+    }
+    let account_dir = profile_dir
+        .parent()
+        .ok_or("Invalid managed account path.")?;
+    let root = account_dir
+        .parent()
+        .ok_or("Invalid managed account path.")?;
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    // Reserve a new account directory exclusively, never reuse another profile.
+    fs::create_dir(account_dir).map_err(|e| format!("Could not reserve a new account: {e}"))?;
+    fs::create_dir(&profile_dir).map_err(|e| e.to_string())?;
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -2750,6 +2774,52 @@ fn read_bounded_utf8(path: &Path, max_bytes: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn managed_account_entropy_failure_and_collisions_preserve_existing_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        for provider in ["codex", "claude"] {
+            let data = dir.path().join(provider);
+            let failed = add_managed_account_with(&data, provider, "Synthetic", |bytes| {
+                bytes.fill(0xA5);
+                Err("Synthetic entropy failure".into())
+            });
+            assert!(failed.unwrap_err().contains("entropy"));
+            assert!(!data.exists(), "entropy failure must not create any files");
+            let fill = |bytes: &mut [u8]| {
+                bytes.fill(0xA5);
+                Ok(())
+            };
+            let account = add_managed_account_with(&data, provider, "First", fill).unwrap();
+            let profile = managed_account_profile_dir(&data, provider, &account.id).unwrap();
+            fs::write(profile.join("marker"), "synthetic profile").unwrap();
+            let root = managed_accounts_root(&data, provider).unwrap();
+            let roster_before = fs::read(root.join("accounts.json")).unwrap();
+            assert!(add_managed_account_with(&data, provider, "Second", fill).is_err());
+            assert_eq!(fs::read(root.join("accounts.json")).unwrap(), roster_before);
+            assert_eq!(
+                fs::read_to_string(profile.join("marker")).unwrap(),
+                "synthetic profile"
+            );
+            // An orphan directory absent from the roster must also not be reused.
+            let orphan =
+                managed_account_profile_dir(&data, provider, "acct-bbbbbbbbbbbbbbbb").unwrap();
+            fs::create_dir_all(&orphan).unwrap();
+            fs::write(orphan.join("marker"), "orphan profile").unwrap();
+            assert!(
+                add_managed_account_with(&data, provider, "Third", |bytes| {
+                    bytes.fill(0xBB);
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(
+                fs::read_to_string(orphan.join("marker")).unwrap(),
+                "orphan profile"
+            );
+            assert_eq!(fs::read(root.join("accounts.json")).unwrap(), roster_before);
+        }
+    }
+
     use super::*;
 
     #[test]
