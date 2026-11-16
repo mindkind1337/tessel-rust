@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 mod body;
 mod parse;
 pub mod request;
+mod storage_path;
 
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 pub const MAX_LINEAR_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -216,14 +217,10 @@ fn protect_key(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>, String
 }
 fn key_lock(path: &Path) -> Result<File, String> {
     let parent = path.parent().ok_or("Invalid private storage directory")?;
-    std::fs::create_dir_all(parent).map_err(|_| "Cannot create private Linear storage")?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(parent.join("linear.lock"))
-        .map_err(|_| "Cannot lock Linear storage")?;
+    storage_path::directory(parent)?;
+    storage_path::check_file(path)?;
+    let file = storage_path::open(&parent.join("linear.lock"), true)?
+        .ok_or("Cannot lock Linear storage")?;
     fs2::FileExt::try_lock_exclusive(&file).map_err(|_| "Linear storage is busy")?;
     Ok(file)
 }
@@ -237,16 +234,15 @@ fn save_key_at(path: &Path, key: &str) -> Result<(), String> {
     temp.write_all(&protected)
         .and_then(|_| temp.as_file().sync_all())
         .map_err(|_| "Cannot write protected Linear key")?;
+    storage_path::check_file(path)?;
     temp.persist(path)
         .map_err(|_| "Cannot save protected Linear key")?;
     Ok(())
 }
 fn load_key_at(path: &Path) -> Result<Option<Zeroizing<String>>, String> {
     let _lock = key_lock(path)?;
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("Cannot read protected Linear key".into()),
+    let Some(file) = storage_path::open(path, false)? else {
+        return Ok(None);
     };
     let bytes = read_bounded(file, MAX_KEY_FILE as usize)?;
     let plain = protect_key(&bytes, false)?;

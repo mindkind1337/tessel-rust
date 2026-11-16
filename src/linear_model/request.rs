@@ -1,43 +1,120 @@
-//! Account-generation cancellation. UI delivery and durable commits must recheck
-//! the scope too: completing a request is not permission to apply it indefinitely.
-use std::future::Future;
+//! Account-generation cancellation and serialized local commits. Completing a
+//! request alone is not permission to apply it; use commit at the delivery boundary.
+use std::{
+    future::Future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::sync::watch;
 
-pub struct Generation {
+struct Authority {
+    gate: Mutex<()>,
     sender: watch::Sender<u64>,
+    closed: AtomicBool,
+}
+pub struct Generation {
+    authority: Arc<Authority>,
 }
 impl Default for Generation {
     fn default() -> Self {
         Self {
-            sender: watch::channel(0).0,
+            authority: Arc::new(Authority {
+                gate: Mutex::new(()),
+                sender: watch::channel(0).0,
+                closed: AtomicBool::new(false),
+            }),
         }
     }
 }
 impl Generation {
     pub fn scope(&self) -> Scope {
-        Scope {
-            generation: *self.sender.borrow(),
-            receiver: self.sender.subscribe(),
-        }
+        Scope::new(self.authority.clone())
     }
     pub fn advance(&mut self) -> Result<Scope, String> {
+        let _guard = self
+            .authority
+            .gate
+            .lock()
+            .map_err(|_| "Linear account authority is unavailable")?;
         let next = self
+            .authority
             .sender
             .borrow()
             .checked_add(1)
             .ok_or("Linear request identity exhausted")?;
-        self.sender.send_replace(next);
+        self.authority.sender.send_replace(next);
         Ok(self.scope())
+    }
+}
+impl Drop for Generation {
+    fn drop(&mut self) {
+        let _guard = self
+            .authority
+            .gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.authority.closed.store(true, Ordering::Release);
+        // Scopes keep the authority alive, so notify explicitly on owner shutdown.
+        self.authority.sender.send_modify(|_| {});
     }
 }
 #[derive(Clone)]
 pub struct Scope {
     generation: u64,
     receiver: watch::Receiver<u64>,
+    authority: Arc<Authority>,
 }
 impl Scope {
+    fn new(authority: Arc<Authority>) -> Self {
+        let generation = *authority.sender.borrow();
+        let receiver = authority.sender.subscribe();
+        Self {
+            generation,
+            receiver,
+            authority,
+        }
+    }
     pub fn is_current(&self) -> bool {
-        self.receiver.has_changed().is_ok() && *self.receiver.borrow() == self.generation
+        !self.authority.closed.load(Ordering::Acquire)
+            && !self.authority.gate.is_poisoned()
+            && *self.receiver.borrow() == self.generation
+    }
+    /// Serialize a synchronous local commit or UI delivery with account changes.
+    /// The callback must not re-enter this authority or wait for asynchronous work.
+    pub fn commit<T>(&self, apply: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let _guard = self
+            .authority
+            .gate
+            .lock()
+            .map_err(|_| "Linear account authority is unavailable")?;
+        if !self.is_current() {
+            return Err("Linear request cancelled".into());
+        }
+        apply()
+    }
+    /// A successful durable account change invalidates old reads before unlocking.
+    /// Failure keeps the old generation, allowing the previous connection to survive.
+    pub fn commit_and_advance<T>(
+        &self,
+        apply: impl FnOnce() -> Result<T, String>,
+    ) -> Result<(T, Scope), String> {
+        let _guard = self
+            .authority
+            .gate
+            .lock()
+            .map_err(|_| "Linear account authority is unavailable")?;
+        if !self.is_current() {
+            return Err("Linear request cancelled".into());
+        }
+        let next = self
+            .generation
+            .checked_add(1)
+            .ok_or("Linear request identity exhausted")?;
+        let value = apply()?;
+        self.authority.sender.send_replace(next);
+        Ok((value, Scope::new(self.authority.clone())))
     }
     pub async fn run<T>(
         &mut self,
@@ -46,7 +123,7 @@ impl Scope {
         // Check the value while marking its version seen. A separate pre-check
         // could miss an invalidation between checking and borrow_and_update.
         let observed = *self.receiver.borrow_and_update();
-        if observed != self.generation || self.receiver.has_changed().is_err() {
+        if observed != self.generation || !self.is_current() {
             return Err("Linear request cancelled".into());
         }
         tokio::pin!(future);
@@ -139,5 +216,69 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
+    }
+    #[test]
+    fn failed_account_commit_retains_authority_and_success_revokes_previous_reads() {
+        let mut owner = Generation::default();
+        let scope = owner.scope();
+        assert!(
+            scope
+                .commit_and_advance(|| Err::<(), _>("synthetic storage failure".into()))
+                .is_err()
+        );
+        assert!(scope.is_current());
+        let (value, current) = scope.commit_and_advance(|| Ok("saved")).unwrap();
+        assert_eq!(value, "saved");
+        assert!(!scope.is_current());
+        assert!(current.is_current());
+        assert!(
+            scope
+                .commit::<()>(|| panic!("stale delivery must not apply"))
+                .is_err()
+        );
+        owner.advance().unwrap();
+        assert!(
+            current
+                .commit_and_advance::<()>(|| panic!("stale save must not run"))
+                .is_err()
+        );
+    }
+    #[test]
+    fn account_invalidation_waits_for_an_already_started_local_commit() {
+        use std::{sync::mpsc, thread, time::Duration};
+        let owner = Generation::default();
+        let scope = owner.scope();
+        let committing = scope.clone();
+        let (entered, entry) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let commit = thread::spawn(move || {
+            committing.commit(|| {
+                entered.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok("committed")
+            })
+        });
+        entry.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (attempted, attempt) = mpsc::channel();
+        let (advanced, advance) = mpsc::channel();
+        let invalidation = thread::spawn(move || {
+            let mut owner = owner;
+            attempted.send(()).unwrap();
+            let next = owner.advance().unwrap();
+            advanced.send(()).unwrap();
+            (owner, next)
+        });
+        attempt.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(advance.try_recv().is_err());
+        release.send(()).unwrap();
+        assert_eq!(commit.join().unwrap().unwrap(), "committed");
+        let (_owner, next) = invalidation.join().unwrap();
+        assert!(!scope.is_current());
+        assert!(next.is_current());
+        assert!(
+            scope
+                .commit::<()>(|| panic!("invalidated result must not apply"))
+                .is_err()
+        );
     }
 }
