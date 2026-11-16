@@ -43,12 +43,14 @@ impl Transport {
         model: &str,
         effort: &str,
         profile: Option<&crate::session_profile::NativeLaunch>,
+        cancellation: &crate::native_connection::Cancellation,
     ) -> Result<Self, String> {
         let exe = executable().ok_or("Install Claude Code and sign in with its CLI first")?;
         let mut command = Self::command(&exe, cwd, session, resume, model, effort);
         if let Some(profile) = profile {
             profile.apply("claude", &mut command)?;
         }
+        cancellation.check()?;
         Self::spawn(&mut command)
     }
     fn command(

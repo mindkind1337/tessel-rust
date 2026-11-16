@@ -423,21 +423,25 @@ impl Chat {
         let profile = self.profile.clone();
         let cwd = self.cwd.clone();
         let session = self.session.clone();
-        self.connecting = Some(crate::native_connection::Pending::start(move || {
-            if let Some(profile) = &profile
-                && resume
-            {
-                profile.validate_resume("claude", &cwd, &session)?;
-            }
-            transport::Transport::start(
-                &cwd,
-                &session,
-                resume,
-                &options.model,
-                &options.effort,
-                profile.as_ref(),
-            )
-        })?);
+        self.connecting = Some(crate::native_connection::Pending::start_cancellable(
+            move |cancellation| {
+                if let Some(profile) = &profile
+                    && resume
+                {
+                    profile.validate_resume("claude", &cwd, &session)?;
+                }
+                cancellation.check()?;
+                transport::Transport::start(
+                    &cwd,
+                    &session,
+                    resume,
+                    &options.model,
+                    &options.effort,
+                    profile.as_ref(),
+                    &cancellation,
+                )
+            },
+        )?);
         self.ready = false;
         self.active = false;
         self.interrupting = false;
