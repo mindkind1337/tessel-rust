@@ -7790,6 +7790,7 @@ mod panel_snapshot_tests {
             let worktree = use_worktree.then(|| crate::workspace::SavedWorktree {
                 path: folder.canonicalize().unwrap(),
                 branch: "synthetic".into(),
+                base_branch: None,
             });
             state.sessions.push(
                 serde_json::from_value(serde_json::json!({

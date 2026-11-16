@@ -350,3 +350,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - `src/worktree_setup.rs` and the opt-in worktree preparation flow follow Tessel `src/main/worktreeCreate.js#setupWorktree` and `NewTaskDialog.vue` under the existing Orca/Tessel MIT attribution. The bounded native process implementation reuses the existing Rust process-tree guard.
 
 - Existing-agent task selection follows Tessel `NewTaskDialog.vue` and `App.vue#startTask` under the existing Orca/Tessel MIT attribution; native conversation epochs and transactional copy receipts are Rust-specific guards.
+
+- Worktree origin metadata in `src/worktree.rs`, `src/workspace.rs` and the owner task controller follows Tessel `src/main/agentTools.js#createWorktree`, `src/main/worktreeCreate.js#resolveWorktreeBase` and `App.vue#taskPrompt` under the existing Orca/Tessel MIT attribution. Rust resolves the captured symbolic ref and describes unknown historical origins explicitly; complete reference-validation parity is tracked separately.

@@ -607,6 +607,9 @@ pub struct NativeThread {
 pub struct SavedWorktree {
     pub path: PathBuf,
     pub branch: String,
+    /// Descriptive origin only; old/discovered copies may have no recorded base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1025,6 +1028,9 @@ impl Workspace {
                     || b.is_empty()
                     || wt.branch.len() > 200
                     || wt.branch.chars().any(char::is_control)
+                    || wt.base_branch.as_ref().is_some_and(|b| {
+                        b.trim().is_empty() || b.len() > 1024 || b.chars().any(char::is_control)
+                    })
                 {
                     return Err("Invalid session worktree metadata.".into());
                 }
@@ -1639,6 +1645,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_worktree_origin_is_optional_and_roundtrips() {
+        let old = serde_json::json!({"path":"C:/synthetic/copy", "branch":"agent/task"});
+        let mut copy: super::SavedWorktree = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(copy.base_branch, None);
+        assert_eq!(serde_json::to_value(&copy).unwrap(), old);
+        copy.base_branch = Some("feature/source".into());
+        let restored: super::SavedWorktree =
+            serde_json::from_value(serde_json::to_value(&copy).unwrap()).unwrap();
+        assert_eq!(copy, restored);
+    }
     use super::*;
     #[test]
     fn pane_numbers_survive_save_reload_reordering_and_new_panes() {

@@ -49,7 +49,7 @@ pub enum WorktreeEvent {
         project_id: u64,
         source_cwd: PathBuf,
         target: WorktreeLaunchTarget,
-        result: Result<(CreatedWorktree, Option<GitRepoSummary>), String>,
+        result: Result<(Box<CreatedWorktree>, Option<GitRepoSummary>), String>,
     },
     CleanupScanned {
         project_id: u64,
@@ -186,7 +186,7 @@ impl WorktreeState {
                     ));
                 }
                 let refreshed = worktree::inspect_project(&cwd).ok();
-                (created, refreshed)
+                (Box::new(created), refreshed)
             });
             let _ = tx.send(WorktreeEvent::Created {
                 project_id,

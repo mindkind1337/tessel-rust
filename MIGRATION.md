@@ -1543,3 +1543,14 @@ The controller reuses the actual pane and its captured directory/provider/epoch 
 Terminal-agent reuse and later manual completion remain separate work. A confirmed Vue discrepancy was reported to Darwin: its existing-pane branch did not copy the pane worktree into the new card, so taskPrompt could incorrectly direct that agent to the main project folder. Rust retains that context rather than reproducing the bug.
 
 Validation: all 5 existing-agent controller tests, 7 native-review regressions and 5 form tests pass. The fixtures cover both native providers, a real synthetic Git worktree, late drafts, changed conversation epochs, persistence and GPUI keyboard selection. Strict all-target/all-feature Clippy passes with warnings denied; the visual-test binary builds (3m31s). The isolated French Compatibility capture was inspected with the existing-agent availability label and complete form visible. No real provider, account or user project was used. Darwin subsequently fixed the reported Vue copy-context bug in b1845 (a472a85).
+
+
+## Worktree origin across owner tasks (2026-11-16)
+
+Worktree creation now retains both the resolved commit and its selected reference. An implicit base captures symbolic HEAD and resolves that exact ref, preventing a later branch switch from relabeling a different HEAD; detached HEAD records the exact commit instead. Explicit base names are trimmed and resolved using the existing local/remote/ref priority. The worktree is still created from the resolved commit.
+
+Saved panes carry an optional descriptive base_branch, bounded like task preparation metadata. Old saves remain readable without it, and discovering an existing copy does not invent its historical origin. New owner tasks and existing-pane reuse retain the recorded origin. For unknown origins, the controller explicitly supplies “an unrecorded base” to the source-compatible prompt formatter instead of its main-branch fallback. These values do not authorize execution or bypass the existing repository-root inspection.
+
+The default-test compilation also exposed that a test fixture introduced in b282 was only available under visual-test. Its configuration now includes test builds as well, without adding it to normal production builds.
+
+Validation: the legacy saved-worktree roundtrip and all 5 existing-agent task regressions pass. The real Git integration test also passes after adding explicit HEAD and a legal branch whose own name starts with refs/heads/, plus explicit branch and detached-commit cases (3.63 seconds). All 3 preparation/background-event regressions pass (6.73 seconds). Strict all-target/all-feature Clippy passes with warnings denied (42.77 seconds); formatting and diff checks pass. The Created event now boxes its worktree payload to keep enum size bounded. All repositories and conversations were synthetic.

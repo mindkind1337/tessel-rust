@@ -424,3 +424,5 @@ Optional connected native reviewers are now selectable in both New Task renderer
 - Local New Task: optional `.tessel/setup.ps1` execution is connected in GPUI and Compatibility, defaults off, and is confined to newly created copies. Read-only review and broader existing-agent/terminal task entry points remain separate work.
 
 - New Task now includes captured connected native agents with availability labels. Existing selection hides copy/setup options and excludes that pane from reviewers. Terminal agents and disconnected-conversation startup remain outstanding.
+
+- Worktree origin: owner tasks and reused native panes preserve a recorded starting branch/commit; unknown historical origins are described explicitly rather than assumed to be main. Old saved panes remain compatible.

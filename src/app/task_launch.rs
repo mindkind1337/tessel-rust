@@ -48,7 +48,6 @@ pub(super) struct Pending {
     expected: Task,
     provider: Provider,
     existing: Option<crate::native_review::Target>,
-    base_branch: Option<String>,
     pane: Option<u64>,
     prompt: String,
     phase: Phase,
@@ -184,7 +183,7 @@ impl Tessel {
                     path: copy.path.clone(),
                     branch: copy.branch.clone(),
                     root,
-                    base_branch: None,
+                    base_branch: copy.base_branch.clone(),
                 })
             } else {
                 if !same_worker_directory(&target.cwd, &spec.source) {
@@ -244,7 +243,6 @@ impl Tessel {
             expected: doing,
             provider: spec.provider,
             existing: spec.existing,
-            base_branch: spec.base_branch.clone(),
             pane: None,
             prompt: String::new(),
             phase: Phase::Pending,
@@ -299,7 +297,7 @@ impl Tessel {
                 .map(|(w, path)| crate::task_prompt::Worktree {
                     path,
                     branch: &w.branch,
-                    base_branch: w.base_branch.as_deref(),
+                    base_branch: Some(w.base_branch.as_deref().unwrap_or("an unrecorded base")),
                 }),
             guest_by: None,
             copied_from: None,
@@ -316,6 +314,7 @@ impl Tessel {
             let worktree = details.worktree.as_ref().map(|w| workspace::SavedWorktree {
                 path: w.path.clone(),
                 branch: w.branch.clone(),
+                base_branch: w.base_branch.clone(),
             });
             let project = pending.ticket.project_id();
             let split = self
@@ -381,7 +380,7 @@ impl Tessel {
                 path: copy.path,
                 root: copy.root,
                 branch: copy.branch,
-                base_branch: pending.base_branch.clone(),
+                base_branch: Some(copy.base_branch),
             });
             self.save_launch_card(&pending.expected, receipt.clone())?;
             pending.expected = receipt;
@@ -782,69 +781,80 @@ mod tests {
 
     #[test]
     fn existing_task_retains_the_agents_existing_worktree_without_running_setup() {
-        let (temp, mut app, mut spec) = fixture(Provider::Codex);
-        let root = spec.source.clone();
-        let git = |args: &[&str]| {
-            let mut options = vec!["-c", "core.hooksPath=", "-c", "commit.gpgsign=false"];
-            options.extend_from_slice(args);
-            crate::git::run(&root, &options, None).unwrap()
-        };
-        git(&["init", "-b", "main"]);
-        git(&["config", "user.name", "Fixture"]);
-        git(&["config", "user.email", "fixture@example.invalid"]);
-        git(&["commit", "--allow-empty", "-m", "fixture"]);
-        let copy = temp.path().join("existing-copy");
-        git(&[
-            "worktree",
-            "add",
-            "-b",
-            "existing-copy",
-            copy.to_str().unwrap(),
-        ]);
-        app.worktree_state
-            .refresh_project(spec.project, root.clone());
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while app.worktree_state.summary(spec.project).is_none() {
-            app.poll_worktrees();
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let pane = app
-            .new_session_with_history(
-                Some(spec.project),
-                Launch::CodexChat,
-                None,
-                false,
-                Some(workspace::SavedWorktree {
-                    path: copy.clone(),
-                    branch: "existing-copy".into(),
-                }),
-                None,
-            )
-            .unwrap();
-        let rx = synthetic_chat(&mut app, Provider::Codex, pane, spec.project, copy.clone());
-        spec.existing = app.current_reviewer_target(spec.project, pane);
-        spec.run_setup = true; // An existing pane never enters copy preparation.
-        app.start_owner_native_task(spec).unwrap();
-        assert_eq!(app.sessions.len(), 1);
-        assert!(!app.worktree_state.is_busy());
-        let receipt = app.state.tasks[0]
-            .preparation
-            .as_ref()
-            .unwrap()
-            .worktree
-            .as_ref()
-            .unwrap();
-        assert!(same_worker_directory(&receipt.path, &copy));
-        assert!(same_worker_directory(&receipt.root, &root));
-        assert_eq!(receipt.branch, "existing-copy");
-        assert!(app.poll_owner_task_launches());
-        assert!(
-            rx.try_recv().unwrap()["params"]["input"][0]["text"]
-                .as_str()
+        for origin in [Some("feature/source"), None] {
+            let (temp, mut app, mut spec) = fixture(Provider::Codex);
+            let root = spec.source.clone();
+            let git = |args: &[&str]| {
+                let mut options = vec!["-c", "core.hooksPath=", "-c", "commit.gpgsign=false"];
+                options.extend_from_slice(args);
+                crate::git::run(&root, &options, None).unwrap()
+            };
+            git(&["init", "-b", "main"]);
+            git(&["config", "user.name", "Fixture"]);
+            git(&["config", "user.email", "fixture@example.invalid"]);
+            git(&["commit", "--allow-empty", "-m", "fixture"]);
+            git(&["switch", "-c", "feature/source"]);
+            let copy = temp.path().join("existing-copy");
+            git(&[
+                "worktree",
+                "add",
+                "-b",
+                "existing-copy",
+                copy.to_str().unwrap(),
+            ]);
+            app.worktree_state
+                .refresh_project(spec.project, root.clone());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while app.worktree_state.summary(spec.project).is_none() {
+                app.poll_worktrees();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let pane = app
+                .new_session_with_history(
+                    Some(spec.project),
+                    Launch::CodexChat,
+                    None,
+                    false,
+                    Some(workspace::SavedWorktree {
+                        path: copy.clone(),
+                        branch: "existing-copy".into(),
+                        base_branch: origin.map(str::to_owned),
+                    }),
+                    None,
+                )
+                .unwrap();
+            let rx = synthetic_chat(&mut app, Provider::Codex, pane, spec.project, copy.clone());
+            spec.existing = app.current_reviewer_target(spec.project, pane);
+            spec.run_setup = true; // An existing pane never enters copy preparation.
+            app.start_owner_native_task(spec).unwrap();
+            assert_eq!(app.sessions.len(), 1);
+            assert!(!app.worktree_state.is_busy());
+            let receipt = app.state.tasks[0]
+                .preparation
+                .as_ref()
                 .unwrap()
-                .contains("existing-copy")
-        );
+                .worktree
+                .as_ref()
+                .unwrap();
+            assert!(same_worker_directory(&receipt.path, &copy));
+            assert!(same_worker_directory(&receipt.root, &root));
+            assert_eq!(receipt.branch, "existing-copy");
+            assert_eq!(receipt.base_branch.as_deref(), origin);
+            assert!(app.poll_owner_task_launches());
+            let sent = rx.try_recv().unwrap();
+            let prompt = sent["params"]["input"][0]["text"].as_str().unwrap();
+            assert!(prompt.contains("existing-copy"));
+            assert!(prompt.contains(&format!(
+                "made from {}",
+                origin.unwrap_or("an unrecorded base")
+            )));
+            assert!(!prompt.contains("made from the main branch"));
+            let saved = app.state.sessions.iter().find(|s| s.id == pane).unwrap();
+            let serialized = serde_json::to_string(saved).unwrap();
+            let restored: workspace::SavedSession = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(restored.worktree.unwrap().base_branch.as_deref(), origin);
+        }
     }
     #[test]
     fn existing_task_form_selects_a_captured_pane_and_excludes_self_review() {

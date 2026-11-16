@@ -1700,7 +1700,7 @@ impl Tessel {
                     result,
                     ..
                 } => {
-                    self.finish_owner_task_copy(id, result.map(|(copy, _)| copy));
+                    self.finish_owner_task_copy(id, result.map(|(copy, _)| *copy));
                 }
                 WorktreeEvent::Created {
                     project_id,
@@ -1720,6 +1720,7 @@ impl Tessel {
                         let saved_wt = workspace::SavedWorktree {
                             path: created.path,
                             branch: created.branch,
+                            base_branch: Some(created.base_branch),
                         };
                         match target {
                             WorktreeLaunchTarget::Task(_) => unreachable!("handled above"),
@@ -4087,6 +4088,7 @@ impl Tessel {
             Some(workspace::SavedWorktree {
                 path: PathBuf::from(path),
                 branch,
+                base_branch: None,
             }),
         );
     }
@@ -4463,6 +4465,7 @@ impl Tessel {
                         Some(workspace::SavedWorktree {
                             path: PathBuf::from(path),
                             branch,
+                            base_branch: None,
                         }),
                     );
                 }

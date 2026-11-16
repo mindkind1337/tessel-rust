@@ -13,7 +13,7 @@ pub(crate) struct Detection {
 }
 
 impl Detection {
-    #[cfg(feature = "visual-test")]
+    #[cfg(any(test, feature = "visual-test"))]
     pub fn model_picker_fixture(agent: &str) -> Self {
         Self {
             entries: crate::agent_catalog::ALL

@@ -80,6 +80,7 @@ pub struct CreatedWorktree {
     pub branch: String,
     pub copied_env_files: usize,
     pub base_commit: String,
+    pub base_branch: String,
     pub setup_warning: Option<String>,
 }
 
@@ -636,10 +637,35 @@ fn copy_ignored_env_files(source_root: &Path, target_root: &Path) -> usize {
     copied
 }
 
-fn resolve_base_commit(toplevel: &Path, base_branch: Option<&str>) -> Result<String, String> {
-    let Some(raw) = base_branch.map(str::trim).filter(|s| !s.is_empty()) else {
-        let sha = run_git_readonly(toplevel, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-        return Ok(sha.trim().to_owned());
+fn resolve_base_commit(
+    toplevel: &Path,
+    base_branch: Option<&str>,
+) -> Result<(String, String), String> {
+    let Some(raw) = base_branch
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "HEAD")
+    else {
+        // Resolve the captured ref itself, not a later HEAD which may have moved
+        // to another branch between commands. Detached HEAD records the exact SHA.
+        let reference = run_git_readonly(toplevel, &["symbolic-ref", "--quiet", "HEAD"]).ok();
+        let reference = reference
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| r.starts_with("refs/heads/"));
+        let sha = run_git_readonly(
+            toplevel,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{}^{{commit}}", reference.unwrap_or("HEAD")),
+            ],
+        )?;
+        let sha = sha.trim().to_owned();
+        let label = reference
+            .map(|r| r.strip_prefix("refs/heads/").unwrap_or(r).to_owned())
+            .unwrap_or_else(|| sha.clone());
+        return Ok((sha, label));
     };
     if raw.starts_with('-') || raw.contains("..") || raw.chars().any(char::is_control) {
         return Err("Invalid base branch name.".into());
@@ -659,7 +685,7 @@ fn resolve_base_commit(toplevel: &Path, base_branch: Option<&str>) -> Result<Str
                 &format!("{candidate}^{{commit}}"),
             ],
         ) {
-            return Ok(sha.trim().to_owned());
+            return Ok((sha.trim().to_owned(), raw.to_owned()));
         }
     }
     Err(format!("Base branch '{raw}' could not be resolved."))
@@ -680,7 +706,7 @@ pub fn create_worktree(
     if !summary.has_commits {
         return Err("Make an initial commit before creating a worktree.".into());
     }
-    let base_commit = resolve_base_commit(&summary.toplevel, base_branch)?;
+    let (base_commit, base_branch) = resolve_base_commit(&summary.toplevel, base_branch)?;
     let base_dir = worktree_base_dir(&summary.toplevel, &general_prefs.workspace_dir)?;
     fs::create_dir_all(&base_dir).map_err(|e| {
         format!(
@@ -759,6 +785,7 @@ pub fn create_worktree(
         branch,
         copied_env_files,
         base_commit,
+        base_branch,
         setup_warning: None,
     })
 }

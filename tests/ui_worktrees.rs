@@ -781,3 +781,63 @@ fn project_panel_renders_secondary_worktree_cards_and_hidden_inbox_actions() {
         })
     );
 }
+
+#[test]
+fn worktree_origin_tracks_selected_ref_current_branch_and_detached_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source");
+    fs::create_dir(&root).unwrap();
+    init_real_git_repo(&root);
+    git::run(&root, &["switch", "-c", "refs/heads/feature/source"], None).unwrap();
+    let general = GeneralPreferences::default();
+    let prefs = GitPreferences::default();
+    let current =
+        worktree::create_worktree(&root, "current", None, false, &general, &prefs, None).unwrap();
+    assert_eq!(current.base_branch, "refs/heads/feature/source");
+    let head = worktree::create_worktree(
+        &root,
+        "named-head",
+        Some("HEAD"),
+        false,
+        &general,
+        &prefs,
+        None,
+    )
+    .unwrap();
+    assert_eq!(head.base_branch, "refs/heads/feature/source");
+    assert_eq!(head.base_commit, current.base_commit);
+
+    assert_eq!(
+        git::run(&current.path, &["rev-parse", "HEAD"], None)
+            .unwrap()
+            .trim(),
+        current.base_commit
+    );
+    let explicit = worktree::create_worktree(
+        &root,
+        "explicit",
+        Some(" main "),
+        false,
+        &general,
+        &prefs,
+        None,
+    )
+    .unwrap();
+    assert_eq!(explicit.base_branch, "main");
+    assert_eq!(
+        git::run(&explicit.path, &["rev-parse", "HEAD"], None)
+            .unwrap()
+            .trim(),
+        explicit.base_commit
+    );
+    git::run(&root, &["checkout", "--detach"], None).unwrap();
+    let detached =
+        worktree::create_worktree(&root, "detached", None, false, &general, &prefs, None).unwrap();
+    assert_eq!(detached.base_branch, detached.base_commit);
+    assert_eq!(
+        git::run(&detached.path, &["rev-parse", "HEAD"], None)
+            .unwrap()
+            .trim(),
+        detached.base_commit
+    );
+}
