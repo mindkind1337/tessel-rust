@@ -24,8 +24,10 @@ pub trait Native {
     ) -> Result<Phase, String>;
 }
 
+pub const MAX_PROMPT_BYTES: usize = 64 * 1024;
+
 pub fn validate_prompt(prompt: &str) -> Result<(), String> {
-    if prompt.trim().is_empty() || prompt.len() > 64 * 1024 || prompt.contains('\0') {
+    if prompt.trim().is_empty() || prompt.len() > MAX_PROMPT_BYTES || prompt.contains('\0') {
         Err("Task instructions must contain 1 to 65536 bytes without null characters.".into())
     } else {
         Ok(())

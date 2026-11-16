@@ -1,0 +1,187 @@
+{
+  "source": "src/renderer/src/App.vue#taskPrompt",
+  "sha256": "035a99a8bbfc70d5c6a0c10b7d806df4004b857fcd0ddfc22db57c38ff2c1762",
+  "cases": [
+    {
+      "name": "direct",
+      "task": {
+        "title": "Fix synthetic fixture",
+        "brief": "Keep the fixture offline."
+      },
+      "ws": {
+        "cwd": "C:/fixtures/project"
+      },
+      "expected": "[Tessel task] Fix synthetic fixture\n\nKeep the fixture offline.\n\nYou work directly in the project folder C:/fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "direct-empty-brief",
+      "task": {
+        "title": "Inspect fixture"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "expected": "[Tessel task] Inspect fixture\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "isolated-base",
+      "task": {
+        "title": "Fix fixture",
+        "brief": "Run fixture checks.",
+        "worktree": {
+          "path": "C:/fixtures/copy",
+          "branch": "agent/fixture",
+          "baseBranch": "develop"
+        }
+      },
+      "ws": {
+        "cwd": "C:/fixtures/project"
+      },
+      "expected": "[Tessel task] Fix fixture\n\nRun fixture checks.\n\nYou work in your own copy of the project: C:/fixtures/copy (git branch agent/fixture, made from develop). Commit your work on that branch (git add the files you changed, then git commit). Do not merge it and do not push: the user reviews and merges it. In your last commit message, list the checks you ran (tests, build) and their results. If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "isolated-default-base",
+      "task": {
+        "title": "Fix fixture",
+        "worktree": {
+          "path": "/fixtures/copy",
+          "branch": "agent/fixture"
+        }
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "expected": "[Tessel task] Fix fixture\n\nYou work in your own copy of the project: /fixtures/copy (git branch agent/fixture, made from the main branch). Commit your work on that branch (git add the files you changed, then git commit). Do not merge it and do not push: the user reviews and merges it. In your last commit message, list the checks you ran (tests, build) and their results. If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "origins",
+      "task": {
+        "title": "Quoted fixture card",
+        "brief": "Synthetic instructions.",
+        "guestBy": "Fixture guest",
+        "copiedFrom": "2026-01-02"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "expected": "[Tessel task] Quoted fixture card\n\n(This card's title was written by Fixture guest, a Live Share guest, not the user.)\n\n(This card's words came from a copy of the settings made on 2026-01-02, not typed here by the user.)\n\nSynthetic instructions.\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "team-with-lead",
+      "task": {
+        "title": "Fixture team task",
+        "teamId": "fixture-team",
+        "paneId": "fixture-worker"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "team": {
+        "id": "fixture-team",
+        "name": "Fixture team"
+      },
+      "lead": {
+        "label": "Fixture lead"
+      },
+      "expected": "[Tessel task] Fixture team task\n\nYou are in team \"Fixture team\", led by Fixture lead: it gave you this task and reviews your work when you finish. Ask it if something is unclear.\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "team-with-mailbox",
+      "task": {
+        "title": "Fixture team task",
+        "teamId": "fixture-team",
+        "paneId": "fixture-worker"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "team": {
+        "id": "fixture-team",
+        "name": "Fixture team"
+      },
+      "lead": {
+        "label": "Fixture lead"
+      },
+      "guide": "Read the synthetic fixture mailbox.",
+      "expected": "[Tessel task] Fixture team task\n\nYou are in team \"Fixture team\", led by Fixture lead: it gave you this task and reviews your work when you finish. Ask it if something is unclear.\nRead the synthetic fixture mailbox.\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "team-without-lead",
+      "task": {
+        "title": "Fixture team task",
+        "teamId": "fixture-team"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "team": {
+        "id": "fixture-team",
+        "name": "Fixture team"
+      },
+      "expected": "[Tessel task] Fixture team task\n\nYou are in team \"Fixture team\".\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "unicode",
+      "task": {
+        "title": "Vérifier Montréal — fixture",
+        "brief": "Ne rien exécuter.\nDeuxième ligne « Québec ».",
+        "guestBy": "Invité Ω"
+      },
+      "ws": {
+        "cwd": "C:/fixtures/Équipe"
+      },
+      "expected": "[Tessel task] Vérifier Montréal — fixture\n\n(This card's title was written by Invité Ω, a Live Share guest, not the user.)\n\nNe rien exécuter.\nDeuxième ligne « Québec ».\n\nYou work directly in the project folder C:/fixtures/Équipe. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "isolated-empty-base",
+      "task": {
+        "title": "Fixture",
+        "worktree": {
+          "path": "/fixtures/copy",
+          "branch": "agent/fixture",
+          "baseBranch": ""
+        }
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "expected": "[Tessel task] Fixture\n\nYou work in your own copy of the project: /fixtures/copy (git branch agent/fixture, made from the main branch). Commit your work on that branch (git add the files you changed, then git commit). Do not merge it and do not push: the user reviews and merges it. In your last commit message, list the checks you ran (tests, build) and their results. If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "team-empty-guide",
+      "task": {
+        "title": "Fixture",
+        "teamId": "fixture-team",
+        "paneId": "fixture-worker"
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "team": {
+        "id": "fixture-team",
+        "name": "Fixture team"
+      },
+      "guide": "",
+      "expected": "[Tessel task] Fixture\n\nYou are in team \"Fixture team\".\n\n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "whitespace-brief",
+      "task": {
+        "title": "Fixture",
+        "brief": "  "
+      },
+      "ws": {
+        "cwd": "/fixtures/project"
+      },
+      "expected": "[Tessel task] Fixture\n\n  \n\nYou work directly in the project folder /fixtures/project. Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    },
+    {
+      "name": "missing-workspace",
+      "task": {
+        "title": "Fixture only"
+      },
+      "ws": null,
+      "expected": "[Tessel task] Fixture only\n\nYou work directly in the project folder . Other agents may work there too: check .tessel/notes.md before editing shared files.\n\nWhen the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line."
+    }
+  ]
+}

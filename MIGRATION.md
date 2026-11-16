@@ -1460,3 +1460,12 @@ A shared native first-turn interface accepts explicit owner-task instructions wh
 Neither path consumes the owner's composer or its input identity. Used chats cancel; a required but unavailable account cannot be replaced by a ready connection; an already-attempted failed connection is not restarted. Task instructions are checked before connecting and are refused rather than truncated above 64 KiB. The caller remains responsible for live task/project identity, operation cancellation and deadline. The form/controller, existing-agent reuse, terminal-agent delivery and Linear start remain pending; this interface does not authorize itself from persisted receipts. Claude worker mailbox startup is not enabled by this change.
 
 Validation: 5 native-task first-turn tests pass, including exact prompt/draft identity, unchanged Codex permissions, Claude approval requests, failed normal-send draft restoration and normal trimmed-wire/untrimmed-display behavior. Both existing worker-first-turn regressions, 9 Claude tests (including 3 of the new tests) and all 26 standalone orchestration tests pass. Final strict all-target/all-feature Clippy passes (30.44 seconds); formatting and diff checks pass. Fixtures use synthetic outgoing transports, without launching a provider or using a real account. The formatter-reference fixtures being prepared separately are not part of this change.
+
+
+## Task instruction text parity (2026-11-16)
+
+The Rust task prompt formatter follows App.vue taskPrompt for direct and isolated work, explicit base branches, guest/copied provenance and team/mailbox instructions. Thirteen synthetic differential vectors are extracted from the reference function with its source SHA256; no live project, account or mailbox is read. The fixture teams have explicit ids so mailbox cases exercise the real reference lookup.
+
+Rendering is descriptive only and grants no launch authority. The complete UTF-8 payload must fit the existing 64 KiB native first-turn boundary and contain no NUL; oversize instructions are refused, never silently truncated. The New Task form/controller and Linear task start remain outstanding. README is unchanged because this formatter alone does not enable a user-facing flow.
+
+Validation: both focused tests pass, covering all 13 exact reference vectors and payload rejection. Strict all-target/all-feature Clippy passes with warnings denied (50.99 seconds).
