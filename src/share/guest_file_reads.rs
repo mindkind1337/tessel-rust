@@ -476,12 +476,15 @@ mod tests {
         run_isolated_probe("isolated_ignore_probe");
     }
     fn run_isolated_probe(probe: &str) {
+        run_isolated_probe_with_config(probe, "");
+    }
+    fn run_isolated_probe_with_config(probe: &str, config: &str) {
         // Keep synthetic HOME under the isolated checkout, away from user data.
         let home = tempfile::Builder::new()
             .prefix("synthetic-share-home-")
             .tempdir_in(std::env::current_dir().unwrap())
             .unwrap();
-        std::fs::write(home.path().join(".gitconfig"), "").unwrap();
+        std::fs::write(home.path().join(".gitconfig"), config).unwrap();
         let test = format!("{}::{probe}", module_path!().split_once("::").unwrap().1);
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child.env_clear();
@@ -530,6 +533,13 @@ mod tests {
     #[test]
     fn real_repository_scope_refuses_bare_metadata_and_broken_repositories() {
         run_isolated_probe("repository_scope_probe");
+    }
+    #[test]
+    fn real_repository_scope_refuses_bare_when_git_requires_explicit_selection() {
+        run_isolated_probe_with_config(
+            "repository_scope_probe",
+            "[safe]\n bareRepository = explicit\n",
+        );
     }
     #[test]
     fn linked_repository_metadata_is_never_shared() {
@@ -833,6 +843,25 @@ mod tests {
             "synthetic hook; never execute",
         )
         .unwrap();
+        let synthetic_home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        if std::fs::read_to_string(synthetic_home.join(".gitconfig"))
+            .unwrap()
+            .contains("bareRepository = explicit")
+        {
+            let mut command = std::process::Command::new("git");
+            command
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "--is-bare-repository"]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000);
+            }
+            let rejected = command.output().unwrap();
+            assert!(!rejected.status.success());
+            assert!(String::from_utf8_lossy(&rejected.stderr).contains("safe.bareRepository"));
+        }
         assert!(crate::git::run_guest_repository(dir.path(), timeout).is_err());
         for hide in [false, true] {
             {

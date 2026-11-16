@@ -1273,3 +1273,9 @@ Both canonical and legacy agent move operations refuse advancement to Doing, Rev
 This is the persistent dependency foundation, not completion of team_task_add or orchestration parity: named assignment, creation/edition of links through tools/UI, ready notifications and reports/gates remain unfinished. No production provider MCP transport is activated.
 
 Validation: 21 distinct focused tests passed (22 executions across dependency, history and agent-tool filters), including original task/history persistence rollback and the new restore/missing-link fixture. Strict all-target/all-feature Clippy passed with warnings denied (53.72 seconds); formatting and diff checks passed. No real provider or external service was invoked.
+
+## Bare-repository policy regression (2026-11-15)
+
+Darwin's Vue SSH audit identified safe.bareRepository=explicit as a case where Git refuses implicit bare-repository discovery. A new isolated regression sets this policy only in a temporary synthetic HOME, proves that raw Git rejects the bare directory with that policy, then runs the existing Rust scope and Live Share read/mutation refusal matrix with hide-ignored enabled and disabled. Both the default-policy and explicit-policy probes passed (4.34 seconds total). Rust's existing classification treats ambiguous/refused Git scope as an error rather than an ordinary folder, alongside its content-signature metadata scan. No production change or user Git configuration change was required. This evidence covers the local Rust guest handlers; it does not claim native SSH-host parity or atomic filesystem race protection.
+
+Strict all-target/all-feature Clippy passed with warnings denied (43.15 seconds), as did formatting/diff checks. Halley approved the regression. README is unchanged because this adds test coverage only, without user-visible behavior changes.
