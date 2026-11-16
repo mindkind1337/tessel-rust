@@ -90,6 +90,7 @@ mod tests {
     use super::*;
     fn task(id: u64, deps: Vec<u64>) -> Task {
         Task {
+            preparation: None,
             created_by: None,
             report: None,
             decision: None,

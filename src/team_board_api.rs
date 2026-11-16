@@ -164,6 +164,7 @@ pub fn add(
     let column = if waiting.is_empty() { requested } else { 0 };
     let id = state.id()?;
     state.tasks.push(Task {
+        preparation: None,
         created_by: Some(caller),
         report: None,
         decision: None,

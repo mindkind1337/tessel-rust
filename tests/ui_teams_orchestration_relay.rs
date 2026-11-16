@@ -68,6 +68,7 @@ mod workspace {
 
     #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
     pub struct Task {
+        pub preparation: Option<()>,
         pub created_by: Option<u64>,
         pub report: Option<crate::task_report::Report>,
         pub decision: Option<crate::task_decision::Decision>,

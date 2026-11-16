@@ -570,6 +570,8 @@ const fn default_agent_folder_trust() -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation: Option<crate::task_preparation::Details>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<crate::task_report::Report>,
@@ -1108,6 +1110,9 @@ impl Workspace {
         crate::task_history::validate(&self.task_history)?;
         crate::task_dependencies::validate(&self.tasks, self.next_id)?;
         for task in &self.tasks {
+            if let Some(details) = &task.preparation {
+                details.validate()?;
+            }
             if task.created_by == Some(0) {
                 return Err("Invalid task creator.".into());
             }

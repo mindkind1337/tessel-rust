@@ -371,6 +371,10 @@ pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result
         }
         task.last_waiting.clear();
         task.created_by = None;
+        if let Some(preparation) = &mut task.preparation {
+            // Imported pane numbers cannot grant an unrelated agent a review assignment.
+            preparation.reviewer_id = None;
+        }
         if let Some(report) = &mut task.report {
             report.by = None;
         }
@@ -527,6 +531,7 @@ mod tests {
         let mut state = fixture();
         state.tasks = (2..902)
             .map(|id| Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -584,6 +589,7 @@ mod tests {
         let mut after = fixture();
         after.tasks = (2..402)
             .map(|id| Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -625,6 +631,7 @@ mod tests {
             next_id: 100,
             task_history_migrated: true,
             tasks: vec![Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -818,6 +825,7 @@ mod tests {
         assert_eq!(state.task_history.records.last().unwrap().id, 1500);
         state.tasks = (2..1002)
             .map(|id| Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,

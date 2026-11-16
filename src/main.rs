@@ -171,6 +171,7 @@ mod task_decision_actions;
 mod task_decision_panel;
 mod task_dependencies;
 mod task_history;
+pub mod task_preparation;
 mod task_readiness;
 mod task_report;
 pub mod task_timeline;

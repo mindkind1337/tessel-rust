@@ -82,6 +82,7 @@ fn transact(
             }
             let id = draft.id()?;
             draft.tasks.push(Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,

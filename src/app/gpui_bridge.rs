@@ -7620,6 +7620,7 @@ mod panel_snapshot_tests {
         let pid = app.state.active_project.unwrap();
         app.state.tasks = (0..10_000)
             .map(|id| crate::workspace::Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,

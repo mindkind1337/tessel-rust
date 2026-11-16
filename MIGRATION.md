@@ -1438,3 +1438,16 @@ Background worktree creation now carries explicit base-branch and environment-co
 This is a prerequisite for New Task and external-issue launches, not a completed task dialog. Setup-script execution, durable task instructions/reviewer/worktree metadata, provider first-turn delivery and the Linear state transition after a successful task start remain outstanding. Tests use temporary Git repositories and synthetic environment data only.
 
 Validation: both worktree-preparation tests pass (7.34 seconds): a real temporary repository verifies selected-base content versus current HEAD and synthetic .env copy on/off; removed/retargeted project checks retain the copy and reject launch. Strict all-target/all-feature Clippy passes with warnings denied (54.71 seconds), as do formatting and diff checks.
+
+
+## Durable New Task preparation metadata (2026-11-16)
+
+Tasks can retain their original project directory, instructions, optional reviewer and prepared worktree (path, root, branch and base branch). Legacy cards omit this optional field. Validation bounds the content, rejects malformed identifiers and paths, and uses the existing workspace/card size budgets. These values are descriptive receipts, not execution authority: reopening or importing a workspace never schedules a launch or setup script from them.
+
+The owner preparation service creates a To do card only after its workspace transaction succeeds. Reviewer selection is checked against project-local agent sessions and current task assignments; runtime working/approval/limit checks still belong to the forthcoming dialog and launch adapter. A worktree receipt is saved once on the matching original card, even if the project directory changed during preparation; the live ticket's project check then rejects launching in the changed context. Storage failure leaves in-memory state and the already-created filesystem copy intact. Guest creation and team-tool creation leave preparation absent, and the existing explicit shared snapshot does not expose these new fields.
+
+The New Task form, launch/first-turn adapter, setup execution and Linear start/state transition are not enabled by this persistence slice. README remains unchanged until the user-facing flow is connected.
+
+Follow-up validation found and corrected two identity boundaries before publication: reviewer ids use the independent pane namespace, not the card counter; settings import clears the reviewer assignment while retaining descriptive instructions/copy metadata and remapping the card id. Settings replacement is also refused while a worktree operation still has an undrained result, preventing a stale launch callback from crossing a restore.
+
+Validation: final run passes 6 preparation/restore tests, 11 history tests, 10 agent-tool tests and 5 shared-board tests (32 total). The reviewer fixture deliberately uses pane 70 with card counter 10. Earlier focused board-action tests also pass. Strict all-target/all-feature Clippy passes with warnings denied (28.06 seconds), as do formatting and diff checks. No real agent, account or remote endpoint is started.

@@ -75,6 +75,7 @@ mod tests {
             state.sessions.push(serde_json::from_value(serde_json::json!({"id":id,"project":project,"launch":launch,"title":title,"cwd":std::env::temp_dir()})).unwrap());
         }
         state.tasks.push(crate::workspace::Task {
+            preparation: None,
             created_by: None,
             report: None,
             decision: None,

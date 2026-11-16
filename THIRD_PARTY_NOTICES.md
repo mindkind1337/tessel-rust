@@ -334,3 +334,5 @@ The secret-name policy in `src/share/secret_names.rs`, `scripts/extract_secret_n
 The optimistic guest-save version contract in `src/share/file_version.rs` and `src/guest_file_editor.rs` follows Tessel `src/main/liveShare/shareRequests.js` (`fs.write`, `expectHash`) under the existing MIT attribution above. The bounded hashing and guest-save serialization are implemented independently in Rust; tests use synthetic content only.
 
 The Issues toolbar menu in `src/issues_menu.rs` and `src/gpui_ui/issues_menu.rs` adapts Tessel App.vue and style.css under the existing Orca/Tessel MIT attribution above, including its inline SVG geometry.
+
+The durable task-preparation contract in src/task_preparation.rs follows Tessel App.vue startTask and NewTaskDialog.vue under the existing Orca/Tessel MIT attribution above. Its bounded Rust records, transactional persistence and runtime ticket are implemented independently.

@@ -1961,6 +1961,7 @@ impl TeamsRelayHub {
                             && let Ok(id) = draft.id()
                         {
                             draft.tasks.push(crate::workspace::Task {
+                                preparation: None,
                                 created_by: None,
                                 report: None,
                                 decision: None,

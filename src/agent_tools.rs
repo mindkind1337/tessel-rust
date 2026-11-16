@@ -264,6 +264,7 @@ fn execute_inner(
             };
             let id = state.id()?;
             state.tasks.push(Task {
+                preparation: None,
                 created_by: pane,
                 report: None,
                 decision: None,

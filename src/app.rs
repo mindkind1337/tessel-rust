@@ -7096,6 +7096,7 @@ impl Tessel {
             && !self.remote.needs_close_confirmation()
             && !self.documents.iter().any(Document::dirty)
             && !self.git_result.busy()
+            && !self.worktree_state.is_busy()
             && !self.scm_state.busy()
             && !self.account_busy()
             && !self.native_exit_pending()
@@ -14384,6 +14385,34 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_preparation_prevents_settings_restore_until_worktree_result_is_drained() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        assert!(app.can_restore());
+        app.worktree_state
+            .request_create(crate::worktree_state::CreateRequest {
+                project_id: 1,
+                cwd: temp.path().join("missing"),
+                label: "fixture".into(),
+                base_branch: None,
+                copy_env: false,
+                general_prefs: Default::default(),
+                git_prefs: Default::default(),
+                target: crate::worktree_state::WorktreeLaunchTarget::ShellNewPane,
+            });
+        assert!(!app.can_restore());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while app.worktree_state.is_busy() {
+            app.worktree_state.poll(&app.state.projects);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.can_restore());
+        assert!(app.sessions.is_empty());
+        assert!(!temp.path().join("missing").exists());
+    }
 
     #[test]
     fn worktree_preparation_rejects_removed_or_retargeted_project_and_preserves_copy() {

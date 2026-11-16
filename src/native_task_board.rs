@@ -290,6 +290,7 @@ mod tests {
     fn tasks() -> Vec<Task> {
         vec![
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -303,6 +304,7 @@ mod tests {
                 column: 0,
             },
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -316,6 +318,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -329,6 +332,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,

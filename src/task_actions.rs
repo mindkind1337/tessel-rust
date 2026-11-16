@@ -63,6 +63,7 @@ fn apply_inner(
             }
             let id = state.id()?;
             state.tasks.push(Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -183,6 +184,7 @@ mod tests {
         let mut state = workspace();
         state.tasks = (0..10_000)
             .map(|n| Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -207,6 +209,7 @@ mod tests {
         state.next_id = 20;
         state.tasks = vec![
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -220,6 +223,7 @@ mod tests {
                 column: 0,
             },
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
@@ -233,6 +237,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                preparation: None,
                 created_by: None,
                 report: None,
                 decision: None,
