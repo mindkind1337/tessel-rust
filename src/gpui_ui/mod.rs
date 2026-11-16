@@ -1567,3 +1567,9 @@ pub fn run_gpui_app() -> Result<(), String> {
 
     Ok(())
 }
+
+#[allow(dead_code)]
+mod private_key_storage;
+
+#[allow(dead_code)]
+mod private_key_input;

@@ -35,3 +35,7 @@ API supplies the same behavior.
 
 The editable-text state and history also expose `push_undo_stop()`. It separates the next recorded edit from the preceding group without adding empty entries, so explicit editor replacement commands do not merge with surrounding typing or adjacent replacements. Preserve this API and its native replacement regression tests when upgrading.
 Undo and redo also end the current edit group, so typing after history navigation cannot merge into an earlier command. Native GPUI regressions cover adjacent replacements, subsequent typing and a new edit after undo.
+
+## Private masked storage hooks (2026-11-16)
+
+`storage.rs` adds default-preserving hooks for storage-owned history, replacement acceptance and directed selection capture. `state.rs` checks acceptance before changing caret or IME ranges and skips its ordinary history when a storage implementation opts out. Tessel's private ASCII key storage exposes only placeholders to the element, platform text queries and accessibility; its zeroizing secret and bounded undo history remain outside the generic editor. Tests live in `src/gpui_ui/private_key_storage.rs` and `private_key_input.rs`. Preserve these hooks alongside the existing style/undo patches on upgrade. Ordinary StringStorage keeps the default behavior.

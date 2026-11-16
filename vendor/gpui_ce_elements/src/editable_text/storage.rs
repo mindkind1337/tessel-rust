@@ -1,3 +1,4 @@
+// Modified by Tessel, 2026-11-16: opt-in storage-owned history and replacement guards.
 /// A unit of text that the caret moves or selects by.
 ///
 /// The variants are `Cluster` (one user-perceived character, such as an emoji
@@ -21,6 +22,20 @@ use unicode_segmentation::UnicodeSegmentation;
 /// default methods provide the navigation and conversions, so an
 /// implementation needs only the required methods.
 pub trait UnicodeTextStorage {
+    /// Custom masked storage can keep its own private history instead of recording
+    /// display placeholders as if they were the original content.
+    fn supports_history(&self) -> bool {
+        true
+    }
+
+    /// Reject a replacement before the editor changes selection or IME ranges.
+    fn allows_replacement(&self, _range: &Range<usize>, _text: &str) -> bool {
+        true
+    }
+
+    /// Capture directed selection for storage-owned history before an accepted edit.
+    fn before_edit(&mut self, _selection: gpui::CaretSelection) {}
+
     /// Returns the version of the content.
     ///
     /// Increase the version on every change, so that the element knows to

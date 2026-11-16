@@ -1,4 +1,4 @@
-// Modified by Tessel, 2026-11-12: expose undo stops and separate edits after undo/redo.
+// Modified by Tessel, 2026-11-16: undo stops, storage-owned history and guarded replacements.
 use crate::editable_text::{
     StringStorage, TextBoundary, UnicodeTextStorage, actions::EditableTextActionHandler,
     caret::CaretNotify, history::EditableTextHistory, layout::EditableTextLayoutResult,
@@ -160,6 +160,7 @@ impl EditableTextState {
     /// ```
     pub fn new(storage: impl UnicodeTextStorage + 'static, cx: &mut Context<Self>) -> Self {
         let accessibility_text_metrics = AccessibilityTextMetrics::new(storage.content_utf8());
+        let history = storage.supports_history().then(EditableTextHistory::default);
 
         Self {
             storage: Box::new(storage),
@@ -176,7 +177,7 @@ impl EditableTextState {
             focus_handle: cx.focus_handle(),
             blur_subscription: None,
             // TODO: what is the best way to give users access to configure this via element
-            history: Some(EditableTextHistory::default()),
+            history,
             accessibility_text_metrics,
 
             layout_data: EditableTextLayoutResult::default(),
@@ -374,10 +375,10 @@ impl EditableTextState {
 
     /// Internal method to record historical changes and perform text replacement in storage.
     /// Selection is moved to the end of the inserted text and ime marked range is cleared.
-    fn replace_text(&mut self, range: Range<usize>, text_to_insert: &str) {
+    fn replace_text(&mut self, range: Range<usize>, text_to_insert: &str) -> bool {
         let affinity = CaretAffinity::from(text_to_insert);
 
-        self.replace_text_with_affinity(range, text_to_insert, affinity);
+        self.replace_text_with_affinity(range, text_to_insert, affinity)
     }
 
     fn replace_text_with_affinity(
@@ -385,13 +386,18 @@ impl EditableTextState {
         range: Range<usize>,
         text_to_insert: &str,
         affinity: CaretAffinity,
-    ) {
+    ) -> bool {
+        if !self.storage.allows_replacement(&range, text_to_insert) {
+            return false;
+        }
+        self.storage.before_edit(self.selection_movement.result);
         let end_pos = range.start + text_to_insert.len();
         self.record_history(range.clone(), text_to_insert.len());
         self.replace_storage_range(range, text_to_insert);
 
         self.set_selection(CaretPosition::from((end_pos, affinity)));
         self.marked_range = None;
+        true
     }
 
     fn emit_text_changed(&self, cx: &mut Context<Self>) {
@@ -925,7 +931,7 @@ impl EditableTextState {
 impl EditableTextState {
     /// Returns the undo and redo history of the field.
     ///
-    /// Returns `None` when the state has no history. States made with [`Self::new`] always have one.
+    /// Returns `None` for storage that manages its own history.
     pub fn history(&self) -> Option<&EditableTextHistory> {
         self.history.as_ref()
     }
@@ -1127,7 +1133,9 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
-        self.replace_text(range.clone(), text_to_insert.as_ref());
+        if !self.replace_text(range.clone(), text_to_insert.as_ref()) {
+            return;
+        }
 
         self.ime_mark_text_in_range(&range, text_to_insert.len());
         self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.as_ref());
