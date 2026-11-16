@@ -3,7 +3,7 @@ use crate::team_mcp_broker::{Binding, Broker, Launch};
 use crate::team_mcp_stdio::{BackendError, Operation};
 use crate::teams_relay::TeamsRelayHub;
 use crate::workspace::{Store, Workspace};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::PathBuf;
 
 const MAX_PER_POLL: usize = 8;
@@ -68,9 +68,15 @@ fn allowed(name: &str) -> bool {
 
 fn catalogue() -> Value {
     let definitions = crate::agent_tools::definitions();
-    json!({"tools": definitions.as_array().into_iter().flatten()
-        .filter(|tool| tool["name"].as_str().is_some_and(allowed))
-        .cloned().collect::<Vec<_>>()})
+    Value::Array(
+        definitions
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|tool| tool["name"].as_str().is_some_and(allowed))
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn current(binding: &Binding, panes: &[LivePane], state: &Workspace) -> bool {
@@ -196,6 +202,7 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::{
         sync::{Arc, mpsc},
         thread,
@@ -340,7 +347,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let launch = fixture.launch();
         let list = fixture.exchange(&launch, Operation::List).unwrap();
-        let names: Vec<_> = list["tools"]
+        let names: Vec<_> = list
             .as_array()
             .unwrap()
             .iter()

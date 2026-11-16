@@ -165,7 +165,10 @@ pub mod task_timeline;
 pub mod tasks_board_panel;
 mod team_mcp_auth;
 pub mod team_mcp_broker;
+pub mod team_mcp_helper;
 pub mod team_mcp_runtime;
+#[cfg(debug_assertions)]
+mod team_mcp_smoke;
 pub mod team_mcp_stdio;
 mod team_mcp_wire;
 pub mod teams_relay;
@@ -195,6 +198,17 @@ pub mod worktree;
 pub mod worktree_cleanup_panel;
 pub mod worktree_state;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--team-mcp-stdio") {
+        let valid = std::env::args().count() == 2;
+        let success = valid && team_mcp_helper::run_from_environment().is_ok();
+        // A client's stderr pipe may also be full. Fatal helper failures use
+        // only the exit status so no diagnostic write can defeat the deadline.
+        std::process::exit(if success { 0 } else { 1 });
+    }
+    #[cfg(debug_assertions)]
+    if std::env::args().nth(1).as_deref() == Some("--self-test-team-mcp") {
+        return team_mcp_smoke::run().map_err(Into::into);
+    }
     if std::env::args().any(|arg| arg == "--version") {
         println!(
             "Tessel Rust {} {}",

@@ -149,6 +149,10 @@ fn oversized_result(id: &Value) -> Value {
 }
 
 impl Session {
+    pub fn is_ready(&self) -> bool {
+        self.phase == Phase::Ready
+    }
+
     pub fn receive(&mut self, bytes: &[u8]) -> Route {
         if bytes.len() > MAX_FRAME_BYTES {
             return Route::Reply(failure(Value::Null, -32600, "Request exceeds limit"));

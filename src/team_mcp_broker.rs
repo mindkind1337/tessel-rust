@@ -17,6 +17,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+pub(crate) const ENV_ENDPOINT: &str = "TESSEL_TEAM_MCP_ENDPOINT";
+
 #[derive(Clone, Copy)]
 struct Limits {
     peers: usize,
@@ -80,6 +82,51 @@ impl Drop for Launch {
 }
 
 impl Client {
+    /// Scoped credentials go only to the child environment, after profile setup.
+    /// Do not log/debug this Command or forward these variables to remote hosts.
+    pub fn apply_environment(&self, command: &mut std::process::Command) {
+        command.env(ENV_ENDPOINT, self.endpoint.to_string());
+        self.credential.apply_environment(command);
+    }
+
+    pub(crate) fn from_environment() -> Result<Self, String> {
+        Self::from_values(|name| {
+            std::env::var(name).map_err(|_| "Missing team helper environment".into())
+        })
+    }
+
+    fn from_values(mut read: impl FnMut(&str) -> Result<String, String>) -> Result<Self, String> {
+        use crate::team_mcp_auth::{ENV_GENERATION, ENV_KEY, ENV_PANE};
+        fn number(text: String) -> Result<u64, String> {
+            let value = text
+                .parse::<u64>()
+                .map_err(|_| "Invalid team helper identity")?;
+            if text.len() > 20 || text != value.to_string() {
+                return Err("Invalid team helper identity".into());
+            }
+            Ok(value)
+        }
+        let endpoint = read(ENV_ENDPOINT)?;
+        if endpoint.len() > 32 {
+            return Err("Invalid local team endpoint".into());
+        }
+        let endpoint: SocketAddr = endpoint
+            .parse()
+            .map_err(|_| "Invalid local team endpoint")?;
+        if endpoint.ip() != std::net::IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
+            return Err("Invalid local team endpoint".into());
+        }
+        let pane = number(read(ENV_PANE)?)?;
+        let generation = number(read(ENV_GENERATION)?)?;
+        let key = zeroize::Zeroizing::new(read(ENV_KEY)?);
+        let credential = Credential::import(pane, generation, &key)?;
+        Ok(Self {
+            endpoint,
+            credential,
+            timeout: Limits::default().deadline,
+        })
+    }
+
     /// One exchange only: failures after sending may be uncertain and are never retried.
     pub fn call(&self, operation: Operation) -> Result<Result<Value, BackendError>, String> {
         self.call_with_cancel(operation, &AtomicBool::new(false))
@@ -533,6 +580,63 @@ mod tests {
     use super::*;
     use crate::team_mcp_wire::{read_packet, write_packet};
     use serde_json::json;
+
+    #[test]
+    fn child_environment_is_scoped_and_rejects_remote_endpoints_and_malformed_credentials() {
+        use crate::team_mcp_auth::{ENV_GENERATION, ENV_KEY, ENV_PANE};
+        let broker = Broker::bind().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let launch = broker.launch(7, 9, &cwd).unwrap();
+        let mut command = std::process::Command::new("synthetic-helper-not-executed");
+        command.arg("--team-mcp-stdio");
+        launch.client().apply_environment(&mut command);
+        assert!(
+            command
+                .get_args()
+                .eq([std::ffi::OsStr::new("--team-mcp-stdio")])
+        );
+        let values: HashMap<String, String> = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_str().unwrap().to_owned(),
+                    value.unwrap().to_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(values.len(), 4);
+        let import = |values: &HashMap<String, String>| {
+            Client::from_values(|name| {
+                values
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| "Missing fixture field".into())
+            })
+        };
+        assert!(import(&values).is_ok());
+        for (name, replacement) in [
+            (ENV_ENDPOINT, "http://127.0.0.1:12"),
+            (ENV_ENDPOINT, "192.0.2.1:12"),
+            (ENV_ENDPOINT, "[::1]:12"),
+            (ENV_ENDPOINT, "127.0.0.1:0"),
+            (ENV_ENDPOINT, "localhost:12"),
+            (ENV_PANE, "-1"),
+            (ENV_PANE, "07"),
+            (ENV_GENERATION, "0"),
+            (ENV_GENERATION, "18446744073709551616"),
+            (ENV_KEY, "not-a-key"),
+            (ENV_KEY, "é"),
+        ] {
+            let mut changed = values.clone();
+            changed.insert(name.into(), replacement.into());
+            assert!(import(&changed).is_err());
+        }
+        for name in [ENV_ENDPOINT, ENV_PANE, ENV_GENERATION, ENV_KEY] {
+            let mut missing = values.clone();
+            missing.remove(name);
+            assert!(import(&missing).is_err());
+        }
+    }
 
     fn broker(peers: usize, queue: usize, timeout: Duration) -> Broker {
         Broker::bind_with_limits(Limits {

@@ -17,6 +17,9 @@ const RESPONSE_DOMAIN: &str = "tessel-team-mcp-response-v1";
 const MAX_BINDINGS: usize = 128;
 const MAX_AGE_MS: u64 = 30_000;
 const MAX_SKEW_MS: u64 = 5_000;
+pub(crate) const ENV_PANE: &str = "TESSEL_TEAM_MCP_PANE";
+pub(crate) const ENV_GENERATION: &str = "TESSEL_TEAM_MCP_GENERATION";
+pub(crate) const ENV_KEY: &str = "TESSEL_TEAM_MCP_KEY";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
@@ -100,6 +103,27 @@ fn signed_bytes(request: &SignedTeamRequest) -> Vec<u8> {
 }
 
 impl Credential {
+    pub(crate) fn import(pane: u64, generation: u64, key: &str) -> Result<Self, String> {
+        if generation == 0 {
+            return Err("Invalid team launch generation".into());
+        }
+        let secret = Zeroizing::new(hex_decode_32(key).ok_or("Invalid team launch key")?);
+        Ok(Self {
+            pane,
+            generation,
+            secret,
+        })
+    }
+
+    /// Child environment only. Never format the resulting Command for diagnostics.
+    pub(crate) fn apply_environment(&self, command: &mut std::process::Command) {
+        let encoded = Zeroizing::new(hex_encode(&self.secret[..]));
+        command
+            .env(ENV_PANE, self.pane.to_string())
+            .env(ENV_GENERATION, self.generation.to_string())
+            .env(ENV_KEY, encoded.as_str());
+    }
+
     pub(crate) fn request(
         &self,
         operation: Operation,
