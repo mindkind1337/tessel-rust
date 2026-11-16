@@ -5,7 +5,10 @@ use gpui::{
     SharedString, Subscription, Window, div, prelude::*, px,
 };
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 gpui::actions!(tessel_new_task, [Submit]);
 struct Input {
@@ -18,8 +21,11 @@ struct Input {
 pub(super) struct View {
     epoch: u64,
     inputs: Vec<Input>,
-    focus: BTreeMap<String, FocusHandle>,
+    pub(super) focus: BTreeMap<String, FocusHandle>,
     order: Vec<FocusHandle>,
+    review_order: Vec<FocusHandle>,
+    review_anchor: Arc<Mutex<Option<gpui::Bounds<gpui::Pixels>>>>,
+    review_menu_was_open: bool,
 }
 impl View {
     pub fn sync(&mut self, panel: &Panel, w: &mut Window, cx: &mut Context<TesselGpuiRoot>) {
@@ -68,16 +74,21 @@ impl View {
         }
     }
     pub fn cycle(&self, back: bool, w: &mut Window, cx: &mut App) {
-        if self.order.is_empty() {
+        let order = if self.review_order.is_empty() {
+            &self.order
+        } else {
+            &self.review_order
+        };
+        if order.is_empty() {
             return;
         }
-        let current = self.order.iter().position(|f| f.is_focused(w));
+        let current = order.iter().position(|f| f.is_focused(w));
         let index = if back {
-            current.unwrap_or(0).wrapping_add(self.order.len() - 1) % self.order.len()
+            current.unwrap_or(0).wrapping_add(order.len() - 1) % order.len()
         } else {
-            current.map_or(0, |i| (i + 1) % self.order.len())
+            current.map_or(0, |i| (i + 1) % order.len())
         };
-        self.order[index].focus(w, cx);
+        order[index].focus(w, cx);
     }
 }
 fn submit_input(
@@ -87,7 +98,8 @@ fn submit_input(
     w: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) {
-    if root.new_task_view.epoch == epoch
+    if !root.app.new_task.reviewer_menu
+        && root.new_task_view.epoch == epoch
         && root.new_task_view.inputs.iter().any(|i| &i.state == input)
     {
         activate(root, epoch, Command::Start, w, cx);
@@ -120,7 +132,14 @@ fn activate(
             );
         }
     }
+    let chose_reviewer = matches!(command, Command::Reviewer(_));
     root.app.new_task_command(epoch, command);
+    if chose_reviewer
+        && !root.app.new_task.reviewer_menu
+        && let Some(focus) = root.new_task_view.focus.get("new-task-review-trigger")
+    {
+        focus.focus(w, cx);
+    }
     if !root.app.new_task.open {
         root.new_task_view = View::default();
         root.focus_handle.focus(w, cx);
@@ -261,11 +280,104 @@ fn field(
         .into_any_element()
 }
 
+fn reviewer_popup(
+    panel: &Panel,
+    view: &mut View,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    w: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> Option<AnyElement> {
+    if !panel.reviewer_menu || panel.reviewers.is_empty() {
+        view.review_menu_was_open = false;
+        return None;
+    }
+    let bounds = view.review_anchor.lock().ok().and_then(|v| *v)?;
+    let viewport = w.viewport_size();
+    let width = f32::from(bounds.size.width).min((f32::from(viewport.width) - 32.).max(100.));
+    let height = (((panel.reviewers.len() + 1) as f32 * 38.) + 10.)
+        .min(200.)
+        .min((f32::from(viewport.height) - 40.).max(40.));
+    let left =
+        f32::from(bounds.left()).clamp(16., (f32::from(viewport.width) - width - 16.).max(16.));
+    let bottom = f32::from(bounds.bottom()) + 4.;
+    let top = if bottom + height <= f32::from(viewport.height) - 16. {
+        bottom
+    } else {
+        (f32::from(bounds.top()) - height - 4.).max(16.)
+    };
+    let mut options = vec![(
+        "new-task-review-none".to_owned(),
+        if french { "personne" } else { "nobody" }.to_owned(),
+        None,
+    )];
+    options.extend(panel.reviewers.iter().map(|r| {
+        (
+            format!("new-task-review-{}", r.target.pane),
+            r.label.clone(),
+            Some(r.target.pane),
+        )
+    }));
+    let mut list = div()
+        .id("new-task-review-menu")
+        .debug_selector(|| "new-task-review-menu".into())
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(width))
+        .max_h(px(height))
+        .p(px(5.))
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .overflow_y_scroll()
+        .role(gpui::Role::ListBox)
+        .bg(tokens.surface_2)
+        .border_1()
+        .border_color(tokens.border)
+        .rounded(px(5.))
+        .on_click(|_, _, cx| cx.stop_propagation());
+    for (id, label, pane) in options {
+        list = list.child(button(
+            &id,
+            label,
+            true,
+            pane == panel.reviewer,
+            Command::Reviewer(pane),
+            view,
+            tokens,
+            cx,
+        ));
+        let focus = view.focus.get(&id).unwrap().clone();
+        if !view.review_menu_was_open && pane == panel.reviewer {
+            focus.focus(w, cx);
+        }
+        view.review_order.push(focus);
+    }
+    view.review_menu_was_open = true;
+    let epoch = panel.epoch;
+    Some(
+        div()
+            .id("new-task-review-dismiss")
+            .absolute()
+            .size_full()
+            .left(px(0.))
+            .top(px(0.))
+            .on_click(cx.listener(move |root, _, w, cx| {
+                cx.stop_propagation();
+                activate(root, epoch, Command::ReviewerMenu(false), w, cx);
+            }))
+            .child(list)
+            .into_any_element(),
+    )
+}
+
 pub(super) fn render(
     panel: &Panel,
     view: &mut View,
     french: bool,
     tokens: &GpuiThemeTokens,
+    w: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> Option<AnyElement> {
     if !panel.open || view.inputs.len() != 3 {
@@ -273,6 +385,7 @@ pub(super) fn render(
     }
     let t = |fr, en| if french { fr } else { en };
     view.order.clear();
+    view.review_order.clear();
     let epoch = panel.epoch;
     let mut body = div()
         .id("new-task-body")
@@ -386,21 +499,20 @@ pub(super) fn render(
         cx,
     ));
     if !panel.reviewers.is_empty() {
-        body = body.child(button(
-            "new-task-review-unavailable",
-            t(
-                "Demande automatique de revue — indisponible pour le moment",
-                "Automatic review requests — not available yet",
-            )
-            .into(),
-            false,
-            false,
-            Command::Reviewer(None),
-            view,
-            tokens,
-            cx,
-        ));
+        let selected = panel
+            .reviewers
+            .iter()
+            .find(|r| Some(r.target.pane) == panel.reviewer)
+            .map(|r| r.label.clone())
+            .unwrap_or_else(|| t("personne", "nobody").into());
+        let anchor = view.review_anchor.clone();
+        body = body.child(t("Une fois terminé, demander une revue à", "When it is done, ask for a review by"))
+        .child(div().id("new-task-review-combo").relative().role(gpui::Role::ComboBox).aria_expanded(panel.reviewer_menu)
+            .child(button("new-task-review-trigger", format!("{selected} ▾"), true, false, Command::ReviewerMenu(!panel.reviewer_menu), view, tokens, cx))
+            .child(gpui::canvas(move |bounds, _, _| { if let Ok(mut current) = anchor.lock() { *current = Some(bounds); } }, |_, _, _, _| {}).absolute().size_full()))
+        .child(div().text_size(px(11.)).text_color(tokens.text_dim).child(t("Agents natifs connectés uniquement. La demande attend la fin du travail, des approbations et du brouillon du réviseur.", "Connected native agents only. The request waits for the reviewer's work, approvals and draft to finish.")));
     }
+    let review_popup = reviewer_popup(panel, view, french, tokens, w, cx);
     body = body.child(
         div()
             .text_size(px(11.5))
@@ -452,9 +564,14 @@ pub(super) fn render(
             .flex()
             .items_center()
             .justify_center()
-            .on_click(
-                cx.listener(move |root, _, w, cx| activate(root, epoch, Command::Cancel, w, cx)),
-            )
+            .on_click(cx.listener(move |root, _, w, cx| {
+                let command = if root.app.new_task.reviewer_menu {
+                    Command::ReviewerMenu(false)
+                } else {
+                    Command::Cancel
+                };
+                activate(root, epoch, command, w, cx);
+            }))
             .child(
                 div()
                     .id("new-task-dialog")
@@ -471,9 +588,15 @@ pub(super) fn render(
                     .rounded(px(14.))
                     .flex()
                     .flex_col()
-                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        cx.stop_propagation();
+                        root.app
+                            .new_task_command(epoch, Command::ReviewerMenu(false));
+                        cx.notify();
+                    }))
                     .child(body),
             )
+            .when_some(review_popup, |element, popup| element.child(popup))
             .into_any_element(),
     )
 }
@@ -498,7 +621,16 @@ mod tests {
                     label: "Codex".into(),
                     enabled: true,
                 }],
-                vec![],
+                vec![crate::native_review::Choice {
+                    label: "Fixture reviewer".into(),
+                    target: crate::native_review::Target {
+                        pane: 99,
+                        project: 7,
+                        cwd: temp.path().join("fixture"),
+                        kind: crate::native_review::Kind::Codex,
+                        epoch: 1,
+                    },
+                }],
             );
             root.app.new_task.isolation = Some(true);
             root
@@ -522,6 +654,76 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         cx.refresh().unwrap();
+        view.update(cx, |root, w, cx| {
+            root.new_task_view
+                .focus
+                .get("new-task-review-trigger")
+                .unwrap()
+                .focus(w, cx);
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let menu = VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("new-task-review-menu")
+            .unwrap();
+        assert!(menu.origin.x >= px(16.) && menu.origin.y >= px(16.));
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("down").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, w, _| {
+            assert!(
+                root.new_task_view
+                    .focus
+                    .get("new-task-review-99")
+                    .unwrap()
+                    .is_focused(w)
+            );
+        })
+        .unwrap();
+        for key in ["up", "enter"] {
+            VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+                keystroke: Keystroke::parse(key).unwrap(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+        }
+        view.update(cx, |root, _, _| {
+            assert!(!root.app.new_task.reviewer_menu);
+            assert!(root.app.new_task.reviewer.is_none());
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("escape").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            assert!(root.app.new_task.open);
+            assert!(!root.app.new_task.reviewer_menu);
+        })
+        .unwrap();
         view.update(cx, |root, w, cx| {
             assert_eq!(root.app.new_task.title, "Titre Québec");
             root.new_task_view

@@ -34,7 +34,7 @@ pub(crate) struct Spec {
     pub title: String,
     pub brief: String,
     pub provider: Provider,
-    pub reviewer: Option<u64>,
+    pub reviewer: Option<crate::native_review::Target>,
     pub isolated: bool,
     pub base_branch: Option<String>,
     pub copy_env: bool,
@@ -50,6 +50,7 @@ pub(super) struct Pending {
     phase: Phase,
     started: Instant,
     waiting_copy: bool,
+    reviewer: Option<crate::native_review::Target>,
 }
 
 pub(super) struct Running {
@@ -88,6 +89,15 @@ impl Tessel {
         if self.owner_task_launches.len() >= 32 || self.sessions.len() >= 100 {
             return Err("Too many task preparations or open sessions.".into());
         }
+        if spec
+            .reviewer
+            .as_ref()
+            .is_some_and(|t| t.project != spec.project || !self.reviewer_current(t))
+        {
+            return Err(
+                "The selected reviewer changed. Select a connected native reviewer again.".into(),
+            );
+        }
         let brief = spec.brief.trim().to_owned();
         // Validate the complete direct prompt before creating any card or pane.
         crate::task_prompt::render(&crate::task_prompt::Context {
@@ -107,7 +117,7 @@ impl Tessel {
             Details {
                 source_cwd: spec.source.clone(),
                 brief,
-                reviewer_id: spec.reviewer,
+                reviewer_id: spec.reviewer.as_ref().map(|t| t.pane),
                 worktree: None,
             },
         )?;
@@ -134,6 +144,7 @@ impl Tessel {
             phase: Phase::Pending,
             started: Instant::now(),
             waiting_copy: spec.isolated,
+            reviewer: spec.reviewer,
         };
         let id = pending.ticket.task_id();
         if spec.isolated {
@@ -283,6 +294,7 @@ impl Tessel {
     }
 
     pub(super) fn cancel_owner_task_pane(&mut self, pane: u64) {
+        self.cancel_owner_reviews_for_pane(pane);
         self.owner_task_turns
             .retain(|r| r.pending.pane != Some(pane));
         while let Some(index) = self
@@ -347,10 +359,28 @@ impl Tessel {
                         .timeline
                         .move_to(review.column, 2, crate::task_timeline::now_ms());
                     review.column = 2;
-                    if let Err(error) = self.save_launch_card(&p.expected, review) {
-                        self.error = format!(
-                            "Task completion could not be saved. Move the card to Review manually. {error}"
-                        );
+                    match self.save_launch_card(&p.expected, review.clone()) {
+                        Err(error) => {
+                            self.error = format!(
+                                "Task completion could not be saved. Move the card to Review manually. {error}"
+                            )
+                        }
+                        Ok(()) => {
+                            if let Some(target) = p.reviewer.clone() {
+                                let who = self
+                                    .sessions
+                                    .iter()
+                                    .find(|s| s.id == pane)
+                                    .map(|s| s.pane_name.as_deref().unwrap_or(&s.title))
+                                    .unwrap_or("another agent")
+                                    .to_owned();
+                                if let Err(error) =
+                                    self.queue_owner_review(p.ticket.clone(), review, target, &who)
+                                {
+                                    self.error = error;
+                                }
+                            }
+                        }
                     }
                     // A failed transaction is reported once, never repeatedly retried.
                     changed = true;
@@ -459,6 +489,231 @@ impl Tessel {
 mod tests {
     use super::*;
 
+    fn synthetic_chat(
+        app: &mut Tessel,
+        provider: Provider,
+        pane: u64,
+        project: u64,
+        cwd: PathBuf,
+    ) -> std::sync::mpsc::Receiver<serde_json::Value> {
+        match provider {
+            Provider::Codex => {
+                let mut c = crate::chat::Chat::new(project, cwd);
+                c.pane = pane;
+                let rx = c.ready_sender_for_test();
+                app.chats.push(c);
+                rx
+            }
+            Provider::Claude => {
+                let mut c = crate::claude::Chat::new(project, cwd, None);
+                c.pane = pane;
+                let rx = c.ready_sender_for_test();
+                app.claude_chats.push(c);
+                rx
+            }
+        }
+    }
+
+    fn review_fixture(
+        worker: Provider,
+        reviewer: Provider,
+    ) -> (
+        tempfile::TempDir,
+        Tessel,
+        std::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
+        let (temp, mut app, mut spec) = fixture(worker);
+        let pane = app
+            .new_session_with_history(
+                Some(spec.project),
+                reviewer.launch(),
+                None,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(pane, 70);
+        let rx = synthetic_chat(&mut app, reviewer, pane, spec.project, spec.source.clone());
+        spec.reviewer = Some(app.task_reviewer_choices(spec.project).remove(0).target);
+        let project = spec.project;
+        let cwd = spec.source.clone();
+        app.start_owner_native_task(spec).unwrap();
+        let worker_rx = synthetic_chat(&mut app, worker, 71, project, cwd);
+        app.poll_owner_task_launches();
+        worker_rx.try_recv().unwrap();
+        (temp, app, rx)
+    }
+
+    #[test]
+    fn native_review_cannot_queue_an_unsaved_or_unfinished_card() {
+        let (_temp, mut app, rx) = review_fixture(Provider::Codex, Provider::Claude);
+        let pending = &app.owner_task_turns[0].pending;
+        let ticket = pending.ticket.clone();
+        let target = pending.reviewer.clone().unwrap();
+        let expected = pending.expected.clone();
+        assert!(
+            app.queue_owner_review(ticket.clone(), expected.clone(), target.clone(), "Fixture")
+                .is_err()
+        );
+        let mut unsaved = expected;
+        unsaved.column = 2;
+        assert!(
+            app.queue_owner_review(ticket, unsaved, target, "Fixture")
+                .is_err()
+        );
+        assert!(app.owner_task_reviews.is_empty());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_review_dispatches_once_after_durable_completion_and_waits_for_draft() {
+        for worker in [Provider::Codex, Provider::Claude] {
+            for reviewer in [Provider::Codex, Provider::Claude] {
+                let (temp, mut app, rx) = review_fixture(worker, reviewer);
+                match reviewer {
+                    Provider::Codex => app
+                        .chats
+                        .iter_mut()
+                        .find(|c| c.pane == 70)
+                        .unwrap()
+                        .gpui_set_composer("Owner draft".into()),
+                    Provider::Claude => app
+                        .claude_chats
+                        .iter_mut()
+                        .find(|c| c.pane == 70)
+                        .unwrap()
+                        .gpui_set_composer("Owner draft".into()),
+                }
+                assert!(!app.poll_owner_task_reviews());
+                completed(&mut app, worker, true, true);
+                assert!(app.poll_owner_task_completions());
+                assert_eq!(app.state.tasks[0].column, 2);
+                assert_eq!(app.owner_task_reviews.len(), 1);
+                assert!(rx.try_recv().is_err());
+                for _ in 0..3 {
+                    assert!(!app.poll_owner_task_reviews());
+                }
+                match reviewer {
+                    Provider::Codex => {
+                        let c = app.chats.iter_mut().find(|c| c.pane == 70).unwrap();
+                        assert_eq!(c.composer_state().1, "Owner draft");
+                        c.gpui_set_composer(String::new());
+                    }
+                    Provider::Claude => {
+                        let c = app.claude_chats.iter_mut().find(|c| c.pane == 70).unwrap();
+                        assert_eq!(c.composer_state().1, "Owner draft");
+                        c.gpui_set_composer(String::new());
+                    }
+                }
+                assert!(app.poll_owner_task_reviews());
+                let wire = rx.try_recv().unwrap();
+                let prompt = match reviewer {
+                    Provider::Codex => wire["params"]["input"][0]["text"].as_str(),
+                    Provider::Claude => wire["message"]["content"][0]["text"].as_str(),
+                }
+                .unwrap();
+                assert!(prompt.starts_with("[Tessel review]"));
+                assert!(prompt.ends_with("Do not modify any files; only report."));
+                assert!(app.owner_task_reviews.is_empty());
+                assert!(!app.poll_owner_task_reviews());
+                assert!(rx.try_recv().is_err());
+                drop(app);
+                let (_store, saved) = Store::open(&temp.path().join("state")).unwrap();
+                assert_eq!(saved.tasks[0].column, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn native_review_stale_context_failed_save_and_target_stop_never_send() {
+        for reviewer in [Provider::Codex, Provider::Claude] {
+            for case in 0..6 {
+                let (_temp, mut app, rx) = review_fixture(Provider::Codex, reviewer);
+                if case == 0 {
+                    app.store = None;
+                }
+                completed(&mut app, Provider::Codex, true, true);
+                app.poll_owner_task_completions();
+                match case {
+                    1 => app.state.tasks[0].title = "Owner edit".into(),
+                    2 => app.state.projects[0].path.push("retargeted"),
+                    3 => app
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == 70)
+                        .unwrap()
+                        .cwd
+                        .push("retargeted"),
+                    4 => match reviewer {
+                        Provider::Codex => app
+                            .chats
+                            .iter_mut()
+                            .find(|c| c.pane == 70)
+                            .unwrap()
+                            .gpui_stop(),
+                        Provider::Claude => app
+                            .claude_chats
+                            .iter_mut()
+                            .find(|c| c.pane == 70)
+                            .unwrap()
+                            .gpui_stop(),
+                    },
+                    5 => app.cancel_owner_task_pane(70),
+                    _ => {}
+                }
+                app.poll_owner_task_reviews();
+                assert!(app.owner_task_reviews.is_empty());
+                assert!(rx.try_recv().is_err());
+                assert_eq!(app.state.tasks[0].column, if case == 0 { 1 } else { 2 });
+            }
+        }
+    }
+
+    #[cfg(feature = "visual-test")]
+    #[test]
+    fn native_review_form_captures_conversation_and_rejects_replacement_before_launch() {
+        let (_temp, mut app, spec) = fixture(Provider::Codex);
+        let pane = app
+            .new_session_with_history(
+                Some(spec.project),
+                Launch::CodexChat,
+                None,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        let rx = synthetic_chat(&mut app, Provider::Codex, pane, spec.project, spec.source);
+        app.agents = crate::agent_detection::Detection::model_picker_fixture("codex");
+        app.open_new_task();
+        let epoch = app.new_task.epoch;
+        app.new_task_command(epoch, crate::new_task_form::Command::Reviewer(Some(pane)));
+        assert_eq!(app.new_task.reviewer, Some(pane));
+        app.chats[0].gpui_stop();
+        let _new_rx = app.chats[0].ready_sender_for_test();
+        app.new_task_command(
+            epoch,
+            crate::new_task_form::Command::Edit(
+                crate::new_task_form::Field::Title,
+                "Fixture".into(),
+            ),
+        );
+        app.new_task_command(epoch, crate::new_task_form::Command::Isolated(false));
+        app.new_task_command(epoch, crate::new_task_form::Command::Start);
+        assert!(app.new_task.open);
+        assert!(app.state.tasks.is_empty());
+        assert!(app.new_task.error.contains("reviewer changed"));
+        assert!(rx.try_recv().is_err());
+        // Drain the read-only probe before releasing its temporary directory.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while app.worktree_state.is_busy() {
+            app.poll_worktrees();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn completion_fixture(provider: Provider) -> (tempfile::TempDir, Tessel) {
         let (temp, mut app, spec) = fixture(provider);
         let project = spec.project;
@@ -488,6 +743,7 @@ mod tests {
 
     fn completed(app: &mut Tessel, provider: Provider, marker: bool, success: bool) {
         use serde_json::json;
+        let pane = app.owner_task_turns[0].pending.pane.unwrap();
         let text = if marker {
             "Checks passed.\nTASK_COMPLETE"
         } else {
@@ -495,14 +751,18 @@ mod tests {
         };
         match provider {
             Provider::Codex => {
-                let c = &mut app.chats[0];
+                let c = app.chats.iter_mut().find(|c| c.pane == pane).unwrap();
                 let thread = c.thread_id.clone().unwrap();
                 c.task_frame_for_test(json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"task-turn"}}}));
                 c.task_frame_for_test(json!({"method":"item/completed","params":{"threadId":thread,"turnId":"task-turn","item":{"type":"agentMessage","id":"answer","phase":"final_answer","text":text}}}));
                 c.task_frame_for_test(json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":"task-turn","status":if success {"completed"} else {"failed"}}}}));
             }
             Provider::Claude => {
-                let c = &mut app.claude_chats[0];
+                let c = app
+                    .claude_chats
+                    .iter_mut()
+                    .find(|c| c.pane == pane)
+                    .unwrap();
                 c.task_frame_for_test(json!({"type":"assistant","session_id":"synthetic-session","message":{"id":"answer","content":[{"type":"text","text":text}]}}));
                 c.task_frame_for_test(json!({"type":"result","session_id":"synthetic-session","is_error":!success,"subtype":if success {"success"} else {"error_during_execution"}}));
             }

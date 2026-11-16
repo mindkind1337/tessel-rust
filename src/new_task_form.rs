@@ -24,6 +24,7 @@ pub(crate) enum Command {
     Isolated(bool),
     CopyEnv(bool),
     Reviewer(Option<u64>),
+    ReviewerMenu(bool),
     Cancel,
     Start,
 }
@@ -47,8 +48,9 @@ pub(crate) struct Panel {
     pub isolated: bool,
     pub copy_env: bool,
     pub reviewer: Option<u64>,
+    pub reviewer_menu: bool,
     pub choices: Vec<Choice>,
-    pub reviewers: Vec<crate::task_agents_model::Choice>,
+    pub reviewers: Vec<crate::native_review::Choice>,
     pub isolation: Option<bool>,
     pub error: String,
     invalid: [bool; 3],
@@ -60,7 +62,7 @@ impl Panel {
         source: PathBuf,
         name: String,
         choices: Vec<Choice>,
-        reviewers: Vec<crate::task_agents_model::Choice>,
+        reviewers: Vec<crate::native_review::Choice>,
     ) {
         let epoch = self
             .epoch
@@ -172,7 +174,13 @@ pub(crate) fn show(
             }
             ui.radio_value(&mut panel.isolated, false, t("Directement dans le dossier du projet", "Directly in the project folder"));
             if !panel.reviewers.is_empty() {
-                ui.add_enabled(false, egui::Button::new(t("Demande automatique de revue — indisponible pour le moment", "Automatic review requests — not available yet")));
+            ui.label(t("Une fois terminé, demander une revue à", "When it is done, ask for a review by"));
+            let selected = panel.reviewers.iter().find(|r| Some(r.target.pane) == panel.reviewer).map(|r| r.label.as_str()).unwrap_or(t("personne", "nobody"));
+            egui::ComboBox::from_id_salt(("task-reviewer", panel.epoch)).selected_text(selected).show_ui(ui, |ui| {
+                ui.selectable_value(&mut panel.reviewer, None, t("personne", "nobody"));
+                for reviewer in &panel.reviewers { ui.selectable_value(&mut panel.reviewer, Some(reviewer.target.pane), &reviewer.label); }
+            });
+            ui.small(t("Agents natifs connectés uniquement. La demande attend la fin du travail, des approbations et du brouillon du réviseur.", "Connected native agents only. The request waits for the reviewer's work, approvals and draft to finish."));
             }
             ui.small(t("Le signal de fin du premier tour place la carte en Révision. Vous pouvez aussi la déplacer manuellement.", "The first turn’s completion signal moves the card to Review. You can also move it manually."));
             if !panel.error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &panel.error); }

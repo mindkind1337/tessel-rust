@@ -1,5 +1,66 @@
 use super::*;
 #[test]
+fn native_review_claude_waits_without_consuming_draft_or_answering_permissions() {
+    use crate::initial_turn::Phase;
+    let mut c = Chat::new(1, "synthetic".into(), None);
+    let rx = c.ready_sender_for_test();
+    c.push("Claude", "Existing conversation");
+    let epoch = c.review_identity().unwrap();
+    c.gpui_set_composer("Owner draft".into());
+    let draft = c.composer_state().0;
+    assert_eq!(
+        c.begin_review_turn("Review fixture", epoch).unwrap(),
+        Phase::Pending
+    );
+    assert_eq!(c.composer_state(), (draft, "Owner draft"));
+    c.gpui_set_composer(String::new());
+    c.active = true;
+    c.frame(approval("review-approval"));
+    c.active = false;
+    assert_eq!(
+        c.begin_review_turn("Review fixture", epoch).unwrap(),
+        Phase::Pending
+    );
+    assert_eq!(c.approvals.len(), 1);
+    c.approvals.clear();
+    c.active = true;
+    c.frame(json!({"type":"control_request","request_id":"review-question","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which?","header":"Fixture","options":[{"label":"A"},{"label":"B"}]}]}}}));
+    c.active = false;
+    assert!(c.questions.is_some());
+    assert_eq!(
+        c.begin_review_turn("Review fixture", epoch).unwrap(),
+        Phase::Pending
+    );
+    c.questions = None;
+    c.active = true;
+    assert_eq!(
+        c.begin_review_turn("Review fixture", epoch).unwrap(),
+        Phase::Pending
+    );
+    c.active = false;
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        c.begin_review_turn("Review fixture", epoch).unwrap(),
+        Phase::Submitted
+    );
+    let wire = rx.try_recv().unwrap();
+    assert_eq!(wire["type"], "user");
+    assert_eq!(wire["message"]["content"][0]["text"], "Review fixture");
+    assert_eq!(c.transcript.back().unwrap().0, "Tessel");
+    assert_eq!(c.composer_state(), (draft, ""));
+    assert_eq!(
+        c.begin_review_turn("Duplicate", epoch).unwrap(),
+        Phase::Pending
+    );
+    assert!(rx.try_recv().is_err());
+    c.stop();
+    let _new_rx = c.ready_sender_for_test();
+    assert_eq!(
+        c.begin_review_turn("Stale", epoch).unwrap(),
+        Phase::Cancelled
+    );
+}
+#[test]
 fn task_completion_claude_reads_text_blocks_but_never_thinking() {
     use crate::initial_turn::Native;
     use crate::task_completion::Outcome;

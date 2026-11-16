@@ -342,3 +342,5 @@ The task instruction formatter in `src/task_prompt.rs`, `scripts/extract_task_pr
 The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui/new_task_view.rs`) follows Tessel `NewTaskDialog.vue` and its `style.css` rules under the existing Orca/Tessel MIT attribution above. Tests use fictitious projects and local temporary workspaces only.
 
 - `src/task_completion.rs`, `scripts/extract_task_completion_reference.mjs` and synthetic `tests/fixtures/task_completion.json` reproduce the standalone completion marker contract from Tessel `src/renderer/src/agentLimit.js` (MIT, Lovecast 2026).
+
+- `src/native_review.rs` and `src/app/task_review.rs` adapt Tessel `src/shared/tesselDelivery.js#reviewRequest` and `App.vue#agentReportedDone` under the existing Orca/Tessel MIT attribution. The conversation identity, bounded queue and persistence guards are native implementations.

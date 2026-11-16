@@ -196,6 +196,7 @@ pub struct Chat {
     pub error: String,
     #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    review_epoch: u64,
     pub(crate) task_completion: crate::task_completion::Watch,
     composer_id: u64,
     composer: String,
@@ -272,6 +273,7 @@ impl Chat {
             error: String::new(),
             #[cfg(test)]
             test_outgoing: None,
+            review_epoch: crate::chat::next_input_id(),
             task_completion: Default::default(),
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
@@ -476,6 +478,7 @@ impl Chat {
         self.status = "Initializing Codex…".into();
     }
     fn stop(&mut self) {
+        self.review_epoch = crate::chat::next_input_id();
         self.task_completion.cancel();
         self.connecting = None;
         self.rpc = None;
@@ -1246,6 +1249,51 @@ impl Chat {
         }
     }
 
+    pub(crate) fn review_identity(&self) -> Option<u64> {
+        (self.ready
+            && self.thread_id.is_some()
+            && self.error.is_empty()
+            && (!self.require_profile || self.profile.is_some()))
+        .then_some(self.review_epoch)
+    }
+
+    pub(crate) fn begin_review_turn(
+        &mut self,
+        prompt: &str,
+        epoch: u64,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        use crate::initial_turn::Phase;
+        crate::initial_turn::validate_prompt(prompt)?;
+        if self.review_identity() != Some(epoch) {
+            return Ok(Phase::Cancelled);
+        }
+        if self.working()
+            || !self.approvals.is_empty()
+            || !self.questions.is_empty()
+            || !self.tool_calls.is_empty()
+            || !self.composer.is_empty()
+        {
+            return Ok(Phase::Pending);
+        }
+        let options = self.options.effective(self.defaults.as_ref());
+        if !options.valid_for("codex") {
+            return Err("Invalid reviewer model or effort.".into());
+        }
+        self.commit_options();
+        self.request(
+            "turn/start",
+            self.turn_params(
+                json!([{"type":"text","text":prompt,"text_elements":[]}]),
+                &options,
+            ),
+        )?;
+        self.starting_turn = true;
+        self.task_completion.cancel();
+        self.push("Tessel", prompt.into());
+        self.status = "Working".into();
+        Ok(Phase::Submitted)
+    }
+
     pub fn gpui_connect(&mut self) {
         if self.rpc.is_none() && self.connecting.is_none() {
             self.start();
@@ -1443,6 +1491,73 @@ impl crate::initial_turn::Native for Chat {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_review_codex_waits_for_draft_approval_question_and_keeps_owner_posture() {
+        use super::*;
+        use crate::initial_turn::Phase;
+        let mut c = Chat::new(1, "synthetic".into());
+        let rx = c.ready_sender_for_test();
+        c.push("Codex", "Existing conversation".into());
+        let epoch = c.review_identity().unwrap();
+        c.gpui_set_composer("Owner draft".into());
+        let draft = c.composer_state().0;
+        assert_eq!(
+            c.begin_review_turn("Review fixture", epoch).unwrap(),
+            Phase::Pending
+        );
+        assert_eq!(c.composer_state(), (draft, "Owner draft"));
+        c.gpui_set_composer(String::new());
+        c.approvals.push_back(Approval {
+            instance_id: next_input_id(),
+            id: json!(1),
+            method: "item/fileChange/requestApproval".into(),
+            params: json!({}),
+        });
+        assert_eq!(
+            c.begin_review_turn("Review fixture", epoch).unwrap(),
+            Phase::Pending
+        );
+        c.approvals.clear();
+        c.questions.push_back(questions::Request::parse(json!(2), &json!({"questions":[{"id":"q","header":"Fixture","question":"Which?","options":null}]})).unwrap());
+        assert_eq!(
+            c.begin_review_turn("Review fixture", epoch).unwrap(),
+            Phase::Pending
+        );
+        c.questions.clear();
+        c.starting_turn = true;
+        assert_eq!(
+            c.begin_review_turn("Review fixture", epoch).unwrap(),
+            Phase::Pending
+        );
+        c.starting_turn = false;
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            c.begin_review_turn("Review fixture", epoch).unwrap(),
+            Phase::Submitted
+        );
+        let wire = rx.try_recv().unwrap();
+        assert_eq!(wire["method"], "turn/start");
+        assert_eq!(wire["params"]["input"][0]["text"], "Review fixture");
+        assert_eq!(wire["params"]["approvalPolicy"], "on-request");
+        assert_eq!(wire["params"]["sandboxPolicy"]["networkAccess"], false);
+        assert_eq!(c.composer_state(), (draft, ""));
+        assert_eq!(c.transcript.back().unwrap().0, "Tessel");
+        assert_eq!(
+            c.begin_review_turn("Duplicate", epoch).unwrap(),
+            Phase::Pending
+        );
+        assert!(rx.try_recv().is_err());
+        c.stop();
+        let _new_rx = c.ready_sender_for_test();
+        assert_eq!(
+            c.begin_review_turn("Stale", epoch).unwrap(),
+            Phase::Cancelled
+        );
+        assert!(
+            c.begin_review_turn("\0", c.review_identity().unwrap())
+                .is_err()
+        );
+    }
     #[test]
     fn task_completion_codex_rejected_start_cannot_stay_armed() {
         use super::*;

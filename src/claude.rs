@@ -34,6 +34,7 @@ pub struct Chat {
     pub options_commit: bool,
     #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    review_epoch: u64,
     pub(crate) task_completion: crate::task_completion::Watch,
     composer_id: u64,
     composer: String,
@@ -134,6 +135,7 @@ impl Chat {
             options_commit: false,
             #[cfg(test)]
             test_outgoing: None,
+            review_epoch: crate::chat::next_input_id(),
             task_completion: Default::default(),
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
@@ -229,6 +231,43 @@ impl Chat {
             questions,
             questions_can_submit,
         }
+    }
+
+    pub(crate) fn review_identity(&self) -> Option<u64> {
+        (self.ready
+            && !self.session.is_empty()
+            && self.error.is_empty()
+            && (!self.require_profile || self.profile.is_some()))
+        .then_some(self.review_epoch)
+    }
+
+    pub(crate) fn begin_review_turn(
+        &mut self,
+        prompt: &str,
+        epoch: u64,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        use crate::initial_turn::Phase;
+        crate::initial_turn::validate_prompt(prompt)?;
+        if self.review_identity() != Some(epoch) {
+            return Ok(Phase::Cancelled);
+        }
+        if self.active
+            || self.interrupting
+            || !self.approvals.is_empty()
+            || self.questions.is_some()
+            || !self.composer.is_empty()
+        {
+            return Ok(Phase::Pending);
+        }
+        if !self
+            .options
+            .effective(self.defaults.as_ref())
+            .valid_for("claude")
+        {
+            return Err("Invalid reviewer model or effort.".into());
+        }
+        self.begin_text_as(prompt, prompt, "Tessel")?;
+        Ok(Phase::Submitted)
     }
 
     pub fn gpui_connect(&mut self) {
@@ -459,6 +498,7 @@ impl Chat {
         Ok(())
     }
     fn stop(&mut self) {
+        self.review_epoch = crate::chat::next_input_id();
         self.task_completion.cancel();
         self.connecting = None;
         self.transport.take();
@@ -507,6 +547,9 @@ impl Chat {
         }
     }
     fn begin_text(&mut self, text: &str, displayed: &str) -> Result<(), String> {
+        self.begin_text_as(text, displayed, "You")
+    }
+    fn begin_text_as(&mut self, text: &str, displayed: &str, role: &str) -> Result<(), String> {
         if !self.ready || self.active {
             return Err("Claude is not ready for another message".into());
         }
@@ -515,7 +558,7 @@ impl Chat {
         }
         self.send(json!({"type":"user","uuid":uuid()?,"session_id":self.session,"parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"text","text":text}]}}))?;
         self.task_completion.cancel();
-        self.push("You", displayed);
+        self.push(role, displayed);
         self.active = true;
         self.interrupting = false;
         self.stream_row = None;

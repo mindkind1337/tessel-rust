@@ -17,6 +17,8 @@ mod native_terminals;
 mod new_task;
 #[path = "app/task_launch.rs"]
 mod task_launch;
+#[path = "app/task_review.rs"]
+mod task_review;
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -706,6 +708,7 @@ pub struct Tessel {
     pending_quick_command: Option<(u64, String, bool)>,
     owner_task_launches: Vec<task_launch::Pending>,
     owner_task_turns: Vec<task_launch::Running>,
+    owner_task_reviews: Vec<task_review::Pending>,
     worktree_state: crate::worktree_state::WorktreeState,
     worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
     pending_transcript_trash: Option<crate::side_panels_model::SessionHistoryEntry>,
@@ -917,6 +920,7 @@ impl Tessel {
             pending_quick_command: None,
             owner_task_launches: Vec::new(),
             owner_task_turns: Vec::new(),
+            owner_task_reviews: Vec::new(),
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -1132,7 +1136,16 @@ impl Tessel {
                             enabled: false,
                         },
                     ],
-                    vec![],
+                    vec![crate::native_review::Choice {
+                        label: "Réviseur de démonstration".into(),
+                        target: crate::native_review::Target {
+                            pane: 99,
+                            project: 7,
+                            cwd: PathBuf::from("C:/fixtures/project"),
+                            kind: crate::native_review::Kind::Codex,
+                            epoch: 1,
+                        },
+                    }],
                 );
                 app.new_task.isolation = Some(true);
                 app.new_task.edit(
@@ -2172,6 +2185,7 @@ impl Tessel {
             }
         }
         native_changed |= self.poll_owner_task_completions();
+        native_changed |= self.poll_owner_task_reviews();
         if chat_metadata_changed {
             self.save();
         }
@@ -7160,6 +7174,7 @@ impl Tessel {
             && !self.git_result.busy()
             && self.owner_task_launches.is_empty()
             && self.owner_task_turns.is_empty()
+            && self.owner_task_reviews.is_empty()
             && !self.worktree_state.is_busy()
             && !self.scm_state.busy()
             && !self.account_busy()

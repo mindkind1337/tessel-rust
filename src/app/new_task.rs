@@ -19,17 +19,7 @@ impl Tessel {
                     .any(|(kind, installed)| kind == id && *installed),
             })
             .collect();
-        let reviewers = self
-            .task_agent_choices(project.id)
-            .into_iter()
-            .filter(|a| {
-                !self
-                    .state
-                    .tasks
-                    .iter()
-                    .any(|t| t.column != 3 && t.timeline.pane_id == Some(a.id))
-            })
-            .collect();
+        let reviewers = self.task_reviewer_choices(project.id);
         self.new_task.begin(
             project.id,
             project.path.clone(),
@@ -89,10 +79,21 @@ impl Tessel {
                 }
             }
             Command::CopyEnv(value) => self.new_task.copy_env = value,
+            Command::ReviewerMenu(open) => self.new_task.reviewer_menu = open,
             Command::Reviewer(id) => {
-                self.new_task.reviewer = None;
-                if id.is_some() {
-                    self.new_task.error = "Automatic review requests are not available yet.".into();
+                if id.is_none()
+                    || self
+                        .new_task
+                        .reviewers
+                        .iter()
+                        .any(|r| Some(r.target.pane) == id && self.reviewer_current(&r.target))
+                {
+                    self.new_task.reviewer = id;
+                    self.new_task.reviewer_menu = false;
+                } else {
+                    self.new_task.error =
+                        "The reviewer changed. Reopen the form to select its current conversation."
+                            .into();
                 }
             }
             Command::Start => {
@@ -100,6 +101,19 @@ impl Tessel {
                 if !self.new_task.ready() {
                     return;
                 }
+                let reviewer = match self.new_task.reviewer {
+                    Some(id) => {
+                        match self.new_task.reviewers.iter().find(|r| r.target.pane == id) {
+                            Some(r) => Some(r.target.clone()),
+                            None => {
+                                self.new_task.error =
+                                    "The selected reviewer is unavailable.".into();
+                                return;
+                            }
+                        }
+                    }
+                    None => None,
+                };
                 let form = &self.new_task;
                 let provider = match form.provider.as_str() {
                     "codex" => task_launch::Provider::Codex,
@@ -112,7 +126,7 @@ impl Tessel {
                     title: form.title.trim().into(),
                     brief: form.brief.trim().into(),
                     provider,
-                    reviewer: form.reviewer,
+                    reviewer,
                     isolated: form.use_copy(),
                     base_branch: (!form.branch.trim().is_empty())
                         .then(|| form.branch.trim().to_owned()),

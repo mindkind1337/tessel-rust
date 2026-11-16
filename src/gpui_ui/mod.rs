@@ -471,7 +471,21 @@ impl TesselGpuiRoot {
         cx: &mut Context<Self>,
     ) {
         if self.app.new_task.open {
-            if event.keystroke.key == "escape" {
+            if event.keystroke.key == "escape" && self.app.new_task.reviewer_menu {
+                self.app.new_task_command(
+                    self.app.new_task.epoch,
+                    crate::new_task_form::Command::ReviewerMenu(false),
+                );
+                if let Some(focus) = self.new_task_view.focus.get("new-task-review-trigger") {
+                    focus.focus(window, cx);
+                }
+                cx.notify();
+            } else if self.app.new_task.reviewer_menu
+                && matches!(event.keystroke.key.as_str(), "up" | "down")
+            {
+                self.new_task_view
+                    .cycle(event.keystroke.key == "up", window, cx);
+            } else if event.keystroke.key == "escape" {
                 self.app.new_task_command(
                     self.app.new_task.epoch,
                     crate::new_task_form::Command::Cancel,
@@ -1590,6 +1604,7 @@ impl Render for TesselGpuiRoot {
                     &mut self.new_task_view,
                     snapshot.french,
                     &tokens,
+                    window,
                     cx,
                 ),
                 |el, modal| el.child(modal),
