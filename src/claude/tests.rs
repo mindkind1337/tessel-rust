@@ -1,4 +1,81 @@
 use super::*;
+#[test]
+fn native_task_first_turn_claude_preserves_draft_and_waits_for_permission() {
+    use crate::initial_turn::{Native, Phase};
+    let mut c = Chat::new(1, "synthetic".into(), None);
+    let outgoing = c.ready_sender_for_test();
+    c.gpui_set_composer("Unsent owner draft".into());
+    let draft_id = c.composer_state().0;
+    let prompt = "[Tessel task] Fixture\n\nExact synthetic instructions.";
+    assert_eq!(c.begin_task_turn(prompt, false).unwrap(), Phase::Submitted);
+    let frame = outgoing.try_recv().unwrap();
+    assert_eq!(frame["type"], "user");
+    assert_eq!(frame["session_id"], "synthetic-session");
+    assert_eq!(frame["message"]["role"], "user");
+    assert_eq!(frame["message"]["content"][0]["text"], prompt);
+    assert!(valid_uuid(frame["uuid"].as_str().unwrap()));
+    assert_eq!(c.composer_state(), (draft_id, "Unsent owner draft"));
+    assert_eq!(c.begin_task_turn(prompt, true).unwrap(), Phase::Cancelled);
+    c.frame(approval("task-write"));
+    assert_eq!(c.approvals.len(), 1);
+    assert!(
+        outgoing.try_recv().is_err(),
+        "no duplicate turn or automatic approval"
+    );
+}
+
+#[test]
+fn native_task_first_turn_claude_rejects_stale_accounts_resumes_and_transport_failures() {
+    use crate::initial_turn::{Native, Phase};
+    let mut c = Chat::new(1, "synthetic".into(), None);
+    c.require_profile = true;
+    let outgoing = c.ready_sender_for_test();
+    assert_eq!(c.begin_task_turn("fixture", false).unwrap(), Phase::Pending);
+    assert!(c.begin_task_turn("fixture", true).is_err());
+    assert!(outgoing.try_recv().is_err());
+    c.require_profile = false;
+    c.resume = "10000000-0000-4000-8000-000000000001".into();
+    assert_eq!(
+        c.begin_task_turn("fixture", false).unwrap(),
+        Phase::Cancelled
+    );
+    c.resume.clear();
+    for prompt in [String::new(), "x".repeat(65537), "null\0fixture".into()] {
+        assert!(c.begin_task_turn(&prompt, false).is_err());
+    }
+    assert!(outgoing.try_recv().is_err());
+    c.gpui_set_composer("Keep this".into());
+    drop(outgoing);
+    assert!(c.begin_task_turn("fixture", false).is_err());
+    assert!(!c.active);
+    assert!(c.transcript.is_empty());
+    assert_eq!(c.composer_state().1, "Keep this");
+    c.ready = false;
+    assert!(c.begin_task_turn("fixture", true).is_err());
+    assert!(!c.busy(), "failed connection is not restarted");
+}
+
+#[test]
+fn native_task_first_turn_refactor_preserves_normal_claude_composer_behavior() {
+    let mut c = Chat::new(1, "synthetic".into(), None);
+    let outgoing = c.ready_sender_for_test();
+    c.gpui_set_composer("  Owner message\n".into());
+    c.gpui_send_message();
+    let frame = outgoing.try_recv().unwrap();
+    assert_eq!(frame["message"]["content"][0]["text"], "Owner message");
+    assert_eq!(c.transcript.back().unwrap().1, "  Owner message\n");
+    assert!(c.composer_state().1.is_empty());
+    let mut failed = Chat::new(1, "synthetic".into(), None);
+    let outgoing = failed.ready_sender_for_test();
+    drop(outgoing);
+    failed.gpui_set_composer("  Keep failed draft\n".into());
+    let draft_id = failed.composer_state().0;
+    failed.gpui_send_message();
+    assert_eq!(failed.composer_state(), (draft_id, "  Keep failed draft\n"));
+    assert!(failed.transcript.is_empty());
+    assert!(!failed.active);
+}
+
 fn chat() -> Chat {
     let mut c = Chat::new(1, PathBuf::from("."), None);
     c.session = "10000000-0000-4000-8000-000000000001".into();

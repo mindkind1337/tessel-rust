@@ -513,11 +513,27 @@ impl Chat {
         &mut self,
         connection_attempted: bool,
     ) -> Result<crate::teams_relay::WorkerFirstTurn, String> {
-        use crate::teams_relay::{WORKER_START_PROMPT, WorkerFirstTurn};
+        self.begin_initial_turn(
+            crate::teams_relay::WORKER_START_PROMPT,
+            connection_attempted,
+        )
+    }
+
+    fn begin_initial_turn(
+        &mut self,
+        prompt: &str,
+        connection_attempted: bool,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        use crate::initial_turn::Phase as WorkerFirstTurn;
+        crate::initial_turn::validate_prompt(prompt)?;
         if !self.error.is_empty() {
             return Err(self.error.clone());
         }
-        if self.starting_turn || self.turn.is_some() || !self.transcript.is_empty() {
+        if self.starting_turn
+            || self.turn.is_some()
+            || !self.transcript.is_empty()
+            || !self.history.is_empty()
+        {
             return Ok(WorkerFirstTurn::Cancelled);
         }
         if self.require_profile && self.profile.is_none() {
@@ -557,11 +573,11 @@ impl Chat {
         if !options.valid_for("codex") {
             return Err("Invalid model or effort for the worker's first turn.".into());
         }
-        let input = json!([{"type":"text","text":WORKER_START_PROMPT,"text_elements":[]}]);
+        let input = json!([{"type":"text","text":prompt,"text_elements":[]}]);
         self.commit_options();
         self.request("turn/start", self.turn_params(input, &options))?;
         self.starting_turn = true;
-        self.push("You", WORKER_START_PROMPT.into());
+        self.push("You", prompt.into());
         self.status = "Working".into();
         Ok(WorkerFirstTurn::Submitted)
     }
@@ -1376,8 +1392,72 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
     Err("Codex initialization timed out.".into())
 }
 
+impl crate::initial_turn::Native for Chat {
+    fn begin_task_turn(
+        &mut self,
+        prompt: &str,
+        connection_attempted: bool,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        self.begin_initial_turn(prompt, connection_attempted)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_task_first_turn_codex_preserves_prompt_draft_and_permissions() {
+        use crate::initial_turn::{Native, Phase};
+        let mut chat = super::Chat::new(1, "synthetic".into());
+        let outgoing = chat.ready_sender_for_test();
+        chat.gpui_set_composer("Unsent owner draft".into());
+        let draft_id = chat.composer_state().0;
+        let prompt = "[Tessel task] Fixture\n\nOnly synthetic instructions.";
+        assert_eq!(
+            chat.begin_task_turn(prompt, false).unwrap(),
+            Phase::Submitted
+        );
+        let frame = outgoing.try_recv().unwrap();
+        assert_eq!(frame["method"], "turn/start");
+        assert_eq!(frame["params"]["input"][0]["text"], prompt);
+        assert_eq!(frame["params"]["approvalPolicy"], "on-request");
+        assert_eq!(frame["params"]["approvalsReviewer"], "user");
+        assert_eq!(frame["params"]["sandboxPolicy"]["type"], "workspaceWrite");
+        assert_eq!(frame["params"]["sandboxPolicy"]["networkAccess"], false);
+        assert_eq!(chat.composer_state(), (draft_id, "Unsent owner draft"));
+        assert_eq!(
+            chat.begin_task_turn(prompt, true).unwrap(),
+            Phase::Cancelled
+        );
+        assert!(outgoing.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_task_first_turn_codex_rejects_missing_account_history_and_oversized_prompt() {
+        use crate::initial_turn::{Native, Phase};
+        let mut chat = super::Chat::new(1, "synthetic".into());
+        chat.require_profile = true;
+        let outgoing = chat.ready_sender_for_test();
+        assert_eq!(
+            chat.begin_task_turn("fixture", false).unwrap(),
+            Phase::Pending
+        );
+        assert!(chat.begin_task_turn("fixture", true).is_err());
+        assert!(outgoing.try_recv().is_err());
+        chat.require_profile = false;
+        chat.history
+            .push_back(("You".into(), "Saved owner turn".into()));
+        assert_eq!(
+            chat.begin_task_turn("fixture", false).unwrap(),
+            Phase::Cancelled
+        );
+        chat.history.clear();
+        for prompt in [String::new(), "x".repeat(65537), "null\0fixture".into()] {
+            assert!(chat.begin_task_turn(&prompt, false).is_err());
+        }
+        assert!(outgoing.try_recv().is_err());
+        assert!(chat.transcript.is_empty());
+    }
+
     #[test]
     fn worker_first_turn_keeps_draft_permissions_and_never_steers_or_retries() {
         use crate::teams_relay::WorkerFirstTurn;

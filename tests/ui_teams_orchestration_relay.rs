@@ -2,6 +2,9 @@
 #[path = "../src/agent_catalog.rs"]
 mod agent_catalog;
 #[allow(dead_code)]
+#[path = "../src/initial_turn.rs"]
+mod initial_turn;
+#[allow(dead_code)]
 #[path = "../src/pane_numbers.rs"]
 mod pane_numbers;
 #[allow(dead_code)]

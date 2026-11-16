@@ -493,16 +493,24 @@ impl Chat {
         }
     }
     fn begin(&mut self) -> Result<(), String> {
+        let text = std::mem::take(&mut self.composer);
+        match self.begin_text(text.trim(), &text) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.composer = text;
+                Err(error)
+            }
+        }
+    }
+    fn begin_text(&mut self, text: &str, displayed: &str) -> Result<(), String> {
         if !self.ready || self.active {
             return Err("Claude is not ready for another message".into());
         }
-        let text = self.composer.trim();
-        if text.is_empty() || text.len() > 65536 {
+        if text.trim().is_empty() || text.len() > 65536 {
             return Err("Message must be 1 to 65536 bytes".into());
         }
         self.send(json!({"type":"user","uuid":uuid()?,"session_id":self.session,"parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"text","text":text}]}}))?;
-        let text = std::mem::take(&mut self.composer);
-        self.push("You", &text);
+        self.push("You", displayed);
         self.active = true;
         self.interrupting = false;
         self.stream_row = None;
@@ -892,6 +900,61 @@ impl Chat {
         }
     }
 }
+impl crate::initial_turn::Native for Chat {
+    fn begin_task_turn(
+        &mut self,
+        prompt: &str,
+        connection_attempted: bool,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        use crate::initial_turn::Phase;
+        crate::initial_turn::validate_prompt(prompt)?;
+        if !self.error.is_empty() {
+            return Err(self.error.clone());
+        }
+        if self.active
+            || self.interrupting
+            || !self.transcript.is_empty()
+            || !self.resume.is_empty()
+        {
+            return Ok(Phase::Cancelled);
+        }
+        if self.require_profile && self.profile.is_none() {
+            return if connection_attempted {
+                Err(
+                    "Task account became unavailable before its first turn; it was not retried."
+                        .into(),
+                )
+            } else {
+                Ok(Phase::Pending)
+            };
+        }
+        if !self.ready {
+            if self.busy() {
+                return Ok(Phase::Connecting);
+            }
+            if connection_attempted {
+                return Err(
+                    "Task connection stopped before its first turn; it was not retried.".into(),
+                );
+            }
+            self.connect()?;
+            return Ok(Phase::Connecting);
+        }
+        if self.session.is_empty() {
+            return Err("Task session identity is missing.".into());
+        }
+        if !self
+            .options
+            .effective(self.defaults.as_ref())
+            .valid_for("claude")
+        {
+            return Err("Invalid model or effort for the task's first turn.".into());
+        }
+        self.begin_text(prompt, prompt)?;
+        Ok(Phase::Submitted)
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

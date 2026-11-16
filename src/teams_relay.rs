@@ -527,16 +527,7 @@ pub struct WorkerRecord {
     pub first_turn_started_at_ms: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkerFirstTurn {
-    #[default]
-    Pending,
-    Connecting,
-    Submitted,
-    Cancelled,
-    Failed,
-}
+pub use crate::initial_turn::Phase as WorkerFirstTurn;
 
 pub const WORKER_START_PROMPT: &str = "You are a Tessel worker. Call the team_inbox tool now: your worker brief and task are there. Follow it.";
 
