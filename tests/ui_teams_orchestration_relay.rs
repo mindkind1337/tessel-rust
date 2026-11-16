@@ -2,6 +2,9 @@
 #[path = "../src/agent_catalog.rs"]
 mod agent_catalog;
 #[allow(dead_code)]
+#[path = "../src/pane_numbers.rs"]
+mod pane_numbers;
+#[allow(dead_code)]
 #[path = "../src/settings_extra_model.rs"]
 mod settings_extra_model;
 #[allow(dead_code)]
@@ -70,6 +73,7 @@ mod workspace {
 
     #[derive(Clone, Debug)]
     pub struct SavedSession {
+        pub legacy_number: Option<u32>,
         pub native_host: Option<()>,
         pub last_model: Option<()>,
         pub codex_seed: Option<()>,
@@ -142,6 +146,7 @@ use workspace::{SavedSession, Workspace};
 
 fn make_session(id: u64, project: u64, name: &str, agent: &str) -> SavedSession {
     SavedSession {
+        legacy_number: None,
         profile_binding: None,
         native_host: None,
         last_model: None,

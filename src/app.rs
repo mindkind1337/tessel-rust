@@ -1374,10 +1374,17 @@ impl Tessel {
         self.refresh_launch_status();
         normalize_session_names(&mut self.sessions);
         self.state.next_pane = self.next_session;
+        let previous_numbers: std::collections::HashMap<_, _> = self
+            .state
+            .sessions
+            .iter()
+            .filter_map(|session| session.legacy_number.map(|number| (session.id, number)))
+            .collect();
         self.state.sessions = self
             .sessions
             .iter()
             .map(|s| workspace::SavedSession {
+                legacy_number: previous_numbers.get(&s.id).copied(),
                 native_host: s.native_host.clone(),
                 last_model: s.last_model.clone(),
                 codex_seed: s.codex_seed.clone(),
@@ -1405,6 +1412,7 @@ impl Tessel {
             })
             .collect();
         self.state.sync_terminal_layouts(self.grid_room);
+        self.state.normalize_pane_numbers();
     }
     fn save(&mut self) {
         self.capture_runtime_state();
@@ -15077,6 +15085,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         };
         for id in [10_u64, 20] {
             ws.sessions.push(workspace::SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,

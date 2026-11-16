@@ -53,6 +53,7 @@ pub fn output(
     if name == "team_tasks" {
         if let Some(tasks) = value["tasks"].as_array_mut() {
             let index = crate::task_dependencies::Index::new(&state.tasks);
+            let numbers = crate::teams_relay::member_numbers(state);
             for task in tasks {
                 let original = task["id"].as_u64().and_then(|id| index.task(id, project));
                 if let Some(original) = original {
@@ -69,16 +70,19 @@ pub fn output(
                 convert(task);
                 let pane = task["timeline"]["pane_id"].as_u64();
                 task["assignee"] = pane.map_or(Value::Null, |pane| {
-                    let name = state
+                    let session = state
                         .sessions
                         .iter()
-                        .find(|session| session.id == pane && session.project == Some(project))
+                        .find(|session| session.id == pane && session.project == Some(project));
+                    let name = session
                         .and_then(|session| session.pane_name.as_deref())
                         .filter(|name| !name.is_empty());
-                    json!(
-                        name.map(str::to_owned)
-                            .unwrap_or_else(|| format!("#{pane}"))
-                    )
+                    json!(name.map(str::to_owned).unwrap_or_else(|| {
+                        session.and_then(|s| numbers.get(&s.id)).map_or_else(
+                            || format!("Former pane {pane}"),
+                            |number| format!("#{number}"),
+                        )
+                    }))
                 });
             }
         }

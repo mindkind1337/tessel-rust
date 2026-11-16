@@ -610,6 +610,8 @@ pub struct ProjectWorktreePrefs {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSession {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_number: Option<u32>,
     /// An explicit native marker suppresses the legacy SSH launch path. It is
     /// inert on restore/import; terminal authority is never stored here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -774,6 +776,16 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    pub fn normalize_pane_numbers(&mut self) {
+        let numbers = crate::pane_numbers::numbers(
+            self.sessions
+                .iter()
+                .map(|session| (session.id, session.project, session.legacy_number)),
+        );
+        for session in &mut self.sessions {
+            session.legacy_number = numbers.get(&session.id).copied();
+        }
+    }
     pub fn sync_terminal_layouts(&mut self, room: [f64; 2]) {
         let mut groups: std::collections::HashMap<String, Vec<u64>> = Default::default();
         for session in &self.sessions {
@@ -1511,6 +1523,7 @@ impl Store {
             Err(e) => return Err(e.to_string()),
         };
         let mut warning = String::new();
+        state.normalize_pane_numbers();
         if !state.task_history_migrated {
             match crate::task_history::load_legacy(dir) {
                 Ok(legacy) => {
@@ -1595,11 +1608,76 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn pane_numbers_survive_save_reload_reordering_and_new_panes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state
+            .projects
+            .iter()
+            .find(|p| p.id == project)
+            .unwrap()
+            .path
+            .clone();
+        for (id, number) in [(900, 4), (7, 1)] {
+            state.sessions.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":id,"project":project,"title":"Synthetic","launch":"CodexChat",
+                    "cwd":cwd,"legacy_number":number
+                }))
+                .unwrap(),
+            );
+        }
+        state.next_pane = 1000;
+        state.normalize_pane_numbers();
+        store.save(&state).unwrap();
+        drop(store);
+        let (_store, mut loaded) = Store::open(dir.path()).unwrap();
+        loaded.sessions.reverse();
+        loaded.normalize_pane_numbers();
+        assert_eq!(
+            loaded
+                .sessions
+                .iter()
+                .find(|s| s.id == 900)
+                .unwrap()
+                .legacy_number,
+            Some(4)
+        );
+        loaded.sessions.retain(|s| s.id != 7);
+        loaded.sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id":800,"project":project,"title":"New","launch":"CodexChat","cwd":cwd
+            }))
+            .unwrap(),
+        );
+        loaded.normalize_pane_numbers();
+        assert_eq!(
+            loaded
+                .sessions
+                .iter()
+                .find(|s| s.id == 800)
+                .unwrap()
+                .legacy_number,
+            Some(1)
+        );
+        assert_eq!(
+            loaded
+                .sessions
+                .iter()
+                .find(|s| s.id == 900)
+                .unwrap()
+                .legacy_number,
+            Some(4)
+        );
+    }
+    #[test]
     fn terminal_conversations_round_trip_and_reject_invalid_or_wrong_provider_ids() {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         let id = crate::claude::uuid().unwrap();
         state.sessions.push(SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -1678,6 +1756,7 @@ mod tests {
             ),
         ] {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -1854,6 +1933,7 @@ mod tests {
             (2, crate::launch::Launch::ClaudeChat),
         ] {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -1917,6 +1997,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         for id in 1..=2 {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -1958,6 +2039,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -1989,6 +2071,7 @@ mod tests {
         let cwd = state.active().unwrap().path.clone();
         for id in [10, 11] {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -2008,6 +2091,7 @@ mod tests {
             });
         }
         state.sessions.push(SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2077,6 +2161,7 @@ mod tests {
         );
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2115,6 +2200,7 @@ mod tests {
             (4, Some("Old shell label"), crate::launch::Launch::Shell),
         ] {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 id,
@@ -2192,6 +2278,7 @@ mod tests {
         let uuid = "123e4567-e89b-42d3-a456-426614174000";
 
         state.sessions.push(SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

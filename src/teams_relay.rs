@@ -1833,6 +1833,7 @@ impl TeamsRelayHub {
                 ))
             }
             "team_members" => {
+                let numbers = member_numbers(state);
                 let Some(team) = state
                     .teams
                     .iter()
@@ -1860,6 +1861,7 @@ impl TeamsRelayHub {
                         };
                         json!({
                             "pane": pid,
+                            "number": numbers.get(&pid),
                             "name": pane_display_name(state, pid),
                             "provider": provider,
                             "role": role,
@@ -2089,6 +2091,15 @@ fn session_agent_provider(launch: &Launch) -> Option<&str> {
     }
 }
 
+pub fn member_numbers(state: &Workspace) -> BTreeMap<u64, u32> {
+    crate::pane_numbers::numbers(
+        state
+            .sessions
+            .iter()
+            .map(|session| (session.id, session.project, session.legacy_number)),
+    )
+}
+
 fn resolve_team_recipients(
     state: &Workspace,
     team: &SavedTeam,
@@ -2115,9 +2126,31 @@ fn resolve_team_recipients(
             None => Err("This team does not currently have a designated lead.".into()),
         };
     }
-    if let Some(num_str) = spec
-        .strip_prefix('#')
-        .or_else(|| lower.strip_prefix("pane:"))
+    if let Some(num_str) = spec.strip_prefix('#') {
+        let number = num_str
+            .parse::<u32>()
+            .map_err(|_| "Invalid member number")?;
+        let numbers = member_numbers(state);
+        let matches: Vec<_> = team
+            .members
+            .iter()
+            .copied()
+            .filter(|pid| {
+                *pid != sender_pane
+                    && numbers.get(pid) == Some(&number)
+                    && state
+                        .sessions
+                        .iter()
+                        .any(|s| s.id == *pid && s.project == Some(team.project))
+            })
+            .collect();
+        return if matches.len() == 1 {
+            Ok(matches)
+        } else {
+            Err("Unknown or ambiguous member number.".into())
+        };
+    }
+    if let Some(num_str) = lower.strip_prefix("pane:")
         && let Ok(pid) = num_str.trim().parse::<u64>()
     {
         if team.members.contains(&pid) && pid != sender_pane {
@@ -2159,9 +2192,21 @@ fn resolve_relay_target<'a>(
     spec: &str,
 ) -> Result<&'a crate::workspace::SavedSession, String> {
     let trimmed = spec.trim();
-    if let Some(id_str) = trimmed
-        .strip_prefix('#')
-        .or_else(|| trimmed.strip_prefix("pane:"))
+    if let Some(number) = trimmed.strip_prefix('#') {
+        let number = number.parse::<u32>().map_err(|_| "Invalid member number")?;
+        let numbers = member_numbers(state);
+        let mut matches = state.sessions.iter().filter(|s| {
+            s.id != caller_pane
+                && session_agent_provider(&s.launch).is_some()
+                && numbers.get(&s.id) == Some(&number)
+        });
+        let target = matches.next().ok_or("Unknown member number.")?;
+        if matches.next().is_some() {
+            return Err("Member number is ambiguous across projects; use the agent name or explicit pane:id.".into());
+        }
+        return Ok(target);
+    }
+    if let Some(id_str) = trimmed.strip_prefix("pane:")
         && let Ok(pid) = id_str.trim().parse::<u64>()
     {
         return state
@@ -2194,7 +2239,7 @@ pub fn dynamic_tool_definitions() -> Vec<Value> {
         json!({"name":"team_create","description":"Create or name a team in this project and enroll this agent pane.","inputSchema":{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}}),
         json!({"name":"team_bootstrap","description":"Create a team and optionally seed initial task board cards.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"tasks":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}}),
         json!({"name":"team_members","description":"List teammates, roles (lead/worker/member), and unread counts.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"team_send","description":"Send a message to a teammate by name, #<pane>, @lead, @all, or @<agent>.","inputSchema":{"type":"object","properties":{"to":{"type":"string"},"text":{"type":"string"}},"required":["to","text"],"additionalProperties":false}}),
+        json!({"name":"team_send","description":"Send a message to a teammate by name, #<member number>, explicit pane:<id>, @lead, @all, or @<agent>.","inputSchema":{"type":"object","properties":{"to":{"type":"string"},"text":{"type":"string"}},"required":["to","text"],"additionalProperties":false}}),
         json!({"name":"team_ask","description":"Send a blocking question to @lead or a coordinator.","inputSchema":{"type":"object","properties":{"question":{"type":"string"},"to":{"type":"string"}},"required":["question"],"additionalProperties":false}}),
         json!({"name":"team_inbox","description":"Claim and read unread team messages for this pane.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"team_task_gate","description":"Request a review gate on a task.","inputSchema":{"type":"object","properties":{"task_id":{"type":"integer"},"note":{"type":"string"}},"additionalProperties":false}}),
@@ -2249,6 +2294,7 @@ mod tests {
 
     fn sample_session(id: u64, project: u64, name: &str, agent: &str) -> SavedSession {
         SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2293,6 +2339,45 @@ mod tests {
         let map = dedupe_team_numbers(&teams);
         assert_eq!(map["t1"], "fr");
         assert_eq!(map["t2"], "fr2");
+    }
+    #[test]
+    fn member_number_addresses_are_not_internal_pane_ids() {
+        let mut state = Workspace::default();
+        let mut lead = sample_session(900, 1, "Lead", "codex");
+        lead.legacy_number = Some(4);
+        let mut worker = sample_session(7, 1, "Worker", "claude");
+        worker.legacy_number = Some(1);
+        state.sessions = vec![lead, worker];
+        let team = SavedTeam {
+            id: "synthetic".into(),
+            project: 1,
+            name: "Test".into(),
+            lead_pane: Some(900),
+            members: vec![900, 7],
+        };
+        state.teams.push(team.clone());
+        assert_eq!(
+            resolve_team_recipients(&state, &team, 900, "#1").unwrap(),
+            vec![7]
+        );
+        assert!(resolve_team_recipients(&state, &team, 900, "#7").is_err());
+        assert_eq!(
+            resolve_team_recipients(&state, &team, 900, "pane:7").unwrap(),
+            vec![7]
+        );
+        let mut hub = TeamsRelayHub::default();
+        hub.send_team_message(&state, 900, "#1", "Synthetic", false, 1)
+            .unwrap();
+        assert_eq!(hub.messages.len(), 1);
+        assert_eq!(hub.messages[0].to_pane, 7);
+        let mut other = sample_session(70, 2, "Other", "codex");
+        other.legacy_number = Some(1);
+        state.sessions.push(other);
+        let mut malformed = team.clone();
+        malformed.members = vec![900, 70];
+        assert!(resolve_team_recipients(&state, &malformed, 900, "#1").is_err());
+        assert!(resolve_relay_target(&state, 900, "#1").is_err());
+        assert_eq!(resolve_relay_target(&state, 900, "pane:70").unwrap().id, 70);
     }
 
     #[test]

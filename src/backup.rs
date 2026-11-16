@@ -209,6 +209,7 @@ mod tests {
             ..Default::default()
         };
         after.sessions.push(crate::workspace::SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -253,6 +254,7 @@ mod tests {
             },
         );
         state.sessions.push(crate::workspace::SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

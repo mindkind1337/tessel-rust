@@ -415,7 +415,7 @@ mod tests {
         assert!(!changed);
         assert_eq!(list["tasks"][0]["id"], id);
         assert_eq!(list["tasks"][0]["column"], "todo");
-        assert_eq!(list["tasks"][0]["assignee"], "#8");
+        assert_eq!(list["tasks"][0]["assignee"], "Former pane 8");
         let (moved, changed) = execute_persisted_for_pane(
             &mut state,
             Some(&store),
@@ -604,6 +604,7 @@ mod tests {
             (3, second, Launch::Agent("claude".into())),
         ] {
             state.sessions.push(SavedSession {
+                legacy_number: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,

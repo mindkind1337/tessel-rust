@@ -348,6 +348,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(crate::workspace::SavedSession {
+            legacy_number: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

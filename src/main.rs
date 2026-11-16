@@ -114,6 +114,7 @@ pub mod pane_model_profile;
 pub mod pane_model_runtime;
 pub mod pane_model_settings;
 pub mod pane_model_worker;
+mod pane_numbers;
 pub mod pane_session_model;
 mod pdf;
 mod preview;
