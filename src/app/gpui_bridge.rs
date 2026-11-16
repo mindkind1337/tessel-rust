@@ -1445,6 +1445,7 @@ impl Tessel {
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn(telemetry_repaint),
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            new_task: Default::default(),
             linear: Default::default(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
@@ -1928,7 +1929,8 @@ impl Tessel {
         self.side_panels_ui.sessions_modal_open || self.gpui_has_aux_modal_except_sessions()
     }
     fn gpui_has_aux_modal_except_sessions(&self) -> bool {
-        self.linear.view.open
+        self.new_task.open
+            || self.linear.view.open
             || self.gpui_extra.issues_menu_open
             || self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
@@ -6495,6 +6497,13 @@ impl Tessel {
                 self.open_settings_by_page_id(&page_id);
             }
             GpuiAction::CloseOverlays => {
+                if self.new_task.open {
+                    self.new_task_command(
+                        self.new_task.epoch,
+                        crate::new_task_form::Command::Cancel,
+                    );
+                    return;
+                }
                 if self.linear.view.open {
                     self.linear.command(
                         self.linear.view.epoch,

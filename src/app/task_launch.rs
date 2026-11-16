@@ -7,7 +7,6 @@ use crate::{
 };
 use std::time::Instant;
 
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(crate) enum Provider {
     Codex,
@@ -79,8 +78,7 @@ impl Tessel {
             && self.state.tasks.iter().any(|t| t == &pending.expected)
     }
 
-    // Kept internal until both New Task renderers can supply the full explicit request.
-    #[allow(dead_code)]
+    // Explicit owner action only; never called from imported task metadata.
     pub(crate) fn start_owner_native_task(&mut self, spec: Spec) -> Result<u64, String> {
         if self.owner_task_launches.len() >= 32 || self.sessions.len() >= 100 {
             return Err("Too many task preparations or open sessions.".into());

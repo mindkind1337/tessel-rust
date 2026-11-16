@@ -13,6 +13,8 @@ pub(crate) mod gpui_bridge;
 #[cfg(windows)]
 #[path = "app/native_terminals.rs"]
 mod native_terminals;
+#[path = "app/new_task.rs"]
+mod new_task;
 #[path = "app/task_launch.rs"]
 mod task_launch;
 use std::{
@@ -722,6 +724,7 @@ pub struct Tessel {
     status_telemetry: crate::status_metrics::StatusTelemetry,
     keep_awake: crate::status_metrics::KeepAwakeController,
     side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
+    pub(crate) new_task: crate::new_task_form::Panel,
     pub(crate) linear: crate::linear_model::panel::Panel,
     dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState,
     teams_hub: crate::teams_relay::TeamsRelayHub,
@@ -952,6 +955,7 @@ impl Tessel {
             }),
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            new_task: Default::default(),
             linear: Default::default(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
@@ -1107,6 +1111,34 @@ impl Tessel {
                 app.settings_section = SettingsSection::Passwords;
                 app.vault.load_fixture();
             }
+            if std::env::args().any(|a| a == "--new-task-fixture") {
+                app.state.language = crate::i18n::Language::French;
+                app.agents = crate::agent_detection::Detection::model_picker_fixture("codex");
+                app.new_task.begin(
+                    7,
+                    PathBuf::from("C:/fixtures/project"),
+                    "Projet de démonstration".into(),
+                    vec![
+                        crate::new_task_form::Choice {
+                            id: "codex".into(),
+                            label: "Codex".into(),
+                            enabled: true,
+                        },
+                        crate::new_task_form::Choice {
+                            id: "claude".into(),
+                            label: "Claude".into(),
+                            enabled: false,
+                        },
+                    ],
+                    vec![],
+                );
+                app.new_task.isolation = Some(true);
+                app.new_task.edit(
+                    crate::new_task_form::Field::Title,
+                    "Vérifier la page de démonstration".into(),
+                );
+                app.new_task.edit(crate::new_task_form::Field::Brief, "Utiliser uniquement les fichiers fictifs. Vérifier le résultat avant de terminer.".into());
+            }
             if std::env::args().any(|a| a == "--help-fixture") {
                 app.open_help();
             }
@@ -1122,7 +1154,9 @@ impl Tessel {
             cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--native-host-fixture");
         let vault_fixture =
             cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--vault-panel-fixture");
-        if !models_fixture && !native_host_fixture && !vault_fixture {
+        let new_task_fixture =
+            cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--new-task-fixture");
+        if !models_fixture && !native_host_fixture && !vault_fixture && !new_task_fixture {
             app.detect_agents();
         }
         #[cfg(feature = "visual-test")]
@@ -1625,7 +1659,20 @@ impl Tessel {
 
         for ev in self.worktree_state.poll(&self.state.projects) {
             match ev {
-                WorktreeEvent::Inspected { .. } => {}
+                WorktreeEvent::Inspected {
+                    project_id,
+                    source_cwd,
+                    summary,
+                } => {
+                    if self.new_task.open && self.new_task.project == project_id {
+                        if self.new_task.source == source_cwd {
+                            self.new_task.isolation = Some(summary.is_some_and(|s| s.has_commits));
+                        } else if self.new_task.isolation.is_none() {
+                            self.worktree_state
+                                .refresh_project(project_id, self.new_task.source.clone());
+                        }
+                    }
+                }
                 WorktreeEvent::Created {
                     target: WorktreeLaunchTarget::Task(id),
                     result,
@@ -2019,6 +2066,7 @@ impl Tessel {
         }
         self.poll_automations();
         self.agents.poll();
+        self.refresh_new_task_agents();
         let mut launch_changed = self
             .model_discovery
             .as_mut()
@@ -3776,11 +3824,7 @@ impl Tessel {
             "conversations" => self.state.panels.toggle_right(RightTab::Conversations),
             "notes" => self.open_notes_modal(),
             "review" => self.open_review_modal(),
-            "task:new" => {
-                self.state.panels.right_open = true;
-                self.state.panels.right_tab = RightTab::Tasks;
-                self.tasks_board.focus_input(ctx);
-            }
+            "task:new" => self.open_new_task(),
             "settings" => self.overlay = Some(Overlay::Settings),
             "help" => self.open_help(),
             "remote" => self.view = View::Remote,
@@ -4277,6 +4321,7 @@ impl Tessel {
         let panel_disabled = self.native_modal_open()
             || self.side_panels_ui.any_modal_open()
             || self.dialogs_toolbar_ui.any_modal_open()
+            || self.new_task.open
             || self.linear.view.open
             || self.teams_ui.manager_project.is_some()
             || !self.teams_hub.approval_prompts.is_empty()
@@ -7167,6 +7212,7 @@ impl Tessel {
         self.tasks_board.reset();
         self.tasks_board_project = None;
         self.gpui_extra.task_board = Default::default();
+        self.new_task.open = false;
         self.gpui_extra.new_task_title.clear();
         self.state = state;
         self.remember_next_project_launch = self.state.launcher_prefs.remember_default.is_some();
@@ -13488,6 +13534,7 @@ impl eframe::App for Tessel {
             if self.native_modal_open()
                 || self.side_panels_ui.any_modal_open()
                 || self.dialogs_toolbar_ui.any_modal_open()
+                || self.new_task.open
                 || self.linear.view.open
                 || self.share.has_pending_ask()
                 || self.finder.is_open()
@@ -13661,6 +13708,10 @@ impl eframe::App for Tessel {
                 self.handle_dialogs_toolbar_action(ctx, act);
             }
             crate::linear_dialog::show(ctx, &mut self.linear, french);
+            let task_epoch = self.new_task.epoch;
+            if let Some(command) = crate::new_task_form::show(ctx, &mut self.new_task, french) {
+                self.new_task_command(task_epoch, command);
+            }
             let existing_groups: Vec<String> = {
                 let mut set: std::collections::BTreeSet<String> =
                     self.state.project_groups.values().cloned().collect();
@@ -13872,6 +13923,7 @@ impl eframe::App for Tessel {
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
                 && !self.dialogs_toolbar_ui.any_modal_open()
+                && !self.new_task.open
                 && !self.linear.view.open
                 && self.teams_ui.manager_project.is_none()
                 && self.teams_hub.approval_prompts.is_empty()

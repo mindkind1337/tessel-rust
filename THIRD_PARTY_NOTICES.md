@@ -338,3 +338,5 @@ The Issues toolbar menu in `src/issues_menu.rs` and `src/gpui_ui/issues_menu.rs`
 The durable task-preparation contract in src/task_preparation.rs and owner launch controller in src/app/task_launch.rs follow Tessel App.vue startTask and NewTaskDialog.vue under the existing Orca/Tessel MIT attribution above. Its bounded Rust records, transactional persistence and runtime ticket are implemented independently.
 
 The task instruction formatter in `src/task_prompt.rs`, `scripts/extract_task_prompt_reference.mjs` and its synthetic reference fixture adapt Tessel `src/renderer/src/App.vue#taskPrompt` under the existing Orca/Tessel MIT attribution above. The extractor records the source hash and fictitious inputs only.
+
+The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui/new_task_view.rs`) follows Tessel `NewTaskDialog.vue` and its `style.css` rules under the existing Orca/Tessel MIT attribution above. Tests use fictitious projects and local temporary workspaces only.

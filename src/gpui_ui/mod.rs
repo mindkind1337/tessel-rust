@@ -18,6 +18,7 @@ mod issues_menu;
 mod linear_view;
 mod modal_query_input;
 pub(crate) mod modals_view;
+mod new_task_view;
 mod panel_query_inputs;
 mod question_inputs;
 pub(crate) mod remote_inputs;
@@ -118,6 +119,7 @@ pub(crate) struct TesselGpuiRoot {
     task_agent_inputs: task_agent_input::Inputs,
     task_decision_inputs: task_decision_input::Inputs,
     linear_view: linear_view::View,
+    new_task_view: new_task_view::View,
     issues_menu: issues_menu::Menu,
     _poller_task: Task<()>,
 }
@@ -148,6 +150,14 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         private_key_input::register(cx);
+        cx.bind_keys([
+            gpui::KeyBinding::new("enter", new_task_view::Submit, Some("TesselNewTaskLine")),
+            gpui::KeyBinding::new(
+                "ctrl-enter",
+                new_task_view::Submit,
+                Some("TesselNewTaskArea"),
+            ),
+        ]);
         cx.bind_keys([gpui::KeyBinding::new(
             "enter",
             linear_view::SubmitKey,
@@ -308,6 +318,7 @@ impl TesselGpuiRoot {
             task_agent_inputs: Default::default(),
             task_decision_inputs: Default::default(),
             linear_view: Default::default(),
+            new_task_view: Default::default(),
             issues_menu: issues_menu::Menu::new(cx),
             _poller_task: poller_task,
         }
@@ -459,6 +470,22 @@ impl TesselGpuiRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app.new_task.open {
+            if event.keystroke.key == "escape" {
+                self.app.new_task_command(
+                    self.app.new_task.epoch,
+                    crate::new_task_form::Command::Cancel,
+                );
+                self.new_task_view = Default::default();
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+            } else if event.keystroke.key == "tab" {
+                self.new_task_view
+                    .cycle(event.keystroke.modifiers.shift, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.app.linear.view.open {
             if event.keystroke.key == "escape" {
                 self.app.linear.command(
@@ -1450,6 +1477,7 @@ impl Render for TesselGpuiRoot {
             window.focus(&self.focus_handle, cx);
         }
         self.linear_view.sync(&self.app.linear.view, window, cx);
+        self.new_task_view.sync(&self.app.new_task, window, cx);
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
 
@@ -1550,6 +1578,16 @@ impl Render for TesselGpuiRoot {
                 linear_view::render(
                     &self.app.linear.view,
                     &mut self.linear_view,
+                    snapshot.french,
+                    &tokens,
+                    cx,
+                ),
+                |el, modal| el.child(modal),
+            )
+            .when_some(
+                new_task_view::render(
+                    &self.app.new_task,
+                    &mut self.new_task_view,
                     snapshot.french,
                     &tokens,
                     cx,

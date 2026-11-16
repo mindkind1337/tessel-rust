@@ -129,6 +129,7 @@ mod issues_menu;
 mod linear_dialog;
 #[allow(dead_code)]
 mod linear_model;
+mod new_task_form;
 mod remote;
 pub mod remote_agent_tools;
 mod remote_panel;

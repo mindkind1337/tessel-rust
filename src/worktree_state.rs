@@ -41,6 +41,7 @@ pub struct CreateRequest {
 pub enum WorktreeEvent {
     Inspected {
         project_id: u64,
+        source_cwd: PathBuf,
         summary: Option<GitRepoSummary>,
     },
     Created {
@@ -141,6 +142,7 @@ impl WorktreeState {
                 let summary = worktree::inspect_project(&cwd).ok();
                 let _ = tx.send(WorktreeEvent::Inspected {
                     project_id,
+                    source_cwd: cwd,
                     summary,
                 });
             });
@@ -234,10 +236,16 @@ impl WorktreeState {
             match &ev {
                 WorktreeEvent::Inspected {
                     project_id,
+                    source_cwd,
                     summary,
                 } => {
                     self.in_flight_inspects.remove(project_id);
-                    self.summaries.insert(*project_id, summary.clone());
+                    if projects
+                        .iter()
+                        .any(|p| p.id == *project_id && p.path == *source_cwd)
+                    {
+                        self.summaries.insert(*project_id, summary.clone());
+                    }
                 }
                 WorktreeEvent::Created {
                     project_id,
@@ -283,6 +291,39 @@ mod preparation_tests {
         fs,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn worktree_preparation_inspection_cannot_replace_retargeted_project_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = WorktreeState::new();
+        state.in_flight_inspects.insert(7);
+        state
+            .tx
+            .send(WorktreeEvent::Inspected {
+                project_id: 7,
+                source_cwd: temp.path().join("old"),
+                summary: None,
+            })
+            .unwrap();
+        let projects = [Project {
+            id: 7,
+            name: "Fixture".into(),
+            path: temp.path().join("new"),
+        }];
+        assert_eq!(state.poll(&projects).len(), 1);
+        assert!(!state.summaries.contains_key(&7));
+        assert!(!state.in_flight_inspects.contains(&7));
+        state
+            .tx
+            .send(WorktreeEvent::Inspected {
+                project_id: 7,
+                source_cwd: projects[0].path.clone(),
+                summary: None,
+            })
+            .unwrap();
+        state.poll(&projects);
+        assert!(state.summaries.contains_key(&7));
+    }
 
     #[test]
     fn worktree_preparation_uses_captured_base_and_secret_policy_without_rebinding_project() {

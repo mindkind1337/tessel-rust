@@ -411,3 +411,8 @@ The Compatibility Changes view now uses a session/project-scoped async Git contr
 ## Linear and Issues integration (2026-11-16)
 
 Linear account connection, private masked input, issue filters/list/detail/back navigation, refresh and disconnect are connected in both renderers (b270). The grouped Issues toolbar now exposes GitHub and Linear without requiring an active project; compact overflow and palette entries use the same routes. This does not complete Linear task launch: agent/worktree/task preparation and the optional post-launch state transition remain pending alongside the full NewTask dialog.
+
+
+### New Task local form — partial activation (2026-11-16)
+
+Both renderers now expose the owner form from the command palette and connect new native Codex/Claude task launches, project-scoped drafts, worktree/base/env preferences and cancel/error paths. Native text fields have independent epoch-bound input entities. This does not close full parity: terminal/existing-agent choices, setup execution, automatic completion/reviewer dispatch and remaining sidebar/context-menu entry points still need integration and visual comparison.
