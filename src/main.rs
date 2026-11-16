@@ -163,6 +163,7 @@ pub mod task_card_timing;
 mod task_history;
 pub mod task_timeline;
 pub mod tasks_board_panel;
+pub mod team_mcp_stdio;
 pub mod teams_relay;
 pub mod teams_ui;
 pub mod terminal;
