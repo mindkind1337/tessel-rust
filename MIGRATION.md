@@ -1359,3 +1359,12 @@ The model now retains typed viewer/organization identity and nested issue state,
 Issue selection now uses the validated viewer id for Assigned/Created, supports team/state/priority together, preserves the state type constraint when adding a state id, and matches Vue's Completed filter without canceled issues. Filter labels and order match the reference dialog. State mutations return the validated updated issue rather than only a success flag. This replaces the original permissive model defaults; asynchronous generation checks, private connection lifecycle and the dialog are still pending. No production calls are enabled.
 
 Validation: all seven Linear model tests pass after the final ordering changes, with strict all-target/all-feature Clippy (17.54 seconds), formatting and diff checks. Halley reviewed the final parsing/filtering delta. Tests use synthetic payloads and do not call Linear.
+
+
+## Cancellable Linear transport (2026-11-15)
+
+Linear HTTP operations now return async futures instead of blocking the caller. The fixed HTTPS endpoint, sensitive authorization header, redirect refusal and fifteen-second deadline remain in place. Response bodies are collected incrementally with the existing two-MiB cap, rejecting a chunk before appending it past that cap. The body abstraction also accepts synthetic streams, so bounded reads and cancellation can be verified without a network service. bytes is now a direct dependency at its already locked version; no dependency version changed.
+
+A separate account-generation scope cancels an in-flight future when its owner changes generation or drops. Stale queued operations are rejected before polling, and ready results are checked again before return. Observing and marking a watch version happens in one borrow, avoiding a missed invalidation between separate checks. Scope state contains only generation metadata, never credentials. A consumer must still revalidate scope at UI delivery and serialize durable account commits; this transport foundation does not yet implement the private account worker or dialog. Cancellation cannot undo a mutation already accepted by a remote server, and the helper never retries it.
+
+Validation: twelve synthetic Linear tests pass, including pending-source destruction on owner shutdown, stale queued requests, ready-result invalidation, bounded unknown-length bodies and storage/parsing regressions. Strict all-target/all-feature Clippy (1m42), formatting and diff checks pass. No HTTP service or real account was used in these tests.

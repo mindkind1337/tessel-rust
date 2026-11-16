@@ -40,6 +40,7 @@ icu_datetime = { version = "=2.4.0", default-features = false, features = ["comp
 icu_locale_core = "=2.4.0"
 directories = "6"
 tempfile = "3"
+bytes = "1"
 rfd = "0.15"
 fs2 = "0.4"
 url = "2"

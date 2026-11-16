@@ -8,7 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
+mod body;
 mod parse;
+pub mod request;
 
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 pub const MAX_LINEAR_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -291,7 +293,7 @@ const ISSUE_FIELDS: &str = "id identifier title url description priority created
 state { id name type color } team { id name key } \
 assignee { id name } creator { id name }";
 
-fn execute_linear_query(
+async fn execute_linear_query(
     key: &str,
     query: &str,
     variables: serde_json::Value,
@@ -301,7 +303,7 @@ fn execute_linear_query(
         "query": query,
         "variables": variables,
     });
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -317,6 +319,7 @@ fn execute_linear_query(
         .header("Accept", "application/json")
         .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
         .send()
+        .await
         .map_err(|e| {
             let msg = e.to_string();
             msg.replace(trimmed_key, "[redacted]")
@@ -327,7 +330,13 @@ fn execute_linear_query(
         return Err(format!("Linear API returned status {status}"));
     }
 
-    let raw_bytes = read_bounded(resp, MAX_LINEAR_RESPONSE_BYTES)?;
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_LINEAR_RESPONSE_BYTES as u64)
+    {
+        return Err("Linear data exceeds size limit".into());
+    }
+    let raw_bytes = body::collect(resp, MAX_LINEAR_RESPONSE_BYTES).await?;
 
     parse_response(&raw_bytes)
 }
@@ -347,29 +356,29 @@ fn parse_response(raw_bytes: &[u8]) -> Result<serde_json::Value, String> {
         .ok_or_else(|| "Linear response missing 'data' field.".to_owned())
 }
 
-pub fn validate_linear_key(key: &str) -> Result<LinearIdentity, String> {
+pub async fn validate_linear_key(key: &str) -> Result<LinearIdentity, String> {
     let data = execute_linear_query(
         key,
         "query TesselLinearConnect { viewer { id name displayName email } organization { id name urlKey } }",
         serde_json::json!({}),
-    )?;
+    ).await?;
     parse::identity(&data)
 }
-pub fn fetch_linear_teams(key: &str) -> Result<Page<LinearTeam>, String> {
+pub async fn fetch_linear_teams(key: &str) -> Result<Page<LinearTeam>, String> {
     let data = execute_linear_query(
         key,
         "query TesselLinearTeams { teams(first: 100) { nodes { id name key } pageInfo { hasNextPage endCursor } } }",
         serde_json::json!({}),
-    )?;
+    ).await?;
     parse::page(&data["teams"], parse::team)
 }
-pub fn fetch_linear_states(key: &str, team_id: &str) -> Result<Page<LinearState>, String> {
+pub async fn fetch_linear_states(key: &str, team_id: &str) -> Result<Page<LinearState>, String> {
     checked_id(team_id)?;
     let data = execute_linear_query(
         key,
         "query TesselLinearStates($teamId: String!) { team(id: $teamId) { states(first: 100) { nodes { id name type position color } pageInfo { hasNextPage endCursor } } } }",
         serde_json::json!({"teamId":team_id}),
-    )?;
+    ).await?;
     let mut page = parse::page(&data["team"]["states"], parse::state)?;
     page.items.sort_by(|a, b| {
         a.position
@@ -414,7 +423,7 @@ fn issue_filter(viewer_id: &str, selection: &IssueSelection) -> Result<serde_jso
     }
     Ok(filter)
 }
-pub fn fetch_linear_issues(
+pub async fn fetch_linear_issues(
     key: &str,
     viewer_id: &str,
     selection: &IssueSelection,
@@ -423,10 +432,10 @@ pub fn fetch_linear_issues(
     let query = format!(
         "query TesselLinearIssues($filter: IssueFilter!) {{ issues(first: 100, orderBy: updatedAt, filter: $filter) {{ nodes {{ {ISSUE_FIELDS} }} pageInfo {{ hasNextPage endCursor }} }} }}"
     );
-    let data = execute_linear_query(key, &query, serde_json::json!({"filter":filter}))?;
+    let data = execute_linear_query(key, &query, serde_json::json!({"filter":filter})).await?;
     parse::page(&data["issues"], parse::issue)
 }
-pub fn update_linear_issue_state(
+pub async fn update_linear_issue_state(
     key: &str,
     issue_id: &str,
     state_id: &str,
@@ -440,7 +449,8 @@ pub fn update_linear_issue_state(
         key,
         &query,
         serde_json::json!({"issueId":issue_id,"input":{"stateId":state_id}}),
-    )?;
+    )
+    .await?;
     parse::updated_issue(&data)
 }
 
