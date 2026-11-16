@@ -85,6 +85,7 @@ impl Rpc {
         profile: Option<&crate::session_profile::NativeLaunch>,
     ) -> Result<Self, String> {
         let mut command = Command::new(executable);
+        crate::agent_env::clean_command(&mut command);
         command
             .arg("app-server")
             .current_dir(cwd)

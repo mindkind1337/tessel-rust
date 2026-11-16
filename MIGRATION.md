@@ -1513,3 +1513,13 @@ Only a successfully persisted owner-task completion creates the bounded in-memor
 The request follows Vue's read-only git status/diff review instruction, with a Tessel provenance header and no interpolated agent report. Labels/paths/branches and the total prompt are bounded. Compatibility uses its select control; GPUI uses an anchored, viewport-bounded menu with keyboard navigation and Escape returning to the form. Terminal reviewers and delivery after later/manual task turns remain outstanding.
 
 Validation: 7 native-review tests, 5 form tests and 6 owner-launch regressions pass. Strict all-target/all-feature Clippy passes with warnings denied (37.27 seconds), and the visual-test binary builds. Its isolated French Compatibility capture was inspected: the reviewer selector, explanatory text and actions fit without clipping. Native GPUI tests cover anchored popup bounds, arrow/Enter selection and Escape returning to the form. No real account, provider or user project was used.
+
+## Parent-session environment isolation (2026-11-16)
+
+Native Codex/Claude commands and PTY shell/agent/SSH launches now remove the exact private parent-session names filtered by Vue cleanEnv.js, case-insensitively. Rust's three parent team-broker capability fields are also removed before fresh local bindings. API keys, proxies, profile roots and other user configuration remain available, subject to the existing managed-account policy. PTY filtering uses inherited OsString names rather than a Unicode-only value iterator, preserves portable-pty registry refresh and Unix SHELL defaults, and occurs before explicit owner preferences. Standard process commands remove matching inherited and explicit entries without changing process-global environment or logging values.
+
+This closes a launch parity gap discovered while porting setup scripts. Setup remains disabled pending its separate bounded runner. Other subprocess launchers are not covered by this slice.
+
+Reference verification: a read-only Node import of Vue cleanEnv.js confirms all 21 source variable names and their lowercase forms are filtered; the Rust list adds only its three team-broker capability names. Unit fixtures use synthetic values and do not mutate process-global environment.
+
+Final Windows validation: all 4 environment tests and 20 launch/task regressions pass (9.07 seconds for the launch selection). Strict all-target/all-feature Clippy passes with warnings denied (30.42 seconds), formatting and diff checks pass. Command fixtures verify removal and preservation without executing a real provider. The Unix-only non-Unicode fixture is present but was not executed on Windows.

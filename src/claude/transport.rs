@@ -62,6 +62,7 @@ impl Transport {
         effort: &str,
     ) -> Command {
         let mut command = Command::new(exe);
+        crate::agent_env::clean_command(&mut command);
         command.args([
             "-p",
             "--input-format",

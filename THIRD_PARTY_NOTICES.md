@@ -344,3 +344,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - `src/task_completion.rs`, `scripts/extract_task_completion_reference.mjs` and synthetic `tests/fixtures/task_completion.json` reproduce the standalone completion marker contract from Tessel `src/renderer/src/agentLimit.js` (MIT, Lovecast 2026).
 
 - `src/native_review.rs` and `src/app/task_review.rs` adapt Tessel `src/shared/tesselDelivery.js#reviewRequest` and `App.vue#agentReportedDone` under the existing Orca/Tessel MIT attribution. The conversation identity, bounded queue and persistence guards are native implementations.
+
+- The parent-session variable filter in `src/agent_env.rs` follows Tessel `src/main/cleanEnv.js` under the existing Orca/Tessel MIT attribution. Rust broker capability names are additionally excluded.

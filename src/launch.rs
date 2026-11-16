@@ -271,6 +271,7 @@ pub fn command_with_shell(
             c
         }
     };
+    crate::agent_env::inherit_clean_pty(&mut command);
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("PATH", &search.value);
