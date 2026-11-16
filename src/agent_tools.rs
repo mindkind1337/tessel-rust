@@ -35,6 +35,7 @@ pub fn execute_persisted_for_pane(
             | "team_bootstrap"
             | "team_task_add"
             | "team_task_done"
+            | "team_task_gate"
     ) {
         return execute_for_pane(state, teams_hub, pane_id, project, name, args);
     }
@@ -53,6 +54,11 @@ pub fn execute_persisted_for_pane(
     let result = if name == "team_task_add" {
         (
             crate::team_board_api::add(&mut draft, project, pane_id, args)?,
+            true,
+        )
+    } else if name == "team_task_gate" {
+        (
+            crate::team_board_api::request_decision(&mut draft, project, pane_id, args)?,
             true,
         )
     } else if name == "team_task_done" {
@@ -75,6 +81,20 @@ pub fn execute_persisted_for_pane(
             .ok_or("Workspace storage is unavailable.")?
             .save_task_bytes(&bytes)?;
         *state = draft;
+        if name == "team_task_gate"
+            && let Some(id) = result.0["id"]
+                .as_str()
+                .and_then(|id| id.parse::<u64>().ok())
+        {
+            // A new persisted question supersedes an older in-memory checkpoint.
+            teams_hub.gates.retain(|gate| {
+                gate.task_id != Some(id)
+                    || !state
+                        .teams
+                        .iter()
+                        .any(|team| team.id == gate.team_id && team.project == project)
+            });
+        }
         if name == "team_task_done"
             && let Some(id) = result.0["id"].as_str().and_then(|id| id.parse().ok())
         {
@@ -246,6 +266,7 @@ fn execute_inner(
             state.tasks.push(Task {
                 created_by: pane,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(

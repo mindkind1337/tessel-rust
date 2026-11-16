@@ -53,11 +53,28 @@ pub struct TasksBoardInput<'a> {
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TasksBoardAction {
+    AnswerDecision {
+        id: u64,
+        request: u64,
+        answer: String,
+    },
     Add(String),
-    Move { id: u64, column: usize },
-    Assign { id: u64, pane: Option<u64> },
-    ShowAgent { id: u64, pane: u64 },
-    Rename { id: u64, title: String },
+    Move {
+        id: u64,
+        column: usize,
+    },
+    Assign {
+        id: u64,
+        pane: Option<u64>,
+    },
+    ShowAgent {
+        id: u64,
+        pane: u64,
+    },
+    Rename {
+        id: u64,
+        title: String,
+    },
     Delete(u64),
     DeleteMany(Vec<u64>),
 }

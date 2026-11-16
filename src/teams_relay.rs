@@ -1081,7 +1081,14 @@ impl TeamsRelayHub {
     }
 
     pub fn task_has_pending_gate(&self, state: &Workspace, project: u64, task: u64) -> bool {
-        self.gates.iter().any(|gate| {
+        state.tasks.iter().any(|card| {
+            card.id == task
+                && card.project == project
+                && card
+                    .decision
+                    .as_ref()
+                    .is_some_and(crate::task_decision::Decision::pending)
+        }) || self.gates.iter().any(|gate| {
             !gate.resolved
                 && gate.task_id == Some(task)
                 && state
@@ -1148,6 +1155,48 @@ impl TeamsRelayHub {
             });
             self.reminded_panes.remove(&(to_pane, 0));
         }
+    }
+
+    pub fn notify_task_answer(&mut self, state: &Workspace, task_id: u64, now: u64) {
+        let Some(task) = state.tasks.iter().find(|task| task.id == task_id) else {
+            return;
+        };
+        let Some(decision) = &task.decision else {
+            return;
+        };
+        let (Some(pane), Some(answer)) = (decision.by, &decision.answer) else {
+            return;
+        };
+        if !state
+            .sessions
+            .iter()
+            .any(|s| s.id == pane && s.project == Some(task.project))
+        {
+            return;
+        }
+        let Some(team) = state
+            .teams
+            .iter()
+            .find(|t| t.project == task.project && t.members.contains(&pane))
+        else {
+            return;
+        };
+        let id = self.alloc_seq();
+        self.messages.push(TeamMessage {
+            id,
+            team_id: team.id.clone(),
+            from_pane: 0,
+            from_name: "Tessel".into(),
+            to_pane: pane,
+            text: format!(
+                "[Tessel] The user answered the decision on card {}: {:?}. Question: {:?}",
+                task.id, answer.text, decision.question
+            ),
+            sent_at_ms: now,
+            read: false,
+            is_question: false,
+        });
+        self.reminded_panes.remove(&(pane, 0));
     }
 
     // --- Worker Orchestration (`team_worker_*`, `team_heartbeat`) ---
@@ -1914,6 +1963,7 @@ impl TeamsRelayHub {
                             draft.tasks.push(crate::workspace::Task {
                                 created_by: None,
                                 report: None,
+                                decision: None,
                                 last_waiting: Vec::new(),
                                 deps: Vec::new(),
                                 timeline: crate::task_timeline::Timeline::created(now_ms, 0, None),
@@ -2013,25 +2063,7 @@ impl TeamsRelayHub {
                 Ok((json!({ "messages": claimed }), false))
             }
             "team_task_gate" => {
-                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, None)?;
-                let note = obj
-                    .get("note")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Review requested")
-                    .trim();
-                let task_id = obj.get("task_id").and_then(Value::as_u64);
-                let gate_id = self.alloc_seq();
-                self.gates.push(TaskGate {
-                    id: gate_id,
-                    team_id: team.id,
-                    task_id,
-                    requested_by_pane: caller_pane,
-                    requested_by_name: pane_display_name(state, caller_pane),
-                    note: note.chars().take(500).collect(),
-                    created_at_ms: now_ms,
-                    resolved: false,
-                });
-                Ok((json!({ "gate_id": gate_id }), false))
+                Err("Decision requests require the persisted board dispatcher.".into())
             }
             "team_gates" => {
                 let team_ids: HashSet<&str> = state
@@ -2045,6 +2077,11 @@ impl TeamsRelayHub {
                     .iter()
                     .filter(|g| team_ids.contains(g.team_id.as_str()))
                     .collect();
+                let mut gates: Vec<Value> = gates.into_iter().map(|gate| json!(gate)).collect();
+                gates.extend(state.tasks.iter().filter(|task|task.project==caller_project).filter_map(|task| {
+                    task.decision.as_ref().map(|d|json!({"id":task.id.to_string(),"gate_id":d.request,"question":d.question,
+                        "options":d.options,"status":if d.pending(){"pending"}else{"resolved"},"answer":d.answer.as_ref().map(|a|&a.text)}))
+                }));
                 Ok((json!({ "gates": gates }), false))
             }
             "team_worker_start" => {
@@ -2348,7 +2385,7 @@ pub fn dynamic_tool_definitions() -> Vec<Value> {
         json!({"name":"team_send","description":"Send a message to a teammate by name, #<member number>, explicit pane:<id>, @lead, @all, or @<agent>.","inputSchema":{"type":"object","properties":{"to":{"type":"string"},"text":{"type":"string"}},"required":["to","text"],"additionalProperties":false}}),
         json!({"name":"team_ask","description":"Send a blocking question to @lead or a coordinator.","inputSchema":{"type":"object","properties":{"question":{"type":"string"},"to":{"type":"string"}},"required":["question"],"additionalProperties":false}}),
         json!({"name":"team_inbox","description":"Claim and read unread team messages for this pane.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"team_task_gate","description":"Request a review gate on a task.","inputSchema":{"type":"object","properties":{"task_id":{"type":"integer"},"note":{"type":"string"}},"additionalProperties":false}}),
+        json!({"name":"team_task_gate","description":"Save a decision question on a project card. Only the user can answer it in the board. Pending questions block agent advancement and successful completion. Replaces the previous question; me cannot change caller identity.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"maxItems":6},"me":{"type":"string"}},"required":["id","question"],"additionalProperties":false}}),
         json!({"name":"team_gates","description":"List task review gates in this project.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"team_worker_start","description":"Spawn a bounded teammate worker (claude, codex, gemini, qwen, opencode).","inputSchema":{"type":"object","properties":{"agent":{"type":"string"},"name":{"type":"string"},"goal":{"type":"string"}},"required":["agent","goal"],"additionalProperties":false}}),
         json!({"name":"team_worker_list","description":"List active and completed workers in this project.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),

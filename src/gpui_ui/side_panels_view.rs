@@ -42,6 +42,7 @@ pub(crate) fn render_side_panel_tab_body(
     task_rename_input: &super::task_rename_input::Input,
     task_card_input: &super::task_card_input::Inputs,
     task_agent_inputs: &super::task_agent_input::Inputs,
+    task_decision_inputs: &super::task_decision_input::Inputs,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -57,6 +58,7 @@ pub(crate) fn render_side_panel_tab_body(
             task_rename_input,
             task_card_input,
             task_agent_inputs,
+            task_decision_inputs,
             french,
             tokens,
             cx,
@@ -1230,6 +1232,7 @@ fn render_tasks_board_tab(
     task_rename_input: &super::task_rename_input::Input,
     task_card_input: &super::task_card_input::Inputs,
     task_agent_inputs: &super::task_agent_input::Inputs,
+    task_decision_inputs: &super::task_decision_input::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1546,6 +1549,14 @@ fn render_tasks_board_tab(
                 .gap(px(6.))
                 .child(title);
             if !editing {
+                content = content.child(super::task_decision_input::render(
+                    task_decision_inputs,
+                    scope,
+                    task,
+                    french,
+                    tokens,
+                    cx,
+                ));
                 content = content.child(super::task_agent_input::render(
                     task_agent_inputs,
                     scope,

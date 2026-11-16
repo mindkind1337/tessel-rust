@@ -27,6 +27,11 @@ pub struct State {
 }
 #[derive(Clone, Debug)]
 pub enum Command {
+    AnswerDecision {
+        id: u64,
+        request: u64,
+        answer: String,
+    },
     Assign {
         id: u64,
         pane: Option<u64>,
@@ -127,6 +132,23 @@ impl State {
             return None;
         }
         match command {
+            Command::AnswerDecision {
+                id,
+                request,
+                answer,
+            } => {
+                if find(id).is_some_and(|task| {
+                    task.decision
+                        .as_ref()
+                        .is_some_and(|d| d.request == request && d.pending())
+                }) {
+                    return Some(TasksBoardAction::AnswerDecision {
+                        id,
+                        request,
+                        answer,
+                    });
+                }
+            }
             Command::Assign { id, pane } => {
                 if find(id).is_some_and(|t| t.column <= 1) && self.edit.is_none() {
                     return Some(TasksBoardAction::Assign { id, pane });
@@ -260,6 +282,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -272,6 +295,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -284,6 +308,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -296,6 +321,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),

@@ -6954,6 +6954,14 @@ impl Tessel {
             .into_iter()
             .map(|p| (p.id, p.label, p.provider))
             .collect();
+        let decision_action = project.and_then(|project| {
+            crate::task_decision_panel::show(
+                ui,
+                &self.state.tasks,
+                project,
+                self.state.language == crate::i18n::Language::French,
+            )
+        });
         let action = self.tasks_board.show(
             ui,
             TasksBoardInput {
@@ -6966,7 +6974,7 @@ impl Tessel {
         let Some(project) = project else {
             return;
         };
-        if let Some(action) = action {
+        if let Some(action) = decision_action.or(action) {
             let showing = matches!(
                 action,
                 crate::tasks_board_panel::TasksBoardAction::ShowAgent { .. }
@@ -6987,6 +6995,28 @@ impl Tessel {
         action: crate::tasks_board_panel::TasksBoardAction,
     ) -> bool {
         self.capture_runtime_state();
+        if let crate::tasks_board_panel::TasksBoardAction::AnswerDecision {
+            id,
+            request,
+            ref answer,
+        } = action
+        {
+            return match crate::task_decision_actions::answer(
+                &mut self.state,
+                self.store.as_ref(),
+                &mut self.teams_hub,
+                project,
+                id,
+                request,
+                answer,
+            ) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    self.error = error;
+                    false
+                }
+            };
+        }
         if let crate::tasks_board_panel::TasksBoardAction::ShowAgent { id, pane } = action {
             if crate::task_agents_model::can_focus(&self.state, project, id, pane) {
                 self.active_session = Some(pane);

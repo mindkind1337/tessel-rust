@@ -573,6 +573,8 @@ pub struct Task {
     pub created_by: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<crate::task_report::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<crate::task_decision::Decision>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_waiting: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1111,6 +1113,12 @@ impl Workspace {
             }
             if let Some(report) = &task.report {
                 report.validate()?;
+            }
+            if let Some(decision) = &task.decision {
+                decision.validate(self.next_id)?;
+                if !ids.insert(decision.request) {
+                    return Err("Duplicate decision identity.".into());
+                }
             }
             if task.last_waiting.len() > crate::task_dependencies::MAX_DEPS
                 || task

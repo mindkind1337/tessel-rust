@@ -166,6 +166,7 @@ pub fn add(
     state.tasks.push(Task {
         created_by: Some(caller),
         report: None,
+        decision: None,
         last_waiting: waiting.clone(),
         id,
         project,
@@ -316,6 +317,99 @@ pub fn normalize(name: &str, args: &Value) -> Result<(&'static str, Value), Stri
     Ok(("tessel_task_move", json!({"id":id,"column":column})))
 }
 
+pub fn request_decision(
+    state: &mut Workspace,
+    project: u64,
+    caller: u64,
+    args: &Value,
+) -> Result<Value, String> {
+    use crate::{
+        agent_names::{js_space, js_trim},
+        launch::Launch,
+        task_decision::Decision,
+    };
+    let object = args.as_object().ok_or("Arguments must be an object")?;
+    let legacy = object.contains_key("task_id");
+    let keys: &[&str] = if legacy {
+        &["task_id", "note"]
+    } else {
+        &["id", "question", "options", "me"]
+    };
+    if object.keys().any(|key| !keys.contains(&key.as_str())) {
+        return Err("Unexpected decision argument".into());
+    }
+    if object.get("me").is_some_and(|v| !v.is_string()) {
+        return Err("me must be a string".into());
+    }
+    if !state.sessions.iter().any(|s| {
+        s.id == caller
+            && s.project == Some(project)
+            && matches!(
+                s.launch,
+                Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+            )
+    }) {
+        return Err("Caller is not an agent in this project.".into());
+    }
+    let id = if legacy {
+        args["task_id"]
+            .as_u64()
+            .filter(|id| *id > 0)
+            .ok_or("Invalid task id")?
+    } else {
+        let raw = args["id"].as_str().ok_or("Use the string card id")?;
+        raw.parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0 && id.to_string() == raw)
+            .ok_or("Invalid card id")?
+    };
+    if !state
+        .tasks
+        .iter()
+        .any(|t| t.id == id && t.project == project)
+    {
+        return Err("Task not found in this project".into());
+    }
+    let question = args[if legacy { "note" } else { "question" }]
+        .as_str()
+        .ok_or("A decision needs a question")?
+        .split(js_space)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut options = Vec::new();
+    if let Some(raw) = object.get("options") {
+        let raw = raw.as_array().ok_or("options must be an array")?;
+        if raw.len() > 6 {
+            return Err("At most six choices are allowed".into());
+        }
+        for value in raw {
+            let value = js_trim(value.as_str().ok_or("options must contain strings")?);
+            if !value.is_empty() {
+                options.push(value.to_owned());
+            }
+        }
+    }
+    let request = state.id()?;
+    let decision = Decision {
+        request,
+        question,
+        options,
+        by: Some(caller),
+        asked_at_ms: crate::task_timeline::now_ms(),
+        answer: None,
+    };
+    decision.validate(state.next_id)?;
+    let result = json!({"id":id.to_string(),"gate_id":request,"status":"pending","question":decision.question,"options":decision.options});
+    state
+        .tasks
+        .iter_mut()
+        .find(|t| t.id == id)
+        .unwrap()
+        .decision = Some(decision);
+    Ok(result)
+}
+
 pub fn output(
     name: &str,
     mut value: Value,
@@ -329,6 +423,11 @@ pub fn output(
             for task in tasks {
                 let original = task["id"].as_u64().and_then(|id| index.task(id, project));
                 if let Some(original) = original {
+                    task["createdBy"] = json!(original.created_by);
+                    task["gate"] = original.decision.as_ref().map_or(Value::Null,|d|json!({
+                        "question":d.question,"options":d.options,"status":if d.pending(){"pending"}else{"resolved"},
+                        "answer":d.answer.as_ref().map(|answer|&answer.text)
+                    }));
                     task["deps"] =
                         json!(original.deps.iter().map(u64::to_string).collect::<Vec<_>>());
                     task["waitingOn"] = json!(

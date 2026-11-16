@@ -1319,3 +1319,14 @@ Only after saving does the hub notify the report's giver, scoped to the same cur
 This slice implements local report storage/tool responses and mailbox notices. Native board report rendering, remote-host report attribution, copied-settings provenance and canonical persisted gate questions/options/user answers remain incomplete. Existing review gates are still memory-only; blocking them during the live session is not a claim that decisions survive restart. Mailbox notices also retain the already documented crash-delivery limitation.
 
 Validation: ten agent-tool tests, eleven history tests and six authenticated-runtime tests passed. The report fixture covers both blockers, manual override, failed outcomes, persisted reload, spoofed/malformed fields and write failure without messages or state mutation. Strict all-target/all-feature Clippy passed with warnings denied (1 minute 36 seconds); formatting and diff checks passed. Halley approved the structure and both move/report guards.
+
+
+## Persisted task decisions (2026-11-15)
+
+Task.decision stores a unique request identity, question, up to six options, asking pane and optional user answer. Canonical team_task_gate and legacy task_id/note calls share the persisted transaction dispatcher; direct in-memory mutation is refused. team_tasks exposes gate/createdBy aliases, and team_gates includes saved decisions. Pending questions survive restart and block agent advancement/completion. Only the host UI answer path can resolve them, after rechecking active project, card, current request and pending state; storage commits before the asking teammate is notified.
+
+GPUI provides native editable freeform text, explicit submit and keyboard-accessible choices. The Compatibility renderer provides equivalent answer actions in a decisions section above the board. Blur never submits. Both use the same authoritative persistence path. Restoring settings remaps question identities, clears old asking-pane attribution and discards imported answers so a fresh user decision is required.
+
+This supersedes the preceding slice's memory-only decision limitation. Native report presentation, guest Live Share answers/provenance, attention notifications, copied-settings provenance and exact visual parity remain unfinished. Mailbox delivery retains the documented crash-loss window; no durable outbox or production provider MCP activation is claimed.
+
+Validation: 31 focused tests pass (four decision tests including two native GPUI cases and the Compatibility choice/disabled-UI case, eleven history, ten agent tools, six authenticated runtime cases). Strict all-target/all-feature Clippy, formatting and diff checks pass. Halley reviewed the final shared authority, persistence and renderer paths.

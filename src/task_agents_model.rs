@@ -77,6 +77,7 @@ mod tests {
         state.tasks.push(crate::workspace::Task {
             created_by: None,
             report: None,
+            decision: None,
             last_waiting: Vec::new(),
             deps: Vec::new(),
             id: 2,

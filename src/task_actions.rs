@@ -47,6 +47,9 @@ fn apply_inner(
         return Ok(false);
     }
     match action {
+        TasksBoardAction::AnswerDecision { .. } => {
+            Err("Decision answers require the explicit host UI commit path.".into())
+        }
         TasksBoardAction::Assign { id, pane } => {
             crate::task_history::assign(state, project, id, pane, crate::task_timeline::now_ms())
         }
@@ -62,6 +65,7 @@ fn apply_inner(
             state.tasks.push(Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
@@ -181,6 +185,7 @@ mod tests {
             .map(|n| Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -204,6 +209,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -216,6 +222,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -228,6 +235,7 @@ mod tests {
             Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),

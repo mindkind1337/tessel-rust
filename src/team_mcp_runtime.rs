@@ -419,6 +419,32 @@ mod tests {
             .unwrap();
         assert_eq!(reported["blocked"], true);
         assert_eq!(fixture.state.tasks[1].report.as_ref().unwrap().by, Some(41));
+        let asked = fixture.exchange(&launch, Operation::Call {
+            name: "team_task_gate".into(),
+            arguments: json!({"id":canonical["id"],"question":"Choose?","options":["Continue"]}),
+        }).unwrap();
+        assert_eq!(asked["status"], "pending");
+        let listed = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_tasks".into(),
+                    arguments: json!({}),
+                },
+            )
+            .unwrap();
+        assert_eq!(listed["tasks"][1]["gate"]["status"], "pending");
+        assert_eq!(listed["tasks"][1]["createdBy"], 41);
+        let gates = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_gates".into(),
+                    arguments: json!({}),
+                },
+            )
+            .unwrap();
+        assert_eq!(gates["gates"][0]["gate_id"], asked["gate_id"]);
         assert!(matches!(
             fixture.exchange(
                 &launch,

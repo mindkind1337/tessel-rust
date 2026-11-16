@@ -84,6 +84,7 @@ fn transact(
             draft.tasks.push(Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(

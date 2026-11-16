@@ -92,6 +92,7 @@ mod tests {
         Task {
             created_by: None,
             report: None,
+            decision: None,
             last_waiting: Vec::new(),
             id,
             project: 1,

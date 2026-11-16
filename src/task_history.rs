@@ -353,7 +353,22 @@ pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result
             entry.insert(after.id()?);
         }
     }
+    let mut requests = Vec::new();
+    for _ in 0..after
+        .tasks
+        .iter()
+        .filter(|task| task.decision.is_some())
+        .count()
+    {
+        requests.push(after.id()?);
+    }
+    let mut requests = requests.into_iter();
     for task in &mut after.tasks {
+        if let Some(decision) = &mut task.decision {
+            decision.request = requests.next().unwrap();
+            decision.by = None;
+            decision.answer = None;
+        }
         task.last_waiting.clear();
         task.created_by = None;
         if let Some(report) = &mut task.report {
@@ -514,6 +529,7 @@ mod tests {
             .map(|id| Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
@@ -570,6 +586,7 @@ mod tests {
             .map(|id| Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
@@ -610,6 +627,7 @@ mod tests {
             tasks: vec![Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id: 2,
@@ -694,6 +712,18 @@ mod tests {
         let mut after = fixture();
         after.tasks[0].timeline.pane_id = Some(9);
         after.tasks[0].created_by = Some(9);
+        let request = after.id().unwrap();
+        after.tasks[0].decision = Some(crate::task_decision::Decision {
+            request,
+            question: "Imported question".into(),
+            options: vec![],
+            by: Some(9),
+            asked_at_ms: 10,
+            answer: Some(crate::task_decision::Answer {
+                text: "Old approval".into(),
+                at_ms: 11,
+            }),
+        });
         after.tasks[0].report = Some(crate::task_report::Report {
             outcome: crate::task_report::Outcome::Succeeded,
             summary: "Archived synthetic report".into(),
@@ -706,6 +736,9 @@ mod tests {
         assert_eq!(after.next_pane, 500);
         assert!(after.tasks[0].timeline.is_empty());
         assert!(after.tasks[0].created_by.is_none());
+        let decision = after.tasks[0].decision.as_ref().unwrap();
+        assert_ne!(decision.request, request);
+        assert!(decision.by.is_none() && decision.pending());
         assert!(after.tasks[0].report.as_ref().unwrap().by.is_none());
         assert_eq!(
             after.tasks[0].report.as_ref().unwrap().summary,
@@ -787,6 +820,7 @@ mod tests {
             .map(|id| Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,

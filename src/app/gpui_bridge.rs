@@ -147,6 +147,7 @@ pub(crate) enum GpuiFocusTarget {
     ScmCommitMessage,
     TaskNewTitle,
     TaskRenameTitle,
+    TaskDecisionAnswer,
     TaskCard(u64),
     TaskBoardControls,
     TaskBoardConfirm,
@@ -2367,6 +2368,7 @@ impl Tessel {
             GpuiFocusTarget::ScmCommitMessage => false,
             GpuiFocusTarget::TaskNewTitle
             | GpuiFocusTarget::TaskRenameTitle
+            | GpuiFocusTarget::TaskDecisionAnswer
             | GpuiFocusTarget::TaskCard(_)
             | GpuiFocusTarget::TaskBoardControls
             | GpuiFocusTarget::TaskBoardConfirm => false,
@@ -7590,6 +7592,7 @@ mod panel_snapshot_tests {
             .map(|id| crate::workspace::Task {
                 created_by: None,
                 report: None,
+                decision: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),

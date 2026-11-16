@@ -29,6 +29,7 @@ pub(crate) mod side_panels_view;
 pub(crate) mod sidebar_view;
 mod task_agent_input;
 mod task_card_input;
+mod task_decision_input;
 mod task_rename_input;
 mod terminal_find_inputs;
 pub(crate) mod terminal_view;
@@ -112,6 +113,7 @@ pub(crate) struct TesselGpuiRoot {
     task_rename_input: task_rename_input::Input,
     task_card_input: task_card_input::Inputs,
     task_agent_inputs: task_agent_input::Inputs,
+    task_decision_inputs: task_decision_input::Inputs,
     _poller_task: Task<()>,
 }
 
@@ -293,6 +295,7 @@ impl TesselGpuiRoot {
             task_rename_input: Default::default(),
             task_card_input: Default::default(),
             task_agent_inputs: Default::default(),
+            task_decision_inputs: Default::default(),
             _poller_task: poller_task,
         }
     }
@@ -471,6 +474,11 @@ impl TesselGpuiRoot {
                     .then_some(FocusInputTarget::TaskRenameTitle)
             })
             .or_else(|| {
+                self.task_decision_inputs
+                    .focused(window, cx)
+                    .then_some(FocusInputTarget::TaskDecisionAnswer)
+            })
+            .or_else(|| {
                 self.task_card_input
                     .focused(window, cx)
                     .map(FocusInputTarget::TaskCard)
@@ -592,6 +600,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::ConversationsQuery
                         | FocusInputTarget::TaskNewTitle
                         | FocusInputTarget::TaskRenameTitle
+                        | FocusInputTarget::TaskDecisionAnswer
                 )
             )
         {
@@ -1229,6 +1238,18 @@ impl Render for TesselGpuiRoot {
         }
         let card_was_focused = self.task_card_input.contains_focus(window, cx)
             || self.task_card_input.confirm_focused(window);
+        self.task_decision_inputs.sync(
+            if snapshot.side_panel.tab == crate::workspace::SideTab::Tasks
+                && snapshot.toolbar.right_open
+            {
+                snapshot.side_panels.task_board.scope
+            } else {
+                None
+            },
+            &snapshot.side_panels.tasks,
+            self.app.gpui_has_open_modal() || !window.is_window_active(),
+            cx,
+        );
         self.task_agent_inputs.sync(
             snapshot.side_panels.task_board.scope,
             &snapshot.side_panels.tasks,
@@ -1443,6 +1464,7 @@ impl Render for TesselGpuiRoot {
                 &self.task_rename_input,
                 &self.task_card_input,
                 &self.task_agent_inputs,
+                &self.task_decision_inputs,
                 focus_input,
                 &tokens,
                 self.left_width,
