@@ -165,6 +165,7 @@ pub mod task_timeline;
 pub mod tasks_board_panel;
 mod team_mcp_auth;
 pub mod team_mcp_broker;
+pub mod team_mcp_runtime;
 pub mod team_mcp_stdio;
 mod team_mcp_wire;
 pub mod teams_relay;

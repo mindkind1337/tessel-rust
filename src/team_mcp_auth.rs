@@ -221,6 +221,14 @@ impl Authority {
         self.bindings.get(&binding.pane) == Some(binding)
     }
 
+    pub(crate) fn bindings(&self) -> Vec<Binding> {
+        self.bindings.values().cloned().collect()
+    }
+
+    pub(crate) fn binding(&self, pane: u64) -> Option<Binding> {
+        self.bindings.get(&pane).cloned()
+    }
+
     pub(crate) fn authenticate(
         &mut self,
         request: &SignedTeamRequest,

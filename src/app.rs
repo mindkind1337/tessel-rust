@@ -721,6 +721,7 @@ pub struct Tessel {
     side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
     dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState,
     teams_hub: crate::teams_relay::TeamsRelayHub,
+    team_mcp: crate::team_mcp_runtime::Runtime,
     teams_ui: crate::teams_ui::TeamsUiState,
     notifications: crate::dialogs_toolbar_model::NotificationCenter,
     notified_waiting_panes: std::collections::HashSet<u64>,
@@ -948,6 +949,7 @@ impl Tessel {
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
+            team_mcp: Default::default(),
             teams_ui: Default::default(),
             notifications: Default::default(),
             notified_waiting_panes: Default::default(),
@@ -2687,6 +2689,7 @@ impl Tessel {
         self.remove_session(id);
     }
     fn remove_session(&mut self, id: u64) {
+        self.team_mcp.revoke(id);
         let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
             return;
         };
@@ -11879,6 +11882,7 @@ impl Tessel {
     }
 
     fn put_session_to_sleep(&mut self, id: u64) {
+        self.team_mcp.revoke(id);
         for worker in &mut self.teams_hub.workers {
             if worker.worker_pane_id == Some(id)
                 && matches!(
@@ -12305,9 +12309,65 @@ impl Tessel {
         changed
     }
 
+    fn poll_team_mcp(&mut self) -> bool {
+        if !self.team_mcp.enabled() {
+            return false;
+        }
+        let panes = self
+            .sessions
+            .iter()
+            .filter_map(|session| {
+                Some(crate::team_mcp_runtime::LivePane {
+                    pane: session.id,
+                    project: session.project?,
+                    cwd: session.cwd.clone(),
+                    local: session.native_host.is_none()
+                        && matches!(
+                            session.launch,
+                            Launch::Agent(_) | Launch::CodexChat | Launch::ClaudeChat
+                        ),
+                    active: session.restarting.is_none()
+                        && (session
+                            .terminal
+                            .as_ref()
+                            .is_some_and(|terminal| !terminal.exited())
+                            || session.loading.is_some()
+                            || self.chats.iter().any(|chat| {
+                                chat.pane == session.id
+                                    && (chat.process_id().is_some() || chat.starting())
+                            })
+                            || self.claude_chats.iter().any(|chat| {
+                                chat.pane == session.id
+                                    && (chat.process_id().is_some() || chat.starting())
+                            })),
+                })
+            })
+            .collect::<Vec<_>>();
+        // Persisted session data supplies tool presentation, not transport authority.
+        self.capture_runtime_state();
+        let mcp_changed = self.team_mcp.poll(
+            &panes,
+            &mut self.state,
+            self.store.as_ref(),
+            &mut self.teams_hub,
+        );
+        if mcp_changed {
+            self.save();
+        }
+        mcp_changed
+    }
+
     fn poll_teams_and_relay(&mut self) -> bool {
+        // A stop queued before this tick takes precedence over queued MCP work.
+        let had_stops = !self.teams_hub.pending_worker_stops.is_empty();
+        while let Some(pane) = self.teams_hub.pending_worker_stops.pop_front() {
+            self.put_session_to_sleep(pane);
+        }
+        let mcp_changed = self.poll_team_mcp();
         let changed = !self.teams_hub.pending_spawns.is_empty()
-            || !self.teams_hub.pending_worker_stops.is_empty();
+            || !self.teams_hub.pending_worker_stops.is_empty()
+            || mcp_changed
+            || had_stops;
         while let Some(pane) = self.teams_hub.pending_worker_stops.pop_front() {
             self.put_session_to_sleep(pane);
         }

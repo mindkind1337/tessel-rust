@@ -47,6 +47,38 @@ pub struct Client {
     timeout: Duration,
 }
 
+/// Keep this owner with the actual child transport, never in persisted pane state.
+/// A replaced transport can drop without revoking its successor's capability.
+pub struct Launch {
+    client: Client,
+    binding: Binding,
+    shared: Arc<Shared>,
+}
+
+impl Launch {
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    pub fn binding(&self) -> &Binding {
+        &self.binding
+    }
+
+    pub fn revoke(&self) {
+        if let Ok(mut authority) = self.shared.authority.lock()
+            && authority.current(&self.binding)
+        {
+            authority.revoke(self.binding.pane);
+        }
+    }
+}
+
+impl Drop for Launch {
+    fn drop(&mut self) {
+        self.revoke();
+    }
+}
+
 impl Client {
     /// One exchange only: failures after sending may be uncertain and are never retried.
     pub fn call(&self, operation: Operation) -> Result<Result<Value, BackendError>, String> {
@@ -197,20 +229,51 @@ impl Broker {
     }
 
     pub fn issue(&self, pane: u64, project: u64, cwd: &Path) -> Result<Client, String> {
+        self.issue_inner(pane, project, cwd)
+            .map(|(client, _)| client)
+    }
+
+    fn issue_inner(
+        &self,
+        pane: u64,
+        project: u64,
+        cwd: &Path,
+    ) -> Result<(Client, Binding), String> {
         if self.shared.stopped.load(Ordering::Acquire) {
             return Err("Team broker stopped".into());
         }
-        let credential = self
+        let mut authority = self
             .shared
             .authority
             .lock()
-            .map_err(|_| "Team authority unavailable")?
-            .issue(pane, project, cwd)?;
-        Ok(Client {
-            endpoint: self.endpoint,
-            credential,
-            timeout: self.timeout,
+            .map_err(|_| "Team authority unavailable")?;
+        let credential = authority.issue(pane, project, cwd)?;
+        let binding = authority.binding(pane).ok_or("Team binding unavailable")?;
+        Ok((
+            Client {
+                endpoint: self.endpoint,
+                credential,
+                timeout: self.timeout,
+            },
+            binding,
+        ))
+    }
+
+    pub fn launch(&self, pane: u64, project: u64, cwd: &Path) -> Result<Launch, String> {
+        let (client, binding) = self.issue_inner(pane, project, cwd)?;
+        Ok(Launch {
+            client,
+            binding,
+            shared: self.shared.clone(),
         })
+    }
+
+    pub fn bindings(&self) -> Result<Vec<Binding>, String> {
+        self.shared
+            .authority
+            .lock()
+            .map(|authority| authority.bindings())
+            .map_err(|_| "Team authority unavailable".into())
     }
 
     pub fn revoke(&self, pane: u64) {
@@ -227,6 +290,11 @@ impl Broker {
             }
         }
         None
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queued_for_test(&self) -> usize {
+        self.shared.queued.load(Ordering::Acquire)
     }
 }
 
@@ -415,6 +483,10 @@ fn serve_peer(
         if shared.stopped.load(Ordering::Acquire)
             || cancelled.load(Ordering::Acquire)
             || !peer_open(&stream)
+            || !shared
+                .authority
+                .lock()
+                .is_ok_and(|authority| authority.current(&binding))
         {
             return;
         }

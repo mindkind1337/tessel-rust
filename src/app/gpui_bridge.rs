@@ -1440,6 +1440,7 @@ impl Tessel {
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
+            team_mcp: Default::default(),
             teams_ui: Default::default(),
             notifications: Default::default(),
             notified_waiting_panes: Default::default(),
@@ -6849,6 +6850,108 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn team_mcp_shared_poll_revalidates_real_sessions_before_persisted_mutation() {
+        use crate::team_mcp_runtime::LivePane;
+        use crate::team_mcp_stdio::Operation;
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        for case in 0..9 {
+            let dir = tempfile::tempdir().unwrap();
+            let project_dir = dir.path().join("project");
+            std::fs::create_dir(&project_dir).unwrap();
+            let data = dir.path().join("state");
+            let (store, mut state) = Store::open(&data).unwrap();
+            let project = state.add_project(&project_dir).unwrap();
+            let cwd = state.projects[0].path.clone();
+            state.sessions.push(
+                serde_json::from_value(serde_json::json!({
+                "id":41,"project":project,"title":"Fixture",
+                "launch":"ClaudeChat","cwd":cwd}))
+                .unwrap(),
+            );
+            state.next_pane = 42;
+            store.save(&state).unwrap();
+            drop(store);
+            let mut app = Tessel::new_for_gpui_in_dir(Some(data.clone()), false, || {});
+            assert!(!app.team_mcp.enabled());
+            let pane = LivePane {
+                pane: 41,
+                project,
+                cwd,
+                local: true,
+                active: true,
+            };
+            let launch = Arc::new(app.team_mcp.begin(&pane, &app.state).unwrap());
+            // An in-memory channel models a child spawn still in progress; no CLI.
+            let (_hold, receiver) = mpsc::channel();
+            app.sessions
+                .iter_mut()
+                .find(|s| s.id == 41)
+                .unwrap()
+                .loading = Some(receiver);
+            let child = launch.clone();
+            let worker = std::thread::spawn(move || {
+                child.client().call(Operation::Call {
+                    name: "tessel_task_add".into(),
+                    arguments: serde_json::json!({"title":"Synthetic dispatch"}),
+                })
+            });
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while app.team_mcp.queued_for_test() == 0 {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            match case {
+                0 => {} // live, local, matching pane: one persisted mutation
+                1 => app.put_session_to_sleep(41),
+                2 => app.remove_session(41),
+                3 => app.sessions[0].cwd = project_dir.join("missing"),
+                4 => app.sessions[0].project = Some(u64::MAX),
+                5 => app.sessions[0].native_host = Some(Default::default()),
+                6 => app.sessions[0].loading = None, // dormant restored pane
+                7 => {
+                    #[cfg(windows)]
+                    let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+                    #[cfg(windows)]
+                    command.args(["/d", "/c", "exit 0"]);
+                    #[cfg(not(windows))]
+                    let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+                    #[cfg(not(windows))]
+                    command.args(["-c", "exit 0"]);
+                    command.cwd(&project_dir);
+                    let mut terminal = crate::terminal::Terminal::spawn_command(command).unwrap();
+                    let exit_deadline = Instant::now() + Duration::from_secs(3);
+                    while !terminal.exited() {
+                        terminal.poll();
+                        assert!(Instant::now() < exit_deadline);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    assert!(terminal.exited());
+                    app.sessions[0].loading = None;
+                    app.sessions[0].terminal = Some(terminal);
+                }
+                _ => app.teams_hub.pending_worker_stops.push_back(41),
+            }
+            app.poll_for_gpui();
+            let result = worker.join().unwrap();
+            let loaded: Workspace =
+                serde_json::from_slice(&std::fs::read(data.join("workspace.json")).unwrap())
+                    .unwrap();
+            if case == 0 {
+                assert!(result.unwrap().is_ok());
+                assert_eq!(app.state.tasks.len(), 1);
+                assert_eq!(loaded.tasks, app.state.tasks);
+            } else {
+                assert!(result.is_err(), "case {case} retained authority");
+                assert!(app.state.tasks.is_empty());
+                assert!(loaded.tasks.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn generated_object_ids_keep_user_labels_out_of_ids_and_preserve_existing_objects() {
         let dir = tempfile::tempdir().unwrap();
