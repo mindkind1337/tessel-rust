@@ -75,6 +75,7 @@ mod tests {
             state.sessions.push(serde_json::from_value(serde_json::json!({"id":id,"project":project,"launch":launch,"title":title,"cwd":std::env::temp_dir()})).unwrap());
         }
         state.tasks.push(crate::workspace::Task {
+            deps: Vec::new(),
             id: 2,
             project: 1,
             title: "Task".into(),

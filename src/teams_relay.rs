@@ -1809,6 +1809,7 @@ impl TeamsRelayHub {
                             && let Ok(id) = draft.id()
                         {
                             draft.tasks.push(crate::workspace::Task {
+                                deps: Vec::new(),
                                 timeline: crate::task_timeline::Timeline::created(now_ms, 0, None),
                                 guest_by: None,
                                 id,

@@ -59,6 +59,7 @@ mod workspace {
 
     #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
     pub struct Task {
+        pub deps: Vec<u64>,
         pub timeline: crate::task_timeline::Timeline,
         pub guest_by: Option<String>,
         pub id: u64,

@@ -258,6 +258,7 @@ mod tests {
     fn tasks() -> Vec<Task> {
         vec![
             Task {
+                deps: Vec::new(),
                 timeline: Default::default(),
                 guest_by: None,
                 id: 1,
@@ -266,6 +267,7 @@ mod tests {
                 column: 0,
             },
             Task {
+                deps: Vec::new(),
                 timeline: Default::default(),
                 guest_by: None,
                 id: 2,
@@ -274,6 +276,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                deps: Vec::new(),
                 timeline: Default::default(),
                 guest_by: None,
                 id: 3,
@@ -282,6 +285,7 @@ mod tests {
                 column: 3,
             },
             Task {
+                deps: Vec::new(),
                 timeline: Default::default(),
                 guest_by: None,
                 id: 4,

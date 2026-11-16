@@ -270,6 +270,7 @@ pub fn merge_legacy(
 }
 
 pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result<(), String> {
+    crate::task_dependencies::validate(&after.tasks, after.next_id)?;
     let id_max = before
         .task_history
         .records
@@ -336,10 +337,27 @@ pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result
             }
         }
     }
-    for index in 0..after.tasks.len() {
-        let id = after.id()?;
-        let task = &mut after.tasks[index];
-        task.id = id;
+    // Reserve new identities for missing prerequisites as well: retaining their old
+    // number could accidentally bind them to an unrelated newly-created card.
+    let mut identities = std::collections::BTreeMap::new();
+    let keys: Vec<_> = after
+        .tasks
+        .iter()
+        .flat_map(|task| {
+            std::iter::once((task.project, task.id))
+                .chain(task.deps.iter().map(|id| (task.project, *id)))
+        })
+        .collect();
+    for key in keys {
+        if let std::collections::btree_map::Entry::Vacant(entry) = identities.entry(key) {
+            entry.insert(after.id()?);
+        }
+    }
+    for task in &mut after.tasks {
+        task.id = identities[&(task.project, task.id)];
+        for dep in &mut task.deps {
+            *dep = identities[&(task.project, *dep)];
+        }
         task.timeline = Default::default();
         task.guest_by = None;
     }
@@ -489,6 +507,7 @@ mod tests {
         let mut state = fixture();
         state.tasks = (2..902)
             .map(|id| Task {
+                deps: Vec::new(),
                 id,
                 project: 1,
                 title: "x".repeat(2500),
@@ -541,6 +560,7 @@ mod tests {
         let mut after = fixture();
         after.tasks = (2..402)
             .map(|id| Task {
+                deps: Vec::new(),
                 id,
                 project: 1,
                 title: "y".repeat(2000),
@@ -577,6 +597,7 @@ mod tests {
             next_id: 100,
             task_history_migrated: true,
             tasks: vec![Task {
+                deps: Vec::new(),
                 id: 2,
                 project: 1,
                 title: "Task".into(),
@@ -666,6 +687,28 @@ mod tests {
         assert!(after.next_id > before.next_id);
     }
     #[test]
+    fn task_history_restore_remaps_live_and_missing_prerequisites_without_rebinding() {
+        let before = fixture();
+        let mut after = fixture();
+        let mut prerequisite = after.tasks[0].clone();
+        prerequisite.id = 3;
+        prerequisite.column = 3;
+        after.tasks[0].deps = vec![3, 4];
+        after.tasks.push(prerequisite);
+        after.next_id = 5;
+        preserve_for_restore(&before, &mut after).unwrap();
+        assert_eq!(after.tasks[0].deps[0], after.tasks[1].id);
+        let missing = after.tasks[0].deps[1];
+        assert!(missing < after.next_id);
+        assert!(!after.tasks.iter().any(|task| task.id == missing));
+        assert_eq!(
+            crate::task_dependencies::waiting_on(&after.tasks[0], &after.tasks),
+            vec![missing]
+        );
+        assert_ne!(after.id().unwrap(), missing);
+        crate::task_dependencies::validate(&after.tasks, after.next_id).unwrap();
+    }
+    #[test]
     fn task_history_restore_separates_cards_costs_projects_and_panes() {
         let mut before = fixture();
         move_at(&mut before, 3, 1000);
@@ -712,6 +755,7 @@ mod tests {
         assert_eq!(state.task_history.records.last().unwrap().id, 1500);
         state.tasks = (2..1002)
             .map(|id| Task {
+                deps: Vec::new(),
                 id,
                 project: 1,
                 title: "x".repeat(3000),

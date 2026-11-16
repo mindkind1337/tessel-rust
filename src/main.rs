@@ -160,6 +160,7 @@ mod system_identity;
 mod task_actions;
 pub mod task_agents_model;
 pub mod task_card_timing;
+mod task_dependencies;
 mod task_history;
 pub mod task_timeline;
 pub mod tasks_board_panel;

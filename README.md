@@ -6,6 +6,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Stored task prerequisites remain blocking when a required card is deleted or reopened. Agent moves to Doing, Review or Done respect those prerequisites; the user can still override the column manually. Restoring a workspace remaps both live and missing prerequisite identifiers. `team_tasks` reports prerequisite and waiting identifiers. Creating these links through `team_task_add`, editing them in the UI and ready notifications are still being integrated.
+
 - Native Codex's task tools also accept `team_tasks` and `team_task_move`, with string card identifiers and the `todo`, `doing`, `review`, and `done` column names. Listing includes assignees; moves use the same persisted board as the UI. The optional `me` label cannot change the calling pane or project. The older `tessel_*` tools remain available. Creation with named assignees/dependencies and the remaining Vue board-tool formats are still being ported.
 
 - Stopping a native Claude connection during account validation cancels the remaining startup work before launching its process. A process already starting is still cleaned up when its cancelled connection owner is dropped.

@@ -204,6 +204,7 @@ fn execute_inner(
             };
             let id = state.id()?;
             state.tasks.push(Task {
+                deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
                     crate::task_timeline::now_ms(),
                     column,
@@ -228,6 +229,24 @@ fn execute_inner(
                 .and_then(Value::as_u64)
                 .filter(|c| *c < 4)
                 .ok_or("Column must be 0 to 3")? as usize;
+            let current = state
+                .tasks
+                .iter()
+                .find(|task| task.project == project && task.id == id)
+                .ok_or("Task not found in this project")?;
+            if column != current.column && column != 0 {
+                let waiting = crate::task_dependencies::waiting_on(current, &state.tasks);
+                if !waiting.is_empty() {
+                    return Err(format!(
+                        "Card waits for prerequisites: {}",
+                        waiting
+                            .iter()
+                            .map(u64::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
             let task = state
                 .tasks
                 .iter_mut()
@@ -270,6 +289,100 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn task_dependencies_gate_agent_moves_but_allow_user_override_and_return_to_todo() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let mut hub = crate::teams_relay::TeamsRelayHub::default();
+        for title in ["Prerequisite", "Dependent"] {
+            execute_persisted_for_pane(
+                &mut state,
+                Some(&store),
+                &mut hub,
+                8,
+                project,
+                "tessel_task_add",
+                &json!({"title":title}),
+            )
+            .unwrap();
+        }
+        let prerequisite = state.tasks[0].id;
+        let dependent = state.tasks[1].id;
+        state.tasks[1].deps = vec![prerequisite];
+        store.save(&state).unwrap();
+        for column in ["doing", "review", "done"] {
+            assert!(
+                execute_persisted_for_pane(
+                    &mut state,
+                    Some(&store),
+                    &mut hub,
+                    8,
+                    project,
+                    "team_task_move",
+                    &json!({"id":dependent.to_string(),"column":column})
+                )
+                .is_err()
+            );
+        }
+        state.active_project = Some(project);
+        crate::task_actions::commit(
+            &mut state,
+            Some(&store),
+            project,
+            crate::tasks_board_panel::TasksBoardAction::Move {
+                id: dependent,
+                column: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(state.tasks[1].column, 2);
+        execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_task_move",
+            &json!({"id":dependent.to_string(),"column":"todo"}),
+        )
+        .unwrap();
+        execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_task_move",
+            &json!({"id":prerequisite.to_string(),"column":"done"}),
+        )
+        .unwrap();
+        execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_task_move",
+            &json!({"id":dependent.to_string(),"column":"doing"}),
+        )
+        .unwrap();
+        let (listed, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_tasks",
+            &json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            listed["tasks"][1]["deps"],
+            json!([prerequisite.to_string()])
+        );
+        assert_eq!(listed["tasks"][1]["waitingOn"], json!([]));
+    }
     #[test]
     fn canonical_board_tools_roundtrip_and_keep_persistence_and_project_authority() {
         let dir = tempfile::tempdir().unwrap();

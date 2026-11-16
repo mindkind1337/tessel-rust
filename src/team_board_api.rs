@@ -52,7 +52,20 @@ pub fn output(
 ) -> Value {
     if name == "team_tasks" {
         if let Some(tasks) = value["tasks"].as_array_mut() {
+            let index = crate::task_dependencies::Index::new(&state.tasks);
             for task in tasks {
+                let original = task["id"].as_u64().and_then(|id| index.task(id, project));
+                if let Some(original) = original {
+                    task["deps"] =
+                        json!(original.deps.iter().map(u64::to_string).collect::<Vec<_>>());
+                    task["waitingOn"] = json!(
+                        index
+                            .waiting_on(original)
+                            .iter()
+                            .map(u64::to_string)
+                            .collect::<Vec<_>>()
+                    );
+                }
                 convert(task);
                 let pane = task["timeline"]["pane_id"].as_u64();
                 task["assignee"] = pane.map_or(Value::Null, |pane| {

@@ -569,6 +569,8 @@ const fn default_agent_folder_trust() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deps: Vec<u64>,
     pub id: u64,
     pub project: u64,
     pub title: String,
@@ -1084,6 +1086,7 @@ impl Workspace {
             }
         }
         crate::task_history::validate(&self.task_history)?;
+        crate::task_dependencies::validate(&self.tasks, self.next_id)?;
         for task in &self.tasks {
             task.timeline.validate()?;
             if task.column != 1
