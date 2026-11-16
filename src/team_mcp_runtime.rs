@@ -47,6 +47,7 @@ fn allowed(name: &str) -> bool {
             | "tessel_task_move"
             | "team_tasks"
             | "team_task_move"
+            | "team_task_add"
             | "team_create"
             | "team_bootstrap"
             | "team_members"
@@ -357,6 +358,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"team_inbox") && names.contains(&"tessel_task_add"));
         assert!(names.contains(&"team_tasks") && names.contains(&"team_task_move"));
+        assert!(names.contains(&"team_task_add"));
         assert!(!names.contains(&"tessel_browser"));
         assert!(names.iter().all(|name| allowed(name)));
         let result = fixture.exchange(&launch, add()).unwrap();
@@ -392,6 +394,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reloaded.tasks[0].column, 2);
+        let canonical = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_task_add".into(),
+                    arguments: json!({"title":"Canonical dependent","column":"doing","after":[id]}),
+                },
+            )
+            .unwrap();
+        assert_eq!(canonical["column"], "todo");
+        assert_eq!(canonical["assigneePane"], 41);
+        assert_eq!(canonical["waitingOn"], json!([id]));
         assert!(matches!(
             fixture.exchange(
                 &launch,
@@ -412,7 +426,7 @@ mod tests {
             ),
             Err(BackendError::Failed(_))
         ));
-        assert_eq!(fixture.state.tasks.len(), 1);
+        assert_eq!(fixture.state.tasks.len(), 2);
     }
 
     #[test]

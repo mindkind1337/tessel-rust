@@ -29,12 +29,21 @@ pub fn execute_persisted_for_pane(
     }
     if !matches!(
         name,
-        "tessel_task_add" | "tessel_task_move" | "tessel_task_assign" | "team_bootstrap"
+        "tessel_task_add"
+            | "tessel_task_move"
+            | "tessel_task_assign"
+            | "team_bootstrap"
+            | "team_task_add"
     ) {
         return execute_for_pane(state, teams_hub, pane_id, project, name, args);
     }
     let mut draft = state.clone();
-    let result = if name == "team_bootstrap" {
+    let result = if name == "team_task_add" {
+        (
+            crate::team_board_api::add(&mut draft, project, pane_id, args)?,
+            true,
+        )
+    } else if name == "team_bootstrap" {
         execute_for_pane(&mut draft, teams_hub, pane_id, project, name, args)?
     } else {
         execute_inner(&mut draft, project, name, args, Some(pane_id))?
@@ -460,6 +469,220 @@ mod tests {
         );
         assert_eq!(state.tasks, before.tasks);
         assert_eq!(state.task_history, before.task_history);
+    }
+
+    #[test]
+    fn canonical_add_assigns_and_defers_atomically_then_reloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let cwd = state.projects[0].path.clone();
+        for (id, name, number) in [(900, "Lead", 4), (7, "Worker", 1)] {
+            state.sessions.push(
+                serde_json::from_value(json!({"id":id,"project":project,
+                "title":"Synthetic","pane_name":name,"legacy_number":number,
+                "launch":"CodexChat","cwd":cwd}))
+                .unwrap(),
+            );
+        }
+        let mut hub = crate::teams_relay::TeamsRelayHub::default();
+        let (first, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            900,
+            project,
+            "team_task_add",
+            &json!({"title":" \t First\ncard\u{feff}","me":"Worker"}),
+        )
+        .unwrap();
+        assert_eq!(state.tasks[0].title, "First card");
+        assert_eq!(state.tasks[0].timeline.pane_id, Some(900));
+        let (second, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            900,
+            project,
+            "team_task_add",
+            &json!({"title":"Dependent","column":"DOING","assignee":"#1",
+                "after":[first["id"],first["id"]]}),
+        )
+        .unwrap();
+        assert_eq!(second["column"], "todo");
+        assert_eq!(second["deferred"], true);
+        assert_eq!(second["waitingOn"], json!([first["id"]]));
+        assert_eq!(state.tasks[1].timeline.pane_id, Some(7));
+        assert!(state.tasks[1].timeline.doing_since_ms.is_none());
+        execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            900,
+            project,
+            "team_task_move",
+            &json!({"id":first["id"],"column":"done"}),
+        )
+        .unwrap();
+        let (third, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            900,
+            project,
+            "team_task_add",
+            &json!({"title":"Ready","column":"doing","assignee":"wOrKeR",
+                "after":[first["id"]]}),
+        )
+        .unwrap();
+        assert_eq!(third["column"], "doing");
+        assert_eq!(third["deferred"], false);
+        assert_eq!(state.tasks[2].timeline.work_periods[0].pane_id, Some(7));
+        let saved = std::fs::read(dir.path().join("workspace.json")).unwrap();
+        let loaded: Workspace = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(loaded.tasks, state.tasks);
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                None,
+                &mut hub,
+                900,
+                project,
+                "team_task_add",
+                &json!({"title":"Do not publish","assignee":"Worker"})
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(
+            std::fs::read(dir.path().join("workspace.json")).unwrap(),
+            saved
+        );
+        std::fs::remove_file(dir.path().join("workspace.json")).unwrap();
+        std::fs::create_dir(dir.path().join("workspace.json")).unwrap();
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                Some(&store),
+                &mut hub,
+                900,
+                project,
+                "team_task_add",
+                &json!({"title":"Write failure","column":"done"})
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    }
+
+    #[test]
+    fn canonical_add_rejects_ambiguous_foreign_and_malformed_inputs_without_partial_cards() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let other = state.add_project(elsewhere.path()).unwrap();
+        for (id, pid, name, launch) in [
+            (10, project, "Lead", "CodexChat"),
+            (11, project, "Duplicate", "CodexChat"),
+            (12, project, "duplicate", "ClaudeChat"),
+            (13, other, "Foreign", "CodexChat"),
+            (14, project, "Shell", "Shell"),
+        ] {
+            let cwd = &state.projects.iter().find(|p| p.id == pid).unwrap().path;
+            state.sessions.push(
+                serde_json::from_value(json!({"id":id,"project":pid,"pane_name":name,
+                "title":"Synthetic","launch":launch,"cwd":cwd}))
+                .unwrap(),
+            );
+        }
+        let mut hub = crate::teams_relay::TeamsRelayHub::default();
+        let (foreign, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            13,
+            other,
+            "team_task_add",
+            &json!({"title":"Other project"}),
+        )
+        .unwrap();
+        let before = serde_json::to_value(&state).unwrap();
+        for args in [
+            json!({"title":"X","assignee":"Duplicate"}),
+            json!({"title":"X","assignee":"Foreign"}),
+            json!({"title":"X","assignee":"Shell"}),
+            json!({"title":"X","assignee":"#99"}),
+            json!({"title":"X","after":[foreign["id"]]}),
+            json!({"title":"X","after":["99999"]}),
+            json!({"title":"X","after":["01"]}),
+            json!({"title":"X","after":[1]}),
+            json!({"title":"X","after":[] ,"project":other}),
+            json!({"title":"X","after":"1"}),
+            json!({"title":"X","after":vec!["1";11]}),
+            json!({"title":"X","me":3}),
+            json!({"title":"X","column":1}),
+            json!({"title":"X","column":"later"}),
+            json!({"title":"\u{feff}\n\t"}),
+            json!({"title":"😀".repeat(101)}),
+        ] {
+            assert!(
+                execute_persisted_for_pane(
+                    &mut state,
+                    Some(&store),
+                    &mut hub,
+                    10,
+                    project,
+                    "team_task_add",
+                    &args
+                )
+                .is_err(),
+                "{args}"
+            );
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        }
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                Some(&store),
+                &mut hub,
+                13,
+                project,
+                "team_task_add",
+                &json!({"title":"Forged caller"})
+            )
+            .is_err()
+        );
+        state.teams.push(crate::teams_relay::SavedTeam {
+            id: "synthetic".into(),
+            project,
+            name: "Test".into(),
+            lead_pane: Some(10),
+            members: vec![10],
+        });
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                Some(&store),
+                &mut hub,
+                10,
+                project,
+                "team_task_add",
+                &json!({"title":"Not in team","assignee":"#2"})
+            )
+            .is_err()
+        );
+        execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            10,
+            project,
+            "team_task_add",
+            &json!({"title":"😀".repeat(100)}),
+        )
+        .unwrap();
     }
 
     #[test]
