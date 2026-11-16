@@ -7433,6 +7433,178 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn worker_launch_failure_or_revocation_never_reuses_an_existing_pane() {
+        for scenario in [
+            "exhausted",
+            "limit",
+            "closed",
+            "removed",
+            "stopped",
+            "moved",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("state");
+            let (store, mut state) = crate::workspace::Store::open(&data).unwrap();
+            let project = state.add_project(dir.path()).unwrap();
+            let cwd = state.active().unwrap().path.clone();
+            state.sessions.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":7,"project":project,"title":"Existing pane","launch":"Shell","cwd":cwd
+                }))
+                .unwrap(),
+            );
+            state.next_pane = 8;
+            if scenario == "limit" {
+                for id in 8..107 {
+                    state.sessions.push(serde_json::from_value(serde_json::json!({
+                        "id":id,"project":project,"title":"Existing pane","launch":"Shell","cwd":cwd
+                    })).unwrap());
+                }
+                state.next_pane = 107;
+            }
+            store.save(&state).unwrap();
+            drop(store);
+            let mut app = Tessel::new_for_gpui_in_dir(Some(data), false, || {});
+            app.state.orchestration_prefs.confirm_workers = false;
+            let worker = app
+                .teams_hub
+                .request_worker_start(
+                    &mut app.state,
+                    7,
+                    "codex",
+                    Some("New worker"),
+                    "Synthetic goal",
+                    100,
+                )
+                .unwrap();
+            // Never execute a real CLI, even if a context guard regresses.
+            app.next_session = u64::MAX;
+            match scenario {
+                "closed" => app.sessions.clear(),
+                "removed" => app.state.projects.clear(),
+                "stopped" => {
+                    app.teams_hub.stop_or_release_worker(&worker.id, false);
+                }
+                "moved" => {
+                    let changed = dir.path().join("changed");
+                    std::fs::create_dir(&changed).unwrap();
+                    app.sessions[0].cwd = changed;
+                }
+                _ => {}
+            }
+            app.poll_teams_and_relay();
+            let record = app
+                .teams_hub
+                .workers
+                .iter()
+                .find(|w| w.id == worker.id)
+                .unwrap();
+            assert!(record.worker_pane_id.is_none(), "{scenario}");
+            assert_eq!(
+                record.state,
+                if scenario == "stopped" {
+                    crate::teams_relay::WorkerState::Stopped
+                } else {
+                    crate::teams_relay::WorkerState::Failed
+                },
+                "{scenario}"
+            );
+            if scenario != "stopped" {
+                assert_eq!(
+                    record.summary.as_deref(),
+                    Some(if matches!(scenario, "exhausted" | "limit") {
+                        "Worker pane could not be created."
+                    } else {
+                        "Worker context changed before launch."
+                    }),
+                    "{scenario}"
+                );
+            }
+            for session in &app.sessions {
+                assert!((7..107).contains(&session.id));
+                assert_eq!(session.title, "Existing pane");
+                assert_ne!(session.pane_name.as_deref(), Some("New worker"));
+                assert!(session.loading.is_none() && session.terminal.is_none());
+            }
+            assert!(app.teams_hub.pending_spawns.is_empty());
+        }
+    }
+
+    #[test]
+    fn worker_launch_preserves_worktree_and_accepts_resolved_folder_spellings() {
+        for use_worktree in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("state");
+            let (store, mut state) = crate::workspace::Store::open(&data).unwrap();
+            let project = state.add_project(dir.path()).unwrap();
+            let folder = if use_worktree {
+                let folder = dir.path().join("worktree");
+                std::fs::create_dir(&folder).unwrap();
+                folder
+            } else {
+                dir.path().to_path_buf()
+            };
+            let cwd = dunce::canonicalize(&folder).unwrap();
+            let worktree = use_worktree.then(|| crate::workspace::SavedWorktree {
+                path: folder.canonicalize().unwrap(),
+                branch: "synthetic".into(),
+            });
+            state.sessions.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":7,"project":project,"title":"Existing pane","launch":"Shell",
+                    "cwd":cwd,"worktree":worktree
+                }))
+                .unwrap(),
+            );
+            state.next_pane = 8;
+            store.save(&state).unwrap();
+            drop(store);
+            let mut app = Tessel::new_for_gpui_in_dir(Some(data), false, || {});
+            app.state.orchestration_prefs.confirm_workers = false;
+            app.state.orchestration_prefs.worker_mode =
+                crate::settings_extra_model::WorkerMode::Chat;
+            let worker = app
+                .teams_hub
+                .request_worker_start(
+                    &mut app.state,
+                    7,
+                    "codex",
+                    Some("New worker"),
+                    "Synthetic goal",
+                    100,
+                )
+                .unwrap();
+            // This polls only team orchestration: native Chat creates a dormant
+            // pane, without starting its provider connection or a real CLI.
+            app.poll_teams_and_relay();
+            let record = app
+                .teams_hub
+                .workers
+                .iter()
+                .find(|w| w.id == worker.id)
+                .unwrap();
+            let id = record.worker_pane_id.expect("new worker must be bound");
+            assert_ne!(id, 7);
+            let spawned = app.sessions.iter().find(|s| s.id == id).unwrap();
+            assert_eq!(spawned.worktree, worktree);
+            assert!(super::super::same_worker_directory(&spawned.cwd, &cwd));
+            assert!(spawned.loading.is_none() && spawned.terminal.is_none());
+            assert_eq!(
+                app.sessions.iter().find(|s| s.id == 7).unwrap().title,
+                "Existing pane"
+            );
+            assert!(!super::super::same_worker_directory(
+                &cwd,
+                &dir.path().join("missing")
+            ));
+            assert!(!super::super::same_worker_directory(
+                std::path::Path::new("."),
+                &cwd
+            ));
+        }
+    }
+
+    #[test]
     fn sessions_modal_keeps_queries_available_without_opening_the_side_panel() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});

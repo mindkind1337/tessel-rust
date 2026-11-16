@@ -20,6 +20,22 @@ use std::{
     time::Duration,
 };
 
+// Restored sessions may use a non-verbatim Windows path while projects store
+// canonical paths. Resolve differing absolute spellings rather than comparing
+// case-folded strings (which would be incorrect on case-sensitive filesystems).
+fn same_worker_directory(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if !a.is_absolute() || !b.is_absolute() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    match (dunce::canonicalize(a), dunce::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 struct Restart {
     switch_mode: bool,
     result: Receiver<Result<(), (Terminal, String)>>,
@@ -2471,7 +2487,7 @@ impl Tessel {
         before: bool,
         worktree: Option<workspace::SavedWorktree>,
     ) {
-        self.new_session_with_history(project_id, launch, split, before, worktree, None);
+        let _ = self.new_session_with_history(project_id, launch, split, before, worktree, None);
     }
     fn new_session_with_history(
         &mut self,
@@ -2481,14 +2497,14 @@ impl Tessel {
         before: bool,
         worktree: Option<workspace::SavedWorktree>,
         resume: Option<&crate::side_panels_model::SessionHistoryEntry>,
-    ) {
+    ) -> Option<u64> {
         if launch.native_chat().is_some() && project_id.is_none() {
             self.error = tr("Select a project for native chat.").into();
-            return;
+            return None;
         }
         if self.sessions.len() >= 100 {
             self.error = "Session limit: 100".into();
-            return;
+            return None;
         }
         // Only a selected local project is eligible. Perform the account-specific
         // write on the launch worker before the child starts, never in a racing thread.
@@ -2535,7 +2551,7 @@ impl Tessel {
         let id = self.next_session;
         let Some(next) = self.next_session.checked_add(1) else {
             self.error = "Session identifiers exhausted".into();
-            return;
+            return None;
         };
         self.next_session = next;
         let mut s = Session {
@@ -2630,6 +2646,7 @@ impl Tessel {
         self.active_session = Some(id);
         self.view = View::Work;
         self.save();
+        Some(id)
     }
     fn session_is_running_agent(&self, id: u64) -> bool {
         let Some(sess) = self.sessions.iter().find(|s| s.id == id) else {
@@ -11608,7 +11625,7 @@ impl Tessel {
                     return;
                 };
                 self.side_panels_ui.sessions_modal_open = false;
-                self.new_session_with_history(
+                let _ = self.new_session_with_history(
                     Some(project),
                     Launch::Agent(agent_id),
                     None,
@@ -12137,6 +12154,30 @@ impl Tessel {
     fn poll_teams_and_relay(&mut self) {
         let now = crate::teams_relay::now_ms();
         while let Some(spec) = self.teams_hub.pending_spawns.pop_front() {
+            let coordinator = self.sessions.iter().find(|s| {
+                s.id == spec.coordinator_pane_id
+                    && s.project == Some(spec.project_id)
+                    && same_worker_directory(&s.cwd, &spec.cwd)
+            });
+            let worktree = coordinator.and_then(|s| s.worktree.clone());
+            let launch_root = worktree.as_ref().map(|wt| &wt.path).or_else(|| {
+                self.state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == spec.project_id)
+                    .map(|p| &p.path)
+            });
+            if !self.teams_hub.worker_spawn_is_current(&self.state, &spec)
+                || coordinator.is_none()
+                || !launch_root.is_some_and(|root| same_worker_directory(root, &spec.cwd))
+            {
+                self.teams_hub.fail_worker_start(
+                    &spec.worker_id,
+                    "Worker context changed before launch.",
+                    now,
+                );
+                continue;
+            }
             let launch = match spec.mode {
                 crate::settings_extra_model::WorkerMode::Chat => match spec.agent.as_str() {
                     "claude" => Launch::ClaudeChat,
@@ -12146,8 +12187,17 @@ impl Tessel {
                     Launch::Agent(spec.agent.clone())
                 }
             };
-            self.new_session_in_worktree(Some(spec.project_id), launch, None, false, None);
-            if let Some(spawned) = self.sessions.last_mut() {
+            let created = self.new_session_with_history(
+                Some(spec.project_id),
+                launch,
+                None,
+                false,
+                worktree,
+                None,
+            );
+            if let Some(created_id) = created
+                && let Some(spawned) = self.sessions.iter_mut().find(|s| s.id == created_id)
+            {
                 let spawned_id = spawned.id;
                 spawned.pane_name = Some(spec.worker_name.clone());
                 let _ = self.teams_hub.auth.ensure_pane_secret_hex(spawned_id);
@@ -12158,6 +12208,12 @@ impl Tessel {
                     now,
                 );
                 self.save();
+            } else {
+                self.teams_hub.fail_worker_start(
+                    &spec.worker_id,
+                    "Worker pane could not be created.",
+                    now,
+                );
             }
         }
 

@@ -1175,6 +1175,35 @@ impl TeamsRelayHub {
         }
     }
 
+    pub fn worker_spawn_is_current(&self, state: &Workspace, spec: &WorkerSpawnSpec) -> bool {
+        self.workers.iter().any(|rec| {
+            rec.id == spec.worker_id
+                && rec.state == WorkerState::Starting
+                && rec.worker_pane_id.is_none()
+                && rec.agent == spec.agent
+                && rec.mode == spec.mode
+                && rec.frozen.project_id == spec.project_id
+                && rec.frozen.team_id == spec.team_id
+                && rec.frozen.coordinator_pane_id == spec.coordinator_pane_id
+                && rec.frozen.cwd == spec.cwd
+        }) && state.projects.iter().any(|p| p.id == spec.project_id)
+            && state.teams.iter().any(|team| {
+                team.id == spec.team_id
+                    && team.project == spec.project_id
+                    && team.members.contains(&spec.coordinator_pane_id)
+            })
+    }
+
+    pub fn fail_worker_start(&mut self, worker_id: &str, reason: &str, now_ms: u64) {
+        if let Some(rec) = self.workers.iter_mut().find(|w| w.id == worker_id)
+            && matches!(rec.state, WorkerState::Starting | WorkerState::Queued)
+        {
+            rec.state = WorkerState::Failed;
+            rec.summary = Some(reason.chars().take(300).collect());
+            rec.last_heartbeat_ms = now_ms;
+        }
+    }
+
     pub fn bind_spawned_worker_pane(
         &mut self,
         state: &mut Workspace,
@@ -1182,7 +1211,10 @@ impl TeamsRelayHub {
         pane_id: u64,
         now_ms: u64,
     ) {
-        if let Some(rec) = self.workers.iter_mut().find(|w| w.id == worker_id) {
+        if let Some(rec) = self.workers.iter_mut().find(|w| w.id == worker_id)
+            && rec.state == WorkerState::Starting
+            && rec.worker_pane_id.is_none()
+        {
             rec.worker_pane_id = Some(pane_id);
             rec.state = WorkerState::Running;
             rec.last_heartbeat_ms = now_ms;
@@ -1254,6 +1286,8 @@ impl TeamsRelayHub {
     }
 
     pub fn stop_or_release_worker(&mut self, worker_id: &str, release: bool) -> Option<u64> {
+        self.pending_spawns
+            .retain(|spec| spec.worker_id != worker_id);
         let rec = self.workers.iter_mut().find(|w| w.id == worker_id)?;
         rec.state = if release {
             WorkerState::Released
@@ -2122,6 +2156,40 @@ mod tests {
             .unwrap();
         tampered.payload = json!({"text": "pwn"});
         assert!(auth.verify_request(&tampered, now).is_err());
+    }
+
+    #[test]
+    fn stopped_or_released_workers_cannot_be_bound_from_stale_spawn_specs() {
+        for release in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut state = Workspace::default();
+            let project = state.add_project(dir.path()).unwrap();
+            state
+                .sessions
+                .push(sample_session(1, project, "Ada", "claude"));
+            state.orchestration_prefs.confirm_workers = false;
+            let mut hub = TeamsRelayHub::default();
+            let record = hub
+                .request_worker_start(&mut state, 1, "codex", None, "Synthetic", 100)
+                .unwrap();
+            let spec = hub.pending_spawns.front().unwrap().clone();
+            assert!(hub.worker_spawn_is_current(&state, &spec));
+            hub.stop_or_release_worker(&record.id, release);
+            assert!(hub.pending_spawns.is_empty());
+            assert!(!hub.worker_spawn_is_current(&state, &spec));
+            hub.bind_spawned_worker_pane(&mut state, &record.id, 99, 200);
+            hub.fail_worker_start(&record.id, "stale", 300);
+            assert_eq!(
+                hub.workers[0].state,
+                if release {
+                    WorkerState::Released
+                } else {
+                    WorkerState::Stopped
+                }
+            );
+            assert!(hub.workers[0].worker_pane_id.is_none());
+            assert!(!state.teams[0].members.contains(&99));
+        }
     }
 
     #[test]
