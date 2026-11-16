@@ -7588,6 +7588,8 @@ mod panel_snapshot_tests {
         let pid = app.state.active_project.unwrap();
         app.state.tasks = (0..10_000)
             .map(|id| crate::workspace::Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),

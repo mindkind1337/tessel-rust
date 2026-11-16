@@ -90,6 +90,8 @@ mod tests {
     use super::*;
     fn task(id: u64, deps: Vec<u64>) -> Task {
         Task {
+            created_by: None,
+            report: None,
             last_waiting: Vec::new(),
             id,
             project: 1,

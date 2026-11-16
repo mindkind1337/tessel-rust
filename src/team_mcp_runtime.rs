@@ -48,6 +48,7 @@ fn allowed(name: &str) -> bool {
             | "team_tasks"
             | "team_task_move"
             | "team_task_add"
+            | "team_task_done"
             | "team_create"
             | "team_bootstrap"
             | "team_members"
@@ -359,6 +360,7 @@ mod tests {
         assert!(names.contains(&"team_inbox") && names.contains(&"tessel_task_add"));
         assert!(names.contains(&"team_tasks") && names.contains(&"team_task_move"));
         assert!(names.contains(&"team_task_add"));
+        assert!(names.contains(&"team_task_done"));
         assert!(!names.contains(&"tessel_browser"));
         assert!(names.iter().all(|name| allowed(name)));
         let result = fixture.exchange(&launch, add()).unwrap();
@@ -406,6 +408,17 @@ mod tests {
         assert_eq!(canonical["column"], "todo");
         assert_eq!(canonical["assigneePane"], 41);
         assert_eq!(canonical["waitingOn"], json!([id]));
+        let reported = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_task_done".into(),
+                    arguments: json!({"id":canonical["id"],"summary":"Synthetic report"}),
+                },
+            )
+            .unwrap();
+        assert_eq!(reported["blocked"], true);
+        assert_eq!(fixture.state.tasks[1].report.as_ref().unwrap().by, Some(41));
         assert!(matches!(
             fixture.exchange(
                 &launch,

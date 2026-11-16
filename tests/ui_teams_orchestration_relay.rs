@@ -11,6 +11,9 @@ mod settings_extra_model;
 #[path = "../src/sidebar_model.rs"]
 mod sidebar_model;
 #[allow(dead_code)]
+#[path = "../src/task_report.rs"]
+mod task_report;
+#[allow(dead_code)]
 #[path = "../src/task_timeline.rs"]
 mod task_timeline;
 #[allow(dead_code)]
@@ -62,6 +65,8 @@ mod workspace {
 
     #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
     pub struct Task {
+        pub created_by: Option<u64>,
+        pub report: Option<crate::task_report::Report>,
         pub deps: Vec<u64>,
         pub last_waiting: Vec<u64>,
         pub timeline: crate::task_timeline::Timeline,

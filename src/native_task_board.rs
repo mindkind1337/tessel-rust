@@ -258,6 +258,8 @@ mod tests {
     fn tasks() -> Vec<Task> {
         vec![
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -268,6 +270,8 @@ mod tests {
                 column: 0,
             },
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -278,6 +282,8 @@ mod tests {
                 column: 3,
             },
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -288,6 +294,8 @@ mod tests {
                 column: 3,
             },
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),

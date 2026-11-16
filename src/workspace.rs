@@ -569,6 +569,10 @@ const fn default_agent_folder_trust() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<crate::task_report::Report>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_waiting: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1102,6 +1106,12 @@ impl Workspace {
         crate::task_history::validate(&self.task_history)?;
         crate::task_dependencies::validate(&self.tasks, self.next_id)?;
         for task in &self.tasks {
+            if task.created_by == Some(0) {
+                return Err("Invalid task creator.".into());
+            }
+            if let Some(report) = &task.report {
+                report.validate()?;
+            }
             if task.last_waiting.len() > crate::task_dependencies::MAX_DEPS
                 || task
                     .last_waiting

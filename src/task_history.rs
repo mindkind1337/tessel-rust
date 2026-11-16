@@ -355,6 +355,10 @@ pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result
     }
     for task in &mut after.tasks {
         task.last_waiting.clear();
+        task.created_by = None;
+        if let Some(report) = &mut task.report {
+            report.by = None;
+        }
         task.id = identities[&(task.project, task.id)];
         for dep in &mut task.deps {
             *dep = identities[&(task.project, *dep)];
@@ -508,6 +512,8 @@ mod tests {
         let mut state = fixture();
         state.tasks = (2..902)
             .map(|id| Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
@@ -562,6 +568,8 @@ mod tests {
         let mut after = fixture();
         after.tasks = (2..402)
             .map(|id| Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
@@ -600,6 +608,8 @@ mod tests {
             next_id: 100,
             task_history_migrated: true,
             tasks: vec![Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id: 2,
@@ -683,10 +693,24 @@ mod tests {
         before.next_pane = 500;
         let mut after = fixture();
         after.tasks[0].timeline.pane_id = Some(9);
+        after.tasks[0].created_by = Some(9);
+        after.tasks[0].report = Some(crate::task_report::Report {
+            outcome: crate::task_report::Outcome::Succeeded,
+            summary: "Archived synthetic report".into(),
+            files: vec![],
+            by: Some(9),
+            at_ms: 10,
+        });
         preserve_for_restore(&before, &mut after).unwrap();
         assert_eq!(before.task_history, after.task_history);
         assert_eq!(after.next_pane, 500);
         assert!(after.tasks[0].timeline.is_empty());
+        assert!(after.tasks[0].created_by.is_none());
+        assert!(after.tasks[0].report.as_ref().unwrap().by.is_none());
+        assert_eq!(
+            after.tasks[0].report.as_ref().unwrap().summary,
+            "Archived synthetic report"
+        );
         assert_ne!(after.tasks[0].id, before.tasks[0].id);
         assert!(after.next_id > before.next_id);
     }
@@ -761,6 +785,8 @@ mod tests {
         assert_eq!(state.task_history.records.last().unwrap().id, 1500);
         state.tasks = (2..1002)
             .map(|id| Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,

@@ -34,13 +34,34 @@ pub fn execute_persisted_for_pane(
             | "tessel_task_assign"
             | "team_bootstrap"
             | "team_task_add"
+            | "team_task_done"
     ) {
         return execute_for_pane(state, teams_hub, pane_id, project, name, args);
+    }
+    if name == "tessel_task_move"
+        && let (Some(id), Some(column)) = (args["id"].as_u64(), args["column"].as_u64())
+        && column != 0
+        && state
+            .tasks
+            .iter()
+            .any(|task| task.id == id && task.project == project && task.column as u64 != column)
+        && teams_hub.task_has_pending_gate(state, project, id)
+    {
+        return Err("Card waits for the user's decision.".into());
     }
     let mut draft = state.clone();
     let result = if name == "team_task_add" {
         (
             crate::team_board_api::add(&mut draft, project, pane_id, args)?,
+            true,
+        )
+    } else if name == "team_task_done" {
+        let pending = args["id"]
+            .as_str()
+            .and_then(|id| id.parse().ok())
+            .is_some_and(|id| teams_hub.task_has_pending_gate(state, project, id));
+        (
+            crate::team_board_api::report(&mut draft, project, pane_id, args, pending)?,
             true,
         )
     } else if name == "team_bootstrap" {
@@ -54,6 +75,16 @@ pub fn execute_persisted_for_pane(
             .ok_or("Workspace storage is unavailable.")?
             .save_task_bytes(&bytes)?;
         *state = draft;
+        if name == "team_task_done"
+            && let Some(id) = result.0["id"].as_str().and_then(|id| id.parse().ok())
+        {
+            teams_hub.notify_task_report(
+                state,
+                id,
+                result.0["blocked"] == true,
+                crate::teams_relay::now_ms(),
+            );
+        }
     }
     Ok(result)
 }
@@ -213,6 +244,8 @@ fn execute_inner(
             };
             let id = state.id()?;
             state.tasks.push(Task {
+                created_by: pane,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
@@ -575,6 +608,159 @@ mod tests {
             .is_err()
         );
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    }
+
+    #[test]
+    fn reports_persist_notify_creator_and_respect_dependencies_and_pending_gates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        for (id, name) in [(900, "Lead"), (7, "Worker")] {
+            state.sessions.push(
+                serde_json::from_value(json!({"id":id,"project":project,"title":"Synthetic",
+                "pane_name":name,"launch":"CodexChat","cwd":state.projects[0].path}))
+                .unwrap(),
+            );
+        }
+        state.teams.push(crate::teams_relay::SavedTeam {
+            id: "team".into(),
+            project,
+            name: "Fixture".into(),
+            lead_pane: Some(900),
+            members: vec![900, 7],
+        });
+        let mut hub = crate::teams_relay::TeamsRelayHub::default();
+        let call = |state: &mut Workspace,
+                    hub: &mut crate::teams_relay::TeamsRelayHub,
+                    pane,
+                    name,
+                    args: &Value| {
+            execute_persisted_for_pane(state, Some(&store), hub, pane, project, name, args)
+        };
+        let (first, _) = call(
+            &mut state,
+            &mut hub,
+            900,
+            "team_task_add",
+            &json!({"title":"Prerequisite"}),
+        )
+        .unwrap();
+        let (second, _) = call(
+            &mut state,
+            &mut hub,
+            900,
+            "team_task_add",
+            &json!({"title":"Work","assignee":"Worker","after":[first["id"]]}),
+        )
+        .unwrap();
+        let id = second["id"].as_str().unwrap().to_owned();
+        let numeric = id.parse().unwrap();
+        let report =
+            json!({"id":id,"summary":"Synthetic report","files":["result.txt"],"me":"Lead"});
+        let (result, _) = call(&mut state, &mut hub, 7, "team_task_done", &report).unwrap();
+        assert_eq!(result["blocked"], true);
+        assert_eq!(state.tasks[1].column, 0);
+        assert_eq!(state.tasks[1].created_by, Some(900));
+        assert_eq!(state.tasks[1].report.as_ref().unwrap().by, Some(7));
+        assert_eq!(hub.claim_team_inbox(900).len(), 1);
+        assert_eq!(hub.claim_team_inbox(7).len(), 1);
+        call(
+            &mut state,
+            &mut hub,
+            900,
+            "team_task_move",
+            &json!({"id":first["id"],"column":"done"}),
+        )
+        .unwrap();
+        hub.gates.push(crate::teams_relay::TaskGate {
+            id: 1,
+            team_id: "team".into(),
+            task_id: Some(numeric),
+            requested_by_pane: 7,
+            requested_by_name: "Worker".into(),
+            note: "Decision".into(),
+            created_at_ms: 1,
+            resolved: false,
+        });
+        let (result, _) = call(&mut state, &mut hub, 7, "team_task_done", &report).unwrap();
+        assert_eq!(result["pendingGate"], true);
+        assert_eq!(result["column"], "todo");
+        for column in ["doing", "review", "done"] {
+            assert!(
+                call(
+                    &mut state,
+                    &mut hub,
+                    7,
+                    "team_task_move",
+                    &json!({"id":id,"column":column})
+                )
+                .is_err()
+            );
+        }
+        call(
+            &mut state,
+            &mut hub,
+            7,
+            "team_task_move",
+            &json!({"id":id,"column":"todo"}),
+        )
+        .unwrap();
+        crate::task_actions::commit(
+            &mut state,
+            Some(&store),
+            project,
+            crate::tasks_board_panel::TasksBoardAction::Move {
+                id: numeric,
+                column: 2,
+            },
+        )
+        .unwrap();
+        let (failed, _) = call(
+            &mut state,
+            &mut hub,
+            7,
+            "team_task_done",
+            &json!({"id":id,"outcome":"failed","summary":"Needs work"}),
+        )
+        .unwrap();
+        assert_eq!(failed["column"], "review");
+        assert_eq!(
+            state.tasks[1].report.as_ref().unwrap().outcome,
+            crate::task_report::Outcome::Failed
+        );
+        hub.gates[0].resolved = true;
+        let (done, _) = call(&mut state, &mut hub, 7, "team_task_done", &report).unwrap();
+        assert_eq!(done["column"], "done");
+        let loaded: Workspace =
+            serde_json::from_slice(&std::fs::read(dir.path().join("workspace.json")).unwrap())
+                .unwrap();
+        assert_eq!(loaded.tasks, state.tasks);
+        assert_eq!(
+            state.tasks[1].report.as_ref().unwrap().files,
+            vec!["result.txt"]
+        );
+        let before = serde_json::to_value(&state).unwrap();
+        let messages = hub.messages.clone();
+        for args in [
+            json!({"id":id,"summary":" "}),
+            json!({"id":id,"summary":"x","outcome":"unknown"}),
+            json!({"id":id,"summary":"x","project":project}),
+            json!({"id":id,"summary":"x","by":900}),
+            json!({"id":id,"summary":"x","remote":{"host":"fake"}}),
+            json!({"id":id,"summary":"x","files":[1]}),
+            json!({"id":id,"summary":"x","files":vec!["x";51]}),
+            json!({"id":id,"summary":"😀".repeat(1001)}),
+            json!({"id":id,"summary":"x","files":["😀".repeat(151)]}),
+        ] {
+            assert!(call(&mut state, &mut hub, 7, "team_task_done", &args).is_err());
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+            assert_eq!(hub.messages, messages);
+        }
+        std::fs::remove_file(dir.path().join("workspace.json")).unwrap();
+        std::fs::create_dir(dir.path().join("workspace.json")).unwrap();
+        assert!(call(&mut state, &mut hub, 7, "team_task_done", &report).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(hub.messages, messages);
     }
 
     #[test]

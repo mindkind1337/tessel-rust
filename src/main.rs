@@ -164,6 +164,7 @@ pub mod task_card_timing;
 mod task_dependencies;
 mod task_history;
 mod task_readiness;
+mod task_report;
 pub mod task_timeline;
 pub mod tasks_board_panel;
 mod team_board_api;

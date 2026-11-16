@@ -60,6 +60,8 @@ fn apply_inner(
             }
             let id = state.id()?;
             state.tasks.push(Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
@@ -177,6 +179,8 @@ mod tests {
         let mut state = workspace();
         state.tasks = (0..10_000)
             .map(|n| Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -198,6 +202,8 @@ mod tests {
         state.next_id = 20;
         state.tasks = vec![
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -208,6 +214,8 @@ mod tests {
                 column: 0,
             },
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
@@ -218,6 +226,8 @@ mod tests {
                 column: 3,
             },
             Task {
+                created_by: None,
+                report: None,
                 last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: Default::default(),
