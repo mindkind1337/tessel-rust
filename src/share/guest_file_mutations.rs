@@ -999,7 +999,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(requested.unwrap(), folder.canonicalize().unwrap());
-        for name in ["AGENTS.md", ".env", "vault.dat"] {
+        for name in ["AGENTS.md", ".env", "vault.dat", "linear.dat"] {
             std::fs::write(folder.join(name), "keep").unwrap();
             let result = apply_with_recycler(&grant, &req, &mut || Ok(()), &mut |_| {
                 panic!("private descendant reached recycling")

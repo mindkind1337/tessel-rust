@@ -683,6 +683,7 @@ pub fn private_path(path: &Path) -> bool {
                     | "cookies"
                     | "web data"
                     | "vault.dat"
+                    | "linear.dat"
                     | "workspace.json"
                     | "id_rsa"
                     | "id_ed25519"
@@ -3160,7 +3161,8 @@ mod tests {
 
     #[test]
     fn real_tls_guest_reads_project_but_not_private_paths() {
-        let (_dir, host) = fixture();
+        let (dir, host) = fixture();
+        std::fs::write(dir.path().join("Linear.DAT"), "synthetic protected data").unwrap();
         let listed = request(&host.invitation, "list", "").unwrap();
         let names: Vec<&str> = listed["entries"]
             .as_array()
@@ -3170,12 +3172,13 @@ mod tests {
             .collect();
         assert!(names.contains(&"hello.txt"));
         assert!(!names.contains(&".env"));
+        assert!(!names.contains(&"Linear.DAT"));
         let read = request(&host.invitation, "read", "hello.txt").unwrap();
         assert_eq!(
             B64.decode(read["data"].as_str().unwrap()).unwrap(),
             b"shared"
         );
-        for path in [".env", "../outside", "C:\\Windows\\win.ini"] {
+        for path in [".env", "Linear.DAT", "../outside", "C:\\Windows\\win.ini"] {
             assert!(request(&host.invitation, "read", path).is_err());
         }
         assert!(request(&host.invitation, "execute", "").is_err());

@@ -62,6 +62,9 @@ height. The patch is recorded in `vendor/vt100/TESSEL_PATCH.md`.
 
 ## Orca
 
+`src/linear_model.rs` follows Tessel's independent Linear service and its
+Orca-derived Linear integration design reference, retaining this attribution.
+
 The floating terminal UI in `src/floating_terminal_panel.rs` and its application
 integration adapt Tessel's `floatingTerminal.js`, `FloatingTerminal.vue` and
 `App.vue` behavior under the same MIT attribution below. The process controller

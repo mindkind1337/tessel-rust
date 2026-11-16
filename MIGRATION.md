@@ -1339,3 +1339,14 @@ GPUI and Compatibility cards show an initially collapsed Report/Failed header wi
 This ports the report disclosure surface, not Vue RichMessage rendering or context-aware opening. Markdown formatting, worktree/SSH provenance, guest source attribution and file navigation remain pending; no report-controlled URL or path is granted local authority.
 
 Validation: the real GPUI fixture verifies keyboard expand/collapse and unchanged saved task/session data. All eleven Compatibility board tests pass, including report expansion, inert path clicks and reset. Strict all-target/all-feature Clippy, formatting and diff checks pass.
+
+
+## Linear model recovery from Franklin (2026-11-15)
+
+The dormant Rust Linear model retains Franklin's GraphQL operations and domain types, with corrected floating-point state comparison. Keys use bounded validation, zeroizing loaded plaintext, Windows DPAPI and a locked temporary-file/atomic-replacement store outside workspace state. There is no plaintext fallback on other platforms; deletion and storage failures are surfaced. Response bodies are limited during reading rather than after an unbounded allocation. Authorization headers are sensitive, redirects are disabled, GraphQL error messages do not echo remote payloads, account identity must be present, identifiers are validated, and issue URLs are restricted to HTTPS linear.app without credentials or alternate ports. List results retain hasNextPage rather than silently implying the first hundred results are complete.
+
+This module is not connected to startup, dialogs, tools or Live Share. The owner-only UI, asynchronous worker/cancellation, complete reference parsing and account-switch generation checks still need integration. No real account, token or Linear API is used in validation. Franklin's original worktree is preserved.
+
+The protected Linear filename is also private to Live Share, case-insensitively, even if copied into a shared project. Real loopback TLS listing/read and directory-recycling boundary cases cover the exclusion.
+
+Validation: four synthetic model tests pass, including Windows DPAPI storage; the non-Windows refusal branch is code-reviewed but not executed on this Windows workstation. Two real Live Share boundary tests pass. Strict all-target/all-feature Clippy, formatting and diff checks pass. Halley reviewed the model structure; no live Linear API test or complete UI parity is claimed.

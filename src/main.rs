@@ -123,6 +123,9 @@ mod process_job;
 pub mod project_panel;
 pub mod prompt_before;
 mod regional_date;
+// Dormant model until the owner-only Linear dialog is wired.
+#[allow(dead_code)]
+mod linear_model;
 mod remote;
 pub mod remote_agent_tools;
 mod remote_panel;

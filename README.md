@@ -6,6 +6,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Live Share excludes the protected Linear credential file (`linear.dat`) from guest browsing and access, including a copy placed inside a shared project. The Linear dialog itself is still being ported.
+
 - Legacy `#n` agent addresses use saved project-scoped member numbers rather than internal pane identifiers. Existing numbers survive reordering and restart; newly opened panes receive a free number. `team_members` includes the number alongside the pane identifier, and `pane:<id>` remains an explicit address. Cross-project relay refuses ambiguous numeric aliases instead of choosing a recipient.
 
 - Stored task prerequisites remain blocking when a required card is deleted or reopened. Agent moves to Doing, Review or Done respect those prerequisites; the user can still override the column manually. Restoring a workspace remaps both live and missing prerequisite identifiers. `team_tasks` reports prerequisite and waiting identifiers. When a To do card's prerequisites become complete, its assigned teammate receives a mailbox notice once per observed transition. The saved readiness state prevents repeated notices on refresh or reload; mailbox delivery itself is not durable across a process crash. Editing dependency links in the UI remains unfinished.
