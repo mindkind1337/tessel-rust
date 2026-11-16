@@ -7441,6 +7441,7 @@ mod panel_snapshot_tests {
             "removed",
             "stopped",
             "moved",
+            "entropy",
         ] {
             let dir = tempfile::tempdir().unwrap();
             let data = dir.path().join("state");
@@ -7479,6 +7480,7 @@ mod panel_snapshot_tests {
                 .unwrap();
             // Never execute a real CLI, even if a context guard regresses.
             app.next_session = u64::MAX;
+            app.teams_hub.auth.force_entropy_error = scenario == "entropy";
             match scenario {
                 "closed" => app.sessions.clear(),
                 "removed" => app.state.projects.clear(),
@@ -7509,7 +7511,15 @@ mod panel_snapshot_tests {
                 },
                 "{scenario}"
             );
-            if scenario != "stopped" {
+            if scenario == "entropy" {
+                assert!(
+                    record
+                        .summary
+                        .as_deref()
+                        .unwrap()
+                        .contains("Secure random generation failed")
+                );
+            } else if scenario != "stopped" {
                 assert_eq!(
                     record.summary.as_deref(),
                     Some(if matches!(scenario, "exhausted" | "limit") {
@@ -7527,6 +7537,12 @@ mod panel_snapshot_tests {
                 assert!(session.loading.is_none() && session.terminal.is_none());
             }
             assert!(app.teams_hub.pending_spawns.is_empty());
+            assert!(
+                app.teams_hub
+                    .auth
+                    .sign_request(u64::MAX, 100, "unallocated", &serde_json::json!({}))
+                    .is_err()
+            );
         }
     }
 

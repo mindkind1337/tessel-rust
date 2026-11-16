@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::launch::Launch;
 use crate::settings_extra_model::{OrchestrationPreferences, WorkerMode};
@@ -245,26 +246,65 @@ pub struct SignedTeamRequest {
     pub signature_hex: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct TeamAuthRegistry {
     secrets: HashMap<u64, [u8; 32]>,
-    nonce_order: VecDeque<String>,
+    nonce_order: VecDeque<(String, u64)>,
     nonce_set: HashSet<String>,
+    #[cfg(test)]
+    pub(crate) force_entropy_error: bool,
+}
+
+impl std::fmt::Debug for TeamAuthRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeamAuthRegistry")
+            .field("pane_count", &self.secrets.len())
+            .field("nonce_count", &self.nonce_set.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for TeamAuthRegistry {
+    fn drop(&mut self) {
+        for secret in self.secrets.values_mut() {
+            secret.zeroize();
+        }
+    }
 }
 
 impl TeamAuthRegistry {
     /// Issues or retrieves the 32-byte hex `TESSEL_TEAM_SECRET` for `pane_id`.
-    pub fn ensure_pane_secret_hex(&mut self, pane_id: u64) -> String {
-        let secret = self.secrets.entry(pane_id).or_insert_with(|| {
-            let mut buf = [0u8; 32];
-            let _ = getrandom::fill(&mut buf);
-            buf
-        });
-        hex_encode(secret)
+    pub fn ensure_pane_secret_hex(&mut self, pane_id: u64) -> Result<String, String> {
+        #[cfg(test)]
+        if self.force_entropy_error {
+            return self.ensure_pane_secret_hex_with(pane_id, |_| {
+                Err("Secure random generation failed; no pane key was created.".into())
+            });
+        }
+        self.ensure_pane_secret_hex_with(pane_id, |bytes| {
+            getrandom::fill(bytes)
+                .map_err(|_| "Secure random generation failed; no pane key was created.".to_owned())
+        })
+    }
+
+    fn ensure_pane_secret_hex_with(
+        &mut self,
+        pane_id: u64,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+    ) -> Result<String, String> {
+        if let Some(secret) = self.secrets.get(&pane_id) {
+            return Ok(hex_encode(secret));
+        }
+        let mut secret = Zeroizing::new([0u8; 32]);
+        fill(&mut secret[..])?;
+        self.secrets.insert(pane_id, *secret);
+        Ok(hex_encode(&secret[..]))
     }
 
     pub fn revoke_pane(&mut self, pane_id: u64) {
-        self.secrets.remove(&pane_id);
+        if let Some(mut secret) = self.secrets.remove(&pane_id) {
+            secret.zeroize();
+        }
     }
 
     pub fn sign_request(
@@ -323,16 +363,40 @@ impl TeamAuthRegistry {
             return Err("HMAC signature mismatch".into());
         }
         let replay_key = format!("{}:{}", req.pane_id, req.nonce);
+        // Forget only signatures that the timestamp check would now reject.
+        // Arrival order need not match expiry order (bounded clock skew).
+        while self
+            .nonce_order
+            .front()
+            .is_some_and(|(_, expires)| *expires < now_ms)
+        {
+            if let Some((expired, _)) = self.nonce_order.pop_front() {
+                self.nonce_set.remove(&expired);
+            }
+        }
+        if self.nonce_order.len() >= MAX_NONCES {
+            self.nonce_order.retain(|(key, expires)| {
+                if *expires < now_ms {
+                    self.nonce_set.remove(key);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
         if self.nonce_set.contains(&replay_key) {
             return Err("Replay nonce rejected".into());
         }
-        if self.nonce_order.len() >= MAX_NONCES
-            && let Some(evicted) = self.nonce_order.pop_front()
-        {
-            self.nonce_set.remove(&evicted);
+        if self.nonce_order.len() >= MAX_NONCES {
+            return Err(
+                "Too many authenticated requests in the replay window; retry later.".into(),
+            );
         }
         self.nonce_set.insert(replay_key.clone());
-        self.nonce_order.push_back(replay_key);
+        self.nonce_order.push_back((
+            replay_key,
+            req.timestamp_ms.saturating_add(TEAM_AUTH_MAX_AGE_MS),
+        ));
         Ok(())
     }
 }
@@ -2189,9 +2253,88 @@ mod tests {
     }
 
     #[test]
+    fn pane_auth_entropy_failure_never_installs_a_partial_key_or_exposes_debug_secrets() {
+        let mut auth = TeamAuthRegistry::default();
+        assert!(
+            auth.ensure_pane_secret_hex_with(10, |bytes| {
+                bytes.fill(0xA5);
+                Err("Synthetic entropy failure".into())
+            })
+            .is_err()
+        );
+        assert!(auth.secrets.is_empty());
+        assert!(auth.sign_request(10, 100, "unknown", &json!({})).is_err());
+        let key = auth
+            .ensure_pane_secret_hex_with(10, |bytes| {
+                bytes.fill(0xA5);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            auth.ensure_pane_secret_hex_with(10, |_| panic!(
+                "existing key must not be regenerated"
+            ))
+            .unwrap(),
+            key
+        );
+        let debug = format!("{auth:?}");
+        assert!(debug.contains("pane_count: 1"));
+        assert!(!debug.contains(&key));
+        assert!(!debug.contains("165"));
+        let request = auth.sign_request(10, 100, "revoked", &json!({})).unwrap();
+        auth.revoke_pane(10);
+        assert!(auth.verify_request(&request, 100).is_err());
+    }
+
+    #[test]
+    fn pane_auth_capacity_never_evicts_live_replay_protection() {
+        let mut auth = TeamAuthRegistry::default();
+        auth.ensure_pane_secret_hex(10).unwrap();
+        let now = 1_700_000_000_000;
+        let live = auth
+            .sign_request(10, now + TEAM_AUTH_MAX_SKEW_MS, "live", &json!({}))
+            .unwrap();
+        auth.verify_request(&live, now).unwrap();
+        // Fill behind a later-expiring front entry: expiry and arrival order
+        // differ, so reclamation must also handle expired entries behind it.
+        for i in 1..MAX_NONCES {
+            let key = format!("10:fixture-{i}");
+            auth.nonce_set.insert(key.clone());
+            auth.nonce_order
+                .push_back((key, now + TEAM_AUTH_MAX_AGE_MS));
+        }
+        let fresh = auth.sign_request(10, now, "fresh", &json!({})).unwrap();
+        assert!(
+            auth.verify_request(&fresh, now)
+                .unwrap_err()
+                .contains("Too many")
+        );
+        assert_eq!(auth.nonce_order.len(), MAX_NONCES);
+        assert!(
+            auth.verify_request(&live, now + 1)
+                .unwrap_err()
+                .contains("Replay")
+        );
+        let later = now + TEAM_AUTH_MAX_AGE_MS + 1;
+        let fresh = auth.sign_request(10, later, "fresh", &json!({})).unwrap();
+        auth.verify_request(&fresh, later).unwrap();
+        assert_eq!(auth.nonce_order.len(), 2);
+        assert!(
+            auth.verify_request(&live, later)
+                .unwrap_err()
+                .contains("Replay")
+        );
+        assert!(
+            auth.verify_request(&live, later + TEAM_AUTH_MAX_SKEW_MS)
+                .unwrap_err()
+                .contains("expired")
+        );
+    }
+
+    #[test]
     fn hmac_sha256_auth_rejects_tamper_skew_expiry_and_replay() {
         let mut auth = TeamAuthRegistry::default();
-        let hex = auth.ensure_pane_secret_hex(10);
+        let hex = auth.ensure_pane_secret_hex(10).unwrap();
         assert_eq!(hex.len(), 64);
 
         let now = 1_700_000_000_000_u64;

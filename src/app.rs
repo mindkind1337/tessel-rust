@@ -12337,6 +12337,14 @@ impl Tessel {
                     Launch::Agent(spec.agent.clone())
                 }
             };
+            // Key creation must succeed before any child can start. The exact
+            // pane id remains reserved within this synchronous launch step.
+            let reserved_pane = self.next_session;
+            if let Err(error) = self.teams_hub.auth.ensure_pane_secret_hex(reserved_pane) {
+                self.teams_hub
+                    .fail_worker_start(&spec.worker_id, &error, now);
+                continue;
+            }
             let created = self.new_session_with_history(
                 Some(spec.project_id),
                 launch,
@@ -12350,7 +12358,6 @@ impl Tessel {
             {
                 let spawned_id = spawned.id;
                 spawned.pane_name = Some(spec.worker_name.clone());
-                let _ = self.teams_hub.auth.ensure_pane_secret_hex(spawned_id);
                 self.teams_hub.bind_spawned_worker_pane(
                     &mut self.state,
                     &spec.worker_id,
@@ -12359,6 +12366,7 @@ impl Tessel {
                 );
                 self.save();
             } else {
+                self.teams_hub.auth.revoke_pane(reserved_pane);
                 self.teams_hub.fail_worker_start(
                     &spec.worker_id,
                     "Worker pane could not be created.",
