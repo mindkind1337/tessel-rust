@@ -1,6 +1,6 @@
 //! Owner-local dialog controller. Neither its key draft nor worker is snapshot/Debug data.
 use super::{
-    service::{Action, Query, Reply},
+    service::{Action, IssuePermit, Query, Reply},
     worker::Worker,
     *,
 };
@@ -51,6 +51,7 @@ pub struct Panel {
     worker: Option<Worker>,
     path: Option<PathBuf>,
     pending: Vec<(Slot, u64)>,
+    issue_permit: Option<IssuePermit>,
     // Compatibility input only. Never copied to a public snapshot or serialized.
     pub(crate) key: Zeroizing<String>,
     pub(crate) rejected_key: bool,
@@ -72,6 +73,7 @@ impl Panel {
         self.rejected_key = false;
         self.path = path;
         self.pending.clear();
+        self.issue_permit = None;
         self.status();
     }
     fn send(&mut self, slot: Slot, action: Action) {
@@ -96,6 +98,7 @@ impl Panel {
         }
     }
     fn status(&mut self) {
+        self.issue_permit = None;
         self.pending.clear();
         self.view.loading_issues = false;
         self.view.loading_account = true;
@@ -113,6 +116,7 @@ impl Panel {
         }
         self.view.error.clear();
         self.view.busy = true;
+        self.issue_permit = None;
         self.pending.clear();
         self.view.loading_issues = false;
         self.send(Slot::Account, Action::Connect(key));
@@ -126,6 +130,7 @@ impl Panel {
         }
         match command {
             Command::Close => {
+                self.issue_permit = None;
                 self.view.open = false;
                 self.pending.clear();
                 self.key = Zeroizing::new(String::new());
@@ -139,6 +144,7 @@ impl Panel {
             }
             Command::ConfirmDisconnect(value) => self.view.confirm_disconnect = value,
             Command::Disconnect if self.view.confirm_disconnect => {
+                self.issue_permit = None;
                 self.view.busy = true;
                 self.view.error.clear();
                 self.pending.clear();
@@ -196,6 +202,7 @@ impl Panel {
         self.send(slot, Action::Read { query, refresh });
     }
     fn issues(&mut self, refresh: bool) {
+        self.issue_permit = None;
         self.view.selected = None;
         self.view.loading_issues = true;
         self.read(
@@ -225,6 +232,7 @@ impl Panel {
                 Ok(Some(event)) => event,
                 Ok(None) => break,
                 Err(error) => {
+                    self.issue_permit = None;
                     self.worker = None;
                     self.pending.clear();
                     self.view.busy = false;
@@ -251,7 +259,15 @@ impl Panel {
             // Apply public data WHILE the account/revision guard is held. Follow-up requests
             // must be enqueued only AFTER this callback returns (no authority re-entry).
             let mut reload = false;
-            if let Err(error) = event.apply(|_, result| reload = self.receive(slot, result)) {
+            if let Err(error) = event.apply_with_permit(|_, result, permit| {
+                if slot == Slot::Issues {
+                    self.issue_permit = permit;
+                }
+                reload = self.receive(slot, result);
+            }) {
+                if slot == Slot::Issues {
+                    self.issue_permit = None;
+                }
                 self.view.error = error;
             }
             if reload {
@@ -261,10 +277,43 @@ impl Panel {
         }
         changed
     }
+    /// Private captured selection for the eventual owner launch controller. No snapshot authority.
+    #[allow(dead_code)]
+    pub(crate) fn capture_selected(
+        &self,
+        epoch: u64,
+    ) -> Result<(crate::external_issue::Linear, IssuePermit), String> {
+        if !self.accepts(epoch) || self.view.loading_account || self.view.loading_issues {
+            return Err("Linear selection changed; select the issue again".into());
+        }
+        let selected = self.view.selected.as_ref().ok_or("Choose a Linear issue")?;
+        let issue = self
+            .view
+            .issues
+            .iter()
+            .find(|issue| *issue == selected)
+            .ok_or("Linear selection changed; select the issue again")?;
+        let permit = self
+            .issue_permit
+            .as_ref()
+            .ok_or("Refresh Linear issues first")?;
+        permit.commit(&issue.id, || {
+            Ok((
+                crate::external_issue::Linear::new(
+                    &issue.id,
+                    &issue.identifier,
+                    &issue.title,
+                    &issue.url,
+                )?,
+                permit.clone(),
+            ))
+        })
+    }
     fn receive(&mut self, slot: Slot, reply: Result<Reply, String>) -> bool {
         match (slot, reply) {
             (Slot::Capability, Ok(Reply::Capability(secure))) => self.view.secure = Some(secure),
             (Slot::Account, Ok(Reply::Status(identity))) => {
+                self.issue_permit = None;
                 self.view.identity = identity;
                 self.view.confirm_disconnect = false;
                 self.view.selection = IssueSelection::default();
@@ -366,6 +415,8 @@ mod tests {
                         }
                         Ok(Reply::Issues(page(vec![LinearIssue {
                             id: selection.filter.id_str().into(),
+                            identifier: "TEAM-1".into(),
+                            url: "https://linear.app/team/issue/TEAM-1".into(),
                             title: "Synthetic issue".into(),
                             ..Default::default()
                         }])))
@@ -415,13 +466,26 @@ mod tests {
         assert_eq!(panel.view.issues[0].id, "open");
         panel.command(epoch, Command::Select("open".into()));
         assert!(panel.view.selected.is_some());
+        let (metadata, permit) = panel.capture_selected(epoch).unwrap();
+        assert_eq!(metadata.issue_id(), "open");
+        assert!(permit.commit("open", || Ok(())).is_ok());
+        assert!(panel.capture_selected(epoch + 1).is_err());
+        panel.view.selected.as_mut().unwrap().title = "Changed snapshot".into();
+        assert!(panel.capture_selected(epoch).is_err());
+        panel.command(epoch, Command::Select("open".into()));
         panel.command(epoch, Command::Back);
         assert!(panel.view.selected.is_none());
+        assert!(panel.capture_selected(epoch).is_err());
+        panel.command(epoch, Command::Select("open".into()));
         panel.command(epoch, Command::ConfirmDisconnect(true));
         panel.command(epoch, Command::Disconnect);
+        assert!(panel.capture_selected(epoch).is_err());
         wait(&mut panel, |p| !p.view.busy);
         assert!(panel.view.identity.is_some());
         assert_eq!(panel.view.error, "synthetic removal refused");
+        // Failed disconnect still revoked the captured account generation.
+        assert!(permit.commit("open", || Ok(())).is_err());
+        assert!(panel.capture_selected(epoch).is_err());
         panel.command(epoch, Command::Close);
         panel.open(None);
         panel.command(epoch, Command::Close);
@@ -430,6 +494,17 @@ mod tests {
             !p.view.loading_account && !p.view.loading_issues && !p.view.issues.is_empty()
         });
         assert_eq!(panel.view.issues[0].id, "assigned");
+        let current = panel.view.epoch;
+        panel.command(current, Command::Select("assigned".into()));
+        assert!(panel.capture_selected(current).is_ok());
+        panel.command(current, Command::Refresh);
+        assert!(panel.capture_selected(current).is_err());
+        wait(&mut panel, |p| !p.view.loading_issues);
+        panel.command(current, Command::Select("assigned".into()));
+        assert!(panel.capture_selected(current).is_ok());
+        panel.command(current, Command::Close);
+        assert!(panel.issue_permit.is_none());
+        assert!(panel.capture_selected(current).is_err());
     }
     #[test]
     fn stale_modal_callbacks_and_busy_close_do_not_change_current_dialog() {
