@@ -38,6 +38,7 @@ pub(crate) struct Spec {
     pub isolated: bool,
     pub base_branch: Option<String>,
     pub copy_env: bool,
+    pub run_setup: bool,
 }
 
 pub(super) struct Pending {
@@ -155,6 +156,7 @@ impl Tessel {
                     label: spec.title,
                     base_branch: spec.base_branch,
                     copy_env: spec.copy_env,
+                    run_setup: spec.run_setup,
                     general_prefs: self.state.general_prefs.clone(),
                     git_prefs: self.state.git_prefs.clone(),
                     target: crate::worktree_state::WorktreeLaunchTarget::Task(id),
@@ -251,6 +253,10 @@ impl Tessel {
         };
         let mut pending = self.owner_task_launches.remove(index);
         let kept_path = result.as_ref().ok().map(|copy| copy.path.clone());
+        let setup_warning = result
+            .as_ref()
+            .ok()
+            .and_then(|copy| copy.setup_warning.clone());
         let result = result.and_then(|copy| {
             let mut receipt = pending.expected.clone();
             receipt
@@ -268,7 +274,12 @@ impl Tessel {
             self.bind_owner_task(&mut pending)
         });
         match result {
-            Ok(()) => self.owner_task_launches.push(pending),
+            Ok(()) => {
+                self.owner_task_launches.push(pending);
+                if let Some(warning) = setup_warning {
+                    self.error = warning;
+                }
+            }
             Err(error) => self.fail_owner_task(
                 &pending,
                 match kept_path {
@@ -845,6 +856,7 @@ mod tests {
             isolated: false,
             base_branch: None,
             copy_env: false,
+            run_setup: false,
         };
         (temp, app, spec)
     }
@@ -1020,6 +1032,8 @@ mod tests {
             git(&["config", "core.hooksPath", ""]);
             std::fs::create_dir(root.join("nested")).unwrap();
             std::fs::write(root.join("nested/version"), "base").unwrap();
+            std::fs::create_dir(root.join(".tessel")).unwrap();
+            std::fs::write(root.join(".tessel/setup.ps1"), "[IO.File]::WriteAllText((Join-Path (Get-Location) 'setup-ran'), 'synthetic'); exit 7").unwrap();
             std::fs::write(root.join(".gitignore"), ".env\n").unwrap();
             git(&["add", "."]);
             git(&["commit", "-m", "fixture base"]);
@@ -1031,6 +1045,7 @@ mod tests {
             app.state.projects[0].path = spec.source.clone();
             spec.isolated = true;
             spec.base_branch = Some("task-base".into());
+            spec.run_setup = cfg!(windows) && !moved;
             let id = app.start_owner_native_task(spec).unwrap();
             assert_eq!(app.state.tasks[0].column, 1);
             assert!(app.sessions.is_empty());
@@ -1059,6 +1074,13 @@ mod tests {
                 "base"
             );
             assert!(!receipt.path.join(".env").exists());
+            assert_eq!(
+                receipt.path.join("setup-ran").exists(),
+                cfg!(windows) && !moved
+            );
+            if cfg!(windows) && !moved {
+                assert!(app.error.contains("setup failed"));
+            }
             if moved {
                 assert!(app.sessions.is_empty());
                 assert!(app.owner_task_launches.is_empty());

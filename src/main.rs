@@ -344,3 +344,5 @@ fn run_compat_egui_app(args: &[String]) -> Result<(), Box<dyn std::error::Error>
     )?;
     Ok(())
 }
+
+mod worktree_setup;

@@ -79,6 +79,7 @@ impl Tessel {
                 }
             }
             Command::CopyEnv(value) => self.new_task.copy_env = value,
+            Command::RunSetup(value) => self.new_task.run_setup = value,
             Command::ReviewerMenu(open) => self.new_task.reviewer_menu = open,
             Command::Reviewer(id) => {
                 if id.is_none()
@@ -131,6 +132,7 @@ impl Tessel {
                     base_branch: (!form.branch.trim().is_empty())
                         .then(|| form.branch.trim().to_owned()),
                     copy_env: form.copy_env,
+                    run_setup: form.use_copy() && form.run_setup,
                 };
                 match self.start_owner_native_task(spec) {
                     Ok(_) => {
@@ -178,6 +180,8 @@ mod tests {
             epoch,
             Command::Edit(Field::Brief, " Exact fixture instructions ".into()),
         );
+        assert!(!app.new_task.run_setup);
+        app.new_task_command(epoch, Command::RunSetup(true));
         app.new_task_command(epoch, Command::Isolated(false));
         app.new_task_command(epoch, Command::Start);
         assert!(!app.new_task.open);
@@ -189,6 +193,7 @@ mod tests {
             "Exact fixture instructions"
         );
         assert_eq!(app.owner_task_launches.len(), 1);
+        assert!(!app.worktree_state.is_busy());
         assert!(app.chats.is_empty()); // No real provider is launched by this fixture.
         app.new_task_command(epoch, Command::Start);
         assert_eq!(app.state.tasks.len(), 1);

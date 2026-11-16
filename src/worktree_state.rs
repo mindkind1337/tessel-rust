@@ -33,6 +33,7 @@ pub struct CreateRequest {
     pub label: String,
     pub base_branch: Option<String>,
     pub copy_env: bool,
+    pub run_setup: bool,
     pub general_prefs: GeneralPreferences,
     pub git_prefs: GitPreferences,
     pub target: WorktreeLaunchTarget,
@@ -156,6 +157,7 @@ impl WorktreeState {
             label,
             base_branch,
             copy_env,
+            run_setup,
             general_prefs,
             git_prefs,
             target,
@@ -172,7 +174,17 @@ impl WorktreeState {
                 &git_prefs,
                 None,
             )
-            .map(|created| {
+            .map(|mut created| {
+                if run_setup
+                    && let crate::worktree_setup::Outcome::Failed { ran, error } =
+                        crate::worktree_setup::run(&created.path, &created.base_commit)
+                {
+                    created.setup_warning = Some(format!(
+                        "Worktree setup {}: {error} Prepared copy kept at {}.",
+                        if ran { "failed" } else { "was not run" },
+                        created.path.display()
+                    ));
+                }
                 let refreshed = worktree::inspect_project(&cwd).ok();
                 (created, refreshed)
             });
@@ -350,6 +362,7 @@ mod preparation_tests {
                 label: format!("copy-{copy_env}"),
                 base_branch: Some("task-base".into()),
                 copy_env,
+                run_setup: false,
                 general_prefs: GeneralPreferences::default(),
                 git_prefs: GitPreferences::default(),
                 target: WorktreeLaunchTarget::ShellNewPane,

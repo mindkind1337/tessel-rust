@@ -79,6 +79,8 @@ pub struct CreatedWorktree {
     pub path: PathBuf,
     pub branch: String,
     pub copied_env_files: usize,
+    pub base_commit: String,
+    pub setup_warning: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -756,6 +758,8 @@ pub fn create_worktree(
         path: normalize_git_path(&wt_str),
         branch,
         copied_env_files,
+        base_commit,
+        setup_warning: None,
     })
 }
 

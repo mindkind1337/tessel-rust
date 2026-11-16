@@ -23,6 +23,7 @@ pub(crate) enum Command {
     Provider(String),
     Isolated(bool),
     CopyEnv(bool),
+    RunSetup(bool),
     Reviewer(Option<u64>),
     ReviewerMenu(bool),
     Cancel,
@@ -47,6 +48,7 @@ pub(crate) struct Panel {
     pub provider: String,
     pub isolated: bool,
     pub copy_env: bool,
+    pub run_setup: bool,
     pub reviewer: Option<u64>,
     pub reviewer_menu: bool,
     pub choices: Vec<Choice>,
@@ -169,8 +171,7 @@ pub(crate) fn show(
                 let mut branch = panel.branch.clone();
                 if ui.add(TextEdit::singleline(&mut branch).hint_text(t("la branche courante", "the current branch"))).changed() { panel.edit(Field::Branch, branch); }
                 ui.checkbox(&mut panel.copy_env, t("Copier les fichiers .env du projet", "Copy the project's .env files"));
-                let mut unavailable = false;
-                ui.add_enabled(false, egui::Checkbox::new(&mut unavailable, t("Exécuter .tessel/setup.ps1 — indisponible pour le moment", "Run .tessel/setup.ps1 — not available yet")));
+                ui.checkbox(&mut panel.run_setup, t("Y lancer d’abord .tessel/setup.ps1 (si le projet en a un)", "Run .tessel/setup.ps1 in it first (if the project has one)"));
             }
             ui.radio_value(&mut panel.isolated, false, t("Directement dans le dossier du projet", "Directly in the project folder"));
             if !panel.reviewers.is_empty() {

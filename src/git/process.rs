@@ -15,7 +15,7 @@ use crate::process_job;
 pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
     run_bytes_with_timeout(root, args, input, Duration::from_secs(20))
 }
-pub(super) fn run_bytes_with_timeout(
+pub(crate) fn run_bytes_with_timeout(
     root: &Path,
     args: &[&str],
     input: Option<&[u8]>,
@@ -251,7 +251,7 @@ fn classify_repository(
 }
 
 /// Owns only the process group created for this Git invocation.
-struct GitProcessCleanup {
+pub(crate) struct GitProcessCleanup {
     #[cfg(windows)]
     _job: process_job::ProcessJob,
     #[cfg(unix)]
@@ -260,7 +260,7 @@ struct GitProcessCleanup {
     armed: bool,
 }
 impl GitProcessCleanup {
-    fn disarm(&mut self) -> Result<()> {
+    pub(crate) fn disarm(&mut self) -> Result<()> {
         #[cfg(windows)]
         self._job.disarm()?;
         #[cfg(unix)]
@@ -269,7 +269,7 @@ impl GitProcessCleanup {
         }
         Ok(())
     }
-    fn attach(child: &std::process::Child) -> Result<Self> {
+    pub(crate) fn attach(child: &std::process::Child) -> Result<Self> {
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;

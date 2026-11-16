@@ -479,10 +479,23 @@ pub(super) fn render(
                 tokens,
                 cx,
             ))
-            .child(div().text_color(tokens.text_dim).child(t(
-                "☐ Exécuter .tessel/setup.ps1 — indisponible pour le moment",
-                "☐ Run .tessel/setup.ps1 — not available yet",
-            )));
+            .child(button(
+                "new-task-setup",
+                format!(
+                    "{} {}",
+                    if panel.run_setup { "☑" } else { "☐" },
+                    t(
+                        "Y lancer d’abord .tessel/setup.ps1 (si le projet en a un)",
+                        "Run .tessel/setup.ps1 in it first (if the project has one)"
+                    )
+                ),
+                true,
+                panel.run_setup,
+                Command::RunSetup(!panel.run_setup),
+                view,
+                tokens,
+                cx,
+            ));
     }
     body = body.child(button(
         "new-task-direct",
@@ -722,6 +735,26 @@ mod tests {
         view.update(cx, |root, _, _| {
             assert!(root.app.new_task.open);
             assert!(!root.app.new_task.reviewer_menu);
+        })
+        .unwrap();
+        view.update(cx, |root, w, cx| {
+            assert!(!root.app.new_task.run_setup);
+            root.new_task_view
+                .focus
+                .get("new-task-setup")
+                .unwrap()
+                .focus(w, cx);
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            assert!(root.app.new_task.run_setup);
         })
         .unwrap();
         view.update(cx, |root, w, cx| {

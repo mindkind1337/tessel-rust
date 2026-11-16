@@ -346,3 +346,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - `src/native_review.rs` and `src/app/task_review.rs` adapt Tessel `src/shared/tesselDelivery.js#reviewRequest` and `App.vue#agentReportedDone` under the existing Orca/Tessel MIT attribution. The conversation identity, bounded queue and persistence guards are native implementations.
 
 - The parent-session variable filter in `src/agent_env.rs` follows Tessel `src/main/cleanEnv.js` under the existing Orca/Tessel MIT attribution. Rust broker capability names are additionally excluded.
+
+- `src/worktree_setup.rs` and the opt-in worktree preparation flow follow Tessel `src/main/worktreeCreate.js#setupWorktree` and `NewTaskDialog.vue` under the existing Orca/Tessel MIT attribution. The bounded native process implementation reuses the existing Rust process-tree guard.
