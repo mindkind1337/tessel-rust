@@ -302,16 +302,7 @@ impl Panel {
                 Ok(Some(event)) => event,
                 Ok(None) => break,
                 Err(error) => {
-                    if self.launch.as_ref().is_some_and(|l| l.accepted) {
-                        self.finish_update(false);
-                    }
-                    self.issue_permit = None;
-                    self.worker = None;
-                    self.pending.clear();
-                    self.view.busy = false;
-                    self.view.loading_account = false;
-                    self.view.loading_issues = false;
-                    self.view.error = error;
+                    self.worker_failed(error);
                     return true;
                 }
             };
@@ -356,6 +347,24 @@ impl Panel {
             }
         }
         changed
+    }
+    fn worker_failed(&mut self, error: String) {
+        if self.launch.as_ref().is_some_and(|l| l.accepted) {
+            self.finish_update(false);
+        } else {
+            // A pending task still owns its old permit, but dropping the worker
+            // revokes that authority. Its later callback must not touch a new dialog.
+            self.launch = None;
+        }
+        self.requested_start = None;
+        self.issue_permit = None;
+        self.worker = None;
+        self.pending.clear();
+        self.view.busy = false;
+        self.view.loading_account = false;
+        self.view.loading_issues = false;
+        self.view.loading_start_states = false;
+        self.view.error = error;
     }
     pub(crate) fn begin_launch(
         &mut self,
@@ -750,6 +759,42 @@ pub(crate) mod tests {
             assert!(panel.begin_launch(epoch).is_err());
         }
     }
+    #[test]
+    fn failed_worker_revokes_pending_launch_and_old_callbacks_cannot_touch_reopened_dialog() {
+        let (mut panel, _) = launch_fixture(false);
+        let epoch = panel.view.epoch;
+        let metadata = panel.begin_launch(epoch).unwrap();
+        let key = metadata.launch_key().unwrap();
+        panel.worker_failed("Synthetic worker failure".into());
+        assert!(metadata.commit(|| Ok(())).is_err());
+        assert!(!panel.view.busy);
+        panel.command(epoch, Command::Close);
+        let (mut replacement, _) = launch_fixture(false);
+        panel.worker = replacement.worker.take();
+        panel.open(None);
+        wait(&mut panel, |p| {
+            !p.view.loading_account && !p.view.loading_issues
+        });
+        assert!(panel.view.error.is_empty());
+        assert!(!panel.launch_finished(key, Err("Old launch failed".into())));
+        assert!(!panel.launch_finished(key, Ok(())));
+        assert!(panel.view.open && panel.view.error.is_empty());
+    }
+
+    #[test]
+    fn worker_failure_after_submission_warns_without_reopening_a_startable_task() {
+        let (mut panel, _) = launch_fixture(false);
+        let epoch = panel.view.epoch;
+        panel.command(epoch, Command::NextState(Some("team-working".into())));
+        let key = panel.begin_launch(epoch).unwrap().launch_key().unwrap();
+        assert!(panel.launch_finished(key, Ok(())));
+        panel.worker_failed("Synthetic worker failure".into());
+        assert!(!panel.view.open);
+        assert!(panel.take_warning().is_some());
+        assert!(!panel.launch_finished(key, Ok(())));
+        assert!(panel.begin_launch(epoch).is_err());
+    }
+
     #[test]
     fn launch_failure_keeps_selection_and_default_success_does_not_mutate_linear() {
         use std::sync::atomic::Ordering;
