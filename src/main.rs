@@ -163,6 +163,7 @@ pub mod task_card_timing;
 mod task_history;
 pub mod task_timeline;
 pub mod tasks_board_panel;
+mod team_board_api;
 mod team_mcp_auth;
 pub mod team_mcp_broker;
 pub mod team_mcp_helper;

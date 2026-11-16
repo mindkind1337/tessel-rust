@@ -11,6 +11,22 @@ pub fn execute_persisted_for_pane(
     name: &str,
     args: &Value,
 ) -> Result<(Value, bool)> {
+    if name == "team_tasks" || name == "team_task_move" {
+        let (legacy, normalized) = crate::team_board_api::normalize(name, args)?;
+        let (value, changed) = execute_persisted_for_pane(
+            state,
+            store,
+            teams_hub,
+            pane_id,
+            project,
+            legacy,
+            &normalized,
+        )?;
+        return Ok((
+            crate::team_board_api::output(name, value, state, project),
+            changed,
+        ));
+    }
     if !matches!(
         name,
         "tessel_task_add" | "tessel_task_move" | "tessel_task_assign" | "team_bootstrap"
@@ -41,6 +57,10 @@ pub fn definitions() -> Value {
         {"name":"tessel_task_assign","description":"Assign a To do or Doing task to an agent pane in this project; null clears assignment.","inputSchema":{"type":"object","properties":{"id":{"type":"integer"},"pane":{"type":["integer","null"]}},"required":["id","pane"],"additionalProperties":false}},
         {"name":"tessel_task_move","description":"Move a task in this project. Columns: 0 todo, 1 doing, 2 review, 3 done.","inputSchema":{"type":"object","properties":{"id":{"type":"integer"},"column":{"type":"integer","minimum":0,"maximum":3}},"required":["id","column"],"additionalProperties":false}}
     ]);
+    definitions
+        .as_array_mut()
+        .unwrap()
+        .extend(crate::team_board_api::definitions());
     #[cfg(windows)]
     {
         definitions
@@ -250,6 +270,117 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn canonical_board_tools_roundtrip_and_keep_persistence_and_project_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = crate::workspace::Store::open(dir.path()).unwrap();
+        let project = state.add_project(dir.path()).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let other = state.add_project(elsewhere.path()).unwrap();
+        let mut hub = crate::teams_relay::TeamsRelayHub::default();
+        let (added, _) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "tessel_task_add",
+            &json!({"title":"Synthetic board card"}),
+        )
+        .unwrap();
+        let id = added["id"].as_u64().unwrap().to_string();
+        let (list, changed) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_tasks",
+            &json!({"me":"Someone else"}),
+        )
+        .unwrap();
+        assert!(!changed);
+        assert_eq!(list["tasks"][0]["id"], id);
+        assert_eq!(list["tasks"][0]["column"], "todo");
+        assert_eq!(list["tasks"][0]["assignee"], "#8");
+        let (moved, changed) = execute_persisted_for_pane(
+            &mut state,
+            Some(&store),
+            &mut hub,
+            8,
+            project,
+            "team_task_move",
+            &json!({"id":id,"column":"doing"}),
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(moved, json!({"id":id,"column":"doing"}));
+        let reopened: Workspace =
+            serde_json::from_slice(&std::fs::read(dir.path().join("workspace.json")).unwrap())
+                .unwrap();
+        assert_eq!(reopened.tasks[0].column, 1);
+        assert_eq!(reopened.tasks[0].timeline.pane_id, Some(8));
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                Some(&store),
+                &mut hub,
+                8,
+                other,
+                "team_task_move",
+                &json!({"id":id,"column":"done","me":"Owner"})
+            )
+            .is_err()
+        );
+        let before = state.clone();
+        assert!(
+            execute_persisted_for_pane(
+                &mut state,
+                None,
+                &mut hub,
+                8,
+                project,
+                "team_task_move",
+                &json!({"id":id,"column":"done"})
+            )
+            .is_err()
+        );
+        assert_eq!(state.tasks, before.tasks);
+        assert_eq!(state.task_history, before.task_history);
+    }
+
+    #[test]
+    fn canonical_board_tools_reject_malformed_arguments_and_authority_overrides() {
+        for args in [
+            json!({"id":2,"column":"done"}),
+            json!({"id":"02","column":"done"}),
+            json!({"id":"2","column":3}),
+            json!({"id":"2","column":"later"}),
+            json!({"id":"2","column":"done","project":1}),
+            json!({"id":"2","column":"done","me":4}),
+            json!({"id":"18446744073709551616","column":"done"}),
+            json!({"id":"0","column":"done"}),
+        ] {
+            assert!(crate::team_board_api::normalize("team_task_move", &args).is_err());
+        }
+        assert!(crate::team_board_api::normalize("team_tasks", &json!({"pane":9})).is_err());
+        let defs = definitions();
+        for name in [
+            "team_tasks",
+            "team_task_move",
+            "tessel_tasks",
+            "tessel_task_move",
+        ] {
+            assert_eq!(
+                defs.as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|tool| tool["name"] == name)
+                    .count(),
+                1
+            );
+        }
+    }
     #[test]
     fn task_assignment_is_project_scoped_and_agent_write_failure_does_not_ack_or_publish() {
         let dir = tempfile::tempdir().unwrap();

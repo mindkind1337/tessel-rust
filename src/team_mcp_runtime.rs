@@ -45,6 +45,8 @@ fn allowed(name: &str) -> bool {
             | "tessel_task_add"
             | "tessel_task_assign"
             | "tessel_task_move"
+            | "team_tasks"
+            | "team_task_move"
             | "team_create"
             | "team_bootstrap"
             | "team_members"
@@ -354,6 +356,7 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"team_inbox") && names.contains(&"tessel_task_add"));
+        assert!(names.contains(&"team_tasks") && names.contains(&"team_task_move"));
         assert!(!names.contains(&"tessel_browser"));
         assert!(names.iter().all(|name| allowed(name)));
         let result = fixture.exchange(&launch, add()).unwrap();
@@ -364,6 +367,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loaded.tasks, fixture.state.tasks);
+        let listed = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_tasks".into(),
+                    arguments: json!({}),
+                },
+            )
+            .unwrap();
+        let id = listed["tasks"][0]["id"].as_str().unwrap();
+        let moved = fixture
+            .exchange(
+                &launch,
+                Operation::Call {
+                    name: "team_task_move".into(),
+                    arguments: json!({"id":id,"column":"review"}),
+                },
+            )
+            .unwrap();
+        assert_eq!(moved["column"], "review");
+        let reloaded: Workspace = serde_json::from_slice(
+            &std::fs::read(fixture._dir.path().join("workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reloaded.tasks[0].column, 2);
         assert!(matches!(
             fixture.exchange(
                 &launch,
