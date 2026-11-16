@@ -14,6 +14,7 @@ mod editor_tool_inputs;
 pub mod editor_view;
 mod explorer_input;
 pub mod icons;
+mod linear_view;
 mod modal_query_input;
 pub(crate) mod modals_view;
 mod panel_query_inputs;
@@ -115,6 +116,7 @@ pub(crate) struct TesselGpuiRoot {
     task_card_input: task_card_input::Inputs,
     task_agent_inputs: task_agent_input::Inputs,
     task_decision_inputs: task_decision_input::Inputs,
+    linear_view: linear_view::View,
     _poller_task: Task<()>,
 }
 
@@ -143,6 +145,12 @@ impl TesselGpuiRoot {
     }
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
+        private_key_input::register(cx);
+        cx.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            linear_view::SubmitKey,
+            Some("TesselPrivateKey"),
+        )]);
         cx.bind_keys([
             gpui::KeyBinding::new(
                 "escape",
@@ -297,6 +305,7 @@ impl TesselGpuiRoot {
             task_card_input: Default::default(),
             task_agent_inputs: Default::default(),
             task_decision_inputs: Default::default(),
+            linear_view: Default::default(),
             _poller_task: poller_task,
         }
     }
@@ -447,6 +456,24 @@ impl TesselGpuiRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app.linear.view.open {
+            if event.keystroke.key == "escape" {
+                self.app.linear.command(
+                    self.app.linear.view.epoch,
+                    crate::linear_model::panel::Command::Close,
+                );
+                if !self.app.linear.view.open {
+                    self.linear_view = Default::default();
+                    self.focus_handle.focus(window, cx);
+                }
+                cx.notify();
+            } else if event.keystroke.key == "tab" {
+                self.linear_view
+                    .cycle(event.keystroke.modifiers.shift, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         let ks = &event.keystroke;
         let ctrl = ks.modifiers.control || ks.modifiers.platform;
         let shift = ks.modifiers.shift;
@@ -1414,6 +1441,7 @@ impl Render for TesselGpuiRoot {
         for retired in self.presented_images.replace(media) {
             cx.drop_image(retired, Some(window));
         }
+        self.linear_view.sync(&self.app.linear.view, window, cx);
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
 
@@ -1430,6 +1458,7 @@ impl Render for TesselGpuiRoot {
             .bg(tokens.backdrop)
             .text_color(tokens.text)
             .font_family(ui_font_family())
+            .on_action(cx.listener(linear_view::submit))
             .on_key_down(cx.listener(Self::handle_key_down))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .capture_any_mouse_up(cx.listener(|root, _: &MouseUpEvent, _, cx| {
@@ -1493,6 +1522,16 @@ impl Render for TesselGpuiRoot {
                     &snapshot,
                     &self.modal_query_input,
                     focus_input,
+                    &tokens,
+                    cx,
+                ),
+                |el, modal| el.child(modal),
+            )
+            .when_some(
+                linear_view::render(
+                    &self.app.linear.view,
+                    &mut self.linear_view,
+                    snapshot.french,
                     &tokens,
                     cx,
                 ),

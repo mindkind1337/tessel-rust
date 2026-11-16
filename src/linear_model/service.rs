@@ -25,6 +25,7 @@ pub(super) trait Store: Send + Sync {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reply {
+    Capability(bool),
     Status(Option<LinearIdentity>),
     Identity(LinearIdentity),
     Teams(Page<LinearTeam>),
@@ -75,6 +76,7 @@ impl Transport for Http {
     }
 }
 pub enum Action {
+    Capability,
     Status,
     Connect(Zeroizing<String>),
     Disconnect,
@@ -149,15 +151,23 @@ pub struct Service {
 }
 impl Service {
     pub fn new(owner: Scope) -> Result<Self, String> {
-        Ok(Self::with_backends(
+        Ok(Self::new_at(
             owner,
-            Arc::new(super::record::DiskStore {
-                path: linear_storage_path().ok_or("No private data directory")?,
-            }),
-            Arc::new(Http),
+            linear_storage_path().ok_or("No private data directory")?,
         ))
     }
-    fn with_backends(owner: Scope, store: Arc<dyn Store>, transport: Arc<dyn Transport>) -> Self {
+    pub fn new_at(owner: Scope, path: PathBuf) -> Self {
+        Self::with_backends(
+            owner,
+            Arc::new(super::record::DiskStore { path }),
+            Arc::new(Http),
+        )
+    }
+    pub(super) fn with_backends(
+        owner: Scope,
+        store: Arc<dyn Store>,
+        transport: Arc<dyn Transport>,
+    ) -> Self {
         Self {
             owner,
             state: Arc::new(Mutex::new(State::default())),
@@ -216,6 +226,7 @@ impl Service {
         let mut delivery_scope = scope.clone();
         let mut revision = None;
         let result = match action {
+            Action::Capability => Ok(Reply::Capability(self.store.encryption().is_ok())),
             Action::Status => self
                 .account(&scope)
                 .map(|account| Reply::Status(account.map(|a| a.identity.clone()))),

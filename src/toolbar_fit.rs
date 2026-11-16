@@ -81,6 +81,7 @@ impl ToolbarRoom {
 pub enum MoreMenuAction {
     LiveShare,
     GitHub,
+    Linear,
     Broadcast,
     FloatingTerminal,
     SplitRight,
@@ -169,6 +170,12 @@ pub fn more_menu_entries(state: MoreMenuState) -> Vec<MoreMenuEntry> {
         MoreMenuEntry::item(
             MoreMenuAction::GitHub,
             pick("GitHub issues and PRs", "Tickets et PR GitHub"),
+            None,
+            false,
+        ),
+        MoreMenuEntry::item(
+            MoreMenuAction::Linear,
+            pick("Linear issues", "Issues Linear"),
             None,
             false,
         ),

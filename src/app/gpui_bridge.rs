@@ -1085,6 +1085,7 @@ pub(crate) enum GpuiAction {
     ToolbarMore(crate::toolbar_fit::MoreMenuAction),
     Share(crate::share_panel::ShareGpuiAction),
     OpenGitHubDialog,
+    OpenLinearDialog,
     DialogsToolbar(crate::dialogs_toolbar_ui::DialogsToolbarAction),
     SetAddProjectTab(crate::dialogs_toolbar_ui::AddProjectTab),
     ToggleNestedRepo(PathBuf),
@@ -1439,6 +1440,7 @@ impl Tessel {
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn(telemetry_repaint),
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            linear: Default::default(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
             team_mcp: Default::default(),
@@ -1674,6 +1676,7 @@ impl Tessel {
         match action {
             M::LiveShare => self.overlay = Some(Overlay::Share),
             M::GitHub => self.open_github_modal(self.state.active_project),
+            M::Linear => self.open_linear_modal(),
             M::Broadcast => {
                 self.state.broadcast = !self.state.broadcast;
                 self.save();
@@ -1917,7 +1920,8 @@ impl Tessel {
         self.side_panels_ui.sessions_modal_open || self.gpui_has_aux_modal_except_sessions()
     }
     fn gpui_has_aux_modal_except_sessions(&self) -> bool {
-        self.gpui_extra.launch_menu_open
+        self.linear.view.open
+            || self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
             || self.side_panels_ui.notes_modal_open
@@ -6478,6 +6482,13 @@ impl Tessel {
                 self.open_settings_by_page_id(&page_id);
             }
             GpuiAction::CloseOverlays => {
+                if self.linear.view.open {
+                    self.linear.command(
+                        self.linear.view.epoch,
+                        crate::linear_model::panel::Command::Close,
+                    );
+                    return;
+                }
                 if let Some(scope) = self.gpui_extra.task_board.scope {
                     self.gpui_extra.task_board.apply(
                         scope,
@@ -6551,6 +6562,7 @@ impl Tessel {
                 let all_projects = self.live_share_project_list();
                 self.share.apply_gpui_share_action(sa, &all_projects);
             }
+            GpuiAction::OpenLinearDialog => self.open_linear_modal(),
             GpuiAction::OpenGitHubDialog => {
                 self.open_github_modal(self.state.active_project);
             }

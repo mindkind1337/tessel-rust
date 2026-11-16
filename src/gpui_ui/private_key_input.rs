@@ -27,6 +27,12 @@ impl Input {
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         self.state.read(cx).focus_handle(cx).focus(window, cx);
     }
+    pub fn entity(&self) -> Entity<EditableTextState> {
+        self.state.clone()
+    }
+    pub fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        self.state.read(cx).focus_handle(cx)
+    }
     pub fn rejected(&self) -> bool {
         self.private.rejected()
     }

@@ -34,6 +34,11 @@ pub struct Worker {
     _thread: std::thread::JoinHandle<()>,
 }
 impl Worker {
+    pub fn new_at(path: std::path::PathBuf) -> Result<Self, String> {
+        let owner = Generation::default();
+        let service = Service::new_at(owner.scope(), path);
+        Self::with_service(owner, service)
+    }
     pub fn new() -> Result<Self, String> {
         let owner = Generation::default();
         let service = Service::new(owner.scope())?;

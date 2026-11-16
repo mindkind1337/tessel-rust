@@ -62,7 +62,8 @@ height. The patch is recorded in `vendor/vt100/TESSEL_PATCH.md`.
 
 ## Orca
 
-`src/linear_model.rs` and its `parse`, `record`, and `service` modules follow Tessel's independent Linear service and its
+`src/linear_model.rs` and its `parse`, `record`, `service`, and `panel` modules, together with
+`src/linear_dialog.rs` and `src/gpui_ui/linear_view.rs`, follow Tessel's independent Linear service and its
 Orca-derived Linear integration design reference, retaining this attribution.
 
 The floating terminal UI in `src/floating_terminal_panel.rs` and its application

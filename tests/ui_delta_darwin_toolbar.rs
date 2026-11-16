@@ -71,6 +71,7 @@ fn more_menu_holds_the_hidden_actions_with_shortcuts_and_checks() {
         [
             MoreMenuAction::LiveShare,
             MoreMenuAction::GitHub,
+            MoreMenuAction::Linear,
             MoreMenuAction::Broadcast,
             MoreMenuAction::FloatingTerminal,
             MoreMenuAction::SplitRight,

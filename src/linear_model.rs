@@ -9,6 +9,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 mod body;
+pub mod panel;
 mod parse;
 mod record;
 pub mod request;

@@ -719,6 +719,7 @@ pub struct Tessel {
     status_telemetry: crate::status_metrics::StatusTelemetry,
     keep_awake: crate::status_metrics::KeepAwakeController,
     side_panels_ui: crate::side_panels_ui::SidePanelsUiState,
+    pub(crate) linear: crate::linear_model::panel::Panel,
     dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState,
     teams_hub: crate::teams_relay::TeamsRelayHub,
     team_mcp: crate::team_mcp_runtime::Runtime,
@@ -947,6 +948,7 @@ impl Tessel {
             }),
             keep_awake: Default::default(),
             side_panels_ui: crate::side_panels_ui::SidePanelsUiState::new(),
+            linear: Default::default(),
             dialogs_toolbar_ui: crate::dialogs_toolbar_ui::DialogsToolbarUiState::new(),
             teams_hub: Default::default(),
             team_mcp: Default::default(),
@@ -2305,6 +2307,7 @@ impl Tessel {
         // Both renderers consume worker requests here. A pane or failure must
         // also request a GPUI refresh even when no process output has arrived.
         native_changed |= self.poll_teams_and_relay();
+        native_changed |= self.linear.poll();
         native_changed
     }
     fn new_session(&mut self, launch: Launch) {
@@ -3511,6 +3514,11 @@ impl Tessel {
             ));
         }
         commands.push(PaletteCommand::new(
+            "linear",
+            task_group,
+            tr("Linear issues…"),
+        ));
+        commands.push(PaletteCommand::new(
             "project:add",
             tr("Projects"),
             tr("Add workspace (Clone / Init / SSH)…"),
@@ -3691,6 +3699,7 @@ impl Tessel {
             "project:new" => self.open_add_project_modal(),
             "project:add" => self.open_add_project_modal(),
             "github" => self.open_github_modal(self.state.active_project),
+            "linear" => self.open_linear_modal(),
             "notifications:clear" => self.notifications.clear(),
             "worktree:new" => {
                 if let Some(pid) = self.state.active_project {
@@ -4226,6 +4235,7 @@ impl Tessel {
         let panel_disabled = self.native_modal_open()
             || self.side_panels_ui.any_modal_open()
             || self.dialogs_toolbar_ui.any_modal_open()
+            || self.linear.view.open
             || self.teams_ui.manager_project.is_some()
             || !self.teams_hub.approval_prompts.is_empty()
             || self.share.has_pending_ask()
@@ -11896,6 +11906,18 @@ impl Tessel {
         self.dialogs_toolbar_ui.add_error.clear();
     }
 
+    pub(crate) fn open_linear_modal(&mut self) {
+        self.command_palette.open = false;
+        self.toolbar_menu_open = false;
+        self.gpui_extra.toolbar_more_open = false;
+        self.gpui_extra.launch_menu_open = false;
+        let path = self
+            .store
+            .as_ref()
+            .map(|store| store.directory().join("linear.dat"));
+        self.linear.open(path);
+    }
+
     fn open_github_modal(&mut self, project_id: Option<u64>) {
         if let Some(pid) = project_id
             && self.state.projects.iter().any(|p| p.id == pid)
@@ -13388,6 +13410,7 @@ impl eframe::App for Tessel {
             if self.native_modal_open()
                 || self.side_panels_ui.any_modal_open()
                 || self.dialogs_toolbar_ui.any_modal_open()
+                || self.linear.view.open
                 || self.share.has_pending_ask()
                 || self.finder.is_open()
                 || self.toolbar_menu_open
@@ -13559,6 +13582,7 @@ impl eframe::App for Tessel {
             ) {
                 self.handle_dialogs_toolbar_action(ctx, act);
             }
+            crate::linear_dialog::show(ctx, &mut self.linear, french);
             let existing_groups: Vec<String> = {
                 let mut set: std::collections::BTreeSet<String> =
                     self.state.project_groups.values().cloned().collect();
@@ -13770,6 +13794,7 @@ impl eframe::App for Tessel {
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
                 && !self.dialogs_toolbar_ui.any_modal_open()
+                && !self.linear.view.open
                 && self.teams_ui.manager_project.is_none()
                 && self.teams_hub.approval_prompts.is_empty()
                 && !ask_modal_open
