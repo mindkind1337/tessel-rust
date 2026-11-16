@@ -99,9 +99,8 @@ pub fn create(
 ) -> Result<Ticket, String> {
     let title = title.trim();
     details.validate()?;
-    if title.is_empty() || title.encode_utf16().count() > 120 || title.chars().any(char::is_control)
-    {
-        return Err("Enter a task title of at most 120 characters.".into());
+    if title.is_empty() || title.len() > 4096 || title.chars().any(char::is_control) {
+        return Err("Enter a task title of at most 4096 bytes.".into());
     }
     if state.tasks.len() >= 10_000 || details.worktree.is_some() {
         return Err("Cannot prepare this task.".into());

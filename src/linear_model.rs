@@ -44,14 +44,14 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
-fn checked_id(id: &str) -> Result<(), String> {
+pub(crate) fn checked_id(id: &str) -> Result<(), String> {
     if valid_id(id) {
         Ok(())
     } else {
         Err("Invalid Linear identifier".into())
     }
 }
-fn issue_url(raw: &str) -> Result<String, String> {
+pub(crate) fn issue_url(raw: &str) -> Result<String, String> {
     let url = reqwest::Url::parse(raw).map_err(|_| "Invalid Linear issue URL")?;
     if url.scheme() != "https"
         || url.host_str() != Some("linear.app")

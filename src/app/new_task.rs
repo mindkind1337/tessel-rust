@@ -176,6 +176,7 @@ impl Tessel {
                         .then(|| form.branch.trim().to_owned()),
                     copy_env: form.copy_env,
                     run_setup: form.use_copy() && form.run_setup,
+                    external: None,
                 };
                 match self.start_owner_native_task(spec) {
                     Ok(_) => {

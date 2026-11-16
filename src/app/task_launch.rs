@@ -41,6 +41,7 @@ pub(crate) struct Spec {
     pub base_branch: Option<String>,
     pub copy_env: bool,
     pub run_setup: bool,
+    pub external: Option<crate::external_issue::Linear>,
 }
 
 pub(super) struct Pending {
@@ -141,7 +142,17 @@ impl Tessel {
     }
 
     // Explicit owner action only; never called from imported task metadata.
-    pub(crate) fn start_owner_native_task(&mut self, spec: Spec) -> Result<u64, String> {
+    pub(crate) fn start_owner_native_task(&mut self, mut spec: Spec) -> Result<u64, String> {
+        if let Some(issue) = &spec.external {
+            if spec.existing.is_some() {
+                return Err("Linked issues require a new agent.".into());
+            }
+            // Enforce at the controller boundary, not just on UI defaults.
+            spec.copy_env = false;
+            spec.run_setup = false;
+            spec.title = issue.title();
+            spec.brief = issue.brief();
+        }
         if self.owner_task_launches.len() >= 32
             || (spec.existing.is_none() && self.sessions.len() >= 100)
         {
@@ -1258,6 +1269,7 @@ mod tests {
             base_branch: None,
             copy_env: false,
             run_setup: false,
+            external: None,
         };
         (temp, app, spec)
     }
@@ -1418,8 +1430,37 @@ mod tests {
     }
 
     #[test]
+    fn linear_task_rejects_existing_agent_before_creating_a_card() {
+        let (_temp, mut app, mut spec) = fixture(Provider::Codex);
+        spec.external = Some(
+            crate::external_issue::Linear::new(
+                "issue-1",
+                "TEAM-1",
+                "Fixture",
+                "https://linear.app/team/issue/TEAM-1",
+            )
+            .unwrap(),
+        );
+        spec.existing = Some(crate::native_review::Target {
+            pane: 70,
+            project: spec.project,
+            cwd: spec.source.clone(),
+            kind: crate::native_review::Kind::Codex,
+            epoch: 0,
+        });
+        assert!(
+            app.start_owner_native_task(spec)
+                .unwrap_err()
+                .contains("new agent")
+        );
+        assert!(app.state.tasks.is_empty());
+        assert!(app.sessions.is_empty());
+        assert!(!app.worktree_state.is_busy());
+    }
+
+    #[test]
     fn owner_task_launch_worktree_callback_keeps_real_root_base_and_secret_policy() {
-        for moved in [false, true] {
+        for (moved, external) in [(false, false), (true, false), (false, true)] {
             let (temp, mut app, mut spec) = fixture(Provider::Codex);
             let root = spec.source.clone();
             let git = |args: &[&str]| {
@@ -1447,6 +1488,20 @@ mod tests {
             spec.isolated = true;
             spec.base_branch = Some("task-base".into());
             spec.run_setup = cfg!(windows) && !moved;
+            if external {
+                spec.external = Some(
+                    crate::external_issue::Linear::new(
+                        "issue-1",
+                        "TEAM-7",
+                        &"x".repeat(220),
+                        "https://linear.app/team/issue/TEAM-7",
+                    )
+                    .unwrap(),
+                );
+                spec.copy_env = true;
+                spec.run_setup = true; // Both are forcibly cleared by the controller.
+                spec.brief = "CALLER_OVERRIDE_MUST_NOT_REACH_AGENT".into();
+            }
             let id = app.start_owner_native_task(spec).unwrap();
             assert_eq!(app.state.tasks[0].column, 1);
             assert!(app.sessions.is_empty());
@@ -1475,11 +1530,17 @@ mod tests {
                 "base"
             );
             assert!(!receipt.path.join(".env").exists());
+            if external {
+                assert_eq!(card.title, format!("TEAM-7 {}", "x".repeat(220)));
+                let prompt = &app.owner_task_launches[0].prompt;
+                assert!(prompt.contains("not from instructions written by the user"));
+                assert!(!prompt.contains("CALLER_OVERRIDE_MUST_NOT_REACH_AGENT"));
+            }
             assert_eq!(
                 receipt.path.join("setup-ran").exists(),
-                cfg!(windows) && !moved
+                cfg!(windows) && !moved && !external
             );
-            if cfg!(windows) && !moved {
+            if cfg!(windows) && !moved && !external {
                 assert!(app.error.contains("setup failed"));
             }
             if moved {

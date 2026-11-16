@@ -125,6 +125,7 @@ pub mod project_panel;
 pub mod prompt_before;
 mod regional_date;
 // Owner-local Linear UI; task-launch integration remains in progress.
+mod external_issue;
 pub mod initial_turn;
 mod issues_menu;
 mod linear_dialog;
