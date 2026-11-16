@@ -1573,3 +1573,11 @@ Linked issues force copy_env and run_setup false at the controller boundary and 
 This is an internal contract only. Linear Start controls, captured account/project authority, accepted-launch callbacks and optional remote state updates are not enabled yet. Restoring metadata still cannot launch tasks.
 
 Validation: 2 metadata tests, refusal of an existing agent, a real synthetic worktree test with local and external cases (13.15 seconds), and all 5 preparation regressions pass: 9 tests total. The external worktree test supplies both flags as true and confirms no environment-file copy or setup execution, preserved long issue titles, and provenance in the actual queued prompt. Strict all-target/all-feature Clippy passes with warnings denied (51.87 seconds). No real account, provider or project was used.
+
+## Captured Linear account authority (2026-11-16)
+
+Successful issue-page delivery can now provide a private, non-serialized permit binding the exact service state, account generation, issue revision and delivered issue IDs. Synchronous local actions recheck those guards under the existing account gate; callbacks must not re-enter Linear. Status and other deliveries cannot produce this authority.
+
+The worker requires that captured permit for state updates instead of selecting whichever account is current when a queued update runs. Before sending a mutation it claims the revision and invalidates issue caches, preventing a cloned permit from sending a second mutation while the first is pending. Account replacement, owner shutdown, changed revisions, unknown issues and another service's permit are rejected. Errors from stale requests retain their original account scope.
+
+Validation: all 14 service tests and 3 panel tests pass, including four new permit regressions with synthetic account changes and a blocked in-flight mutation. Strict all-target/all-feature Clippy passes with warnings denied (1m07s). Formatting and diff checks pass. These are internal prerequisites: Linear Start controls, project binding and accepted-launch callbacks remain unconnected. No real account or remote mutation was used.

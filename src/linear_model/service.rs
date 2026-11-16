@@ -127,9 +127,47 @@ pub struct Delivery {
     revision: Option<u64>,
     result: Result<Reply, String>,
 }
+/// Captured from a delivered issue page, never from a renderer snapshot.
+/// This is transient account/revision authority, not serialized data.
+#[derive(Clone)]
+pub struct IssuePermit {
+    scope: Scope,
+    state: Arc<Mutex<State>>,
+    revision: u64,
+    issues: Arc<Vec<String>>,
+}
+impl IssuePermit {
+    pub(super) fn captured_scope(&self) -> Scope {
+        self.scope.clone()
+    }
+    /// Synchronous local action only. Do not re-enter Linear from the callback.
+    pub fn commit<T>(
+        &self,
+        issue: &str,
+        apply: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        if !self.issues.iter().any(|id| id == issue) {
+            return Err("Issue is not in the captured Linear page".into());
+        }
+        self.scope.commit(|| {
+            let state = self.state.lock().map_err(|_| CANCELLED)?;
+            if state.revision != self.revision || state.account.is_none() {
+                return Err("Linear issues changed; refresh".into());
+            }
+            apply()
+        })
+    }
+}
 impl Delivery {
     /// Callback is synchronous and must not re-enter this service or its authority.
     pub fn apply<T>(self, apply: impl FnOnce(Result<Reply, String>) -> T) -> Result<T, String> {
+        self.apply_with_permit(|reply, _| apply(reply))
+    }
+    /// Store the permit during delivery; use it only after this callback returns.
+    pub fn apply_with_permit<T>(
+        self,
+        apply: impl FnOnce(Result<Reply, String>, Option<IssuePermit>) -> T,
+    ) -> Result<T, String> {
         self.scope.commit(|| {
             let state = self.state.lock().map_err(|_| CANCELLED)?;
             if self
@@ -138,7 +176,18 @@ impl Delivery {
             {
                 return Err("Linear issues changed; refresh".into());
             }
-            Ok(apply(self.result))
+            let permit = match (&self.result, self.revision) {
+                (Ok(Reply::Issues(page)), Some(revision)) if state.account.is_some() => {
+                    Some(IssuePermit {
+                        scope: self.scope.clone(),
+                        state: self.state.clone(),
+                        revision,
+                        issues: Arc::new(page.items.iter().map(|issue| issue.id.clone()).collect()),
+                    })
+                }
+                _ => None,
+            };
+            Ok(apply(self.result, permit))
         })
     }
 }
@@ -187,6 +236,37 @@ impl Service {
     }
     pub(super) fn current_scope(&self) -> Scope {
         self.owner.latest()
+    }
+    /// Claim an update against the account/revision that supplied the issue.
+    /// Advancing revision here prevents replay even while network work is pending.
+    pub(super) fn prepare_issue_update(
+        &self,
+        permit: &IssuePermit,
+        issue: &str,
+        target: &str,
+    ) -> Result<Scope, String> {
+        checked_id(issue)?;
+        checked_id(target)?;
+        if !permit.issues.iter().any(|id| id == issue) {
+            return Err("Issue is not in the captured Linear page".into());
+        }
+        if !self.accepts_owner(&permit.scope) || !Arc::ptr_eq(&self.state, &permit.state) {
+            return Err("Wrong Linear account owner".into());
+        }
+        permit.scope.commit(|| {
+            let mut state = self.state.lock().map_err(|_| CANCELLED)?;
+            if state.revision != permit.revision || state.account.is_none() {
+                return Err("Linear issues changed; refresh".into());
+            }
+            state.revision = state
+                .revision
+                .checked_add(1)
+                .ok_or("Linear issue revision exhausted")?;
+            state
+                .cache
+                .retain(|entry| !matches!(entry.query, Query::Issues(_)));
+            Ok(permit.scope.clone())
+        })
     }
     pub(super) fn accepts_owner(&self, scope: &Scope) -> bool {
         self.owner.same_owner(scope)

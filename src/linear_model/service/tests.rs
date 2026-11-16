@@ -602,3 +602,223 @@ async fn worker_delivers_tagged_results_and_superseding_connect_cancels_old_requ
         Reply::Status(Some(identity("latest")))
     );
 }
+
+fn launch_issue_page() -> Reply {
+    Reply::Issues(Page {
+        items: vec![LinearIssue {
+            id: "issue-1".into(),
+            ..Default::default()
+        }],
+        has_next_page: false,
+        end_cursor: None,
+    })
+}
+async fn launch_permit(service: &Service, scope: Scope) -> IssuePermit {
+    service
+        .execute(scope, read(Query::Issues(IssueSelection::default())))
+        .await
+        .apply_with_permit(|result, permit| {
+            assert!(matches!(result, Ok(Reply::Issues(_))));
+            permit.unwrap()
+        })
+        .unwrap()
+}
+#[tokio::test]
+async fn issue_permit_rejects_unknown_issue_and_account_revision_or_owner_changes() {
+    for invalidation in ["revision", "account", "owner"] {
+        let mut owner = request::Generation::default();
+        let service = Service::with_backends(
+            owner.scope(),
+            Arc::new(MemoryStore::new()),
+            Arc::new(Fake::new(vec![Step::ready(launch_issue_page())])),
+        );
+        service
+            .execute(owner.scope(), Action::Status)
+            .await
+            .apply_with_permit(|result, permit| {
+                assert!(result.is_ok());
+                assert!(permit.is_none());
+            })
+            .unwrap();
+        let permit = launch_permit(&service, owner.scope()).await;
+        let calls = AtomicUsize::new(0);
+        assert!(
+            permit
+                .commit("unknown", || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .is_err()
+        );
+        permit
+            .commit("issue-1", || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        match invalidation {
+            "revision" => service.invalidate_issues(&owner.scope()).unwrap(),
+            "account" => {
+                owner.advance().unwrap();
+            }
+            _ => drop(owner),
+        }
+        assert!(
+            permit
+                .commit("issue-1", || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+#[tokio::test]
+async fn issue_permit_update_checks_service_identity_and_claims_revision_once() {
+    let owner = request::Generation::default();
+    let transport = Arc::new(Fake::new(vec![
+        Step::ready(launch_issue_page()),
+        Step::ready(update()),
+    ]));
+    let store = Arc::new(MemoryStore::new());
+    let service = Service::with_backends(owner.scope(), store.clone(), transport.clone());
+    let other = Service::with_backends(owner.scope(), store, transport.clone());
+    let permit = launch_permit(&service, owner.scope()).await;
+    assert!(
+        other
+            .prepare_issue_update(&permit, "issue-1", "state-1")
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_issue_update(&permit, "other-issue", "state-1")
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_issue_update(&permit, "issue-1", "bad state")
+            .is_err()
+    );
+    permit.commit("issue-1", || Ok(())).unwrap();
+    let scope = service
+        .prepare_issue_update(&permit, "issue-1", "state-1")
+        .unwrap();
+    assert!(
+        service
+            .prepare_issue_update(&permit, "issue-1", "state-1")
+            .is_err()
+    );
+    assert!(permit.commit("issue-1", || Ok(())).is_err());
+    assert!(matches!(
+        delivered(
+            service
+                .execute_prepared(
+                    scope,
+                    Action::SetState {
+                        issue: "issue-1".into(),
+                        state: "state-1".into()
+                    }
+                )
+                .await
+        ),
+        Ok(Reply::Updated(_))
+    ));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn issue_permit_worker_never_updates_the_account_that_replaced_its_page() {
+    let owner = request::Generation::default();
+    let transport = Arc::new(Fake::new(vec![Step::ready(launch_issue_page())]));
+    let service = Service::with_backends(
+        owner.scope(),
+        Arc::new(MemoryStore::new()),
+        transport.clone(),
+    );
+    let mut worker = super::super::worker::Worker::with_service(owner, service).unwrap();
+    assert!(
+        worker
+            .submit(Action::SetState {
+                issue: "issue-1".into(),
+                state: "state-1".into()
+            })
+            .is_err()
+    );
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+    worker
+        .submit(read(Query::Issues(IssueSelection::default())))
+        .unwrap();
+    let permit = worker_event(&mut worker)
+        .await
+        .apply_with_permit(|_, result, permit| {
+            result.unwrap();
+            permit.unwrap()
+        })
+        .unwrap();
+    worker.submit(Action::Disconnect).unwrap();
+    let update_id = worker
+        .submit_issue_update(permit, "issue-1".into(), "state-1".into())
+        .unwrap();
+    let mut rejected = false;
+    for _ in 0..2 {
+        let event = worker_event(&mut worker).await;
+        if event.id() == update_id {
+            assert!(
+                event
+                    .apply(|_, _| panic!("stale update delivered under a new account"))
+                    .is_err()
+            );
+            rejected = true;
+        } else {
+            assert!(matches!(
+                event.apply(|_, result| result).unwrap(),
+                Ok(Reply::Status(None))
+            ));
+        }
+    }
+    assert!(rejected);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn issue_permit_worker_replay_cannot_send_a_second_remote_mutation() {
+    let owner = request::Generation::default();
+    let (step, entered, release) = pending(update());
+    let transport = Arc::new(Fake::new(vec![Step::ready(launch_issue_page()), step]));
+    let service = Service::with_backends(
+        owner.scope(),
+        Arc::new(MemoryStore::new()),
+        transport.clone(),
+    );
+    let mut worker = super::super::worker::Worker::with_service(owner, service).unwrap();
+    worker
+        .submit(read(Query::Issues(IssueSelection::default())))
+        .unwrap();
+    let permit = worker_event(&mut worker)
+        .await
+        .apply_with_permit(|_, result, permit| {
+            result.unwrap();
+            permit.unwrap()
+        })
+        .unwrap();
+    let first = worker
+        .submit_issue_update(permit.clone(), "issue-1".into(), "state-1".into())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered)
+        .await
+        .unwrap()
+        .unwrap();
+    let repeated = worker
+        .submit_issue_update(permit, "issue-1".into(), "state-1".into())
+        .unwrap();
+    let event = worker_event(&mut worker).await;
+    assert_eq!(event.id(), repeated);
+    assert!(event.apply(|_, result| result).unwrap().is_err());
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+    release.send(()).unwrap();
+    let event = worker_event(&mut worker).await;
+    assert_eq!(event.id(), first);
+    assert!(matches!(
+        event.apply(|_, result| result).unwrap(),
+        Ok(Reply::Updated(_))
+    ));
+}
