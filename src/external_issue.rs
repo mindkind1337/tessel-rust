@@ -1,4 +1,4 @@
-//! Bounded external issue metadata, not launch or account authority.
+//! Bounded external issue metadata with optional transient account authority.
 //! Adapted from Tessel renderer/externalIssues.js; see THIRD_PARTY_NOTICES.md.
 #[derive(Clone)]
 pub(crate) struct Linear {
@@ -6,6 +6,7 @@ pub(crate) struct Linear {
     identifier: String,
     title: String,
     url: String,
+    permit: Option<crate::linear_model::service::IssuePermit>,
 }
 fn text(raw: &str, max: usize) -> String {
     let clean: String = raw
@@ -45,7 +46,23 @@ impl Linear {
             identifier,
             title,
             url: crate::linear_model::issue_url(url)?,
+            permit: None,
         })
+    }
+    pub(crate) fn authorize(
+        mut self,
+        permit: crate::linear_model::service::IssuePermit,
+    ) -> Result<Self, String> {
+        permit.commit(&self.id, || Ok(()))?;
+        self.permit = Some(permit);
+        Ok(self)
+    }
+    /// Only synchronous local work; callback must not re-enter Linear authority.
+    pub(crate) fn commit<T>(&self, apply: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        self.permit
+            .as_ref()
+            .ok_or("Refresh and select the Linear issue again")?
+            .commit(&self.id, apply)
     }
     #[allow(dead_code)]
     pub fn issue_id(&self) -> &str {

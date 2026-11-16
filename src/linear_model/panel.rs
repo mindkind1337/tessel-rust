@@ -297,17 +297,14 @@ impl Panel {
             .issue_permit
             .as_ref()
             .ok_or("Refresh Linear issues first")?;
-        permit.commit(&issue.id, || {
-            Ok((
-                crate::external_issue::Linear::new(
-                    &issue.id,
-                    &issue.identifier,
-                    &issue.title,
-                    &issue.url,
-                )?,
-                permit.clone(),
-            ))
-        })
+        let metadata = crate::external_issue::Linear::new(
+            &issue.id,
+            &issue.identifier,
+            &issue.title,
+            &issue.url,
+        )?
+        .authorize(permit.clone())?;
+        Ok((metadata, permit.clone()))
     }
     fn receive(&mut self, slot: Slot, reply: Result<Reply, String>) -> bool {
         match (slot, reply) {

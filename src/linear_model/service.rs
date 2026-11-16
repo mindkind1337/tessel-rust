@@ -137,6 +137,38 @@ pub struct IssuePermit {
     issues: Arc<Vec<String>>,
 }
 impl IssuePermit {
+    #[cfg(test)]
+    pub(crate) fn fixture(issue: &str) -> (super::request::Generation, Self) {
+        let owner = super::request::Generation::default();
+        let state = State {
+            loaded: true,
+            account: Some(Arc::new(Credentials {
+                key: Zeroizing::new("synthetic-only".into()),
+                identity: LinearIdentity {
+                    viewer: Default::default(),
+                    organization: Default::default(),
+                },
+            })),
+            ..Default::default()
+        };
+        let delivery = Delivery {
+            scope: owner.scope(),
+            state: Arc::new(Mutex::new(state)),
+            revision: Some(0),
+            result: Ok(Reply::Issues(Page {
+                items: vec![LinearIssue {
+                    id: issue.into(),
+                    ..Default::default()
+                }],
+                has_next_page: false,
+                end_cursor: None,
+            })),
+        };
+        let permit = delivery
+            .apply_with_permit(|_, permit| permit.unwrap())
+            .unwrap();
+        (owner, permit)
+    }
     pub(super) fn captured_scope(&self) -> Scope {
         self.scope.clone()
     }

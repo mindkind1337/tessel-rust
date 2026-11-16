@@ -55,6 +55,7 @@ pub(super) struct Pending {
     started: Instant,
     waiting_copy: bool,
     reviewer: Option<crate::native_review::Target>,
+    external: Option<crate::external_issue::Linear>,
 }
 
 pub(super) struct Running {
@@ -147,6 +148,7 @@ impl Tessel {
             if spec.existing.is_some() {
                 return Err("Linked issues require a new agent.".into());
             }
+            issue.commit(|| Ok(()))?;
             // Enforce at the controller boundary, not just on UI defaults.
             spec.copy_env = false;
             spec.run_setup = false;
@@ -260,6 +262,7 @@ impl Tessel {
             started: Instant::now(),
             waiting_copy: spec.isolated,
             reviewer: spec.reviewer,
+            external: spec.external,
         };
         let id = pending.ticket.task_id();
         if spec.isolated {
@@ -284,6 +287,13 @@ impl Tessel {
     }
 
     fn bind_owner_task(&mut self, pending: &mut Pending) -> Result<(), String> {
+        match pending.external.clone() {
+            Some(issue) => issue.commit(|| self.bind_owner_task_authorized(pending)),
+            None => self.bind_owner_task_authorized(pending),
+        }
+    }
+
+    fn bind_owner_task_authorized(&mut self, pending: &mut Pending) -> Result<(), String> {
         if !self.launch_context_current(pending) {
             return Err(
                 "The task or project changed. No agent was started; any prepared copy was kept."
@@ -563,39 +573,45 @@ impl Tessel {
             } else if pending.started.elapsed() >= Duration::from_secs(30) {
                 Err("Task first turn timed out; it was not retried.".into())
             } else {
-                self.ensure_native_chat_instances();
-                let attempted = pending.phase == Phase::Connecting;
-                match pending.provider {
-                    Provider::Codex => self
-                        .chats
-                        .iter_mut()
-                        .find(|c| {
-                            c.pane == pane
-                                && c.project == pending.ticket.project_id()
-                                && same_worker_directory(&c.cwd, cwd)
-                        })
-                        .ok_or_else(|| "Task chat is unavailable.".to_owned())
-                        .and_then(|c| match &pending.existing {
-                            Some(target) => {
-                                c.begin_existing_task_turn(&pending.prompt, target.epoch)
-                            }
-                            None => c.begin_task_turn(&pending.prompt, attempted),
-                        }),
-                    Provider::Claude => self
-                        .claude_chats
-                        .iter_mut()
-                        .find(|c| {
-                            c.pane == pane
-                                && c.project == pending.ticket.project_id()
-                                && same_worker_directory(&c.cwd, cwd)
-                        })
-                        .ok_or_else(|| "Task chat is unavailable.".to_owned())
-                        .and_then(|c| match &pending.existing {
-                            Some(target) => {
-                                c.begin_existing_task_turn(&pending.prompt, target.epoch)
-                            }
-                            None => c.begin_task_turn(&pending.prompt, attempted),
-                        }),
+                let mut submit = || {
+                    self.ensure_native_chat_instances();
+                    let attempted = pending.phase == Phase::Connecting;
+                    match pending.provider {
+                        Provider::Codex => self
+                            .chats
+                            .iter_mut()
+                            .find(|c| {
+                                c.pane == pane
+                                    && c.project == pending.ticket.project_id()
+                                    && same_worker_directory(&c.cwd, cwd)
+                            })
+                            .ok_or_else(|| "Task chat is unavailable.".to_owned())
+                            .and_then(|c| match &pending.existing {
+                                Some(target) => {
+                                    c.begin_existing_task_turn(&pending.prompt, target.epoch)
+                                }
+                                None => c.begin_task_turn(&pending.prompt, attempted),
+                            }),
+                        Provider::Claude => self
+                            .claude_chats
+                            .iter_mut()
+                            .find(|c| {
+                                c.pane == pane
+                                    && c.project == pending.ticket.project_id()
+                                    && same_worker_directory(&c.cwd, cwd)
+                            })
+                            .ok_or_else(|| "Task chat is unavailable.".to_owned())
+                            .and_then(|c| match &pending.existing {
+                                Some(target) => {
+                                    c.begin_existing_task_turn(&pending.prompt, target.epoch)
+                                }
+                                None => c.begin_task_turn(&pending.prompt, attempted),
+                            }),
+                    }
+                };
+                match &pending.external {
+                    Some(issue) => issue.commit(submit),
+                    None => submit(),
                 }
             };
             match result {
@@ -1276,8 +1292,25 @@ mod tests {
 
     #[test]
     fn owner_task_launch_binds_actual_pane_and_sends_exact_prompt_once_for_each_native_provider() {
-        for provider in [Provider::Codex, Provider::Claude] {
-            let (_temp, mut app, spec) = fixture(provider);
+        for (provider, linked) in [Provider::Codex, Provider::Claude]
+            .into_iter()
+            .flat_map(|p| [(p, false), (p, true)])
+        {
+            let (_temp, mut app, mut spec) = fixture(provider);
+            let (_owner, permit) = crate::linear_model::service::IssuePermit::fixture("issue-1");
+            if linked {
+                spec.external = Some(
+                    crate::external_issue::Linear::new(
+                        "issue-1",
+                        "T-1",
+                        "Fixture",
+                        "https://linear.app/team/issue/T-1",
+                    )
+                    .unwrap()
+                    .authorize(permit)
+                    .unwrap(),
+                );
+            }
             let project = spec.project;
             let cwd = spec.source.clone();
             let id = app.start_owner_native_task(spec).unwrap();
@@ -1459,8 +1492,54 @@ mod tests {
     }
 
     #[test]
+    fn linear_task_requires_current_authority_before_card_and_first_turn() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            for before_start in [true, false] {
+                let (_temp, mut app, mut spec) = fixture(provider);
+                let (mut owner, permit) =
+                    crate::linear_model::service::IssuePermit::fixture("issue-1");
+                let metadata = crate::external_issue::Linear::new(
+                    "issue-1",
+                    "T-1",
+                    "Fixture",
+                    "https://linear.app/team/issue/T-1",
+                )
+                .unwrap();
+                spec.external = Some(metadata.clone());
+                assert!(app.start_owner_native_task(spec.clone()).is_err());
+                assert!(app.state.tasks.is_empty());
+                spec.external = Some(metadata.authorize(permit).unwrap());
+                if before_start {
+                    owner.advance().unwrap();
+                    assert!(app.start_owner_native_task(spec).is_err());
+                    assert!(app.state.tasks.is_empty());
+                    assert!(app.sessions.is_empty());
+                } else {
+                    app.start_owner_native_task(spec).unwrap();
+                    assert_eq!(app.sessions.len(), 1);
+                    owner.advance().unwrap();
+                    assert!(app.poll_owner_task_launches());
+                    assert!(app.owner_task_launches.is_empty());
+                    assert!(app.owner_task_turns.is_empty());
+                    assert_eq!(app.state.tasks[0].column, 0);
+                    // Authority fails before any native provider is instantiated or contacted.
+                    assert!(app.chats.is_empty());
+                    assert!(app.claude_chats.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn owner_task_launch_worktree_callback_keeps_real_root_base_and_secret_policy() {
-        for (moved, external) in [(false, false), (true, false), (false, true)] {
+        for (moved, external, revoked) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, true, true),
+        ] {
+            let (mut linear_owner, permit) =
+                crate::linear_model::service::IssuePermit::fixture("issue-1");
             let (temp, mut app, mut spec) = fixture(Provider::Codex);
             let root = spec.source.clone();
             let git = |args: &[&str]| {
@@ -1496,6 +1575,8 @@ mod tests {
                         &"x".repeat(220),
                         "https://linear.app/team/issue/TEAM-7",
                     )
+                    .unwrap()
+                    .authorize(permit)
                     .unwrap(),
                 );
                 spec.copy_env = true;
@@ -1503,6 +1584,9 @@ mod tests {
                 spec.brief = "CALLER_OVERRIDE_MUST_NOT_REACH_AGENT".into();
             }
             let id = app.start_owner_native_task(spec).unwrap();
+            if revoked {
+                linear_owner.advance().unwrap();
+            }
             assert_eq!(app.state.tasks[0].column, 1);
             assert!(app.sessions.is_empty());
             assert!(!app.can_restore());
@@ -1530,7 +1614,7 @@ mod tests {
                 "base"
             );
             assert!(!receipt.path.join(".env").exists());
-            if external {
+            if external && !revoked {
                 assert_eq!(card.title, format!("TEAM-7 {}", "x".repeat(220)));
                 let prompt = &app.owner_task_launches[0].prompt;
                 assert!(prompt.contains("not from instructions written by the user"));
@@ -1543,7 +1627,7 @@ mod tests {
             if cfg!(windows) && !moved && !external {
                 assert!(app.error.contains("setup failed"));
             }
-            if moved {
+            if moved || revoked {
                 assert!(app.sessions.is_empty());
                 assert!(app.owner_task_launches.is_empty());
                 assert_eq!(card.column, 0);
