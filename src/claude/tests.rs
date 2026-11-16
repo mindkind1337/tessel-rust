@@ -1,5 +1,55 @@
 use super::*;
 #[test]
+fn task_completion_claude_reads_text_blocks_but_never_thinking() {
+    use crate::initial_turn::Native;
+    use crate::task_completion::Outcome;
+    for text in ["TASK_COMPLETE", "Not finished"] {
+        let mut c = Chat::new(1, "synthetic".into(), None);
+        let rx = c.ready_sender_for_test();
+        c.begin_task_turn("Fixture", false).unwrap();
+        rx.try_recv().unwrap();
+        let token = c.task_completion.token();
+        c.frame(json!({"type":"assistant","session_id":"synthetic-session","message":{"id":"answer","content":[{"type":"thinking","thinking":"TASK_COMPLETE"},{"type":"text","text":text}]}}));
+        c.frame(json!({"type":"result","session_id":"synthetic-session","is_error":false,"subtype":"success"}));
+        assert!(
+            c.task_completion.outcome(token)
+                == if text == "TASK_COMPLETE" {
+                    Outcome::Complete
+                } else {
+                    Outcome::Cancelled
+                }
+        );
+    }
+}
+#[test]
+fn task_completion_claude_ignores_tools_deltas_foreign_sessions_and_interruptions() {
+    use crate::initial_turn::Native;
+    use crate::task_completion::Outcome;
+    for case in 0..6 {
+        let mut c = Chat::new(1, "synthetic".into(), None);
+        let rx = c.ready_sender_for_test();
+        c.begin_task_turn("Fixture", false).unwrap();
+        rx.try_recv().unwrap();
+        let token = c.task_completion.token();
+        if case == 0 {
+            c.frame(json!({"type":"stream_event","session_id":"synthetic-session","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"TASK_COMPLETE"}}}));
+        } else {
+            c.frame(json!({"type":if case == 1 {"user"} else {"assistant"},"session_id":if case == 2 {"foreign"} else {"synthetic-session"},"message":{"id":"answer","content":[{"type":if case == 3 {"tool_use"} else {"text"},"text":"TASK_COMPLETE"}]}}));
+        }
+        if case == 4 {
+            c.gpui_interrupt();
+        }
+        if case == 5 {
+            c.frame(json!({"type":"stream_event","session_id":"synthetic-session","event":{"type":"message_start","message":{"id":"next"}}}));
+        }
+        c.frame(json!({"type":"result","session_id":"synthetic-session","is_error":false,"subtype":"success"}));
+        assert!(
+            c.task_completion.outcome(token) == Outcome::Cancelled,
+            "case {case}"
+        );
+    }
+}
+#[test]
 fn native_task_first_turn_claude_preserves_draft_and_waits_for_permission() {
     use crate::initial_turn::{Native, Phase};
     let mut c = Chat::new(1, "synthetic".into(), None);

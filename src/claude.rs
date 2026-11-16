@@ -34,6 +34,7 @@ pub struct Chat {
     pub options_commit: bool,
     #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    pub(crate) task_completion: crate::task_completion::Watch,
     composer_id: u64,
     composer: String,
     transcript: VecDeque<(String, String)>,
@@ -133,6 +134,7 @@ impl Chat {
             options_commit: false,
             #[cfg(test)]
             test_outgoing: None,
+            task_completion: Default::default(),
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
@@ -253,6 +255,7 @@ impl Chat {
 
     pub fn gpui_interrupt(&mut self) {
         if self.active {
+            self.task_completion.cancel();
             self.interrupting = true;
             if let Some(questions) = self.questions.take() {
                 self.deny(&questions.id);
@@ -456,6 +459,7 @@ impl Chat {
         Ok(())
     }
     fn stop(&mut self) {
+        self.task_completion.cancel();
         self.connecting = None;
         self.transport.take();
         self.ready = false;
@@ -510,6 +514,7 @@ impl Chat {
             return Err("Message must be 1 to 65536 bytes".into());
         }
         self.send(json!({"type":"user","uuid":uuid()?,"session_id":self.session,"parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"text","text":text}]}}))?;
+        self.task_completion.cancel();
         self.push("You", displayed);
         self.active = true;
         self.interrupting = false;
@@ -520,6 +525,11 @@ impl Chat {
         self.status = "Working".into();
         Ok(())
     }
+    #[cfg(test)]
+    pub(crate) fn task_frame_for_test(&mut self, value: Value) {
+        self.frame(value);
+    }
+
     fn frame(&mut self, value: Value) {
         if let Some(id) = value["session_id"].as_str()
             && !id.is_empty()
@@ -620,6 +630,7 @@ impl Chat {
             "stream_event" if self.active => {
                 let event = &value["event"];
                 if event["type"] == "message_start" {
+                    self.task_completion.message("");
                     self.stream_id = event["message"]["id"].as_str().map(str::to_owned);
                     self.push("Claude", "");
                     self.stream_row = Some(self.transcript.len() - 1);
@@ -652,6 +663,18 @@ impl Chat {
                             .join("\n")
                     })
                     .unwrap_or_default();
+                let text_only = value["message"]["content"]
+                    .as_array()
+                    .is_some_and(|blocks| {
+                        blocks.iter().all(|b| {
+                            matches!(
+                                b["type"].as_str(),
+                                Some("text" | "thinking" | "redacted_thinking")
+                            )
+                        })
+                    });
+                self.task_completion
+                    .message(if text_only { &text } else { "" });
                 if !text.is_empty() {
                     if value["message"]["id"].as_str() == self.stream_id.as_deref()
                         && let Some(row) = self.stream_row.and_then(|i| self.transcript.get_mut(i))
@@ -665,6 +688,11 @@ impl Chat {
                 self.stream_id = None;
             }
             "result" if self.active => {
+                self.task_completion.finish(
+                    !self.interrupting
+                        && value["is_error"] == false
+                        && value["subtype"] == "success",
+                );
                 self.saved_session = Some(self.session.clone());
                 self.active = false;
                 self.interrupting = false;
@@ -886,6 +914,7 @@ impl Chat {
             }
         });
         if self.active && ui.button(tr("Interrupt")).clicked() {
+            self.task_completion.cancel();
             self.interrupting = true;
             if let Some(questions) = self.questions.take() {
                 self.deny(&questions.id);
@@ -951,6 +980,7 @@ impl crate::initial_turn::Native for Chat {
             return Err("Invalid model or effort for the task's first turn.".into());
         }
         self.begin_text(prompt, prompt)?;
+        self.task_completion.arm();
         Ok(Phase::Submitted)
     }
 }

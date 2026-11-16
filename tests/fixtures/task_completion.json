@@ -1,0 +1,158 @@
+{
+  "source": "src/renderer/src/agentLimit.js#detectTaskDone",
+  "sha256": "1d3b40221c520d8a33a1b8a62f6eb9108880d7e40e1424a2d2e100d5014112c4",
+  "cases": [
+    {
+      "text": "",
+      "expected": false
+    },
+    {
+      "text": "TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": "TASK_COMPLETE.",
+      "expected": true
+    },
+    {
+      "text": "All tests pass.\nTASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": "I will print TASK_COMPLETE when finished.",
+      "expected": false
+    },
+    {
+      "text": "MY_TASK_COMPLETED_FLAG",
+      "expected": false
+    },
+    {
+      "text": "Next: tests, then TASK_COMPLETE",
+      "expected": false
+    },
+    {
+      "text": "**TASK_COMPLETE**",
+      "expected": false
+    },
+    {
+      "text": "TASK_COMPLETE..",
+      "expected": false
+    },
+    {
+      "text": "●TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " ● TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": "⏺TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " ⏺ TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": "•TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " • TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": "*TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " * TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": ">TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " > TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": "-TASK_COMPLETE",
+      "expected": true
+    },
+    {
+      "text": " - TASK_COMPLETE. ",
+      "expected": true
+    },
+    {
+      "text": "\rTASK_COMPLETE\r",
+      "expected": true
+    },
+    {
+      "text": "\tTASK_COMPLETE\t",
+      "expected": true
+    },
+    {
+      "text": "TASK_COMPLETE",
+      "expected": false
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": " TASK_COMPLETE ",
+      "expected": true
+    },
+    {
+      "text": "　TASK_COMPLETE　",
+      "expected": true
+    },
+    {
+      "text": "﻿TASK_COMPLETE﻿",
+      "expected": true
+    },
+    {
+      "text": "TASK_\nCOMPLETE",
+      "expected": false
+    },
+    {
+      "text": "● ● TASK_COMPLETE",
+      "expected": false
+    },
+    {
+      "text": "TASK_COMPLETE\r\nContinuing",
+      "expected": true
+    },
+    {
+      "text": "Tasks say TASK and COMPLETE joined by an underscore",
+      "expected": false
+    }
+  ]
+}

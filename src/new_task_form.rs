@@ -174,7 +174,7 @@ pub(crate) fn show(
             if !panel.reviewers.is_empty() {
                 ui.add_enabled(false, egui::Button::new(t("Demande automatique de revue — indisponible pour le moment", "Automatic review requests — not available yet")));
             }
-            ui.small(t("À la fin, déplacez la carte en Révision manuellement.", "When finished, move the card to Review manually."));
+            ui.small(t("Le signal de fin du premier tour place la carte en Révision. Vous pouvez aussi la déplacer manuellement.", "The first turn’s completion signal moves the card to Review. You can also move it manually."));
             if !panel.error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &panel.error); }
         });
         ui.horizontal(|ui| {

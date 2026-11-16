@@ -52,6 +52,11 @@ pub(super) struct Pending {
     waiting_copy: bool,
 }
 
+pub(super) struct Running {
+    pending: Pending,
+    token: u64,
+}
+
 impl Tessel {
     fn save_launch_card(&mut self, expected: &Task, replacement: Task) -> Result<(), String> {
         let mut draft = self.state.clone();
@@ -278,6 +283,8 @@ impl Tessel {
     }
 
     pub(super) fn cancel_owner_task_pane(&mut self, pane: u64) {
+        self.owner_task_turns
+            .retain(|r| r.pending.pane != Some(pane));
         while let Some(index) = self
             .owner_task_launches
             .iter()
@@ -286,6 +293,71 @@ impl Tessel {
             let pending = self.owner_task_launches.remove(index);
             self.fail_owner_task(&pending, "Task launch cancelled by the owner.".into());
         }
+    }
+
+    pub(super) fn poll_owner_task_completions(&mut self) -> bool {
+        use crate::task_completion::Outcome;
+        let mut changed = false;
+        for running in std::mem::take(&mut self.owner_task_turns) {
+            let p = &running.pending;
+            let pane = p.pane.unwrap_or(0);
+            let details = p.expected.preparation.as_ref().unwrap();
+            let cwd = details
+                .worktree
+                .as_ref()
+                .map(|w| &w.path)
+                .unwrap_or(&details.source_cwd);
+            if !self.launch_context_current(p)
+                || !self.sessions.iter().any(|s| {
+                    s.id == pane
+                        && s.project == Some(p.ticket.project_id())
+                        && p.provider.matches(&s.launch)
+                        && same_worker_directory(&s.cwd, cwd)
+                })
+            {
+                continue;
+            }
+            let outcome = match p.provider {
+                Provider::Codex => self
+                    .chats
+                    .iter()
+                    .find(|c| {
+                        c.pane == pane
+                            && c.project == p.ticket.project_id()
+                            && same_worker_directory(&c.cwd, cwd)
+                    })
+                    .map(|c| c.task_completion.outcome(running.token)),
+                Provider::Claude => self
+                    .claude_chats
+                    .iter()
+                    .find(|c| {
+                        c.pane == pane
+                            && c.project == p.ticket.project_id()
+                            && same_worker_directory(&c.cwd, cwd)
+                    })
+                    .map(|c| c.task_completion.outcome(running.token)),
+            }
+            .unwrap_or(Outcome::Cancelled);
+            match outcome {
+                Outcome::Pending => self.owner_task_turns.push(running),
+                Outcome::Cancelled => {}
+                Outcome::Complete => {
+                    let mut review = p.expected.clone();
+                    review
+                        .timeline
+                        .move_to(review.column, 2, crate::task_timeline::now_ms());
+                    review.column = 2;
+                    if let Err(error) = self.save_launch_card(&p.expected, review) {
+                        self.error = format!(
+                            "Task completion could not be saved. Move the card to Review manually. {error}"
+                        );
+                    }
+                    // A failed transaction is reported once, never repeatedly retried.
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub(super) fn poll_owner_task_launches(&mut self) -> bool {
@@ -344,6 +416,22 @@ impl Tessel {
             };
             match result {
                 Ok(Phase::Submitted) => {
+                    let token = match pending.provider {
+                        Provider::Codex => self
+                            .chats
+                            .iter()
+                            .find(|c| c.pane == pane)
+                            .map(|c| c.task_completion.token()),
+                        Provider::Claude => self
+                            .claude_chats
+                            .iter()
+                            .find(|c| c.pane == pane)
+                            .map(|c| c.task_completion.token()),
+                    };
+                    if let Some(token) = token {
+                        pending.prompt.clear();
+                        self.owner_task_turns.push(Running { pending, token });
+                    }
                     changed = true;
                 }
                 Ok(phase @ (Phase::Pending | Phase::Connecting)) => {
@@ -370,6 +458,107 @@ impl Tessel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completion_fixture(provider: Provider) -> (tempfile::TempDir, Tessel) {
+        let (temp, mut app, spec) = fixture(provider);
+        let project = spec.project;
+        let cwd = spec.source.clone();
+        app.start_owner_native_task(spec).unwrap();
+        let rx = match provider {
+            Provider::Codex => {
+                let mut c = crate::chat::Chat::new(project, cwd);
+                c.pane = 70;
+                let rx = c.ready_sender_for_test();
+                app.chats.push(c);
+                rx
+            }
+            Provider::Claude => {
+                let mut c = crate::claude::Chat::new(project, cwd, None);
+                c.pane = 70;
+                let rx = c.ready_sender_for_test();
+                app.claude_chats.push(c);
+                rx
+            }
+        };
+        app.poll_owner_task_launches();
+        rx.try_recv().unwrap();
+        assert_eq!(app.owner_task_turns.len(), 1);
+        (temp, app)
+    }
+
+    fn completed(app: &mut Tessel, provider: Provider, marker: bool, success: bool) {
+        use serde_json::json;
+        let text = if marker {
+            "Checks passed.\nTASK_COMPLETE"
+        } else {
+            "Still working."
+        };
+        match provider {
+            Provider::Codex => {
+                let c = &mut app.chats[0];
+                let thread = c.thread_id.clone().unwrap();
+                c.task_frame_for_test(json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"task-turn"}}}));
+                c.task_frame_for_test(json!({"method":"item/completed","params":{"threadId":thread,"turnId":"task-turn","item":{"type":"agentMessage","id":"answer","phase":"final_answer","text":text}}}));
+                c.task_frame_for_test(json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":"task-turn","status":if success {"completed"} else {"failed"}}}}));
+            }
+            Provider::Claude => {
+                let c = &mut app.claude_chats[0];
+                c.task_frame_for_test(json!({"type":"assistant","session_id":"synthetic-session","message":{"id":"answer","content":[{"type":"text","text":text}]}}));
+                c.task_frame_for_test(json!({"type":"result","session_id":"synthetic-session","is_error":!success,"subtype":if success {"success"} else {"error_during_execution"}}));
+            }
+        }
+    }
+
+    #[test]
+    fn owner_task_completion_success_is_saved_once_and_failures_stay_doing() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            for (marker, success) in [(true, true), (true, false), (false, true)] {
+                let (temp, mut app) = completion_fixture(provider);
+                assert!(!app.poll_owner_task_completions());
+                assert_eq!(app.state.tasks[0].column, 1);
+                completed(&mut app, provider, marker, success);
+                assert_eq!(app.poll_owner_task_completions(), marker && success);
+                assert_eq!(
+                    app.state.tasks[0].column,
+                    if marker && success { 2 } else { 1 }
+                );
+                assert!(app.owner_task_turns.is_empty());
+                assert!(!app.poll_owner_task_completions());
+                let expected = app.state.tasks[0].clone();
+                drop(app);
+                let (_store, reopened) = Store::open(&temp.path().join("state")).unwrap();
+                assert_eq!(reopened.tasks[0], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn owner_task_completion_stale_context_cancel_and_storage_failure_never_overwrite() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            for case in 0..6 {
+                let (_temp, mut app) = completion_fixture(provider);
+                completed(&mut app, provider, true, true);
+                match case {
+                    0 => app.state.tasks[0].title = "Owner edit".into(),
+                    1 => app.state.projects[0].path.push("retargeted"),
+                    2 => app.sessions[0].cwd.push("retargeted"),
+                    3 => app.cancel_owner_task_pane(70),
+                    4 => app.store = None,
+                    _ => match provider {
+                        Provider::Codex => app.chats[0].task_completion.arm(),
+                        Provider::Claude => app.claude_chats[0].task_completion.arm(),
+                    },
+                }
+                app.poll_owner_task_completions();
+                assert_eq!(app.state.tasks[0].column, 1);
+                assert!(app.owner_task_turns.is_empty());
+                if case == 4 {
+                    assert!(app.error.contains("could not be saved"));
+                }
+                assert!(!app.poll_owner_task_completions());
+            }
+        }
+    }
 
     fn fixture(provider: Provider) -> (tempfile::TempDir, Tessel, Spec) {
         let temp = tempfile::tempdir().unwrap();

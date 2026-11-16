@@ -340,3 +340,5 @@ The durable task-preparation contract in src/task_preparation.rs and owner launc
 The task instruction formatter in `src/task_prompt.rs`, `scripts/extract_task_prompt_reference.mjs` and its synthetic reference fixture adapt Tessel `src/renderer/src/App.vue#taskPrompt` under the existing Orca/Tessel MIT attribution above. The extractor records the source hash and fictitious inputs only.
 
 The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui/new_task_view.rs`) follows Tessel `NewTaskDialog.vue` and its `style.css` rules under the existing Orca/Tessel MIT attribution above. Tests use fictitious projects and local temporary workspaces only.
+
+- `src/task_completion.rs`, `scripts/extract_task_completion_reference.mjs` and synthetic `tests/fixtures/task_completion.json` reproduce the standalone completion marker contract from Tessel `src/renderer/src/agentLimit.js` (MIT, Lovecast 2026).

@@ -196,6 +196,7 @@ pub struct Chat {
     pub error: String,
     #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
+    pub(crate) task_completion: crate::task_completion::Watch,
     composer_id: u64,
     composer: String,
     transcript: VecDeque<(String, String)>,
@@ -271,6 +272,7 @@ impl Chat {
             error: String::new(),
             #[cfg(test)]
             test_outgoing: None,
+            task_completion: Default::default(),
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
             transcript: VecDeque::new(),
@@ -302,6 +304,9 @@ impl Chat {
         self.composer.push_str(text);
     }
     fn request(&mut self, method: &str, params: Value) -> Result<(), String> {
+        if method == "turn/interrupt" {
+            self.task_completion.cancel();
+        }
         let id = self.next_id;
         self.next_id += 1;
         #[cfg(test)]
@@ -471,6 +476,7 @@ impl Chat {
         self.status = "Initializing Codex…".into();
     }
     fn stop(&mut self) {
+        self.task_completion.cancel();
         self.connecting = None;
         self.rpc = None;
         self.ready = false;
@@ -616,6 +622,7 @@ impl Chat {
                 if self.turn.is_none() {
                     self.starting_turn = true;
                 }
+                self.task_completion.cancel();
                 self.push("You", text);
                 self.composer.clear();
                 self.status = "Working".into();
@@ -623,6 +630,11 @@ impl Chat {
             Err(e) => self.error = e,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn task_frame_for_test(&mut self, value: Value) {
+        self.frame(value);
+    }
+
     fn frame(&mut self, value: Value) {
         if let Some(method) = value.get("method").and_then(Value::as_str) {
             let p = value.get("params").cloned().unwrap_or(Value::Null);
@@ -708,9 +720,15 @@ impl Chat {
                     self.starting_turn = false;
                 }
                 "turn/completed" => {
-                    if p.pointer("/turn/id").and_then(Value::as_str) != self.turn.as_deref() {
+                    if self.turn.is_none()
+                        || p.pointer("/turn/id").and_then(Value::as_str) != self.turn.as_deref()
+                    {
                         return;
                     }
+                    self.task_completion.finish(
+                        p.pointer("/turn/status").and_then(Value::as_str) == Some("completed")
+                            && p.pointer("/turn/error").is_none_or(Value::is_null),
+                    );
                     self.tool_calls.clear();
                     self.turn = None;
                     self.starting_turn = false;
@@ -761,6 +779,18 @@ impl Chat {
                             self.items.clear();
                         }
                         self.items.insert(id.into(), item.clone());
+                        if method == "item/started" || item["type"] != "agentMessage" {
+                            self.task_completion.message("");
+                        }
+                        if method == "item/completed" && item["type"] == "agentMessage" {
+                            let final_message = item.get("phase").is_none_or(Value::is_null)
+                                || item["phase"] == "final_answer";
+                            self.task_completion.message(if final_message {
+                                item["text"].as_str().unwrap_or("")
+                            } else {
+                                ""
+                            });
+                        }
                         if method == "item/completed"
                             && !matches!(
                                 item.get("type").and_then(Value::as_str),
@@ -791,6 +821,7 @@ impl Chat {
                         .unwrap_or("Codex error")
                         .into();
                     if p.get("willRetry") == Some(&Value::Bool(false)) {
+                        self.task_completion.cancel();
                         self.turn = None;
                         self.starting_turn = false;
                     }
@@ -806,6 +837,9 @@ impl Chat {
             return;
         };
         if let Some(error) = value.get("error") {
+            if method == "turn/start" {
+                self.task_completion.cancel();
+            }
             let message = error.get("message").and_then(Value::as_str).unwrap_or("");
             if method == "thread/items/list"
                 && (message.contains("not supported")
@@ -1223,6 +1257,7 @@ impl Chat {
     }
 
     pub fn gpui_interrupt(&mut self) {
+        self.task_completion.cancel();
         if self.turn.is_some()
             && let Err(e) = self.request(
                 "turn/interrupt",
@@ -1398,12 +1433,64 @@ impl crate::initial_turn::Native for Chat {
         prompt: &str,
         connection_attempted: bool,
     ) -> Result<crate::initial_turn::Phase, String> {
-        self.begin_initial_turn(prompt, connection_attempted)
+        let phase = self.begin_initial_turn(prompt, connection_attempted)?;
+        if phase == crate::initial_turn::Phase::Submitted {
+            self.task_completion.arm();
+        }
+        Ok(phase)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn task_completion_codex_rejected_start_cannot_stay_armed() {
+        use super::*;
+        use crate::initial_turn::Native;
+        let mut c = Chat::new(1, "synthetic".into());
+        let rx = c.ready_sender_for_test();
+        c.begin_task_turn("Fixture", false).unwrap();
+        let request = rx.try_recv().unwrap();
+        let token = c.task_completion.token();
+        c.frame(json!({"id":request["id"],"error":{"message":"Synthetic refusal"}}));
+        assert!(c.task_completion.outcome(token) == crate::task_completion::Outcome::Cancelled);
+    }
+    #[test]
+    fn task_completion_codex_ignores_tools_deltas_stale_turns_and_interruptions() {
+        use super::*;
+        use crate::initial_turn::Native;
+        use crate::task_completion::Outcome;
+        for case in 0..7 {
+            let mut c = Chat::new(1, "synthetic".into());
+            let rx = c.ready_sender_for_test();
+            c.begin_task_turn("Fixture", false).unwrap();
+            rx.try_recv().unwrap();
+            let token = c.task_completion.token();
+            let thread = c.thread_id.clone().unwrap();
+            c.frame(json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"current"}}}));
+            let kind = match case {
+                0 => "commandExecution",
+                1 => "userMessage",
+                _ => "agentMessage",
+            };
+            if case == 2 {
+                c.frame(json!({"method":"item/agentMessage/delta","params":{"threadId":thread,"turnId":"current","itemId":"answer","delta":"TASK_COMPLETE"}}));
+            } else {
+                c.frame(json!({"method":"item/completed","params":{"threadId":thread,"turnId":if case == 3 {"stale"} else {"current"},"item":{"type":kind,"id":"answer","phase":if case == 4 {"commentary"} else {"final_answer"},"text":"TASK_COMPLETE"}}}));
+            }
+            if case == 5 {
+                c.gpui_interrupt();
+            }
+            if case == 6 {
+                c.frame(json!({"method":"item/started","params":{"threadId":thread,"turnId":"current","item":{"id":"next","type":"agentMessage"}}}));
+            }
+            c.frame(json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":"current","status":"completed"}}}));
+            assert!(
+                c.task_completion.outcome(token) == Outcome::Cancelled,
+                "case {case}"
+            );
+        }
+    }
     #[test]
     fn native_task_first_turn_codex_preserves_prompt_draft_and_permissions() {
         use crate::initial_turn::{Native, Phase};

@@ -406,8 +406,8 @@ pub(super) fn render(
             .text_size(px(11.5))
             .text_color(tokens.text_dim)
             .child(t(
-                "À la fin, déplacez la carte en Révision manuellement.",
-                "When finished, move the card to Review manually.",
+                "Le signal de fin du premier tour place la carte en Révision. Vous pouvez aussi la déplacer manuellement.",
+                "The first turn’s completion signal moves the card to Review. You can also move it manually.",
             )),
     );
     if !panel.error.is_empty() {

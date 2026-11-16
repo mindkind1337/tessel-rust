@@ -416,3 +416,5 @@ Linear account connection, private masked input, issue filters/list/detail/back 
 ### New Task local form — partial activation (2026-11-16)
 
 Both renderers now expose the owner form from the command palette and connect new native Codex/Claude task launches, project-scoped drafts, worktree/base/env preferences and cancel/error paths. Native text fields have independent epoch-bound input entities. This does not close full parity: terminal/existing-agent choices, setup execution, automatic completion/reviewer dispatch and remaining sidebar/context-menu entry points still need integration and visual comparison.
+
+The first native owner-task turn now moves its unchanged card to Review only after a successful terminal event and a complete assistant completion marker. Later/manual turns and restored conversations remain manual; reviewer delivery is still pending.

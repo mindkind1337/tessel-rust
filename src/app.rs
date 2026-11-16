@@ -705,6 +705,7 @@ pub struct Tessel {
     pending_remove_project: Option<u64>,
     pending_quick_command: Option<(u64, String, bool)>,
     owner_task_launches: Vec<task_launch::Pending>,
+    owner_task_turns: Vec<task_launch::Running>,
     worktree_state: crate::worktree_state::WorktreeState,
     worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
     pending_transcript_trash: Option<crate::side_panels_model::SessionHistoryEntry>,
@@ -915,6 +916,7 @@ impl Tessel {
             pending_remove_project: None,
             pending_quick_command: None,
             owner_task_launches: Vec::new(),
+            owner_task_turns: Vec::new(),
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -2169,6 +2171,7 @@ impl Tessel {
                 Err(error) => self.error = error,
             }
         }
+        native_changed |= self.poll_owner_task_completions();
         if chat_metadata_changed {
             self.save();
         }
@@ -7156,6 +7159,7 @@ impl Tessel {
             && !self.documents.iter().any(Document::dirty)
             && !self.git_result.busy()
             && self.owner_task_launches.is_empty()
+            && self.owner_task_turns.is_empty()
             && !self.worktree_state.is_busy()
             && !self.scm_state.busy()
             && !self.account_busy()

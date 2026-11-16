@@ -168,6 +168,7 @@ mod system_identity;
 mod task_actions;
 pub mod task_agents_model;
 pub mod task_card_timing;
+mod task_completion;
 mod task_decision;
 mod task_decision_actions;
 mod task_decision_panel;

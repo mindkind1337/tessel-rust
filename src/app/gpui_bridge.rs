@@ -1406,6 +1406,7 @@ impl Tessel {
             pending_remove_project: None,
             pending_quick_command: None,
             owner_task_launches: Vec::new(),
+            owner_task_turns: Vec::new(),
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
