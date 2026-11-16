@@ -1350,3 +1350,12 @@ This module is not connected to startup, dialogs, tools or Live Share. The owner
 The protected Linear filename is also private to Live Share, case-insensitively, even if copied into a shared project. Real loopback TLS listing/read and directory-recycling boundary cases cover the exclusion.
 
 Validation: four synthetic model tests pass, including Windows DPAPI storage; the non-Windows refusal branch is code-reviewed but not executed on this Windows workstation. Two real Live Share boundary tests pass. Strict all-target/all-feature Clippy, formatting and diff checks pass. Halley reviewed the model structure; no live Linear API test or complete UI parity is claimed.
+
+
+## Linear reference parsing and filtering (2026-11-15)
+
+The model now retains typed viewer/organization identity and nested issue state, team, assignee and creator records. Required object fields and identifiers are validated before any page is returned; one invalid row rejects the page rather than silently dropping it. Optional text follows the reference limits in UTF-16 units while preserving valid UTF-8 boundaries. Cursor metadata is retained up to its reference bound. State results use stable numeric ordering with absent positions treated as zero.
+
+Issue selection now uses the validated viewer id for Assigned/Created, supports team/state/priority together, preserves the state type constraint when adding a state id, and matches Vue's Completed filter without canceled issues. Filter labels and order match the reference dialog. State mutations return the validated updated issue rather than only a success flag. This replaces the original permissive model defaults; asynchronous generation checks, private connection lifecycle and the dialog are still pending. No production calls are enabled.
+
+Validation: all seven Linear model tests pass after the final ordering changes, with strict all-target/all-feature Clippy (17.54 seconds), formatting and diff checks. Halley reviewed the final parsing/filtering delta. Tests use synthetic payloads and do not call Linear.

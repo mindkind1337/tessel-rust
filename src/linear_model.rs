@@ -8,14 +8,16 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
+mod parse;
 
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 pub const MAX_LINEAR_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Page<T> {
     pub items: Vec<T>,
     pub has_next_page: bool,
+    pub end_cursor: Option<String>,
 }
 fn page_nodes(value: &serde_json::Value) -> Result<(&[serde_json::Value], bool), String> {
     let nodes = value["nodes"]
@@ -69,24 +71,24 @@ impl LinearFilter {
     pub const ALL: [Self; 5] = [
         Self::Assigned,
         Self::Created,
-        Self::All,
-        Self::Completed,
         Self::Open,
+        Self::Completed,
+        Self::All,
     ];
 
     #[must_use]
     pub const fn label(self, french: bool) -> &'static str {
         match (self, french) {
             (Self::Assigned, false) => "Assigned to me",
-            (Self::Assigned, true) => "Assignés à moi",
+            (Self::Assigned, true) => "Assignées à moi",
             (Self::Created, false) => "Created by me",
-            (Self::Created, true) => "Créés par moi",
+            (Self::Created, true) => "Créées par moi",
             (Self::All, false) => "All issues",
-            (Self::All, true) => "Tous les tickets",
-            (Self::Completed, false) => "Done / Canceled",
-            (Self::Completed, true) => "Terminés / Annulés",
-            (Self::Open, false) => "Open",
-            (Self::Open, true) => "Ouverts",
+            (Self::All, true) => "Toutes les issues",
+            (Self::Completed, false) => "Completed",
+            (Self::Completed, true) => "Terminées",
+            (Self::Open, false) => "All open",
+            (Self::Open, true) => "Toutes les ouvertes",
         }
     }
 
@@ -119,24 +121,44 @@ pub struct LinearState {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPerson {
+    pub id: String,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearOrganization {
+    pub id: String,
+    pub name: String,
+    pub url_key: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearIdentity {
+    pub viewer: LinearPerson,
+    pub organization: LinearOrganization,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LinearIssue {
     pub id: String,
     pub identifier: String,
     pub title: String,
     pub url: String,
-    pub description: Option<String>,
+    pub description: String,
     pub priority: u8,
     pub created_at: String,
     pub updated_at: String,
-    pub state_id: String,
-    pub state_name: String,
-    pub state_color: String,
-    pub state_type: String,
-    pub team_id: String,
-    pub team_name: String,
-    pub team_key: String,
-    pub assignee_name: Option<String>,
-    pub creator_name: Option<String>,
+    pub state: LinearState,
+    pub team: LinearTeam,
+    pub assignee: Option<LinearPerson>,
+    pub creator: Option<LinearPerson>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssueSelection {
+    pub filter: LinearFilter,
+    pub team_id: Option<String>,
+    pub state_id: Option<String>,
+    pub priority: Option<u8>,
 }
 
 impl LinearIssue {
@@ -325,328 +347,101 @@ fn parse_response(raw_bytes: &[u8]) -> Result<serde_json::Value, String> {
         .ok_or_else(|| "Linear response missing 'data' field.".to_owned())
 }
 
-pub fn validate_linear_key(key: &str) -> Result<(String, String), String> {
-    let query = "query TesselLinearConnect { viewer { id name displayName email } organization { id name urlKey } }";
-    let data = execute_linear_query(key, query, serde_json::json!({}))?;
-    parse_identity(&data)
+pub fn validate_linear_key(key: &str) -> Result<LinearIdentity, String> {
+    let data = execute_linear_query(
+        key,
+        "query TesselLinearConnect { viewer { id name displayName email } organization { id name urlKey } }",
+        serde_json::json!({}),
+    )?;
+    parse::identity(&data)
 }
-fn parse_identity(data: &serde_json::Value) -> Result<(String, String), String> {
-    let person = &data["viewer"];
-    let org = &data["organization"];
-    checked_id(person["id"].as_str().ok_or("Missing Linear viewer")?)?;
-    checked_id(org["id"].as_str().ok_or("Missing Linear organization")?)?;
-    let name = person["displayName"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .or_else(|| person["name"].as_str())
-        .filter(|s| !s.is_empty())
-        .ok_or("Missing Linear viewer name")?;
-    let organization = org["name"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("Missing Linear organization name")?;
-    Ok((
-        name.chars().take(500).collect(),
-        organization.chars().take(500).collect(),
-    ))
-}
-
 pub fn fetch_linear_teams(key: &str) -> Result<Page<LinearTeam>, String> {
-    let query = "query TesselLinearTeams { teams(first: 100) { nodes { id name key } pageInfo { hasNextPage } } }";
-    let data = execute_linear_query(key, query, serde_json::json!({}))?;
-    let mut out = Vec::new();
-    let connection = data.get("teams").ok_or("Missing Linear result list")?;
-    let (nodes, has_next_page) = page_nodes(connection)?;
-    {
-        for n in nodes {
-            let id = n
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let name = n
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let key = n
-                .get("key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            checked_id(&id)?;
-            {
-                out.push(LinearTeam { id, name, key });
-            }
-        }
-    }
-    Ok(Page {
-        items: out,
-        has_next_page,
-    })
+    let data = execute_linear_query(
+        key,
+        "query TesselLinearTeams { teams(first: 100) { nodes { id name key } pageInfo { hasNextPage endCursor } } }",
+        serde_json::json!({}),
+    )?;
+    parse::page(&data["teams"], parse::team)
 }
-
 pub fn fetch_linear_states(key: &str, team_id: &str) -> Result<Page<LinearState>, String> {
     checked_id(team_id)?;
-    let query = "query TesselLinearStates($teamId: String!) { team(id: $teamId) { states(first: 100) { nodes { id name type position color } pageInfo { hasNextPage } } } }";
-    let data = execute_linear_query(key, query, serde_json::json!({ "teamId": team_id }))?;
-    let mut out = Vec::new();
-    let connection = data
-        .get("team")
-        .and_then(|t| t.get("states"))
-        .ok_or("Missing Linear result list")?;
-    let (nodes, has_next_page) = page_nodes(connection)?;
-    {
-        for n in nodes {
-            let id = n
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let name = n
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let r#type = n
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let color = n
-                .get("color")
-                .and_then(|v| v.as_str())
-                .unwrap_or("#888888")
-                .to_owned();
-            let position = n.get("position").and_then(|v| v.as_f64());
-            checked_id(&id)?;
-            {
-                out.push(LinearState {
-                    id,
-                    name,
-                    r#type,
-                    color,
-                    position,
-                });
-            }
-        }
-    }
-    Ok(Page {
-        items: out,
-        has_next_page,
-    })
+    let data = execute_linear_query(
+        key,
+        "query TesselLinearStates($teamId: String!) { team(id: $teamId) { states(first: 100) { nodes { id name type position color } pageInfo { hasNextPage endCursor } } } }",
+        serde_json::json!({"teamId":team_id}),
+    )?;
+    let mut page = parse::page(&data["team"]["states"], parse::state)?;
+    page.items.sort_by(|a, b| {
+        a.position
+            .unwrap_or(0.)
+            .partial_cmp(&b.position.unwrap_or(0.))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(page)
 }
-
-pub fn fetch_linear_issues(
-    key: &str,
-    filter: LinearFilter,
-    team_id: Option<&str>,
-) -> Result<Page<LinearIssue>, String> {
-    if let Some(team) = team_id.filter(|id| !id.is_empty()) {
-        checked_id(team)?;
-    }
-    let query = format!(
-        "query TesselLinearIssues($filter: IssueFilter!) {{ \
-            issues(first: 100, orderBy: updatedAt, filter: $filter) {{ \
-                nodes {{ {ISSUE_FIELDS} }} pageInfo {{ hasNextPage }} \
-            }} \
-        }}"
-    );
-
-    let mut filter_obj = serde_json::Map::new();
-    match filter {
-        LinearFilter::Assigned => {
-            filter_obj.insert(
-                "assignee".into(),
-                serde_json::json!({ "isMe": { "eq": true } }),
-            );
+fn issue_filter(viewer_id: &str, selection: &IssueSelection) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    let mut filter = json!({});
+    match selection.filter {
+        LinearFilter::Assigned | LinearFilter::Created => {
+            checked_id(viewer_id)?;
+            filter[if selection.filter == LinearFilter::Assigned {
+                "assignee"
+            } else {
+                "creator"
+            }] = json!({"id":{"eq":viewer_id}});
         }
-        LinearFilter::Created => {
-            filter_obj.insert(
-                "creator".into(),
-                serde_json::json!({ "isMe": { "eq": true } }),
-            );
-        }
-        LinearFilter::Completed => {
-            filter_obj.insert(
-                "state".into(),
-                serde_json::json!({ "type": { "in": ["completed", "canceled"] } }),
-            );
-        }
-        LinearFilter::Open => {
-            filter_obj.insert(
-                "state".into(),
-                serde_json::json!({ "type": { "nin": ["completed", "canceled"] } }),
-            );
-        }
+        LinearFilter::Completed => filter["state"] = json!({"type":{"eq":"completed"}}),
+        LinearFilter::Open => filter["state"] = json!({"type":{"nin":["completed","canceled"]}}),
         LinearFilter::All => {}
     }
-
-    if let Some(tid) = team_id
-        && !tid.is_empty()
-    {
-        filter_obj.insert("team".into(), serde_json::json!({ "id": { "eq": tid } }));
+    if let Some(id) = selection.team_id.as_deref().filter(|s| !s.is_empty()) {
+        checked_id(id)?;
+        filter["team"] = json!({"id":{"eq":id}});
     }
-
+    if let Some(id) = selection.state_id.as_deref().filter(|s| !s.is_empty()) {
+        checked_id(id)?;
+        if filter["state"].is_null() {
+            filter["state"] = json!({});
+        }
+        filter["state"]["id"] = json!({"eq":id});
+    }
+    if let Some(priority) = selection.priority {
+        if priority > 4 {
+            return Err("Invalid Linear priority".into());
+        }
+        filter["priority"] = json!({"eq":priority});
+    }
+    Ok(filter)
+}
+pub fn fetch_linear_issues(
+    key: &str,
+    viewer_id: &str,
+    selection: &IssueSelection,
+) -> Result<Page<LinearIssue>, String> {
+    let filter = issue_filter(viewer_id, selection)?;
+    let query = format!(
+        "query TesselLinearIssues($filter: IssueFilter!) {{ issues(first: 100, orderBy: updatedAt, filter: $filter) {{ nodes {{ {ISSUE_FIELDS} }} pageInfo {{ hasNextPage endCursor }} }} }}"
+    );
+    let data = execute_linear_query(key, &query, serde_json::json!({"filter":filter}))?;
+    parse::page(&data["issues"], parse::issue)
+}
+pub fn update_linear_issue_state(
+    key: &str,
+    issue_id: &str,
+    state_id: &str,
+) -> Result<LinearIssue, String> {
+    checked_id(issue_id)?;
+    checked_id(state_id)?;
+    let query = format!(
+        "mutation TesselLinearSetState($issueId: String!, $input: IssueUpdateInput!) {{ issueUpdate(id: $issueId, input: $input) {{ success issue {{ {ISSUE_FIELDS} }} }} }}"
+    );
     let data = execute_linear_query(
         key,
         &query,
-        serde_json::json!({ "filter": serde_json::Value::Object(filter_obj) }),
+        serde_json::json!({"issueId":issue_id,"input":{"stateId":state_id}}),
     )?;
-
-    let mut out = Vec::new();
-    let connection = data.get("issues").ok_or("Missing Linear result list")?;
-    let (nodes, has_next_page) = page_nodes(connection)?;
-    {
-        for n in nodes {
-            let id = n
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let identifier = n
-                .get("identifier")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let title = n
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let url = n
-                .get("url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let url = issue_url(&url)?;
-            let description = n
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned);
-            let priority = n
-                .get("priority")
-                .and_then(|v| v.as_u64())
-                .filter(|p| *p <= 4)
-                .unwrap_or(0) as u8;
-            let created_at = n
-                .get("createdAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let updated_at = n
-                .get("updatedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-
-            let state_id = n
-                .get("state")
-                .and_then(|s| s.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let state_name = n
-                .get("state")
-                .and_then(|s| s.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let state_color = n
-                .get("state")
-                .and_then(|s| s.get("color"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("#888888")
-                .to_owned();
-            let state_type = n
-                .get("state")
-                .and_then(|s| s.get("type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unstarted")
-                .to_owned();
-
-            let team_id = n
-                .get("team")
-                .and_then(|t| t.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let team_name = n
-                .get("team")
-                .and_then(|t| t.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let team_key = n
-                .get("team")
-                .and_then(|t| t.get("key"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-
-            let assignee_name = n
-                .get("assignee")
-                .and_then(|a| a.get("name"))
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned);
-            let creator_name = n
-                .get("creator")
-                .and_then(|c| c.get("name"))
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned);
-
-            checked_id(&id)?;
-            {
-                out.push(LinearIssue {
-                    id,
-                    identifier,
-                    title,
-                    url,
-                    description,
-                    priority,
-                    created_at,
-                    updated_at,
-                    state_id,
-                    state_name,
-                    state_color,
-                    state_type,
-                    team_id,
-                    team_name,
-                    team_key,
-                    assignee_name,
-                    creator_name,
-                });
-            }
-        }
-    }
-    Ok(Page {
-        items: out,
-        has_next_page,
-    })
-}
-
-pub fn update_linear_issue_state(key: &str, issue_id: &str, state_id: &str) -> Result<(), String> {
-    checked_id(issue_id)?;
-    checked_id(state_id)?;
-    let query = "mutation TesselLinearSetState($issueId: String!, $input: IssueUpdateInput!) { \
-        issueUpdate(id: $issueId, input: $input) { success } \
-    }";
-    let variables = serde_json::json!({
-        "issueId": issue_id,
-        "input": {
-            "stateId": state_id,
-        }
-    });
-    let data = execute_linear_query(key, query, variables)?;
-    let success = data
-        .get("issueUpdate")
-        .and_then(|u| u.get("success"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(false);
-    if !success {
-        return Err("Linear issue state update reported failure.".into());
-    }
-    Ok(())
+    parse::updated_issue(&data)
 }
 
 #[cfg(test)]
@@ -685,8 +480,12 @@ mod tests {
         for raw in [b"null".as_slice(), b"{\"data\":null}", b"broken"] {
             assert!(parse_response(raw).is_err());
         }
-        assert!(parse_identity(&json!({"viewer":{},"organization":{}})).is_err());
-        assert_eq!(parse_identity(&json!({"viewer":{"id":"user-1","name":"Fixture"},"organization":{"id":"org-1","name":"Test"}})).unwrap(),("Fixture".into(),"Test".into()));
+        assert!(parse::identity(&json!({"viewer":{},"organization":{}})).is_err());
+        let identity=parse::identity(&json!({"viewer":{"id":"user-1","name":"Fixture"},"organization":{"id":"org-1","name":"Test"}})).unwrap();
+        assert_eq!(identity.viewer.id, "user-1");
+        assert_eq!(identity.viewer.name, "Fixture");
+        assert_eq!(identity.organization.id, "org-1");
+        assert_eq!(identity.organization.name, "Test");
     }
     #[test]
     fn identifiers_urls_and_pagination_are_explicit() {
