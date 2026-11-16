@@ -3507,15 +3507,15 @@ impl Tessel {
                 task_group,
                 tr("Review task branch…"),
             ));
-            commands.push(PaletteCommand::new(
-                "github",
-                task_group,
-                tr("GitHub PRs & Issues…"),
-            ));
         }
         commands.push(PaletteCommand::new(
+            "github",
+            "Issues",
+            tr("GitHub PRs & Issues…"),
+        ));
+        commands.push(PaletteCommand::new(
             "linear",
-            task_group,
+            "Issues",
             tr("Linear issues…"),
         ));
         commands.push(PaletteCommand::new(
@@ -11907,6 +11907,7 @@ impl Tessel {
     }
 
     pub(crate) fn open_linear_modal(&mut self) {
+        self.gpui_extra.issues_menu_open = false;
         self.command_palette.open = false;
         self.toolbar_menu_open = false;
         self.gpui_extra.toolbar_more_open = false;
@@ -11919,6 +11920,7 @@ impl Tessel {
     }
 
     fn open_github_modal(&mut self, project_id: Option<u64>) {
+        self.gpui_extra.issues_menu_open = false;
         if let Some(pid) = project_id
             && self.state.projects.iter().any(|p| p.id == pid)
             && self.state.active_project != Some(pid)
@@ -11927,6 +11929,11 @@ impl Tessel {
             self.refresh_project();
         }
         self.dialogs_toolbar_ui.github_open = true;
+        // A freshly opened dialog must not show a previous project's data if no project
+        // is selected or a new repository request fails.
+        self.dialogs_toolbar_ui.github_prs.clear();
+        self.dialogs_toolbar_ui.github_issues.clear();
+        self.dialogs_toolbar_ui.github_query.clear();
         self.refresh_github_modal();
     }
 
@@ -13083,7 +13090,33 @@ impl eframe::App for Tessel {
                 self.toolbar_menu_open |= self.share.is_pill_popover_open();
                 let toolbar_spec = crate::theme::active(ui.ctx()).spec();
                 let secondary_x0 = ui.cursor().min.x;
+                if !fit_full {
+                    egui::Popup::close_id(ui.ctx(), egui::Id::new("toolbar-issues"));
+                }
                 if fit_full {
+                    let issues_id = egui::Id::new("toolbar-issues");
+                    let issues_open = egui::Popup::is_id_open(ui.ctx(), issues_id);
+                    let button = crate::issues_menu::button(ui, issues_open, toolbar_french);
+                    let mut selected_issue_service = None;
+                    let popup = egui::Popup::menu(&button)
+                        .id(issues_id)
+                        .align(egui::RectAlign::BOTTOM_END)
+                        .gap(5.0)
+                        .frame(
+                            crate::layout_broadcast_ui::layout_menu_frame(&toolbar_spec.ui)
+                                .shadow(ui.visuals().popup_shadow),
+                        )
+                        .show(|ui| {
+                            selected_issue_service =
+                                crate::issues_menu::contents(ui, &toolbar_spec.ui, toolbar_french);
+                            if selected_issue_service.is_some() {
+                                ui.close();
+                            }
+                        });
+                    self.toolbar_menu_open |= popup.is_some();
+                    if let Some(action) = selected_issue_service {
+                        self.apply_toolbar_more_action(action);
+                    }
                     if crate::layout_broadcast_ui::paint_broadcast_toolbar_button(
                         ui,
                         &toolbar_spec.ui,
@@ -14323,6 +14356,31 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issues_menu_github_without_project_clears_previous_repository_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        assert!(app.state.active_project.is_none());
+        app.dialogs_toolbar_ui
+            .github_issues
+            .push(crate::dialogs_toolbar_model::GhIssue {
+                number: 1,
+                title: "Previous repository fixture".into(),
+                state: "OPEN".into(),
+                author: "fixture".into(),
+                url: "https://github.com/fixture/old/issues/1".into(),
+            });
+        app.dialogs_toolbar_ui.github_query = "old repository".into();
+        app.open_github_modal(None);
+        assert!(app.dialogs_toolbar_ui.github_issues.is_empty());
+        assert!(app.dialogs_toolbar_ui.github_prs.is_empty());
+        assert!(app.dialogs_toolbar_ui.github_query.is_empty());
+        assert_eq!(
+            app.dialogs_toolbar_ui.github_error,
+            "Select a project first."
+        );
+    }
 
     #[test]
     #[cfg(windows)]

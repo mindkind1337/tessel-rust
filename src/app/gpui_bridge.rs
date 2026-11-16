@@ -43,6 +43,7 @@ pub(crate) struct GpuiExtraUiState {
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
     pub toolbar_more_open: bool,
+    pub issues_menu_open: bool,
     pub notifications_popover_open: bool,
     pub status_popover: Option<crate::status_strip::StatusBarItemId>,
     pub launch_menu_open: bool,
@@ -84,6 +85,7 @@ impl Default for GpuiExtraUiState {
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
             toolbar_more_open: false,
+            issues_menu_open: false,
             notifications_popover_open: false,
             status_popover: None,
             launch_menu_open: false,
@@ -203,6 +205,7 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub share_pill_badge: Option<String>,
     pub share_pill_dot_live: bool,
     pub more_menu_open: bool,
+    pub issues_menu_open: bool,
     pub can_arrange_panes: bool,
     pub waiting_agents_count: usize,
     pub first_waiting_pane: Option<u64>,
@@ -1082,6 +1085,7 @@ pub(crate) enum GpuiAction {
     },
     OpenLiveShare,
     ToggleToolbarMore,
+    ToggleIssuesMenu,
     ToolbarMore(crate::toolbar_fit::MoreMenuAction),
     Share(crate::share_panel::ShareGpuiAction),
     OpenGitHubDialog,
@@ -1909,6 +1913,9 @@ impl Tessel {
         }
     }
 
+    pub(crate) fn gpui_issues_menu_open(&self) -> bool {
+        self.gpui_extra.issues_menu_open
+    }
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
         self.command_palette.open || self.finder.is_open() || self.gpui_has_non_search_modal()
     }
@@ -1921,6 +1928,7 @@ impl Tessel {
     }
     fn gpui_has_aux_modal_except_sessions(&self) -> bool {
         self.linear.view.open
+            || self.gpui_extra.issues_menu_open
             || self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
             || self.dialogs_toolbar_ui.any_modal_open()
@@ -3371,6 +3379,7 @@ impl Tessel {
                 share_pill_badge: share_snap.pill_badge,
                 share_pill_dot_live: share_snap.pill_dot_live,
                 more_menu_open: self.gpui_extra.toolbar_more_open,
+                issues_menu_open: self.gpui_extra.issues_menu_open,
                 can_arrange_panes: self
                     .sessions
                     .iter()
@@ -6501,6 +6510,7 @@ impl Tessel {
                 self.gpui_extra.launch_menu_open = false;
                 self.gpui_extra.usage_popover_open = false;
                 self.gpui_extra.toolbar_more_open = false;
+                self.gpui_extra.issues_menu_open = false;
                 self.gpui_extra.notifications_popover_open = false;
                 self.gpui_extra.status_popover = None;
                 self.overlay = None;
@@ -6680,7 +6690,14 @@ impl Tessel {
                     self.gpui_extra.status_popover = Some(item);
                 }
             }
+            GpuiAction::ToggleIssuesMenu => {
+                self.gpui_extra.issues_menu_open = !self.gpui_extra.issues_menu_open;
+                self.gpui_extra.toolbar_more_open = false;
+                self.gpui_extra.usage_popover_open = false;
+                self.gpui_extra.notifications_popover_open = false;
+            }
             GpuiAction::ToggleToolbarMore => {
+                self.gpui_extra.issues_menu_open = false;
                 self.gpui_extra.toolbar_more_open = !self.gpui_extra.toolbar_more_open;
                 if self.gpui_extra.toolbar_more_open {
                     self.gpui_extra.usage_popover_open = false;
@@ -6688,6 +6705,7 @@ impl Tessel {
                 }
             }
             GpuiAction::ToolbarMore(item) => {
+                self.gpui_extra.issues_menu_open = false;
                 self.gpui_extra.toolbar_more_open = false;
                 self.apply_toolbar_more_action(item);
             }

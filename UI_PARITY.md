@@ -407,3 +407,7 @@ The Compatibility Files view now uses project/session/path-scoped asynchronous r
 ## Guest Changes and transport follow-up (2026-11-12)
 
 The Compatibility Changes view now uses a session/project-scoped async Git controller instead of blocking status and unacknowledged commits. Message recovery, explicit discard, unknown outcomes, hidden counts and partial responses are integrated. The host executes hardened bounded Git outside the authority mutex and revalidates current access around execution. Native guest Changes tabs and full stage/discard/diff/history controls remain incomplete. The shared local Git process runner retains its behavior; the guest runner additionally clears inherited Git environment overrides. Runtime cancellation has a short-I/O-slice fallback for Windows reads that did not wake on socket shutdown. These are functional/safety improvements, not evidence of pixel-level parity.
+
+## Linear and Issues integration (2026-11-16)
+
+Linear account connection, private masked input, issue filters/list/detail/back navigation, refresh and disconnect are connected in both renderers (b270). The grouped Issues toolbar now exposes GitHub and Linear without requiring an active project; compact overflow and palette entries use the same routes. This does not complete Linear task launch: agent/worktree/task preparation and the optional post-launch state transition remain pending alongside the full NewTask dialog.

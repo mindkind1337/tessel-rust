@@ -75,10 +75,8 @@ pub(crate) fn toolbar_fit_level(snapshot: &GpuiWorkspaceSnapshot, viewport_w: f3
         right += icon;
         secondary += icon;
     }
-    if tb.has_active_project {
-        right += icon;
-        secondary += icon;
-    }
+    right += icon; // Issues is also available without an active project.
+    secondary += icon;
     if tb.waiting_agents_count > 0 {
         right += 130.0;
     }
@@ -117,6 +115,7 @@ fn live_share_pill_width(label: &str, badge: bool) -> f32 {
 
 pub(crate) fn render_toolbar(
     snapshot: &GpuiWorkspaceSnapshot,
+    issues_menu: &super::issues_menu::Menu,
     tokens: &GpuiThemeTokens,
     is_maximized: bool,
     viewport_w: f32,
@@ -578,13 +577,11 @@ pub(crate) fn render_toolbar(
                         cx,
                     ))
                 })
-                .when(full && tb.has_active_project, |el| {
-                    el.child(toolbar_icon_btn(
-                        "btn-github-dialog",
-                        GpuiIcon::Github,
-                        snapshot.modals.github_open,
+                .when(full, |el| {
+                    el.child(super::issues_menu::button(
+                        issues_menu,
+                        snapshot.toolbar.issues_menu_open,
                         tokens,
-                        GpuiAction::OpenGitHubDialog,
                         cx,
                     ))
                 })

@@ -14,6 +14,7 @@ mod editor_tool_inputs;
 pub mod editor_view;
 mod explorer_input;
 pub mod icons;
+mod issues_menu;
 mod linear_view;
 mod modal_query_input;
 pub(crate) mod modals_view;
@@ -117,6 +118,7 @@ pub(crate) struct TesselGpuiRoot {
     task_agent_inputs: task_agent_input::Inputs,
     task_decision_inputs: task_decision_input::Inputs,
     linear_view: linear_view::View,
+    issues_menu: issues_menu::Menu,
     _poller_task: Task<()>,
 }
 
@@ -306,6 +308,7 @@ impl TesselGpuiRoot {
             task_agent_inputs: Default::default(),
             task_decision_inputs: Default::default(),
             linear_view: Default::default(),
+            issues_menu: issues_menu::Menu::new(cx),
             _poller_task: poller_task,
         }
     }
@@ -1441,6 +1444,11 @@ impl Render for TesselGpuiRoot {
         for retired in self.presented_images.replace(media) {
             cx.drop_image(retired, Some(window));
         }
+        if self.app.gpui_issues_menu_open() && chrome::toolbar_fit_level(&snapshot, viewport_w) != 0
+        {
+            self.app.apply_gpui_action(GpuiAction::ToggleIssuesMenu);
+            window.focus(&self.focus_handle, cx);
+        }
         self.linear_view.sync(&self.app.linear.view, window, cx);
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
@@ -1468,6 +1476,7 @@ impl Render for TesselGpuiRoot {
             }))
             .child(chrome::render_toolbar(
                 &snapshot,
+                &self.issues_menu,
                 &tokens,
                 is_maximized,
                 viewport_w,
@@ -1526,6 +1535,16 @@ impl Render for TesselGpuiRoot {
                     cx,
                 ),
                 |el, modal| el.child(modal),
+            )
+            .when_some(
+                issues_menu::popup(
+                    &self.issues_menu,
+                    self.app.gpui_issues_menu_open(),
+                    snapshot.french,
+                    &tokens,
+                    cx,
+                ),
+                |el, menu| el.child(menu),
             )
             .when_some(
                 linear_view::render(

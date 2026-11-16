@@ -6,7 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
-- Live Share excludes the protected Linear credential file (`linear.dat`) from guest browsing and access, including a copy placed inside a shared project. Both renderers now open an owner-local Linear dialog from the command palette or toolbar overflow menu, with an encrypted account connection, team/state filters, issue details, refresh, copy/open actions and confirmed disconnect. Keys stay out of workspace state, snapshots and shared messages. Preparing agent tasks from Linear and the grouped Issues toolbar menu are still being ported.
+- Live Share excludes the protected Linear credential file (`linear.dat`) from guest browsing and access, including a copy placed inside a shared project. Both renderers now open an owner-local Linear dialog from the command palette, grouped Issues toolbar menu or toolbar overflow menu, with an encrypted account connection, team/state filters, issue details, refresh, copy/open actions and confirmed disconnect. Keys stay out of workspace state, snapshots and shared messages. Preparing agent tasks from Linear is still being ported.
 
 - Legacy `#n` agent addresses use saved project-scoped member numbers rather than internal pane identifiers. Existing numbers survive reordering and restart; newly opened panes receive a free number. `team_members` includes the number alongside the pane identifier, and `pane:<id>` remains an explicit address. Cross-project relay refuses ambiguous numeric aliases instead of choosing a recipient.
 

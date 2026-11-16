@@ -1420,3 +1420,12 @@ GPUI and Compatibility expose connection, secure-storage availability, list/deta
 
 This slice does not implement the task-preparation/agent/worktree/state-transition flow or the grouped Issues toolbar menu; the detail view explicitly identifies the missing task launch. It does not claim full Linear or application parity. The prior b268 and b269 independent reviews were explicitly confirmed by Halley (9451b09160727174ac2ea02c).
 Validation: 31 Linear tests (including real dedicated-worker delivery, native GPUI Back/Enter and Compatibility masked-buffer/history checks), 5 private-input tests and 3 toolbar tests pass. Final strict all-target/all-feature Clippy passes (55.33 seconds), as do formatting and diff checks. All account/network fixtures are synthetic. Independent review of this new UI wiring remains requested from Halley; the earlier worker/input approvals do not imply approval of this delta.
+
+
+## Grouped Issues toolbar menu (2026-11-16)
+
+Both renderers now expose the source Issues toolbar button with GitHub followed by Linear, including when no project is active. The source 16px circle/exclamation geometry, 200px minimum menu width, 30px rows, 5px padding and 9px corners replace the former native GitHub-only shortcut; overflow entries remain available in compact layouts. The command palette groups both services under Issues and no longer hides GitHub without an active project.
+
+GPUI anchors the menu to the button's measured bounds, supports Enter/Space/arrow navigation and Escape with focus restoration, and closes the menu when resizing into compact toolbar mode. Compatibility uses its native popup/focus routing and the same service order. Opening Linear still uses the owner-local account controller; no credentials or remote actions are passed through the menu.
+
+Validation: both focused Issues menu tests pass, including native keyboard focus, the actual window-resize callback and clearing previous GitHub repository results without a selected project. The Linear filter runs 32 passing tests (including the new menu fixture). Strict all-target/all-feature Clippy passes with warnings denied (27.00 seconds); formatting and diff checks pass. All account fixtures remain synthetic. Full task preparation and Linear task launch remain pending.
