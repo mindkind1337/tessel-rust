@@ -32,7 +32,7 @@ pub struct Chat {
     pub options: crate::native_chat_options::Options,
     pub defaults: Option<Value>,
     pub options_commit: bool,
-    #[cfg(all(test, feature = "visual-test"))]
+    #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
     composer_id: u64,
     composer: String,
@@ -131,7 +131,7 @@ impl Chat {
             options: Default::default(),
             defaults: None,
             options_commit: false,
-            #[cfg(all(test, feature = "visual-test"))]
+            #[cfg(test)]
             test_outgoing: None,
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
@@ -267,7 +267,7 @@ impl Chat {
         }
     }
 
-    #[cfg(all(test, feature = "visual-test"))]
+    #[cfg(test)]
     pub(crate) fn ready_sender_for_test(&mut self) -> std::sync::mpsc::Receiver<Value> {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         self.test_outgoing = Some(tx);
@@ -386,7 +386,7 @@ impl Chat {
         }
     }
     fn send(&self, value: Value) -> Result<(), String> {
-        #[cfg(all(test, feature = "visual-test"))]
+        #[cfg(test)]
         if let Some(tx) = &self.test_outgoing {
             return tx
                 .try_send(value)

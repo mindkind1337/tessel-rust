@@ -7577,8 +7577,6 @@ mod panel_snapshot_tests {
             // Exercise the actual GPUI polling path. Native Chat creates a
             // dormant pane without starting its provider connection or a CLI.
             assert!(app.poll_for_gpui(), "the new pane must request a repaint");
-            app.poll_for_gpui(); // a later frame cannot duplicate the launch
-            assert_eq!(app.sessions.len(), 2);
             let record = app
                 .teams_hub
                 .workers
@@ -7586,6 +7584,29 @@ mod panel_snapshot_tests {
                 .find(|w| w.id == worker.id)
                 .unwrap();
             let id = record.worker_pane_id.expect("new worker must be bound");
+            let mut chat = crate::chat::Chat::new(project, cwd.clone());
+            chat.pane = id;
+            chat.gpui_set_composer("Owner draft remains intact".into());
+            let outgoing = chat.ready_sender_for_test();
+            app.chats.push(chat);
+            app.poll_for_gpui(); // bootstrap through the real shared polling path
+            assert_eq!(app.sessions.len(), 2);
+            let frame = outgoing.try_recv().unwrap();
+            assert_eq!(frame["method"], "turn/start");
+            assert_eq!(
+                frame["params"]["input"][0]["text"],
+                crate::teams_relay::WORKER_START_PROMPT
+            );
+            assert_eq!(
+                app.chats[0].composer_state().1,
+                "Owner draft remains intact"
+            );
+            app.poll_for_gpui();
+            assert!(outgoing.try_recv().is_err());
+            assert_eq!(
+                app.teams_hub.workers[0].first_turn,
+                crate::teams_relay::WorkerFirstTurn::Submitted
+            );
             assert_ne!(id, 7);
             let spawned = app.sessions.iter().find(|s| s.id == id).unwrap();
             assert_eq!(spawned.worktree, worktree);
@@ -7609,6 +7630,167 @@ mod panel_snapshot_tests {
                 std::path::Path::new("."),
                 &cwd
             ));
+        }
+    }
+
+    #[test]
+    fn worker_first_turn_respects_stop_release_context_and_transport_failures() {
+        use crate::teams_relay::{WorkerFirstTurn, WorkerState};
+        for scenario in [
+            "stop",
+            "stop_claude",
+            "release",
+            "sleep",
+            "closed",
+            "moved",
+            "timeout",
+            "send_error",
+            "manual",
+            "connecting_stop",
+            "connecting_release",
+            "connecting_moved",
+        ] {
+            let connecting = scenario.starts_with("connecting_");
+            let scenario = scenario.strip_prefix("connecting_").unwrap_or(scenario);
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("state");
+            let (store, mut state) = crate::workspace::Store::open(&data).unwrap();
+            let project = state.add_project(dir.path()).unwrap();
+            let cwd = state.active().unwrap().path.clone();
+            state.sessions.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":7,"project":project,"title":"Coordinator","launch":"Shell","cwd":cwd
+                }))
+                .unwrap(),
+            );
+            state.next_pane = 8;
+            store.save(&state).unwrap();
+            drop(store);
+            let mut app = Tessel::new_for_gpui_in_dir(Some(data), false, || {});
+            app.state.orchestration_prefs.confirm_workers = false;
+            app.state.orchestration_prefs.worker_mode =
+                crate::settings_extra_model::WorkerMode::Chat;
+            let agent = if scenario == "stop_claude" {
+                "claude"
+            } else {
+                "codex"
+            };
+            let worker = app
+                .teams_hub
+                .request_worker_start(&mut app.state, 7, agent, None, "Synthetic goal", 100)
+                .unwrap();
+            app.poll_for_gpui();
+            let pane = app.teams_hub.workers[0].worker_pane_id.unwrap();
+            if connecting {
+                app.teams_hub.workers[0].first_turn = WorkerFirstTurn::Connecting;
+            }
+            // Every connection is an in-memory protocol sink. No real account,
+            // executable discovery or provider connection is used in this test.
+            let mut outgoing = Some(if scenario == "stop_claude" {
+                let mut chat = crate::claude::Chat::new(project, cwd, None);
+                chat.pane = pane;
+                let rx = chat.ready_sender_for_test();
+                app.claude_chats.push(chat);
+                rx
+            } else {
+                let mut chat = crate::chat::Chat::new(project, cwd);
+                chat.pane = pane;
+                let rx = chat.ready_sender_for_test();
+                app.chats.push(chat);
+                rx
+            });
+            match scenario {
+                "stop" | "stop_claude" | "release" => {
+                    let tool = if scenario == "release" {
+                        "team_worker_release"
+                    } else {
+                        "team_worker_stop"
+                    };
+                    app.teams_hub
+                        .execute_tool(
+                            &mut app.state,
+                            7,
+                            project,
+                            tool,
+                            &serde_json::json!({"worker_id":worker.id}),
+                            crate::teams_relay::now_ms(),
+                        )
+                        .unwrap();
+                }
+                "sleep" => app.put_session_to_sleep(pane),
+                "closed" => app.sessions.retain(|s| s.id != pane),
+                "moved" => {
+                    let moved = dir.path().join("moved");
+                    std::fs::create_dir(&moved).unwrap();
+                    app.sessions[0].cwd = moved;
+                }
+                "timeout" => {
+                    app.teams_hub.workers[0].first_turn_started_at_ms =
+                        Some(crate::teams_relay::now_ms() - 30_001)
+                }
+                "send_error" => {
+                    outgoing.take();
+                }
+                "manual" => {
+                    app.chats[0].gpui_set_composer("Owner submitted this turn".into());
+                    app.chats[0].gpui_send_message();
+                    assert_eq!(
+                        outgoing.as_ref().unwrap().try_recv().unwrap()["method"],
+                        "turn/start"
+                    );
+                }
+                _ => unreachable!(),
+            }
+            app.poll_for_gpui();
+            app.poll_for_gpui();
+            let record = &app.teams_hub.workers[0];
+            let cancelled = matches!(
+                scenario,
+                "stop" | "stop_claude" | "release" | "sleep" | "manual"
+            );
+            assert_eq!(
+                record.first_turn,
+                if cancelled {
+                    WorkerFirstTurn::Cancelled
+                } else {
+                    WorkerFirstTurn::Failed
+                },
+                "{scenario}"
+            );
+            assert_eq!(
+                record.state,
+                match scenario {
+                    "stop" | "stop_claude" | "sleep" => WorkerState::Stopped,
+                    "release" => WorkerState::Released,
+                    "manual" => WorkerState::Running,
+                    _ => WorkerState::Failed,
+                },
+                "{scenario}"
+            );
+            if let Some(rx) = outgoing {
+                assert!(rx.try_recv().is_err(), "{scenario}");
+            }
+            assert!(app.teams_hub.pending_worker_stops.is_empty());
+            if scenario == "stop_claude" {
+                assert!(!app.claude_chats[0].gpui_snapshot().ready);
+                assert_eq!(app.claude_chats[0].status, "Stopped");
+            } else if matches!(scenario, "stop" | "sleep") {
+                assert!(!app.chats[0].gpui_snapshot().ready);
+                assert_eq!(app.chats[0].status, "Stopped");
+            } else if scenario == "release" {
+                assert!(
+                    app.chats[0].gpui_snapshot().ready,
+                    "release must not stop an independent chat"
+                );
+            } else if scenario == "send_error" {
+                let retry = app.chats[0].ready_sender_for_test();
+                app.chats[0].error.clear();
+                app.poll_for_gpui();
+                assert!(
+                    retry.try_recv().is_err(),
+                    "a failed automatic send cannot replay after recovery"
+                );
+            }
         }
     }
 

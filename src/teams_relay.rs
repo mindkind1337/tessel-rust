@@ -445,7 +445,24 @@ pub struct WorkerRecord {
     pub summary: Option<String>,
     pub created_at_ms: u64,
     pub last_heartbeat_ms: u64,
+    #[serde(default)]
+    pub first_turn: WorkerFirstTurn,
+    #[serde(default)]
+    pub first_turn_started_at_ms: Option<u64>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerFirstTurn {
+    #[default]
+    Pending,
+    Connecting,
+    Submitted,
+    Cancelled,
+    Failed,
+}
+
+pub const WORKER_START_PROMPT: &str = "You are a Tessel worker. Call the team_inbox tool now: your worker brief and task are there. Follow it.";
 
 impl WorkerRecord {
     #[must_use]
@@ -707,6 +724,7 @@ pub struct TeamsRelayHub {
     pub workers: Vec<WorkerRecord>,
     coordinator_starts: HashMap<u64, VecDeque<u64>>,
     pub pending_spawns: VecDeque<WorkerSpawnSpec>,
+    pub pending_worker_stops: VecDeque<u64>,
     pub pending_pty_sends: VecDeque<(u64, String)>,
     reminded_panes: HashSet<(u64, u8)>,
     pub wake_banners: BTreeMap<u64, WakeBanner>,
@@ -1071,6 +1089,8 @@ impl TeamsRelayHub {
             summary: None,
             created_at_ms: now_ms,
             last_heartbeat_ms: now_ms,
+            first_turn: WorkerFirstTurn::Pending,
+            first_turn_started_at_ms: None,
         };
         self.workers.push(record.clone());
 
@@ -1321,6 +1341,18 @@ impl TeamsRelayHub {
         } else {
             WorkerState::Stopped
         };
+        if matches!(
+            rec.first_turn,
+            WorkerFirstTurn::Pending | WorkerFirstTurn::Connecting
+        ) {
+            rec.first_turn = WorkerFirstTurn::Cancelled;
+        }
+        if !release
+            && let Some(pane) = rec.worker_pane_id
+            && !self.pending_worker_stops.contains(&pane)
+        {
+            self.pending_worker_stops.push_back(pane);
+        }
         rec.worker_pane_id
     }
 
@@ -1847,6 +1879,7 @@ impl TeamsRelayHub {
                     json!({
                         "worker_id": rec.id,
                         "state": rec.state,
+                        "first_turn": rec.first_turn,
                         "worker_name": rec.worker_name,
                     }),
                     true,
@@ -1875,6 +1908,7 @@ impl TeamsRelayHub {
                         "worker_id": rec.id,
                         "worker_name": rec.worker_name,
                         "state": rec.state,
+                        "first_turn": rec.first_turn,
                         "stale": rec.is_stale(now_ms),
                         "summary": rec.summary,
                     }),

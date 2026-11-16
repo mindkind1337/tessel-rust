@@ -194,7 +194,7 @@ pub struct Chat {
     next_id: u64,
     pub status: String,
     pub error: String,
-    #[cfg(all(test, feature = "visual-test"))]
+    #[cfg(test)]
     test_outgoing: Option<std::sync::mpsc::SyncSender<Value>>,
     composer_id: u64,
     composer: String,
@@ -269,7 +269,7 @@ impl Chat {
             next_id: 1,
             status: "Not connected".into(),
             error: String::new(),
-            #[cfg(all(test, feature = "visual-test"))]
+            #[cfg(test)]
             test_outgoing: None,
             composer_id: crate::chat::next_input_id(),
             composer: String::new(),
@@ -304,7 +304,7 @@ impl Chat {
     fn request(&mut self, method: &str, params: Value) -> Result<(), String> {
         let id = self.next_id;
         self.next_id += 1;
-        #[cfg(all(test, feature = "visual-test"))]
+        #[cfg(test)]
         if let Some(tx) = &self.test_outgoing {
             tx.try_send(json!({"id":id,"method":method,"params":params}))
                 .map_err(|_| "Synthetic transport unavailable".to_owned())?;
@@ -507,6 +507,65 @@ impl Chat {
         }
         params
     }
+    /// One coordinator-authorized initial turn. The assignment remains mailbox
+    /// data; this fixed prompt never consumes or replaces the owner's draft.
+    pub(crate) fn begin_worker_turn(
+        &mut self,
+        connection_attempted: bool,
+    ) -> Result<crate::teams_relay::WorkerFirstTurn, String> {
+        use crate::teams_relay::{WORKER_START_PROMPT, WorkerFirstTurn};
+        if !self.error.is_empty() {
+            return Err(self.error.clone());
+        }
+        if self.starting_turn || self.turn.is_some() || !self.transcript.is_empty() {
+            return Ok(WorkerFirstTurn::Cancelled);
+        }
+        if self.require_profile && self.profile.is_none() {
+            return if connection_attempted {
+                Err(
+                    "Worker account became unavailable before its first turn; it was not retried."
+                        .into(),
+                )
+            } else {
+                Ok(WorkerFirstTurn::Pending)
+            };
+        }
+        if !self.ready {
+            if self.busy() {
+                return Ok(WorkerFirstTurn::Connecting);
+            }
+            if connection_attempted {
+                return Err(
+                    "Worker connection stopped before its first turn; it was not retried.".into(),
+                );
+            }
+            self.start();
+            return if self.error.is_empty() && self.busy() {
+                Ok(WorkerFirstTurn::Connecting)
+            } else {
+                Err(if self.error.is_empty() {
+                    "Worker connection could not start.".into()
+                } else {
+                    self.error.clone()
+                })
+            };
+        }
+        if self.thread_id.is_none() {
+            return Err("Worker thread identity is missing.".into());
+        }
+        let options = self.options.effective(self.defaults.as_ref());
+        if !options.valid_for("codex") {
+            return Err("Invalid model or effort for the worker's first turn.".into());
+        }
+        let input = json!([{"type":"text","text":WORKER_START_PROMPT,"text_elements":[]}]);
+        self.commit_options();
+        self.request("turn/start", self.turn_params(input, &options))?;
+        self.starting_turn = true;
+        self.push("You", WORKER_START_PROMPT.into());
+        self.status = "Working".into();
+        Ok(WorkerFirstTurn::Submitted)
+    }
+
     fn send_message(&mut self) {
         if !self.ready || self.composer.trim().is_empty() || self.starting_turn {
             return;
@@ -1164,7 +1223,7 @@ impl Chat {
         }
     }
 
-    #[cfg(all(test, feature = "visual-test"))]
+    #[cfg(test)]
     pub(crate) fn ready_sender_for_test(&mut self) -> std::sync::mpsc::Receiver<Value> {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         self.test_outgoing = Some(tx);
@@ -1319,6 +1378,58 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_first_turn_keeps_draft_permissions_and_never_steers_or_retries() {
+        use crate::teams_relay::WorkerFirstTurn;
+        let mut chat = super::Chat::new(1, std::path::PathBuf::from("synthetic"));
+        let outgoing = chat.ready_sender_for_test();
+        chat.gpui_set_composer("Unsent owner draft".into());
+        let draft_id = chat.composer_state().0;
+        assert_eq!(
+            chat.begin_worker_turn(false).unwrap(),
+            WorkerFirstTurn::Submitted
+        );
+        let frame = outgoing.try_recv().unwrap();
+        assert_eq!(frame["method"], "turn/start");
+        assert_eq!(frame["params"]["approvalPolicy"], "on-request");
+        assert_eq!(frame["params"]["approvalsReviewer"], "user");
+        assert_eq!(frame["params"]["sandboxPolicy"]["type"], "workspaceWrite");
+        assert_eq!(frame["params"]["sandboxPolicy"]["networkAccess"], false);
+        assert_eq!(chat.composer_state(), (draft_id, "Unsent owner draft"));
+        assert_eq!(
+            chat.begin_worker_turn(true).unwrap(),
+            WorkerFirstTurn::Cancelled
+        );
+        assert!(outgoing.try_recv().is_err());
+
+        let mut waiting = super::Chat::new(1, "synthetic".into());
+        waiting.require_profile = true;
+        assert_eq!(
+            waiting.begin_worker_turn(false).unwrap(),
+            WorkerFirstTurn::Pending
+        );
+        assert!(!waiting.busy());
+        assert!(
+            waiting
+                .begin_worker_turn(true)
+                .unwrap_err()
+                .contains("not retried")
+        );
+        let outgoing = waiting.ready_sender_for_test();
+        assert_eq!(
+            waiting.begin_worker_turn(false).unwrap(),
+            WorkerFirstTurn::Pending
+        );
+        assert!(
+            outgoing.try_recv().is_err(),
+            "ready does not replace the required account"
+        );
+        waiting.require_profile = false;
+        drop(outgoing);
+        assert!(waiting.begin_worker_turn(false).is_err());
+        assert_eq!(waiting.composer_state().1, "");
+    }
+
     use super::*;
     #[test]
     #[cfg(windows)]

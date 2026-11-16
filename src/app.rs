@@ -2294,8 +2294,7 @@ impl Tessel {
         }
         // Both renderers consume worker requests here. A pane or failure must
         // also request a GPUI refresh even when no process output has arrived.
-        native_changed |= !self.teams_hub.pending_spawns.is_empty();
-        self.poll_teams_and_relay();
+        native_changed |= self.poll_teams_and_relay();
         native_changed
     }
     fn new_session(&mut self, launch: Launch) {
@@ -11874,10 +11873,37 @@ impl Tessel {
     }
 
     fn put_session_to_sleep(&mut self, id: u64) {
+        for worker in &mut self.teams_hub.workers {
+            if worker.worker_pane_id == Some(id)
+                && matches!(
+                    worker.state,
+                    crate::teams_relay::WorkerState::Starting
+                        | crate::teams_relay::WorkerState::Running
+                )
+            {
+                worker.state = crate::teams_relay::WorkerState::Stopped;
+                if matches!(
+                    worker.first_turn,
+                    crate::teams_relay::WorkerFirstTurn::Pending
+                        | crate::teams_relay::WorkerFirstTurn::Connecting
+                ) {
+                    worker.first_turn = crate::teams_relay::WorkerFirstTurn::Cancelled;
+                }
+            }
+        }
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
             session.terminal = None;
             session.loading = None;
             session.restarting = None;
+            session.profile_migration = None;
+            session.codex_restore = None;
+            session.codex_discovery = None;
+        }
+        if let Some(chat) = self.chats.iter_mut().find(|c| c.pane == id) {
+            chat.gpui_stop();
+        }
+        if let Some(chat) = self.claude_chats.iter_mut().find(|c| c.pane == id) {
+            chat.gpui_stop();
         }
     }
 
@@ -12134,9 +12160,7 @@ impl Tessel {
                 }
             }
             TeamsUiAction::StopWorker(wid) => {
-                if let Some(pid) = self.teams_hub.stop_or_release_worker(&wid, false) {
-                    self.put_session_to_sleep(pid);
-                }
+                let _ = self.teams_hub.stop_or_release_worker(&wid, false);
             }
             TeamsUiAction::ReleaseWorker(wid) => {
                 let _ = self.teams_hub.stop_or_release_worker(&wid, true);
@@ -12155,7 +12179,129 @@ impl Tessel {
         }
     }
 
-    fn poll_teams_and_relay(&mut self) {
+    fn poll_worker_first_turns(&mut self) -> bool {
+        use crate::teams_relay::{WorkerFirstTurn, WorkerState};
+        let pending: Vec<_> = self
+            .teams_hub
+            .workers
+            .iter()
+            .filter(|w| {
+                w.state == WorkerState::Running
+                    && w.agent == "codex"
+                    && w.mode == crate::settings_extra_model::WorkerMode::Chat
+                    && matches!(
+                        w.first_turn,
+                        WorkerFirstTurn::Pending | WorkerFirstTurn::Connecting
+                    )
+            })
+            .cloned()
+            .collect();
+        let mut changed = false;
+        for worker in pending {
+            let Some(pane) = worker.worker_pane_id else {
+                continue;
+            };
+            let context_valid = self
+                .state
+                .projects
+                .iter()
+                .any(|p| p.id == worker.frozen.project_id)
+                && self.state.teams.iter().any(|t| {
+                    t.id == worker.frozen.team_id
+                        && t.project == worker.frozen.project_id
+                        && t.members.contains(&pane)
+                        && t.members.contains(&worker.frozen.coordinator_pane_id)
+                })
+                && self.sessions.iter().any(|s| {
+                    s.id == worker.frozen.coordinator_pane_id
+                        && s.project == Some(worker.frozen.project_id)
+                        && same_worker_directory(&s.cwd, &worker.frozen.cwd)
+                })
+                && self.sessions.iter().any(|s| {
+                    s.id == pane
+                        && matches!(s.launch, Launch::CodexChat)
+                        && s.project == Some(worker.frozen.project_id)
+                        && same_worker_directory(&s.cwd, &worker.frozen.cwd)
+                        && s.worktree
+                            .as_ref()
+                            .map(|w| &w.path)
+                            .or_else(|| {
+                                self.state
+                                    .projects
+                                    .iter()
+                                    .find(|p| p.id == worker.frozen.project_id)
+                                    .map(|p| &p.path)
+                            })
+                            .is_some_and(|root| same_worker_directory(root, &worker.frozen.cwd))
+                });
+            let now = crate::teams_relay::now_ms();
+            let started = worker.first_turn_started_at_ms.unwrap_or(now);
+            let result = if !context_valid {
+                Err("Worker context changed before its first turn.".to_owned())
+            } else if now.saturating_sub(started) >= 30_000 {
+                Err("Worker first turn timed out; it was not retried.".to_owned())
+            } else {
+                self.ensure_native_chat_instances();
+                match self.chats.iter_mut().find(|c| {
+                    c.pane == pane
+                        && c.project == worker.frozen.project_id
+                        && same_worker_directory(&c.cwd, &worker.frozen.cwd)
+                }) {
+                    Some(chat) => {
+                        chat.begin_worker_turn(worker.first_turn == WorkerFirstTurn::Connecting)
+                    }
+                    None => Err("Worker chat is unavailable.".into()),
+                }
+            };
+            if let Err(error) = &result
+                && let Some(chat) = self.chats.iter_mut().find(|c| {
+                    c.pane == pane
+                        && c.project == worker.frozen.project_id
+                        && same_worker_directory(&c.cwd, &worker.frozen.cwd)
+                })
+            {
+                chat.gpui_stop();
+                chat.error = error.clone();
+            }
+            if let Some(record) = self
+                .teams_hub
+                .workers
+                .iter_mut()
+                .find(|r| r.id == worker.id)
+            {
+                record.first_turn_started_at_ms = Some(started);
+                match result {
+                    Ok(phase) => {
+                        changed |= record.first_turn != phase;
+                        record.first_turn = phase;
+                        if phase == WorkerFirstTurn::Cancelled {
+                            record.summary = Some(
+                                "Automatic first turn skipped because this chat was already used."
+                                    .into(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        record.first_turn = WorkerFirstTurn::Failed;
+                        record.state = WorkerState::Failed;
+                        record.summary = Some(error.chars().take(300).collect());
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn poll_teams_and_relay(&mut self) -> bool {
+        let changed = !self.teams_hub.pending_spawns.is_empty()
+            || !self.teams_hub.pending_worker_stops.is_empty();
+        while let Some(pane) = self.teams_hub.pending_worker_stops.pop_front() {
+            self.put_session_to_sleep(pane);
+        }
+        // Bootstrap already-bound workers only. A new pane gets its own chat
+        // instance and frozen mailbox before the next tick can send a turn.
+        let changed = self.poll_worker_first_turns() || changed;
         let now = crate::teams_relay::now_ms();
         while let Some(spec) = self.teams_hub.pending_spawns.pop_front() {
             let coordinator = self.sessions.iter().find(|s| {
@@ -12266,6 +12412,7 @@ impl Tessel {
                 let _ = term.run_quick_command(&line, true);
             }
         }
+        changed
     }
 }
 impl eframe::App for Tessel {
