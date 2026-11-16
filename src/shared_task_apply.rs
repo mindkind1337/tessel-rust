@@ -82,6 +82,7 @@ fn transact(
             }
             let id = draft.id()?;
             draft.tasks.push(Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
                     crate::task_timeline::now_ms(),

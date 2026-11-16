@@ -12372,9 +12372,22 @@ impl Tessel {
             self.put_session_to_sleep(pane);
         }
         let mcp_changed = self.poll_team_mcp();
+        let readiness_changed = match crate::task_readiness::poll(
+            &mut self.state,
+            self.store.as_ref(),
+            &mut self.teams_hub,
+            crate::teams_relay::now_ms(),
+        ) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.error = error;
+                false
+            }
+        };
         let changed = !self.teams_hub.pending_spawns.is_empty()
             || !self.teams_hub.pending_worker_stops.is_empty()
             || mcp_changed
+            || readiness_changed
             || had_stops;
         while let Some(pane) = self.teams_hub.pending_worker_stops.pop_front() {
             self.put_session_to_sleep(pane);

@@ -354,6 +354,7 @@ pub fn preserve_for_restore(before: &Workspace, after: &mut Workspace) -> Result
         }
     }
     for task in &mut after.tasks {
+        task.last_waiting.clear();
         task.id = identities[&(task.project, task.id)];
         for dep in &mut task.deps {
             *dep = identities[&(task.project, *dep)];
@@ -507,6 +508,7 @@ mod tests {
         let mut state = fixture();
         state.tasks = (2..902)
             .map(|id| Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
                 project: 1,
@@ -560,6 +562,7 @@ mod tests {
         let mut after = fixture();
         after.tasks = (2..402)
             .map(|id| Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
                 project: 1,
@@ -597,6 +600,7 @@ mod tests {
             next_id: 100,
             task_history_migrated: true,
             tasks: vec![Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id: 2,
                 project: 1,
@@ -694,10 +698,12 @@ mod tests {
         prerequisite.id = 3;
         prerequisite.column = 3;
         after.tasks[0].deps = vec![3, 4];
+        after.tasks[0].last_waiting = vec![3, 4];
         after.tasks.push(prerequisite);
         after.next_id = 5;
         preserve_for_restore(&before, &mut after).unwrap();
         assert_eq!(after.tasks[0].deps[0], after.tasks[1].id);
+        assert!(after.tasks.iter().all(|task| task.last_waiting.is_empty()));
         let missing = after.tasks[0].deps[1];
         assert!(missing < after.next_id);
         assert!(!after.tasks.iter().any(|task| task.id == missing));
@@ -755,6 +761,7 @@ mod tests {
         assert_eq!(state.task_history.records.last().unwrap().id, 1500);
         state.tasks = (2..1002)
             .map(|id| Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 id,
                 project: 1,

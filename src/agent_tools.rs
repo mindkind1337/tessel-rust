@@ -213,6 +213,7 @@ fn execute_inner(
             };
             let id = state.id()?;
             state.tasks.push(Task {
+                last_waiting: Vec::new(),
                 deps: Vec::new(),
                 timeline: crate::task_timeline::Timeline::created(
                     crate::task_timeline::now_ms(),

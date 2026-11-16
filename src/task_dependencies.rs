@@ -90,6 +90,7 @@ mod tests {
     use super::*;
     fn task(id: u64, deps: Vec<u64>) -> Task {
         Task {
+            last_waiting: Vec::new(),
             id,
             project: 1,
             title: "Synthetic".into(),
