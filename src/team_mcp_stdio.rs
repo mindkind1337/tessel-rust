@@ -1,6 +1,7 @@
 //! Bounded MCP handshake protocol only. No credentials, listener, or tool execution.
 //! The caller must authenticate and scope every dispatched operation separately.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
@@ -91,7 +92,13 @@ pub enum Route {
     Ignore,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "message",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum BackendError {
     UnknownTool,
     Failed(String),
