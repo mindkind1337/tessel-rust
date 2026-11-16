@@ -349,6 +349,7 @@ fn tasks_board_inline_rename_and_done_bulk_selection() {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 30,
@@ -357,6 +358,7 @@ fn tasks_board_inline_rename_and_done_bulk_selection() {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 31,
@@ -365,6 +367,7 @@ fn tasks_board_inline_rename_and_done_bulk_selection() {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
     ];
 

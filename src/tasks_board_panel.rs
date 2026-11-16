@@ -38,6 +38,35 @@ pub struct TaskCard {
     pub pane: Option<u64>,
     pub timing: String,
     pub timing_title: String,
+    pub report: Option<CardReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardReport {
+    pub failed: bool,
+    pub summary: String,
+    pub files: Vec<String>,
+}
+impl CardReport {
+    pub fn label(&self, french: bool) -> String {
+        let head = match (self.failed, french) {
+            (true, true) => "Échec",
+            (true, false) => "Failed",
+            (false, true) => "Rapport",
+            (false, false) => "Report",
+        };
+        let n = self.files.len();
+        if n == 0 {
+            return head.into();
+        }
+        let noun = match (french, n == 1) {
+            (true, true) => "fichier",
+            (true, false) => "fichiers",
+            (false, true) => "file",
+            (false, false) => "files",
+        };
+        format!("{head} · {n} {noun}")
+    }
 }
 
 /// Frame input for [`TasksBoard::show`].
@@ -378,6 +407,7 @@ pub struct TasksBoard {
     focus_edit_requested: bool,
     done_select_mode: bool,
     selected_done_ids: BTreeSet<u64>,
+    open_reports: BTreeSet<u64>,
 }
 
 impl TasksBoard {
@@ -399,6 +429,7 @@ impl TasksBoard {
         self.focus_edit_requested = false;
         self.done_select_mode = false;
         self.selected_done_ids.clear();
+        self.open_reports.clear();
     }
 
     #[allow(dead_code)]
@@ -644,6 +675,13 @@ impl TasksBoard {
         input: TasksBoardInput<'_>,
     ) -> Option<TasksBoardAction> {
         clamp_draft_in_place(&mut self.draft);
+        let report_ids: BTreeSet<_> = input
+            .tasks
+            .iter()
+            .filter(|t| t.report.is_some())
+            .map(|t| t.id)
+            .collect();
+        self.open_reports.retain(|id| report_ids.contains(id));
 
         let board_id = ui.id().with("tessel-tasks-board");
         let add_input_id = board_id.with("add-input");
@@ -1580,8 +1618,21 @@ impl TasksBoard {
         });
         let timing_h = timing_galley.as_ref().map_or(0.0, |g| g.size().y + 6.0);
         let foot_h = 24.0_f32;
-        let card_h = 10.0_f32 + title_h + 28.0 + timing_h + 8.0_f32 + foot_h + 8.0_f32;
+        let report_open = self.open_reports.contains(&card.id);
+        let report_h = if card.report.is_some() {
+            if report_open { 272. } else { 30. }
+        } else {
+            0.
+        };
+        let card_h = 10.0_f32 + title_h + 28.0 + timing_h + report_h + 8.0_f32 + foot_h + 8.0_f32;
         let (_, card_rect) = ui.allocate_space(Vec2::new(full_w, card_h));
+        let report_rect = Rect::from_min_size(
+            Pos2::new(
+                card_rect.min.x + left_text_pad,
+                card_rect.min.y + 10. + title_h + 28. + timing_h,
+            ),
+            Vec2::new(text_wrap_w, report_h),
+        );
 
         let agent_rect = Rect::from_min_size(
             Pos2::new(
@@ -1695,9 +1746,15 @@ impl TasksBoard {
             && ui.input(|i| {
                 i.pointer.press_origin().is_some_and(|p| {
                     card_rect.contains(p)
-                        && ![agent_rect, del_btn_rect, left_btn_rect, right_btn_rect]
-                            .iter()
-                            .any(|control| control.contains(p))
+                        && ![
+                            agent_rect,
+                            del_btn_rect,
+                            left_btn_rect,
+                            right_btn_rect,
+                            report_rect,
+                        ]
+                        .iter()
+                        .any(|control| control.contains(p))
                 })
             })
         {
@@ -1884,15 +1941,54 @@ impl TasksBoard {
             });
         }
 
+        if let Some(report) = &card.report {
+            let mut report_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("report", card.id))
+                    .max_rect(report_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            report_ui.set_clip_rect(ui.clip_rect().intersect(report_rect));
+            let label = format!(
+                "{} {}",
+                if report_open { "▾" } else { "▸" },
+                report.label(french)
+            );
+            if report_ui.button(label).clicked() && !interaction_blocked {
+                if report_open {
+                    self.open_reports.remove(&card.id);
+                } else {
+                    self.open_reports.insert(card.id);
+                }
+            }
+            if report_open {
+                egui::ScrollArea::vertical()
+                    .max_height(240.)
+                    .show(&mut report_ui, |ui| {
+                        ui.add(egui::Label::new(&report.summary).wrap());
+                        for path in &report.files {
+                            ui.add(egui::Label::new(path).wrap());
+                        }
+                    });
+            }
+        }
+        let over_report = card.report.is_some()
+            && ui.input(|i| {
+                i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| report_rect.contains(pos))
+            });
         let del_clicked = !interaction_blocked && can_del && del_resp.clicked();
         let left_clicked = !interaction_blocked && can_left && left_resp.clicked();
         let right_clicked = !interaction_blocked && can_right && right_resp.clicked();
         let card_clicked = !interaction_blocked
+            && !over_report
             && card_resp.clicked()
             && !left_clicked
             && !right_clicked
             && !del_clicked;
         let card_double_clicked = !interaction_blocked
+            && !over_report
             && !in_done_select
             && card_resp.double_clicked()
             && !left_clicked

@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) struct Inputs {
     scope: Option<Scope>,
     handles: HashMap<u64, FocusHandle>,
+    report_handles: HashMap<u64, FocusHandle>,
     board: Option<FocusHandle>,
     confirm: Option<[FocusHandle; 2]>,
     dialog_open: bool,
@@ -22,6 +23,7 @@ impl Inputs {
     pub fn sync(&mut self, scope: Option<Scope>, tasks: &[Task], cx: &App) {
         if self.scope != scope {
             self.handles.clear();
+            self.report_handles.clear();
             self.scope = scope;
             self.board = scope.map(|_| cx.focus_handle());
             self.confirm = scope.map(|_| [cx.focus_handle(), cx.focus_handle()]);
@@ -30,8 +32,14 @@ impl Inputs {
         }
         let ids: HashSet<_> = tasks.iter().map(|t| t.id).collect();
         self.handles.retain(|id, _| ids.contains(id));
+        self.report_handles.retain(|id, _| ids.contains(id));
         if scope.is_some() {
             for task in tasks {
+                if task.report.is_some() {
+                    self.report_handles
+                        .entry(task.id)
+                        .or_insert_with(|| cx.focus_handle());
+                }
                 self.handles
                     .entry(task.id)
                     .or_insert_with(|| cx.focus_handle());
@@ -40,6 +48,9 @@ impl Inputs {
     }
     pub fn confirm_handle(&self, index: usize) -> Option<&FocusHandle> {
         self.confirm.as_ref().and_then(|h| h.get(index))
+    }
+    pub fn report_handle(&self, id: u64) -> Option<&FocusHandle> {
+        self.report_handles.get(&id)
     }
     pub fn confirm_focused(&self, w: &Window) -> bool {
         self.dialog_open

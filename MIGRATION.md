@@ -1330,3 +1330,12 @@ GPUI provides native editable freeform text, explicit submit and keyboard-access
 This supersedes the preceding slice's memory-only decision limitation. Native report presentation, guest Live Share answers/provenance, attention notifications, copied-settings provenance and exact visual parity remain unfinished. Mailbox delivery retains the documented crash-loss window; no durable outbox or production provider MCP activation is claimed.
 
 Validation: 31 focused tests pass (four decision tests including two native GPUI cases and the Compatibility choice/disabled-UI case, eleven history, ten agent tools, six authenticated runtime cases). Strict all-target/all-feature Clippy, formatting and diff checks pass. Halley reviewed the final shared authority, persistence and renderer paths.
+
+
+## Task report presentation (2026-11-15)
+
+GPUI and Compatibility cards show an initially collapsed Report/Failed header with localized file count, expandable summary and file list. Expanded content has a bounded scroll area. Native controls support Tab and Enter/Space; open state is transient and project-scoped. Compatibility resets it with the board. Report interactions do not rename, move or execute a card, and paths remain inert text.
+
+This ports the report disclosure surface, not Vue RichMessage rendering or context-aware opening. Markdown formatting, worktree/SSH provenance, guest source attribution and file navigation remain pending; no report-controlled URL or path is granted local authority.
+
+Validation: the real GPUI fixture verifies keyboard expand/collapse and unchanged saved task/session data. All eleven Compatibility board tests pass, including report expansion, inert path clicks and reset. Strict all-target/all-feature Clippy, formatting and diff checks pass.

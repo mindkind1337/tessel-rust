@@ -31,6 +31,7 @@ mod task_agent_input;
 mod task_card_input;
 mod task_decision_input;
 mod task_rename_input;
+mod task_report_view;
 mod terminal_find_inputs;
 pub(crate) mod terminal_view;
 pub mod theme;

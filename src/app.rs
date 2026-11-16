@@ -6916,27 +6916,34 @@ impl Tessel {
             self.tasks_board.reset();
             self.tasks_board_project = project;
         }
-        let cards: Vec<_> = self
-            .state
-            .tasks
-            .iter()
-            .filter(|task| Some(task.project) == project)
-            .map(|task| {
-                let timing = crate::task_card_timing::cached(
-                    &task.timeline,
-                    task.column,
-                    self.state.language == crate::i18n::Language::French,
-                );
-                TaskCard {
-                    id: task.id,
-                    title: task.title.clone(),
-                    column: task.column,
-                    pane: task.timeline.pane_id,
-                    timing: timing.text,
-                    timing_title: timing.tooltip,
-                }
-            })
-            .collect();
+        let cards: Vec<_> =
+            self.state
+                .tasks
+                .iter()
+                .filter(|task| Some(task.project) == project)
+                .map(|task| {
+                    let timing = crate::task_card_timing::cached(
+                        &task.timeline,
+                        task.column,
+                        self.state.language == crate::i18n::Language::French,
+                    );
+                    TaskCard {
+                        id: task.id,
+                        title: task.title.clone(),
+                        column: task.column,
+                        pane: task.timeline.pane_id,
+                        timing: timing.text,
+                        timing_title: timing.tooltip,
+                        report: task.report.as_ref().map(|r| {
+                            crate::tasks_board_panel::CardReport {
+                                failed: r.outcome == crate::task_report::Outcome::Failed,
+                                summary: r.summary.clone(),
+                                files: r.files.clone(),
+                            }
+                        }),
+                    }
+                })
+                .collect();
         if project.is_some() {
             ui.horizontal(|ui| {
                 if ui.small_button(tr("Review task branch…")).clicked() {

@@ -22,11 +22,13 @@ pub struct State {
     serial: u64,
     pub selecting: bool,
     pub picked: BTreeSet<u64>,
+    pub open_reports: BTreeSet<u64>,
     pub edit: Option<Edit>,
     pub pending_delete: Option<(Vec<u64>, bool)>,
 }
 #[derive(Clone, Debug)]
 pub enum Command {
+    ToggleReport(u64),
     AnswerDecision {
         id: u64,
         request: u64,
@@ -82,6 +84,7 @@ impl State {
             });
             self.selecting = false;
             self.picked.clear();
+            self.open_reports.clear();
             self.edit = None;
             self.pending_delete = None;
         }
@@ -93,6 +96,8 @@ impl State {
             .collect();
         self.picked
             .retain(|id| cards.get(id).is_some_and(|t| t.column == 3));
+        self.open_reports
+            .retain(|id| cards.get(id).is_some_and(|t| t.report.is_some()));
         if !cards.values().any(|t| t.column == 3) {
             self.selecting = false;
         }
@@ -132,6 +137,11 @@ impl State {
             return None;
         }
         match command {
+            Command::ToggleReport(id) => {
+                if find(id).is_some_and(|t| t.report.is_some()) && !self.open_reports.remove(&id) {
+                    self.open_reports.insert(id);
+                }
+            }
             Command::AnswerDecision {
                 id,
                 request,

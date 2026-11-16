@@ -121,6 +121,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 2,
@@ -129,6 +130,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 3,
@@ -137,6 +139,7 @@ fn sample_tasks() -> Vec<TaskCard> {
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
     ]
 }
@@ -405,6 +408,7 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
             pane: None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 40,
@@ -413,6 +417,7 @@ fn moving_tasks_respects_0_to_3_bounds_via_vector_buttons_drag_drop_and_out_of_r
             pane: None,
             timing: String::new(),
             timing_title: String::new(), // clamped to column 3 (Done)
+            report: None,
         },
     ];
 
@@ -964,6 +969,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
             pane:None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
         TaskCard {
             id: 2,
@@ -972,6 +978,7 @@ fn narrow_280px_and_wide_920px_layouts_never_overflow_or_force_880px_parent_widt
             pane:None,
             timing: String::new(),
             timing_title: String::new(),
+            report: None,
         },
     ];
 
@@ -1180,4 +1187,59 @@ fn assignment_menu_emits_choice_and_review_only_offers_show_agent() {
         .center();
     let (_, action) = frame(&ctx, &mut board, &tasks, &agents, click_events(button));
     assert_eq!(action, Some(TasksBoardAction::ShowAgent { id: 1, pane: 7 }));
+}
+
+#[test]
+fn report_expansion_is_inert_and_reset_closes_it() {
+    let ctx = egui::Context::default();
+    let mut board = TasksBoard::new();
+    let mut tasks = sample_tasks();
+    tasks.truncate(1);
+    tasks[0].report = Some(tasks_board_panel::CardReport {
+        failed: true,
+        summary: "Synthetic report content".into(),
+        files: vec!["javascript:alert(1)".into()],
+    });
+    let frame = |board: &mut TasksBoard, events| {
+        let mut action = None;
+        let out = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600., 900.))),
+                events,
+                focused: true,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    action = board.show(
+                        ui,
+                        TasksBoardInput {
+                            tasks: &tasks,
+                            agents: &[],
+                            french: false,
+                            project_selected: true,
+                        },
+                    )
+                });
+            },
+        );
+        assert!(action.is_none());
+        out
+    };
+    let _ = frame(&mut board, vec![]);
+    let out = frame(&mut board, vec![]);
+    let pos = find_painted_text_rect(&out.shapes, "▸ Failed · 1 file")
+        .unwrap()
+        .center();
+    assert!(!has_painted_text(&out.shapes, "Synthetic report content"));
+    let _ = frame(&mut board, click_events(pos));
+    let out = frame(&mut board, vec![]);
+    assert!(has_painted_text(&out.shapes, "Synthetic report content"));
+    let pos = find_painted_text_rect(&out.shapes, "javascript:alert(1)")
+        .unwrap()
+        .center();
+    let _ = frame(&mut board, click_events(pos));
+    board.reset();
+    let out = frame(&mut board, vec![]);
+    assert!(!has_painted_text(&out.shapes, "Synthetic report content"));
 }

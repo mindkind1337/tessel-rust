@@ -1549,6 +1549,19 @@ fn render_tasks_board_tab(
                 .gap(px(6.))
                 .child(title);
             if !editing {
+                if task.report.is_some()
+                    && let Some(handle) = task_card_input.report_handle(id)
+                {
+                    content = content.child(super::task_report_view::render(
+                        task,
+                        scope,
+                        sp.task_board.open_reports.contains(&id),
+                        handle,
+                        french,
+                        tokens,
+                        cx,
+                    ));
+                }
                 content = content.child(super::task_decision_input::render(
                     task_decision_inputs,
                     scope,
