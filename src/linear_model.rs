@@ -14,6 +14,7 @@ mod record;
 pub mod request;
 pub mod service;
 mod storage_path;
+pub mod worker;
 
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 pub const MAX_LINEAR_RESPONSE_BYTES: usize = 2 * 1024 * 1024;

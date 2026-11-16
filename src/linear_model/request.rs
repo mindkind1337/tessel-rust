@@ -76,6 +76,9 @@ impl Scope {
             authority,
         }
     }
+    pub(super) fn latest(&self) -> Self {
+        Self::new(self.authority.clone())
+    }
     pub(super) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.authority, &other.authority)
     }

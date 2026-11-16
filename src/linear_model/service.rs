@@ -175,32 +175,44 @@ impl Service {
             Ok(state.account.clone())
         })
     }
+    pub(super) fn current_scope(&self) -> Scope {
+        self.owner.latest()
+    }
+    pub(super) fn accepts_owner(&self, scope: &Scope) -> bool {
+        self.owner.same_owner(scope)
+    }
+    pub(super) fn prepare(&self, scope: &Scope, action: &Action) -> Result<Scope, String> {
+        if !self.owner.same_owner(scope) {
+            return Err("Wrong Linear account owner".into());
+        }
+        if !scope.is_current() {
+            return Err(CANCELLED.into());
+        }
+        if let Action::Connect(key) = action {
+            valid_key(key)?;
+            self.store.encryption()?;
+        }
+        if matches!(action, Action::Connect(_) | Action::Disconnect) {
+            scope.commit_and_advance(|| Ok(())).map(|(_, scope)| scope)
+        } else {
+            Ok(scope.clone())
+        }
+    }
+    pub(super) fn failure(&self, scope: Scope, error: String) -> Delivery {
+        Delivery {
+            scope,
+            state: self.state.clone(),
+            revision: None,
+            result: Err(error),
+        }
+    }
     pub async fn execute(&self, scope: Scope, action: Action) -> Delivery {
-        let prepare = || -> Result<Scope, String> {
-            if !self.owner.same_owner(&scope) {
-                return Err("Wrong Linear account owner".into());
-            }
-            if let Action::Connect(key) = &action {
-                valid_key(key)?;
-                self.store.encryption()?;
-            }
-            if matches!(&action, Action::Connect(_) | Action::Disconnect) {
-                scope.commit_and_advance(|| Ok(())).map(|(_, scope)| scope)
-            } else {
-                Ok(scope.clone())
-            }
-        };
-        let scope = match prepare() {
-            Ok(scope) => scope,
-            Err(error) => {
-                return Delivery {
-                    scope,
-                    state: self.state.clone(),
-                    revision: None,
-                    result: Err(error),
-                };
-            }
-        };
+        match self.prepare(&scope, &action) {
+            Ok(scope) => self.execute_prepared(scope, action).await,
+            Err(error) => self.failure(scope, error),
+        }
+    }
+    pub(super) async fn execute_prepared(&self, scope: Scope, action: Action) -> Delivery {
         let mut delivery_scope = scope.clone();
         let mut revision = None;
         let result = match action {

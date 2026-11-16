@@ -513,3 +513,92 @@ async fn unavailable_encryption_never_sends_key_and_empty_filters_share_cache() 
     .unwrap();
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
 }
+async fn worker_event(worker: &mut super::super::worker::Worker) -> super::super::worker::Event {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(event) = worker.poll().unwrap() {
+                return event;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+#[tokio::test]
+async fn worker_runs_off_caller_with_bounded_queue_and_cancels_on_drop() {
+    let owner = request::Generation::default();
+    let (step, entered, mut release) = pending(teams());
+    let transport = Arc::new(Fake::new(vec![step]));
+    let service = Service::with_backends(
+        owner.scope(),
+        Arc::new(MemoryStore::new()),
+        transport.clone(),
+    );
+    let mut worker = super::super::worker::Worker::with_service(owner, service).unwrap();
+    worker.submit(read(Query::Teams)).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut full = false;
+    for _ in 0..100 {
+        if worker.submit(read(Query::Teams)).is_err() {
+            full = true;
+            break;
+        }
+    }
+    assert!(full, "bounded queue must refuse instead of growing");
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    assert!(worker.poll().unwrap().is_none());
+    drop(worker);
+    tokio::time::timeout(Duration::from_secs(3), release.closed())
+        .await
+        .unwrap();
+}
+#[tokio::test]
+async fn worker_delivers_tagged_results_and_superseding_connect_cancels_old_request() {
+    let owner = request::Generation::default();
+    let (step, entered, _release) = pending(Reply::Identity(identity("superseded")));
+    let transport = Arc::new(Fake::new(vec![
+        step,
+        Step::ready(Reply::Identity(identity("latest"))),
+    ]));
+    let store = Arc::new(MemoryStore::new());
+    let service = Service::with_backends(owner.scope(), store.clone(), transport);
+    let mut worker = super::super::worker::Worker::with_service(owner, service).unwrap();
+    let old = worker
+        .submit(Action::Connect(Zeroizing::new(
+            "synthetic-first-key".into(),
+        )))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered)
+        .await
+        .unwrap()
+        .unwrap();
+    let latest = worker
+        .submit(Action::Connect(Zeroizing::new(
+            "synthetic-second-key".into(),
+        )))
+        .unwrap();
+    let mut accepted = None;
+    for _ in 0..2 {
+        let event = worker_event(&mut worker).await;
+        if event.id() == old {
+            assert!(event.apply(|_, _| panic!("stale callback")).is_err());
+        } else {
+            accepted = Some(event.apply(|id, result| (id, result)).unwrap());
+        }
+    }
+    let (id, result) = accepted.unwrap();
+    assert_eq!(id, latest);
+    assert_eq!(result.unwrap(), Reply::Status(Some(identity("latest"))));
+    assert_eq!(store.saves.load(Ordering::SeqCst), 1);
+    let status = worker.submit(Action::Status).unwrap();
+    let event = worker_event(&mut worker).await;
+    assert_eq!(event.id(), status);
+    assert_eq!(
+        event.apply(|_, result| result).unwrap().unwrap(),
+        Reply::Status(Some(identity("latest")))
+    );
+}
