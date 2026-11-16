@@ -2114,11 +2114,19 @@ impl SettingsExtraState {
                         if let Some((_, _, ppath)) =
                             projects.iter().find(|(id, ..)| *id == draft.project_id)
                         {
+                            let id = match draft.id.clone().map(Ok).unwrap_or_else(|| generate_automation_id("auto")) {
+                                Ok(id) => id,
+                                Err(error) => {
+                                    draft.error = error;
+                                    return;
+                                }
+                            };
+                            if draft.id.is_none() && store.automations.iter().any(|auto| auto.id == id) {
+                                draft.error = "Automation identifier already exists; retry creating the automation.".into();
+                                return;
+                            }
                             let mut candidate = Automation {
-                                id: draft
-                                    .id
-                                    .clone()
-                                    .unwrap_or_else(|| generate_automation_id("auto")),
+                                id,
                                 name: draft.name.trim().to_owned(),
                                 project_id: draft.project_id,
                                 project_path: ppath.clone(),
@@ -2356,10 +2364,18 @@ impl SettingsExtraState {
                         .button(if french { "Enregistrer" } else { "Save" })
                         .clicked()
                     {
-                        let id = self
+                        let id = match self
                             .editing_custom_id
                             .clone()
-                            .unwrap_or_else(generate_custom_agent_id);
+                            .map(Ok)
+                            .unwrap_or_else(|| generate_custom_agent_id(custom_agents))
+                        {
+                            Ok(id) => id,
+                            Err(error) => {
+                                self.custom_error = error;
+                                return;
+                            }
+                        };
                         match validate_custom_agent_fields(
                             &id,
                             &self.custom_name,

@@ -75,17 +75,29 @@ pub struct SavedTeam {
     pub members: Vec<u64>,
 }
 
-#[must_use]
-pub fn generate_team_id() -> String {
+pub fn generate_team_id(teams: &[SavedTeam]) -> Result<String, String> {
+    generate_team_id_with(teams, |bytes| {
+        getrandom::fill(bytes)
+            .map_err(|_| "Secure random generation failed; no team was created.".into())
+    })
+}
+
+fn generate_team_id_with(
+    teams: &[SavedTeam],
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
     let mut bytes = [0u8; 6];
-    let _ = getrandom::fill(&mut bytes);
+    fill(&mut bytes)?;
     let mut out = String::with_capacity(17);
     out.push_str("team-");
     for b in bytes {
         use std::fmt::Write as _;
         let _ = write!(&mut out, "{b:02x}");
     }
-    out
+    if teams.iter().any(|team| team.id == out) {
+        return Err("Team identifier already exists; retry creating the team.".into());
+    }
+    Ok(out)
 }
 
 /// Extracts trailing digits (`"Team 2"` / `"Équipe 2"` -> `"2"`) or up to the first
@@ -913,7 +925,7 @@ impl TeamsRelayHub {
         project: u64,
         pane_id: u64,
         requested_name: Option<&str>,
-    ) -> SavedTeam {
+    ) -> Result<SavedTeam, String> {
         if let Some(existing_idx) = state
             .teams
             .iter()
@@ -922,7 +934,7 @@ impl TeamsRelayHub {
             if let Some(name) = requested_name.map(str::trim).filter(|s| !s.is_empty()) {
                 state.teams[existing_idx].name = name.chars().take(64).collect();
             }
-            return state.teams[existing_idx].clone();
+            return Ok(state.teams[existing_idx].clone());
         }
         let next_num = state.teams.iter().filter(|t| t.project == project).count() + 1;
         let default_name = format!("Team {next_num}");
@@ -934,14 +946,14 @@ impl TeamsRelayHub {
             .take(64)
             .collect();
         let team = SavedTeam {
-            id: generate_team_id(),
+            id: generate_team_id(&state.teams)?,
             project,
             name: clean_name,
             lead_pane: Some(pane_id),
             members: vec![pane_id],
         };
         state.teams.push(team.clone());
-        team
+        Ok(team)
     }
 
     pub fn toggle_team_lead(state: &mut Workspace, team_id: &str, pane_id: u64) -> bool {
@@ -1115,7 +1127,7 @@ impl TeamsRelayHub {
         }
         starts.push_back(now_ms);
 
-        let team = self.ensure_team_for_pane(state, project_id, coordinator_pane, None);
+        let team = self.ensure_team_for_pane(state, project_id, coordinator_pane, None)?;
         let coordinator_name = pane_display_name(state, coordinator_pane);
         let seq = self.alloc_seq();
         let worker_id = format!("worker-{seq}");
@@ -1771,7 +1783,7 @@ impl TeamsRelayHub {
         match tool_name {
             "team_create" => {
                 let name = obj.get("name").and_then(Value::as_str);
-                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, name);
+                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, name)?;
                 Ok((
                     json!({
                         "team_id": team.id,
@@ -1784,7 +1796,7 @@ impl TeamsRelayHub {
             }
             "team_bootstrap" => {
                 let name = obj.get("name").and_then(Value::as_str);
-                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, name);
+                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, name)?;
                 let mut draft = state.clone();
                 let mut added_tasks = Vec::new();
                 if let Some(tasks) = obj.get("tasks").and_then(Value::as_array) {
@@ -1892,7 +1904,7 @@ impl TeamsRelayHub {
                 Ok((json!({ "messages": claimed }), false))
             }
             "team_task_gate" => {
-                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, None);
+                let team = self.ensure_team_for_pane(state, caller_project, caller_pane, None)?;
                 let note = obj
                     .get("note")
                     .and_then(Value::as_str)
@@ -2201,6 +2213,36 @@ pub fn dynamic_tool_definitions() -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn team_identifier_entropy_and_collision_errors_never_return_fallback_ids() {
+        assert!(
+            generate_team_id_with(&[], |bytes| {
+                bytes.fill(0xA5);
+                Err("Synthetic entropy failure".into())
+            })
+            .is_err()
+        );
+        let fill = |bytes: &mut [u8]| {
+            bytes.fill(0xA5);
+            Ok(())
+        };
+        let id = generate_team_id_with(&[], fill).unwrap();
+        let teams = vec![SavedTeam {
+            id: id.clone(),
+            project: 1,
+            name: "Existing".into(),
+            lead_pane: Some(3),
+            members: vec![3],
+        }];
+        assert!(
+            generate_team_id_with(&teams, fill)
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert_eq!(teams[0].id, id);
+        assert_eq!(teams[0].members, vec![3]);
+    }
+
     use super::*;
     use crate::workspace::SavedSession;
 

@@ -6069,7 +6069,15 @@ impl Tessel {
                 self.gpui_extra.new_custom_agent_cmd = cmd;
             }
             GpuiAction::SubmitNewCustomAgent => {
-                let id = crate::settings_extra_model::generate_custom_agent_id();
+                let id = match crate::settings_extra_model::generate_custom_agent_id(
+                    &self.state.custom_agents,
+                ) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        self.error = error;
+                        return;
+                    }
+                };
                 let name = self.gpui_extra.new_custom_agent_name.trim().to_owned();
                 let cmd = self.gpui_extra.new_custom_agent_cmd.trim().to_owned();
                 let accent = crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[0].to_owned();
@@ -6154,8 +6162,26 @@ impl Tessel {
                             expr: format!("*/{} * * * *", mins.min(59)),
                         }
                     };
+                    let id = match crate::automations::generate_automation_id("auto") {
+                        Ok(id) => id,
+                        Err(error) => {
+                            self.error = error;
+                            return;
+                        }
+                    };
+                    if self
+                        .automations_store
+                        .automations
+                        .iter()
+                        .any(|auto| auto.id == id)
+                    {
+                        self.error =
+                            "Automation identifier already exists; retry creating the automation."
+                                .into();
+                        return;
+                    }
                     let auto = crate::automations::Automation {
-                        id: crate::automations::generate_automation_id(&name),
+                        id,
                         name,
                         project_id: proj.id,
                         project_path: proj.path,
@@ -6823,6 +6849,50 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn generated_object_ids_keep_user_labels_out_of_ids_and_preserve_existing_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let project = app.state.add_project(&project_dir).unwrap();
+        app.state.active_project = Some(project);
+        for name in ["First / task", "Deuxième tâche"] {
+            app.apply_gpui_action(GpuiAction::SetAutomationDraft {
+                name: name.into(),
+                prompt: "Synthetic task; never executed".into(),
+                every_mins: 60,
+            });
+            app.apply_gpui_action(GpuiAction::SubmitNewAutomation);
+        }
+        assert_eq!(app.automations_store.automations.len(), 2);
+        let first = &app.automations_store.automations[0];
+        let second = &app.automations_store.automations[1];
+        assert_eq!(first.name, "First / task");
+        assert_eq!(second.name, "Deuxième tâche");
+        assert_ne!(first.id, second.id);
+        for automation in &app.automations_store.automations {
+            let suffix = automation.id.strip_prefix("auto-").unwrap();
+            assert_eq!(suffix.len(), 12);
+            assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(!automation.enabled);
+            assert!(automation.runs.is_empty());
+        }
+        for name in ["First agent", "Second agent"] {
+            app.apply_gpui_action(GpuiAction::SetCustomAgentDraft {
+                name: name.into(),
+                cmd: "synthetic-cli".into(),
+            });
+            app.apply_gpui_action(GpuiAction::SubmitNewCustomAgent);
+        }
+        assert_eq!(app.state.custom_agents.len(), 2);
+        assert_ne!(app.state.custom_agents[0].id, app.state.custom_agents[1].id);
+        assert_eq!(app.state.custom_agents[0].name, "First agent");
+        assert_eq!(app.state.custom_agents[1].name, "Second agent");
+        assert!(app.sessions.is_empty());
+        assert!(!dir.path().join("state/automations/runs").exists());
+    }
+
     use super::*;
 
     #[test]

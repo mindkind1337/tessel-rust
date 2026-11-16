@@ -469,16 +469,29 @@ impl AutomationsFile {
     }
 }
 
-#[must_use]
-pub fn generate_automation_id(prefix: &str) -> String {
+pub fn generate_automation_id(prefix: &str) -> Result<String, String> {
+    generate_automation_id_with(prefix, |bytes| {
+        getrandom::fill(bytes).map_err(|_| {
+            "Secure random generation failed; no automation identifier was created.".into()
+        })
+    })
+}
+
+fn generate_automation_id_with(
+    prefix: &str,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
+    if !matches!(prefix, "auto" | "run") {
+        return Err("Invalid automation identifier prefix.".into());
+    }
     let mut raw = [0u8; 6];
-    let _ = getrandom::fill(&mut raw);
+    fill(&mut raw)?;
     let mut out = format!("{prefix}-");
     for b in raw {
         use std::fmt::Write as _;
         let _ = write!(&mut out, "{b:02x}");
     }
-    out
+    Ok(out)
 }
 
 /// Writes the automation prompt safely to `<data_dir>/automations/runs/<run_id>/prompt.md`
@@ -495,10 +508,20 @@ pub fn write_automation_prompt_file(
     {
         return Err("Invalid automation run ID.".into());
     }
-    let dir = data_dir.join("automations").join("runs").join(run_id);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let root = data_dir.join("automations").join("runs");
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let dir = root.join(run_id);
+    fs::create_dir(&dir).map_err(|e| format!("Could not reserve a new automation run: {e}"))?;
     let file = dir.join("prompt.md");
-    fs::write(&file, prompt.as_bytes()).map_err(|e| e.to_string())?;
+    use std::io::Write as _;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)
+        .map_err(|e| e.to_string())?;
+    output
+        .write_all(prompt.as_bytes())
+        .map_err(|e| e.to_string())?;
     Ok(file)
 }
 
@@ -615,5 +638,36 @@ mod tests {
         assert_eq!(saved, "Check $(whoami) & `id`");
         let instr = safe_prompt_instruction(&path);
         assert!(!instr.contains("$(whoami)"));
+        assert!(write_automation_prompt_file(dir.path(), "run-abc123", "Replacement").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        let orphan = dir.path().join("automations/runs/run-orphan");
+        fs::create_dir(&orphan).unwrap();
+        assert!(write_automation_prompt_file(dir.path(), "run-orphan", "Replacement").is_err());
+        assert!(!orphan.join("prompt.md").exists());
+    }
+
+    #[test]
+    fn automation_identifier_entropy_errors_never_return_fallback_ids() {
+        assert!(
+            generate_automation_id_with("run", |bytes| {
+                bytes.fill(0xA5);
+                Err("Synthetic entropy failure".into())
+            })
+            .is_err()
+        );
+        assert!(
+            generate_automation_id_with("User supplied name", |_| panic!("invalid prefix"))
+                .is_err()
+        );
+        for prefix in ["auto", "run"] {
+            assert_eq!(
+                generate_automation_id_with(prefix, |bytes| {
+                    bytes.fill(0xBB);
+                    Ok(())
+                })
+                .unwrap(),
+                format!("{prefix}-{}", "bb".repeat(6))
+            );
+        }
     }
 }

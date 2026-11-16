@@ -9956,11 +9956,17 @@ impl Tessel {
         if open_for_this >= crate::automations::MAX_OPEN_PANES_PER_AUTOMATION {
             return;
         }
-        let run_id = crate::automations::generate_automation_id("run");
-        let Ok(prompt_file) =
-            crate::automations::write_automation_prompt_file(&store_dir, &run_id, &auto.prompt)
-        else {
-            return;
+        let (run_id, prompt_file) = match crate::automations::generate_automation_id("run")
+            .and_then(|run_id| {
+                crate::automations::write_automation_prompt_file(&store_dir, &run_id, &auto.prompt)
+                    .map(|file| (run_id, file))
+            }) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.error = error.clone();
+                self.settings_extra.automations_status = error;
+                return;
+            }
         };
         let instruction = crate::automations::safe_prompt_instruction(&prompt_file);
         let agent_id = auto.agent.as_id().to_owned();
@@ -12120,7 +12126,13 @@ impl Tessel {
                 self.teams_hub.wake_banners.remove(&pane_id);
             }
             TeamsUiAction::CreateTeam { project, name } => {
-                let id = crate::teams_relay::generate_team_id();
+                let id = match crate::teams_relay::generate_team_id(&self.state.teams) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        self.error = error;
+                        return;
+                    }
+                };
                 self.state.teams.push(crate::teams_relay::SavedTeam {
                     id,
                     project,

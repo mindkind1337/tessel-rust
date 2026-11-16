@@ -68,17 +68,29 @@ pub fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
-#[must_use]
-pub fn generate_custom_agent_id() -> String {
+pub fn generate_custom_agent_id(agents: &[CustomAgent]) -> Result<String, String> {
+    generate_custom_agent_id_with(agents, |bytes| {
+        getrandom::fill(bytes)
+            .map_err(|_| "Secure random generation failed; no custom agent was created.".into())
+    })
+}
+
+fn generate_custom_agent_id_with(
+    agents: &[CustomAgent],
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
     let mut bytes = [0u8; 6];
-    let _ = getrandom::fill(&mut bytes);
+    fill(&mut bytes)?;
     let mut hex = String::with_capacity(19);
     hex.push_str("custom-");
     for b in bytes {
         use std::fmt::Write as _;
         let _ = write!(&mut hex, "{b:02x}");
     }
-    hex
+    if agents.iter().any(|agent| agent.id == hex) {
+        return Err("Custom agent identifier already exists; retry creating the agent.".into());
+    }
+    Ok(hex)
 }
 
 pub fn validate_custom_agent_fields(
@@ -2774,6 +2786,36 @@ fn read_bounded_utf8(path: &Path, max_bytes: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_identifier_entropy_and_collision_errors_never_return_fallback_ids() {
+        assert!(
+            generate_custom_agent_id_with(&[], |bytes| {
+                bytes.fill(0xA5);
+                Err("Synthetic entropy failure".into())
+            })
+            .is_err()
+        );
+        let fill = |bytes: &mut [u8]| {
+            bytes.fill(0xA5);
+            Ok(())
+        };
+        let id = generate_custom_agent_id_with(&[], fill).unwrap();
+        let agents = vec![CustomAgent {
+            id: id.clone(),
+            name: "Existing".into(),
+            command: "synthetic-cli".into(),
+            accent: "#ffffff".into(),
+            enabled: true,
+        }];
+        assert!(
+            generate_custom_agent_id_with(&agents, fill)
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert_eq!(agents[0].id, id);
+        assert_eq!(agents[0].command, "synthetic-cli");
+    }
+
     #[test]
     fn managed_account_entropy_failure_and_collisions_preserve_existing_profiles() {
         let dir = tempfile::tempdir().unwrap();
