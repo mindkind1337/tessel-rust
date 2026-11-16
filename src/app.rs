@@ -10,6 +10,7 @@ use eframe::egui;
 mod floating_terminal;
 #[path = "app/gpui_bridge.rs"]
 pub(crate) mod gpui_bridge;
+mod linear_task;
 #[cfg(windows)]
 #[path = "app/native_terminals.rs"]
 mod native_terminals;
@@ -1161,6 +1162,13 @@ impl Tessel {
                 );
                 app.new_task.edit(crate::new_task_form::Field::Brief, "Utiliser uniquement les fichiers fictifs. Vérifier le résultat avant de terminer.".into());
             }
+            if std::env::args().any(|a| a == "--linear-task-fixture") {
+                app.state.language = crate::i18n::Language::French;
+                crate::i18n::set_language(app.state.language);
+                app.agents = crate::agent_detection::Detection::model_picker_fixture("codex");
+                app.install_linear_view_fixture();
+                // Rendering only: no bound project, worker, account secret or launch permit.
+            }
             if std::env::args().any(|a| a == "--help-fixture") {
                 app.open_help();
             }
@@ -1178,7 +1186,14 @@ impl Tessel {
             cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--vault-panel-fixture");
         let new_task_fixture =
             cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--new-task-fixture");
-        if !models_fixture && !native_host_fixture && !vault_fixture && !new_task_fixture {
+        let linear_task_fixture =
+            cfg!(feature = "visual-test") && std::env::args().any(|a| a == "--linear-task-fixture");
+        if !models_fixture
+            && !native_host_fixture
+            && !vault_fixture
+            && !new_task_fixture
+            && !linear_task_fixture
+        {
             app.detect_agents();
         }
         #[cfg(feature = "visual-test")]
@@ -2423,6 +2438,7 @@ impl Tessel {
         // also request a GPUI refresh even when no process output has arrived.
         native_changed |= self.poll_teams_and_relay();
         native_changed |= self.linear.poll();
+        native_changed |= self.poll_linear_task();
         native_changed
     }
     fn new_session(&mut self, launch: Launch) {
@@ -12030,6 +12046,9 @@ impl Tessel {
     }
 
     pub(crate) fn open_linear_modal(&mut self) {
+        if self.linear.view.open {
+            return;
+        }
         self.gpui_extra.issues_menu_open = false;
         self.command_palette.open = false;
         self.toolbar_menu_open = false;
@@ -12040,6 +12059,7 @@ impl Tessel {
             .as_ref()
             .map(|store| store.directory().join("linear.dat"));
         self.linear.open(path);
+        self.configure_linear_task();
     }
 
     fn open_github_modal(&mut self, project_id: Option<u64>) {

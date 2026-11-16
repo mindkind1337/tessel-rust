@@ -5,6 +5,20 @@ use super::{
     *,
 };
 
+#[derive(Clone, Debug)]
+pub struct AgentChoice {
+    pub id: String,
+    pub label: String,
+    pub available: bool,
+}
+struct Launch {
+    key: u64,
+    issue: String,
+    permit: IssuePermit,
+    next_state: Option<String>,
+    accepted: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub open: bool,
@@ -22,6 +36,13 @@ pub struct Snapshot {
     pub issues: Vec<LinearIssue>,
     pub has_more: bool,
     pub selected: Option<LinearIssue>,
+    pub agents: Vec<AgentChoice>,
+    pub agent: String,
+    pub isolated: bool,
+    pub project_name: String,
+    pub start_states: Vec<LinearState>,
+    pub loading_start_states: bool,
+    pub next_state: Option<String>,
 }
 /// No secret-bearing command variant: key submission has its own private method.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +57,10 @@ pub enum Command {
     State(Option<String>),
     Select(String),
     Back,
+    Agent(String),
+    Isolated(bool),
+    NextState(Option<String>),
+    Start,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {
@@ -44,6 +69,8 @@ enum Slot {
     Teams,
     States,
     Issues,
+    StartStates,
+    Update,
 }
 #[derive(Default)]
 pub struct Panel {
@@ -52,6 +79,11 @@ pub struct Panel {
     path: Option<PathBuf>,
     pending: Vec<(Slot, u64)>,
     issue_permit: Option<IssuePermit>,
+    pub(crate) project: Option<(u64, PathBuf)>,
+    pub(crate) requested_start: Option<u64>,
+    sequence: u64,
+    launch: Option<Launch>,
+    warning: Option<String>,
     // Compatibility input only. Never copied to a public snapshot or serialized.
     pub(crate) key: Zeroizing<String>,
     pub(crate) rejected_key: bool,
@@ -67,12 +99,15 @@ impl Panel {
         self.view = Snapshot {
             open: true,
             epoch,
+            isolated: true,
             ..Default::default()
         };
         self.key = Zeroizing::new(String::new());
         self.rejected_key = false;
         self.path = path;
         self.pending.clear();
+        self.project = None;
+        self.requested_start = None;
         self.issue_permit = None;
         self.status();
     }
@@ -98,6 +133,7 @@ impl Panel {
         }
     }
     fn status(&mut self) {
+        self.clear_start_states();
         self.issue_permit = None;
         self.pending.clear();
         self.view.loading_issues = false;
@@ -187,21 +223,54 @@ impl Panel {
                 self.issues(false);
             }
             Command::Select(id) if !self.view.loading_issues => {
+                self.clear_start_states();
                 self.view.selected = self
                     .view
                     .issues
                     .iter()
                     .find(|issue| issue.id == id)
                     .cloned();
+                if let Some(team) = self
+                    .view
+                    .selected
+                    .as_ref()
+                    .map(|issue| issue.team.id.clone())
+                    .filter(|id| !id.is_empty())
+                {
+                    self.view.loading_start_states = true;
+                    self.read(Slot::StartStates, Query::States(team), false);
+                }
             }
-            Command::Back => self.view.selected = None,
+            Command::Back => {
+                self.view.selected = None;
+                self.clear_start_states();
+            }
+            Command::Agent(id) if self.view.agents.iter().any(|a| a.id == id && a.available) => {
+                self.view.agent = id
+            }
+            Command::Isolated(value) => self.view.isolated = value,
+            Command::NextState(state)
+                if state
+                    .as_ref()
+                    .is_none_or(|id| self.view.start_states.iter().any(|s| &s.id == id)) =>
+            {
+                self.view.next_state = state
+            }
+            Command::Start => self.requested_start = Some(epoch),
             _ => {}
         }
+    }
+    fn clear_start_states(&mut self) {
+        self.view.start_states.clear();
+        self.view.next_state = None;
+        self.view.loading_start_states = false;
+        self.pending.retain(|(s, _)| *s != Slot::StartStates);
     }
     fn read(&mut self, slot: Slot, query: Query, refresh: bool) {
         self.send(slot, Action::Read { query, refresh });
     }
     fn issues(&mut self, refresh: bool) {
+        self.clear_start_states();
         self.issue_permit = None;
         self.view.selected = None;
         self.view.loading_issues = true;
@@ -218,6 +287,7 @@ impl Panel {
                 self.view.busy = false;
             }
             Slot::Issues => self.view.loading_issues = false,
+            Slot::StartStates => self.view.loading_start_states = false,
             _ => {}
         }
     }
@@ -232,6 +302,9 @@ impl Panel {
                 Ok(Some(event)) => event,
                 Ok(None) => break,
                 Err(error) => {
+                    if self.launch.as_ref().is_some_and(|l| l.accepted) {
+                        self.finish_update(false);
+                    }
                     self.issue_permit = None;
                     self.worker = None;
                     self.pending.clear();
@@ -256,6 +329,13 @@ impl Panel {
             self.pending.retain(|(s, _)| *s != slot);
             self.set_idle(slot);
             changed = true;
+            if slot == Slot::Update {
+                let success = event
+                    .apply(|_, result| matches!(result, Ok(Reply::Updated(_))))
+                    .unwrap_or(false);
+                self.finish_update(success);
+                continue;
+            }
             // Apply public data WHILE the account/revision guard is held. Follow-up requests
             // must be enqueued only AFTER this callback returns (no authority re-entry).
             let mut reload = false;
@@ -276,6 +356,89 @@ impl Panel {
             }
         }
         changed
+    }
+    pub(crate) fn begin_launch(
+        &mut self,
+        epoch: u64,
+    ) -> Result<crate::external_issue::Linear, String> {
+        let (metadata, permit) = self.capture_selected(epoch)?;
+        if self.launch.is_some()
+            || self.project.is_none()
+            || !self
+                .view
+                .agents
+                .iter()
+                .any(|a| a.id == self.view.agent && a.available)
+        {
+            return Err("Choose a local project and an available native agent".into());
+        }
+        if self
+            .view
+            .next_state
+            .as_ref()
+            .is_some_and(|id| !self.view.start_states.iter().any(|s| &s.id == id))
+        {
+            return Err("Choose an available Linear state".into());
+        }
+        let key = self
+            .sequence
+            .checked_add(1)
+            .ok_or("Linear launch identity exhausted")?;
+        self.sequence = key;
+        self.launch = Some(Launch {
+            key,
+            issue: metadata.issue_id().into(),
+            permit,
+            next_state: self.view.next_state.clone(),
+            accepted: false,
+        });
+        self.view.busy = true;
+        self.view.error.clear();
+        Ok(metadata.with_launch_key(key))
+    }
+    /// Called only after the controller accepts its native first turn, or definitively fails.
+    pub(crate) fn launch_finished(&mut self, key: u64, result: Result<(), String>) -> bool {
+        let Some(launch) = self.launch.as_mut().filter(|l| l.key == key && !l.accepted) else {
+            return false;
+        };
+        if let Err(error) = result {
+            self.launch = None;
+            self.view.busy = false;
+            self.view.error = error;
+            return false;
+        }
+        launch.accepted = true;
+        if let Some(state) = launch.next_state.clone() {
+            let result = self
+                .worker
+                .as_mut()
+                .ok_or("Linear worker unavailable".to_owned())
+                .and_then(|w| {
+                    w.submit_issue_update(launch.permit.clone(), launch.issue.clone(), state)
+                });
+            match result {
+                Ok(id) => self.pending.push((Slot::Update, id)),
+                Err(_) => self.finish_update(false),
+            }
+        } else {
+            self.finish_update(true);
+        }
+        true
+    }
+    fn finish_update(&mut self, success: bool) {
+        self.launch = None;
+        self.view.busy = false;
+        self.view.open = false;
+        self.pending.clear();
+        self.issue_permit = None;
+        self.view.selected = None;
+        self.view.issues.clear();
+        if !success {
+            self.warning = Some("The task started, but its Linear state could not be changed. Refresh Linear and change it there.".into());
+        }
+    }
+    pub(crate) fn take_warning(&mut self) -> Option<String> {
+        self.warning.take()
     }
     /// Private captured selection for the eventual owner launch controller. No snapshot authority.
     #[allow(dead_code)]
@@ -310,6 +473,7 @@ impl Panel {
         match (slot, reply) {
             (Slot::Capability, Ok(Reply::Capability(secure))) => self.view.secure = Some(secure),
             (Slot::Account, Ok(Reply::Status(identity))) => {
+                self.clear_start_states();
                 self.issue_permit = None;
                 self.view.identity = identity;
                 self.view.confirm_disconnect = false;
@@ -323,6 +487,7 @@ impl Panel {
             }
             (Slot::Teams, Ok(Reply::Teams(page))) => self.view.teams = page.items,
             (Slot::States, Ok(Reply::States(page))) => self.view.states = page.items,
+            (Slot::StartStates, Ok(Reply::States(page))) => self.view.start_states = page.items,
             (Slot::Issues, Ok(Reply::Issues(page))) => {
                 self.view.issues = page.items;
                 self.view.has_more = page.has_next_page;
@@ -341,8 +506,55 @@ pub fn issue_text(issue: &LinearIssue) -> String {
     )
 }
 
+#[cfg(any(test, feature = "visual-test"))]
+pub(crate) fn fixture_view() -> Snapshot {
+    let issue = LinearIssue {
+        id: "fixture".into(), identifier: "TES-42".into(), title: "Améliorer le panneau des projets".into(),
+        url: "https://linear.app/demo/issue/TES-42".into(),
+        description: "Conserver la sélection et la position de défilement lorsque la liste des projets est actualisée.".into(),
+        team: LinearTeam { id: "team".into(), name: "Tessel".into(), ..Default::default() },
+        state: LinearState { name: "À faire".into(), ..Default::default() },
+        ..Default::default()
+    };
+    Snapshot {
+        open: true,
+        epoch: 8,
+        secure: Some(true),
+        identity: Some(LinearIdentity {
+            viewer: LinearPerson {
+                name: "Compte de démonstration".into(),
+                ..Default::default()
+            },
+            organization: Default::default(),
+        }),
+        issues: vec![issue.clone()],
+        selected: Some(issue),
+        project_name: "Projet de démonstration".into(),
+        agents: vec![
+            AgentChoice {
+                id: "codex".into(),
+                label: "Codex".into(),
+                available: true,
+            },
+            AgentChoice {
+                id: "claude".into(),
+                label: "Claude".into(),
+                available: false,
+            },
+        ],
+        agent: "codex".into(),
+        isolated: true,
+        start_states: vec![LinearState {
+            id: "working".into(),
+            name: "En cours".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::{
         request::Generation,
         service::{Credentials, Remote, Service, Store, Transport},
@@ -392,6 +604,18 @@ mod tests {
                 };
                 match request {
                     Remote::Read {
+                        query: Query::States(team),
+                        ..
+                    } => Ok(Reply::States(Page {
+                        items: vec![LinearState {
+                            id: format!("{team}-working"),
+                            name: "In progress".into(),
+                            ..Default::default()
+                        }],
+                        has_next_page: false,
+                        end_cursor: None,
+                    })),
+                    Remote::Read {
                         query: Query::Teams,
                         ..
                     } => Ok(Reply::Teams(Page {
@@ -415,6 +639,11 @@ mod tests {
                             identifier: "TEAM-1".into(),
                             url: "https://linear.app/team/issue/TEAM-1".into(),
                             title: "Synthetic issue".into(),
+                            team: LinearTeam {
+                                id: "team".into(),
+                                name: "Fixture team".into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         }])))
                     }
@@ -433,6 +662,110 @@ mod tests {
             assert!(Instant::now() < deadline, "fixture worker timed out");
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    struct LaunchTransport {
+        updates: Arc<std::sync::atomic::AtomicUsize>,
+        fail: bool,
+    }
+    impl Transport for LaunchTransport {
+        fn request<'a>(
+            &'a self,
+            key: &'a str,
+            request: Remote,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Reply, String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                if let Remote::SetState { issue, state } = request {
+                    assert_eq!(issue, "assigned");
+                    assert_eq!(state, "team-working");
+                    self.updates
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if self.fail {
+                        return Err("synthetic update refused".into());
+                    }
+                    Ok(Reply::Updated(Box::new(LinearIssue {
+                        id: issue,
+                        ..Default::default()
+                    })))
+                } else {
+                    FixtureTransport.request(key, request).await
+                }
+            })
+        }
+    }
+    pub(crate) fn launch_fixture(fail: bool) -> (Panel, Arc<std::sync::atomic::AtomicUsize>) {
+        let updates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let owner = Generation::default();
+        let service = Service::with_backends(
+            owner.scope(),
+            Arc::new(FixtureStore),
+            Arc::new(LaunchTransport {
+                updates: updates.clone(),
+                fail,
+            }),
+        );
+        let mut panel = Panel {
+            worker: Some(Worker::with_service(owner, service).unwrap()),
+            ..Default::default()
+        };
+        panel.open(None);
+        wait(&mut panel, |p| {
+            !p.view.loading_account && !p.view.loading_issues && !p.view.issues.is_empty()
+        });
+        panel.command(panel.view.epoch, Command::Select("assigned".into()));
+        wait(&mut panel, |p| !p.view.loading_start_states);
+        panel.project = Some((1, PathBuf::from("synthetic")));
+        panel.view.project_name = "Fixture project".into();
+        panel.view.agents = vec![AgentChoice {
+            id: "codex".into(),
+            label: "Codex".into(),
+            available: true,
+        }];
+        panel.view.agent = "codex".into();
+        (panel, updates)
+    }
+    #[test]
+    fn launch_updates_only_explicit_state_after_acceptance_and_never_retries_task() {
+        use std::sync::atomic::Ordering;
+        for fail in [false, true] {
+            let (mut panel, updates) = launch_fixture(fail);
+            let epoch = panel.view.epoch;
+            panel.command(epoch, Command::NextState(Some("foreign".into())));
+            assert!(panel.view.next_state.is_none());
+            panel.command(epoch, Command::NextState(Some("team-working".into())));
+            let metadata = panel.begin_launch(epoch).unwrap();
+            let key = metadata.launch_key().unwrap();
+            assert!(panel.begin_launch(epoch).is_err());
+            panel.command(epoch, Command::Close);
+            panel.command(epoch, Command::NextState(None));
+            assert!(panel.view.open && panel.view.busy);
+            assert_eq!(updates.load(Ordering::SeqCst), 0);
+            assert!(!panel.launch_finished(key + 1, Ok(())));
+            assert!(panel.launch_finished(key, Ok(())));
+            assert!(!panel.launch_finished(key, Ok(())));
+            wait(&mut panel, |p| !p.view.open);
+            assert_eq!(updates.load(Ordering::SeqCst), 1);
+            assert_eq!(panel.take_warning().is_some(), fail);
+            assert!(!panel.launch_finished(key, Ok(())));
+            assert!(panel.begin_launch(epoch).is_err());
+        }
+    }
+    #[test]
+    fn launch_failure_keeps_selection_and_default_success_does_not_mutate_linear() {
+        use std::sync::atomic::Ordering;
+        let (mut panel, updates) = launch_fixture(false);
+        let epoch = panel.view.epoch;
+        let key = panel.begin_launch(epoch).unwrap().launch_key().unwrap();
+        assert!(!panel.launch_finished(key, Err("synthetic launch failure".into())));
+        assert!(panel.view.open && !panel.view.busy && panel.view.selected.is_some());
+        assert_eq!(updates.load(Ordering::SeqCst), 0);
+        let next = panel.begin_launch(epoch).unwrap().launch_key().unwrap();
+        assert_ne!(next, key);
+        assert!(!panel.launch_finished(key, Ok(())));
+        assert!(panel.launch_finished(next, Ok(())));
+        assert!(!panel.view.open);
+        assert_eq!(updates.load(Ordering::SeqCst), 0);
+        assert!(panel.take_warning().is_none());
     }
     #[test]
     fn actual_worker_delivery_obeys_latest_filter_close_and_failed_disconnect() {

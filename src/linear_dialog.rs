@@ -150,10 +150,98 @@ pub fn show(ctx: &egui::Context, panel: &mut Panel, french: bool) {
                         .show(ui, |ui| {
                             ui.label(RichText::new(&issue.description).monospace());
                         });
-                    ui.label(t(
-                        "La préparation d’une tâche depuis Linear reste à raccorder.",
-                        "Preparing a task from Linear is not connected yet.",
-                    ));
+                    if view.project_name.is_empty() {
+                        ui.label(t(
+                            "Ouvrez Linear depuis un projet local pour démarrer une tâche.",
+                            "Open Linear from a local project to start a task.",
+                        ));
+                    } else {
+                        ui.label(format!(
+                            "{} : {}",
+                            t("Projet", "Project"),
+                            view.project_name
+                        ));
+                    }
+                    let mut agent = view.agent.clone();
+                    egui::ComboBox::from_id_salt("linear-launch-agent")
+                        .selected_text(
+                            view.agents
+                                .iter()
+                                .find(|a| a.id == agent)
+                                .map(|a| a.label.as_str())
+                                .unwrap_or(t("Choisir un agent", "Choose agent")),
+                        )
+                        .show_ui(ui, |ui| {
+                            for choice in &view.agents {
+                                ui.add_enabled_ui(choice.available, |ui| {
+                                    ui.selectable_value(
+                                        &mut agent,
+                                        choice.id.clone(),
+                                        &choice.label,
+                                    );
+                                });
+                            }
+                        });
+                    if agent != view.agent {
+                        command = Some(Command::Agent(agent));
+                    }
+                    let mut isolated = view.isolated;
+                    if ui
+                        .checkbox(
+                            &mut isolated,
+                            t(
+                                "Créer une copie Git isolée",
+                                "Create an isolated Git worktree",
+                            ),
+                        )
+                        .changed()
+                    {
+                        command = Some(Command::Isolated(isolated));
+                    }
+                    let mut next = view.next_state.clone();
+                    ui.add_enabled_ui(!view.loading_start_states, |ui| {
+                        egui::ComboBox::from_id_salt("linear-launch-state")
+                            .selected_text(
+                                view.start_states
+                                    .iter()
+                                    .find(|s| Some(&s.id) == next.as_ref())
+                                    .map(|s| s.name.as_str())
+                                    .unwrap_or(t("Ne pas changer l’état", "Do not change state")),
+                            )
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut next,
+                                    None,
+                                    t("Ne pas changer l’état", "Do not change state"),
+                                );
+                                for state in &view.start_states {
+                                    ui.selectable_value(
+                                        &mut next,
+                                        Some(state.id.clone()),
+                                        &state.name,
+                                    );
+                                }
+                            });
+                    });
+                    if next != view.next_state {
+                        command = Some(Command::NextState(next));
+                    }
+                    if ui
+                        .add_enabled(
+                            !view.project_name.is_empty()
+                                && view
+                                    .agents
+                                    .iter()
+                                    .any(|a| a.id == view.agent && a.available),
+                            egui::Button::new(t("Démarrer la tâche", "Start task")),
+                        )
+                        .clicked()
+                    {
+                        command = Some(Command::Start);
+                    }
+                    if view.busy {
+                        ui.label(t("Préparation de la tâche…", "Preparing task…"));
+                    }
                 } else {
                     let mut filter = view.selection.filter;
                     let mut team = view.selection.team_id.clone();

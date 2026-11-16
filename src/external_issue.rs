@@ -7,6 +7,7 @@ pub(crate) struct Linear {
     title: String,
     url: String,
     permit: Option<crate::linear_model::service::IssuePermit>,
+    launch_key: Option<u64>,
 }
 fn text(raw: &str, max: usize) -> String {
     let clean: String = raw
@@ -47,6 +48,7 @@ impl Linear {
             title,
             url: crate::linear_model::issue_url(url)?,
             permit: None,
+            launch_key: None,
         })
     }
     pub(crate) fn authorize(
@@ -63,6 +65,13 @@ impl Linear {
             .as_ref()
             .ok_or("Refresh and select the Linear issue again")?
             .commit(&self.id, apply)
+    }
+    pub(crate) fn with_launch_key(mut self, key: u64) -> Self {
+        self.launch_key = Some(key);
+        self
+    }
+    pub(crate) fn launch_key(&self) -> Option<u64> {
+        self.launch_key
     }
     #[allow(dead_code)]
     pub fn issue_id(&self) -> &str {

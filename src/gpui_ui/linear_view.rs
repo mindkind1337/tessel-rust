@@ -33,6 +33,8 @@ enum Picker {
     Filter,
     Team,
     State,
+    Agent,
+    NextState,
 }
 #[derive(Clone)]
 enum Click {
@@ -391,10 +393,7 @@ pub fn render(
                         .whitespace_normal()
                         .child(issue.description.clone()),
                 )
-                .child(t(
-                    "La préparation d’une tâche depuis Linear reste à raccorder.",
-                    "Preparing a task from Linear is not connected yet.",
-                ));
+                .child(start_controls(s, view, french, tokens, cx));
         } else {
             let team = s
                 .teams
@@ -446,6 +445,7 @@ pub fn render(
             );
             if let Some(picker) = view.picker {
                 let entries: Vec<(String, Command)> = match picker {
+                    Picker::Agent | Picker::NextState => Vec::new(),
                     Picker::Filter => LinearFilter::ALL
                         .iter()
                         .map(|v| (v.label(french).into(), Command::Filter(*v)))
@@ -609,11 +609,194 @@ pub fn render(
     )
 }
 
+fn start_controls(
+    s: &Snapshot,
+    view: &mut View,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let t = |fr, en| if french { fr } else { en };
+    let agent = s
+        .agents
+        .iter()
+        .find(|a| a.id == s.agent)
+        .map(|a| a.label.as_str())
+        .unwrap_or(t("Choisir un agent", "Choose agent"));
+    let state = s
+        .start_states
+        .iter()
+        .find(|v| Some(&v.id) == s.next_state.as_ref())
+        .map(|v| v.name.as_str())
+        .unwrap_or(t("Ne pas changer l’état", "Do not change state"));
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(if s.project_name.is_empty() {
+            t(
+                "Ouvrez Linear depuis un projet local pour démarrer une tâche.",
+                "Open Linear from a local project to start a task.",
+            )
+            .to_owned()
+        } else {
+            format!("{} : {}", t("Projet", "Project"), s.project_name)
+        })
+        .child(button(
+            "linear-launch-agent",
+            format!("{agent} ▾"),
+            !s.busy,
+            Click::Pick(Picker::Agent),
+            view,
+            s.epoch,
+            tokens,
+            cx,
+        ))
+        .child(button(
+            "linear-launch-copy",
+            format!(
+                "{} {}",
+                if s.isolated { "☑" } else { "☐" },
+                t(
+                    "Créer une copie Git isolée",
+                    "Create an isolated Git worktree"
+                )
+            ),
+            !s.busy,
+            Click::Command(Command::Isolated(!s.isolated)),
+            view,
+            s.epoch,
+            tokens,
+            cx,
+        ))
+        .child(button(
+            "linear-launch-state",
+            format!("{state} ▾"),
+            !s.busy && !s.loading_start_states,
+            Click::Pick(Picker::NextState),
+            view,
+            s.epoch,
+            tokens,
+            cx,
+        ));
+    let options: Vec<(String, Command, bool)> = match view.picker {
+        Some(Picker::Agent) => s
+            .agents
+            .iter()
+            .map(|a| (a.label.clone(), Command::Agent(a.id.clone()), a.available))
+            .collect(),
+        Some(Picker::NextState) => std::iter::once((
+            t("Ne pas changer l’état", "Do not change state").to_owned(),
+            Command::NextState(None),
+            true,
+        ))
+        .chain(
+            s.start_states
+                .iter()
+                .map(|v| (v.name.clone(), Command::NextState(Some(v.id.clone())), true)),
+        )
+        .collect(),
+        _ => Vec::new(),
+    };
+    let mut menu = div()
+        .id("linear-launch-options")
+        .max_h(px(160.))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(3.));
+    for (i, (label, command, enabled)) in options.into_iter().enumerate() {
+        menu = menu.child(button(
+            &format!("option-launch-{i}"),
+            label,
+            !s.busy && enabled,
+            Click::Command(command),
+            view,
+            s.epoch,
+            tokens,
+            cx,
+        ));
+    }
+    body = body.child(menu).child(button(
+        "linear-launch-start",
+        if s.busy {
+            t("Préparation…", "Preparing…")
+        } else {
+            t("Démarrer la tâche", "Start task")
+        },
+        !s.busy
+            && !s.project_name.is_empty()
+            && s.agents.iter().any(|a| a.id == s.agent && a.available),
+        Click::Command(Command::Start),
+        view,
+        s.epoch,
+        tokens,
+        cx,
+    ));
+    body.into_any_element()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linear_model::{LinearIdentity, LinearIssue, LinearPerson};
     use gpui::{EntityInputHandler, Keystroke, TestAppContext, VisualTestContext};
+    #[gpui::test]
+    fn native_launch_controls_accept_keyboard_and_block_busy_replays(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|w, cx| {
+            w.activate();
+            let mut root = TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+            root.app.install_linear_view_fixture();
+            root
+        });
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        view.update(cx, |root, w, cx| {
+            root.linear_view
+                .focus
+                .get("linear-launch-copy")
+                .unwrap()
+                .focus(w, cx)
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        view.update(cx, |root, w, cx| {
+            assert!(!root.app.linear.view.isolated);
+            assert!(root.app.linear.view.error.is_empty());
+            root.linear_view
+                .focus
+                .get("linear-launch-start")
+                .unwrap()
+                .focus(w, cx);
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        view.update(cx, |root, w, cx| {
+            // The real UI polling loop already consumed the keyboard request. This
+            // unbound rendering fixture must reach the controller and refuse launch.
+            assert_eq!(
+                root.app.linear.view.error,
+                "Select a local owner project before opening Linear"
+            );
+            assert!(root.app.linear.requested_start.is_none());
+            root.app.linear.view.busy = true;
+            activate(root, 8, Click::Command(Command::Start), w, cx);
+            assert!(root.app.linear.requested_start.is_none());
+            root.app.linear.view.busy = false;
+            activate(root, 7, Click::Command(Command::Start), w, cx);
+            assert!(root.app.linear.requested_start.is_none());
+        })
+        .unwrap();
+    }
     #[gpui::test]
     fn native_dialog_back_keyboard_and_private_input_lifecycle(cx: &mut TestAppContext) {
         let temp = tempfile::tempdir().unwrap();

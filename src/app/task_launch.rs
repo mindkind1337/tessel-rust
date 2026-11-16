@@ -425,6 +425,9 @@ impl Tessel {
     }
 
     fn fail_owner_task(&mut self, pending: &Pending, error: String) {
+        if let Some(key) = pending.external.as_ref().and_then(|i| i.launch_key()) {
+            self.linear.launch_finished(key, Err(error.clone()));
+        }
         // Do not overwrite a user's intervening edit or a removed/reassigned card.
         let mut todo = pending.expected.clone();
         todo.timeline
@@ -616,6 +619,13 @@ impl Tessel {
             };
             match result {
                 Ok(Phase::Submitted) => {
+                    if let Some(key) = pending.external.as_ref().and_then(|i| i.launch_key())
+                        && self.linear.launch_finished(key, Ok(()))
+                    {
+                        self.state.active_project = Some(pending.ticket.project_id());
+                        self.active_session = Some(pane);
+                        self.view = View::Work;
+                    }
                     let token = match pending.provider {
                         Provider::Codex => self
                             .chats

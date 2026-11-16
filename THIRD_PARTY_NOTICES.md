@@ -356,3 +356,4 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - Auxiliary-process parent-session filtering reuses `src/agent_env.rs`, derived from Tessel `src/main/cleanEnv.js` under the existing Orca/Tessel MIT attribution; native process integration and synthetic subprocess tests are independently implemented.
 
 - `src/external_issue.rs` and the linked-issue controller restrictions follow Tessel renderer `externalIssues.js` under the existing Orca/Tessel MIT attribution. Rust reuses existing Linear origin/ID validation, adds external provenance and keeps the transient contract outside serialized state.
+- `src/app/linear_task.rs` and the Linear launch controls follow `externalIssues.js` and `components/LinearDialog.vue` under that same attribution, with captured account authority and native first-turn callbacks.
