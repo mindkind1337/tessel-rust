@@ -7492,7 +7492,7 @@ mod panel_snapshot_tests {
                 }
                 _ => {}
             }
-            app.poll_teams_and_relay();
+            app.poll_for_gpui();
             let record = app
                 .teams_hub
                 .workers
@@ -7574,9 +7574,11 @@ mod panel_snapshot_tests {
                     100,
                 )
                 .unwrap();
-            // This polls only team orchestration: native Chat creates a dormant
-            // pane, without starting its provider connection or a real CLI.
-            app.poll_teams_and_relay();
+            // Exercise the actual GPUI polling path. Native Chat creates a
+            // dormant pane without starting its provider connection or a CLI.
+            assert!(app.poll_for_gpui(), "the new pane must request a repaint");
+            app.poll_for_gpui(); // a later frame cannot duplicate the launch
+            assert_eq!(app.sessions.len(), 2);
             let record = app
                 .teams_hub
                 .workers
@@ -7589,6 +7591,12 @@ mod panel_snapshot_tests {
             assert_eq!(spawned.worktree, worktree);
             assert!(super::super::same_worker_directory(&spawned.cwd, &cwd));
             assert!(spawned.loading.is_none() && spawned.terminal.is_none());
+            let inbox = app.teams_hub.claim_team_inbox(id);
+            assert_eq!(inbox.len(), 1);
+            assert!(inbox[0].text.contains("Synthetic goal"));
+            assert_eq!(inbox[0].from_pane, 7);
+            assert!(app.teams_hub.claim_team_inbox(7).is_empty());
+            assert!(app.teams_hub.claim_team_inbox(id).is_empty());
             assert_eq!(
                 app.sessions.iter().find(|s| s.id == 7).unwrap().title,
                 "Existing pane"

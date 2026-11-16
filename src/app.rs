@@ -2292,6 +2292,10 @@ impl Tessel {
                 self.pending_quick_command = None;
             }
         }
+        // Both renderers consume worker requests here. A pane or failure must
+        // also request a GPUI refresh even when no process output has arrived.
+        native_changed |= !self.teams_hub.pending_spawns.is_empty();
+        self.poll_teams_and_relay();
         native_changed
     }
     fn new_session(&mut self, launch: Launch) {
@@ -13311,7 +13315,6 @@ impl eframe::App for Tessel {
             ) {
                 self.handle_teams_ui_action(act);
             }
-            self.poll_teams_and_relay();
         }
         #[cfg_attr(not(windows), allow(unused_variables))]
         let ask_modal_open = if self.share.hosting() {

@@ -6,7 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
-- Queued worker launches recheck their project, team, coordinator and working folder before creating a pane. Cancelling removes queued launches, and a failed pane creation reports failure without renaming or binding an existing pane. A matching coordinator worktree is retained. Initial worker-brief delivery is still being integrated.
+- Both GPUI and Compatibility process queued worker launches through the shared application loop, rechecking the project, team, coordinator and working folder before creating a pane. Cancelling removes queued launches, and a failed pane creation reports failure without renaming or binding an existing pane. A matching coordinator worktree is retained. Successful binding places the frozen assignment once in the worker's team inbox, without typing it into a terminal. Automatically starting its first turn and exposing team tools to terminal agents and Claude chat are still being integrated; currently the native Codex chat exposes these tools.
 
 - The Past conversations command opens a standalone dialog in GPUI and Compatibility. GPUI reuses the existing history search, profile-aware resume and deletion confirmation, works with the side panel closed, and rejects delayed search edits after closing or switching context. Its native search keeps selection, clipboard, undo and IME behavior; Escape clears the query first and closes the dialog once the query is empty.
 

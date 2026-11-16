@@ -439,6 +439,8 @@ pub struct WorkerRecord {
     pub state: WorkerState,
     pub frozen: FrozenWorkerContext,
     pub coordinator_name: String,
+    #[serde(default)]
+    pub team_name: String,
     pub task_goal: String,
     pub summary: Option<String>,
     pub created_at_ms: u64,
@@ -1064,6 +1066,7 @@ impl TeamsRelayHub {
                 coordinator_pane_id: coordinator_pane,
             },
             coordinator_name: coordinator_name.clone(),
+            team_name: team.name.clone(),
             task_goal: goal.to_owned(),
             summary: None,
             created_at_ms: now_ms,
@@ -1144,7 +1147,7 @@ impl TeamsRelayHub {
         let brief = build_worker_brief(&WorkerBriefInput {
             worker_name: rec.worker_name.clone(),
             coordinator_name: rec.coordinator_name.clone(),
-            team_name: team.name.clone(),
+            team_name: rec.team_name.clone(),
             task_goal: rec.task_goal.clone(),
             heartbeat_minutes: HEARTBEAT_MIN,
         });
@@ -1223,6 +1226,30 @@ impl TeamsRelayHub {
             {
                 team.members.push(pane_id);
             }
+            // The assignment is mailbox data, never terminal input. Build it
+            // from the frozen record, not a later caller-supplied command.
+            let text = build_worker_brief(&WorkerBriefInput {
+                worker_name: rec.worker_name.clone(),
+                coordinator_name: rec.coordinator_name.clone(),
+                team_name: rec.team_name.clone(),
+                task_goal: rec.task_goal.clone(),
+                heartbeat_minutes: HEARTBEAT_MIN,
+            });
+            let team_id = rec.frozen.team_id.clone();
+            let from_pane = rec.frozen.coordinator_pane_id;
+            let from_name = rec.coordinator_name.clone();
+            let id = self.alloc_seq();
+            self.messages.push(TeamMessage {
+                id,
+                team_id,
+                from_pane,
+                from_name,
+                to_pane: pane_id,
+                text,
+                sent_at_ms: now_ms,
+                read: false,
+                is_question: false,
+            });
         }
     }
 
@@ -2189,6 +2216,7 @@ mod tests {
             );
             assert!(hub.workers[0].worker_pane_id.is_none());
             assert!(!state.teams[0].members.contains(&99));
+            assert!(hub.claim_team_inbox(99).is_empty());
         }
     }
 
@@ -2212,8 +2240,21 @@ mod tests {
         let spec = hub.approve_worker_start(&ws, &rec.id, now + 100).unwrap();
         assert!(spec.brief.contains("[Tessel worker brief]"));
         assert!(spec.brief.contains("team_worker_done"));
+        ws.teams[0].name = "Renamed after approval".into();
         hub.bind_spawned_worker_pane(&mut ws, &rec.id, 2, now + 200);
         ws.sessions.push(sample_session(2, p1, "Builder", "codex"));
+
+        // Binding retries cannot replay the assignment or redirect it to a
+        // different pane. Reading consumes only this worker's copy.
+        hub.bind_spawned_worker_pane(&mut ws, &rec.id, 2, now + 201);
+        hub.bind_spawned_worker_pane(&mut ws, &rec.id, 3, now + 202);
+        let assignment = hub.claim_team_inbox(2);
+        assert_eq!(assignment.len(), 1);
+        assert_eq!(assignment[0].text, spec.brief);
+        assert_eq!(assignment[0].from_pane, 1);
+        assert_eq!(assignment[0].team_id, spec.team_id);
+        assert!(hub.claim_team_inbox(2).is_empty());
+        assert!(hub.claim_team_inbox(3).is_empty());
 
         // Default max_depth = 1 -> nested worker from depth-1 worker #2 must fail:
         assert!(
