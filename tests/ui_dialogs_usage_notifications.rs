@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/agent_env.rs"]
+mod agent_env;
+#[allow(dead_code)]
 #[path = "../src/session_profile_identity.rs"]
 mod session_profile_identity;
 #[allow(dead_code)]

@@ -24,6 +24,7 @@ async fn send(pipe: &mut tokio::process::ChildStdin, value: Value) -> Result<(),
 /// Worker-only. Caller resolves the native executable and supplies its fixed
 /// `serve` argument. Stderr is drained without retaining or logging its contents.
 pub fn model_list(mut command: Command, timeout: Duration) -> Result<Value, Failure> {
+    crate::agent_env::clean_command(command.as_std_mut());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

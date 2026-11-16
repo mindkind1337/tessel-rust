@@ -109,6 +109,7 @@ async fn read<R: AsyncRead + Unpin>(
 /// Caller supplies a resolved executable, argument array, working directory and
 /// environment. Never call from the egui thread; this owns its Tokio runtime.
 pub fn run(mut command: Command, stdin: Option<&str>, limits: Limits) -> Result<Output, Error> {
+    crate::agent_env::clean_command(command.as_std_mut());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -249,6 +250,21 @@ mod tests {
     }
 
     #[test]
+    fn model_process_filters_parent_session_capabilities_without_losing_account_context() {
+        let mut command = fixture("environment");
+        command
+            .env("TESSEL_TEAM_MCP_KEY", "synthetic-secret")
+            .env("TESSEL_TEAM_MCP_PANE", "synthetic-pane")
+            .env("TESSEL_TEAM_MCP_GENERATION", "synthetic-generation")
+            .env("CLAUDE_CODE_SESSION_ID", "synthetic-session")
+            .env("OPENAI_API_KEY", "synthetic-account")
+            .env("CODEX_HOME", "synthetic-profile");
+        let output = run(command, None, Limits::default()).unwrap();
+        assert_eq!(output.code, Some(0));
+        assert!(output.stdout.contains("1 passed"));
+    }
+
+    #[test]
     fn output_limit_and_timeout_stop_synthetic_processes() {
         let limits = || Limits {
             timeout: Duration::from_secs(2),
@@ -282,6 +298,22 @@ mod tests {
                 std::io::stdin().read_to_string(&mut input).unwrap();
                 print!("{input}");
                 eprint!("synthetic-stderr");
+            }
+            Ok("environment") => {
+                for name in [
+                    "TESSEL_TEAM_MCP_KEY",
+                    "TESSEL_TEAM_MCP_PANE",
+                    "TESSEL_TEAM_MCP_GENERATION",
+                    "CLAUDE_CODE_SESSION_ID",
+                ] {
+                    assert!(
+                        std::env::var_os(name).is_none(),
+                        "Parent capability reached the synthetic child"
+                    );
+                }
+                assert!(std::env::var("OPENAI_API_KEY").as_deref() == Ok("synthetic-account"));
+                assert!(std::env::var("CODEX_HOME").as_deref() == Ok("synthetic-profile"));
+                assert!(std::env::var_os("PATH").is_some());
             }
             Ok("failure") => std::process::exit(7),
             Ok("flood") => {

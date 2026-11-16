@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/agent_env.rs"]
+mod agent_env;
+#[allow(dead_code)]
 #[path = "../src/git/process.rs"]
 mod git;
 #[allow(dead_code)]

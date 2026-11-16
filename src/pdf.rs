@@ -185,6 +185,7 @@ fn render(bytes: &[u8], index: usize, scale: f32, cancel: &AtomicBool) -> Result
     std::fs::write(&input, bytes).map_err(|_| "Cannot prepare PDF rendering")?;
     let mut command =
         Command::new(std::env::current_exe().map_err(|_| "Cannot locate PDF worker")?);
+    crate::agent_env::clean_command(&mut command);
     command
         .arg("--pdf-worker")
         .arg(&input)

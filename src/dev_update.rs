@@ -197,6 +197,7 @@ pub fn format_overlap_message(overlap: &[String], french: bool) -> String {
 
 fn git_cmd(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("git");
+    crate::agent_env::clean_command(&mut cmd);
     cmd.arg("-C")
         .arg(repo_dir)
         .args(args)

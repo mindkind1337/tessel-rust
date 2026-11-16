@@ -149,6 +149,7 @@ pub fn execute(host: Host, action: Action) -> Result<Reply, String> {
         .map_err(|_| "Cannot start SFTP runtime")?;
     runtime.block_on(async move {
         let mut command=tokio::process::Command::new("ssh");
+        crate::agent_env::clean_command(command.as_std_mut());
         command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
         #[cfg(windows)] command.creation_flags(0x08000000);
         let mut child=command.spawn().map_err(|_|"OpenSSH was not found or could not start")?;

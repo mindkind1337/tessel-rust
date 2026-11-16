@@ -47,6 +47,7 @@ impl tessel_host_client::Connector for Connector {
     }
 }
 fn open_process(command: &mut std::process::Command) -> std::io::Result<tessel_host_client::Pipe> {
+    crate::agent_env::clean_command(command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -204,6 +205,7 @@ async fn run_process(
     if limit.is_zero() || cancel.load(Ordering::Acquire) || input.len() > 64 * 1024 * 1024 {
         return Err(TransportFailed);
     }
+    crate::agent_env::clean_command(command.as_std_mut());
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

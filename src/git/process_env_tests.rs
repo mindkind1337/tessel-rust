@@ -71,3 +71,46 @@ fn guest_runner_ignores_inherited_repository_and_config_overrides() {
         "probe did not run"
     );
 }
+
+#[test]
+fn parent_session_git_probe() {
+    let Some(root) = std::env::var_os("TESSEL_SYNTHETIC_CLEAN_GIT_PROBE") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let check = r#"alias.tessel-env-check=!test -z "${TESSEL_TEAM_MCP_KEY+x}" && test -z "${TESSEL_TEAM_MCP_PANE+x}" && test -z "${TESSEL_TEAM_MCP_GENERATION+x}" && test -z "${CLAUDE_CODE_SESSION_ID+x}" && test "$TESSEL_SYNTHETIC_KEEP" = keep"#;
+    run_bytes(&root, &["-c", check, "tessel-env-check"], None).unwrap();
+}
+
+#[test]
+fn git_children_do_not_inherit_parent_session_capabilities() {
+    let dir = tempfile::tempdir().unwrap();
+    empty_repo(dir.path());
+    let test_name = format!(
+        "{}::parent_session_git_probe",
+        module_path!().split_once("::").unwrap().1
+    );
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
+        .args(["--exact", &test_name, "--nocapture"])
+        .env("TESSEL_SYNTHETIC_CLEAN_GIT_PROBE", dir.path())
+        .env("TESSEL_TEAM_MCP_KEY", "synthetic-secret")
+        .env("TESSEL_TEAM_MCP_PANE", "synthetic-pane")
+        .env("TESSEL_TEAM_MCP_GENERATION", "synthetic-generation")
+        .env("CLAUDE_CODE_SESSION_ID", "synthetic-session")
+        .env("TESSEL_SYNTHETIC_KEEP", "keep");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        child.creation_flags(0x08000000);
+    }
+    let output = child.output().unwrap();
+    assert!(
+        output.status.success(),
+        "Synthetic inherited-environment probe failed"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "probe did not run"
+    );
+}

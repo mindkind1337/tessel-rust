@@ -2,6 +2,9 @@
 #[path = "../src/agent_catalog.rs"]
 mod agent_catalog;
 #[allow(dead_code)]
+#[path = "../src/agent_env.rs"]
+mod agent_env;
+#[allow(dead_code)]
 #[path = "../src/automations.rs"]
 mod automations;
 #[allow(dead_code)]

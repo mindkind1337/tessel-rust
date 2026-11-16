@@ -1416,6 +1416,7 @@ impl Tessel {
                 let (tx, rx) = mpsc::channel();
                 thread::spawn(move || {
                     let mut cmd = std::process::Command::new("git");
+                    crate::agent_env::clean_command(&mut cmd);
                     cmd.args(["config", "--global", "user.name"]);
                     #[cfg(windows)]
                     {

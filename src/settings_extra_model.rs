@@ -1876,6 +1876,7 @@ pub fn probe_mcp_stdio(command: &str, args: &[String]) -> Result<String, String>
         c.args(args);
         c
     };
+    crate::agent_env::clean_command(&mut cmd);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -2761,6 +2762,7 @@ fn run_short_stdout(bin: &str, args: &[&str]) -> Option<String> {
         c.args(args);
         c
     };
+    crate::agent_env::clean_command(&mut cmd);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

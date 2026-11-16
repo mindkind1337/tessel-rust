@@ -15,6 +15,7 @@ pub struct Program {
 impl Program {
     pub fn command(&self, cwd: &Path) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(&self.file);
+        crate::agent_env::clean_command(command.as_std_mut());
         command
             .args(&self.pre)
             .current_dir(cwd)

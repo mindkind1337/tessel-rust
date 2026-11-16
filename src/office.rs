@@ -127,6 +127,7 @@ fn decode(bytes: &[u8], extension: &str, cancel: &AtomicBool) -> Result<Book, St
     std::fs::write(&input, bytes).map_err(|_| "Cannot prepare document")?;
     let mut command =
         Command::new(std::env::current_exe().map_err(|_| "Cannot locate document worker")?);
+    crate::agent_env::clean_command(&mut command);
     command
         .arg("--office-worker")
         .arg(&input)

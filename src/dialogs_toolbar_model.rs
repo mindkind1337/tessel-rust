@@ -169,6 +169,7 @@ pub fn clone_git_repository(
         return Err(format!("Destination `{}` already exists.", dest.display()));
     }
     let mut cmd = Command::new("git");
+    crate::agent_env::clean_command(&mut cmd);
     cmd.args([
         "-c",
         "protocol.ext.allow=never",
@@ -211,6 +212,7 @@ pub fn init_new_git_project(parent_dir: &Path, folder_name: &str) -> Result<Path
 
     let run_init = |args: &[&str]| -> Result<(), String> {
         let mut cmd = Command::new("git");
+        crate::agent_env::clean_command(&mut cmd);
         cmd.current_dir(&dest)
             .args(args)
             .stdin(Stdio::null())
@@ -251,6 +253,7 @@ pub fn list_remote_directories(host_alias: &str, remote_dir: &str) -> Result<Vec
     }
     let quoted_dir = format!("'{}'", dir.replace('\'', "'\\''"));
     let mut cmd = Command::new("ssh");
+    crate::agent_env::clean_command(&mut cmd);
     cmd.args([
         "-o",
         "BatchMode=yes",
@@ -356,6 +359,7 @@ pub struct GhPullRequest {
 
 fn run_gh_json(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("gh");
+    crate::agent_env::clean_command(&mut cmd);
     cmd.current_dir(cwd)
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")

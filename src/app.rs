@@ -929,6 +929,7 @@ impl Tessel {
                 let (tx, rx) = mpsc::channel();
                 thread::spawn(move || {
                     let mut cmd = std::process::Command::new("git");
+                    crate::agent_env::clean_command(&mut cmd);
                     cmd.args(["config", "--global", "user.name"]);
                     #[cfg(windows)]
                     {
@@ -7399,7 +7400,9 @@ impl Tessel {
                     let dir = store.directory().to_path_buf();
                     #[cfg(windows)]
                     {
-                        let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
+                        let mut command = std::process::Command::new("explorer.exe");
+                        crate::agent_env::clean_command(&mut command);
+                        let _ = command.arg(dir).spawn();
                     }
                     #[cfg(not(windows))]
                     {
@@ -9674,6 +9677,7 @@ impl Tessel {
                         .join(format!("tessel-skill-clone-{}", std::process::id()));
                     let _ = std::fs::remove_dir_all(&tmp_dir);
                     let mut cmd = std::process::Command::new("git");
+                    crate::agent_env::clean_command(&mut cmd);
                     cmd.args([
                         "-c",
                         "protocol.ext.allow=never",

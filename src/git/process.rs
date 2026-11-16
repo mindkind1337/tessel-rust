@@ -80,6 +80,7 @@ fn run_captured(
     english: bool,
 ) -> Result<Completed> {
     let mut command = Command::new("git");
+    crate::agent_env::clean_command(&mut command);
     if english {
         command.env("LC_ALL", "C").env("LANGUAGE", "C");
     }

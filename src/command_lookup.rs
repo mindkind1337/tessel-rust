@@ -55,7 +55,9 @@ pub fn lookup(names: &[&str], path: &std::ffi::OsStr) -> Result<HashMap<String, 
         return Err("Invalid agent lookup batch.".into());
     }
     let root = std::env::var_os("SystemRoot").ok_or("Windows system directory unavailable.")?;
-    let mut child = Command::new(std::path::PathBuf::from(root).join("System32/where.exe"))
+    let mut command = Command::new(std::path::PathBuf::from(root).join("System32/where.exe"));
+    crate::agent_env::clean_command(&mut command);
+    let mut child = command
         .args(names)
         .env("PATH", path)
         .creation_flags(0x08000000)
