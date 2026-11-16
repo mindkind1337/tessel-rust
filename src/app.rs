@@ -1147,6 +1147,12 @@ impl Tessel {
                         },
                     }],
                 );
+                app.new_task.existing = app.new_task.reviewers.clone();
+                app.new_task.choices.push(crate::new_task_form::Choice {
+                    id: "pane:99".into(),
+                    label: "Agent de démonstration".into(),
+                    enabled: true,
+                });
                 app.new_task.isolation = Some(true);
                 app.new_task.edit(
                     crate::new_task_form::Field::Title,

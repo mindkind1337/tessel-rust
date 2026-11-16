@@ -1258,6 +1258,27 @@ impl Chat {
         .then_some(self.review_epoch)
     }
 
+    pub(crate) fn can_take_task(&self, epoch: u64) -> bool {
+        self.review_identity() == Some(epoch)
+            && !(self.working()
+                || !self.approvals.is_empty()
+                || !self.questions.is_empty()
+                || !self.tool_calls.is_empty()
+                || !self.composer.is_empty())
+    }
+
+    pub(crate) fn begin_existing_task_turn(
+        &mut self,
+        prompt: &str,
+        epoch: u64,
+    ) -> Result<crate::initial_turn::Phase, String> {
+        let phase = self.begin_review_turn(prompt, epoch)?;
+        if phase == crate::initial_turn::Phase::Submitted {
+            self.task_completion.arm();
+        }
+        Ok(phase)
+    }
+
     pub(crate) fn begin_review_turn(
         &mut self,
         prompt: &str,
@@ -1278,7 +1299,7 @@ impl Chat {
         }
         let options = self.options.effective(self.defaults.as_ref());
         if !options.valid_for("codex") {
-            return Err("Invalid reviewer model or effort.".into());
+            return Err("Invalid agent model or effort.".into());
         }
         self.commit_options();
         self.request(

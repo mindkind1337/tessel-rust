@@ -14,7 +14,7 @@ pub(super) struct Pending {
 }
 
 impl Tessel {
-    fn current_reviewer_target(&self, project: u64, pane: u64) -> Option<Target> {
+    pub(super) fn current_reviewer_target(&self, project: u64, pane: u64) -> Option<Target> {
         let session = self
             .sessions
             .iter()

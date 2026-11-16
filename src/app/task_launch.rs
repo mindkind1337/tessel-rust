@@ -28,12 +28,14 @@ impl Provider {
 }
 
 // This type is passed by an explicit owner action, never reconstructed on restore.
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct Spec {
     pub project: u64,
     pub source: PathBuf,
     pub title: String,
     pub brief: String,
     pub provider: Provider,
+    pub existing: Option<crate::native_review::Target>,
     pub reviewer: Option<crate::native_review::Target>,
     pub isolated: bool,
     pub base_branch: Option<String>,
@@ -45,6 +47,7 @@ pub(super) struct Pending {
     ticket: Ticket,
     expected: Task,
     provider: Provider,
+    existing: Option<crate::native_review::Target>,
     base_branch: Option<String>,
     pane: Option<u64>,
     prompt: String,
@@ -60,6 +63,59 @@ pub(super) struct Running {
 }
 
 impl Tessel {
+    #[cfg(test)]
+    pub(crate) fn install_existing_task_fixture(
+        &mut self,
+        cwd: &std::path::Path,
+    ) -> crate::native_review::Choice {
+        std::fs::create_dir_all(cwd).unwrap();
+        let project = self.state.add_project(cwd).unwrap();
+        let cwd = self
+            .state
+            .projects
+            .iter()
+            .find(|p| p.id == project)
+            .unwrap()
+            .path
+            .clone();
+        let pane = self
+            .new_session_with_history(Some(project), Launch::CodexChat, None, false, None, None)
+            .unwrap();
+        let mut chat = crate::chat::Chat::new(project, cwd);
+        chat.pane = pane;
+        let _unused = chat.ready_sender_for_test();
+        self.chats.push(chat);
+        crate::native_review::Choice {
+            target: self.current_reviewer_target(project, pane).unwrap(),
+            label: "Fixture existing agent".into(),
+        }
+    }
+
+    pub(super) fn existing_task_available(
+        &self,
+        target: &crate::native_review::Target,
+        own: Option<u64>,
+    ) -> bool {
+        self.current_reviewer_target(target.project, target.pane)
+            .as_ref()
+            == Some(target)
+            && !self.state.tasks.iter().any(|t| {
+                Some(t.id) != own && t.column != 3 && t.timeline.pane_id == Some(target.pane)
+            })
+            && match target.kind {
+                crate::native_review::Kind::Codex => self
+                    .chats
+                    .iter()
+                    .find(|c| c.pane == target.pane)
+                    .is_some_and(|c| c.can_take_task(target.epoch)),
+                crate::native_review::Kind::Claude => self
+                    .claude_chats
+                    .iter()
+                    .find(|c| c.pane == target.pane)
+                    .is_some_and(|c| c.can_take_task(target.epoch)),
+            }
+    }
+
     fn save_launch_card(&mut self, expected: &Task, replacement: Task) -> Result<(), String> {
         let mut draft = self.state.clone();
         let card = draft
@@ -87,7 +143,9 @@ impl Tessel {
 
     // Explicit owner action only; never called from imported task metadata.
     pub(crate) fn start_owner_native_task(&mut self, spec: Spec) -> Result<u64, String> {
-        if self.owner_task_launches.len() >= 32 || self.sessions.len() >= 100 {
+        if self.owner_task_launches.len() >= 32
+            || (spec.existing.is_none() && self.sessions.len() >= 100)
+        {
             return Err("Too many task preparations or open sessions.".into());
         }
         if spec
@@ -99,6 +157,44 @@ impl Tessel {
                 "The selected reviewer changed. Select a connected native reviewer again.".into(),
             );
         }
+        let existing_worktree = if let Some(target) = &spec.existing {
+            if spec.isolated
+                || target.project != spec.project
+                || !self.existing_task_available(target, None)
+                || spec
+                    .reviewer
+                    .as_ref()
+                    .is_some_and(|r| r.pane == target.pane)
+                || !matches!(
+                    (spec.provider, target.kind),
+                    (Provider::Codex, crate::native_review::Kind::Codex)
+                        | (Provider::Claude, crate::native_review::Kind::Claude)
+                )
+            {
+                return Err("The selected agent is busy or changed. Select an available conversation again.".into());
+            }
+            let session = self.sessions.iter().find(|s| s.id == target.pane).unwrap();
+            if let Some(copy) = &session.worktree {
+                if !same_worker_directory(&copy.path, &target.cwd) {
+                    return Err("The agent's copy changed.".into());
+                }
+                let root = self.worktree_state.summary(spec.project).map(|s| s.toplevel.clone())
+                    .ok_or("The existing copy is still being checked. Try again when Git inspection finishes.")?;
+                Some(crate::task_preparation::Worktree {
+                    path: copy.path.clone(),
+                    branch: copy.branch.clone(),
+                    root,
+                    base_branch: None,
+                })
+            } else {
+                if !same_worker_directory(&target.cwd, &spec.source) {
+                    return Err("The agent's directory does not match this project.".into());
+                }
+                None
+            }
+        } else {
+            None
+        };
         let brief = spec.brief.trim().to_owned();
         // Validate the complete direct prompt before creating any card or pane.
         crate::task_prompt::render(&crate::task_prompt::Context {
@@ -122,6 +218,14 @@ impl Tessel {
                 worktree: None,
             },
         )?;
+        if let Some(copy) = existing_worktree {
+            crate::task_preparation::record_worktree(
+                &mut self.state,
+                self.store.as_ref(),
+                &ticket,
+                copy,
+            )?;
+        }
         let card = self
             .state
             .tasks
@@ -139,6 +243,7 @@ impl Tessel {
             ticket,
             expected: doing,
             provider: spec.provider,
+            existing: spec.existing,
             base_branch: spec.base_branch.clone(),
             pane: None,
             prompt: String::new(),
@@ -200,33 +305,42 @@ impl Tessel {
             copied_from: None,
             team: None,
         })?;
-        let worktree = details.worktree.as_ref().map(|w| workspace::SavedWorktree {
-            path: w.path.clone(),
-            branch: w.branch.clone(),
-        });
-        let project = pending.ticket.project_id();
-        let split = self
-            .sessions
-            .iter()
-            .find(|s| s.project == Some(project) && Some(s.id) == self.active_session)
-            .map(|s| (s.id, crate::pane_grid::SplitDir::Row));
-        let keep_selection = self.state.active_project != Some(project);
-        let previous_active = self.active_session;
-        let previous_view = std::mem::replace(&mut self.view, View::Work);
-        // Nothing asynchronous occurs between the identity check and pane allocation.
-        let pane = self.new_session_with_history(
-            Some(project),
-            pending.provider.launch(),
-            split,
-            false,
-            worktree,
-            None,
-        );
-        if keep_selection || pane.is_none() {
-            self.active_session = previous_active;
-            self.view = previous_view;
-        }
-        let pane = pane.ok_or("The task's agent pane could not be created.")?;
+        let pane = if let Some(target) = &pending.existing {
+            if !self.existing_task_available(target, Some(pending.ticket.task_id())) {
+                return Err(
+                    "The selected agent is no longer available. No instructions were sent.".into(),
+                );
+            }
+            target.pane
+        } else {
+            let worktree = details.worktree.as_ref().map(|w| workspace::SavedWorktree {
+                path: w.path.clone(),
+                branch: w.branch.clone(),
+            });
+            let project = pending.ticket.project_id();
+            let split = self
+                .sessions
+                .iter()
+                .find(|s| s.project == Some(project) && Some(s.id) == self.active_session)
+                .map(|s| (s.id, crate::pane_grid::SplitDir::Row));
+            let keep_selection = self.state.active_project != Some(project);
+            let previous_active = self.active_session;
+            let previous_view = std::mem::replace(&mut self.view, View::Work);
+            // Nothing asynchronous occurs between the identity check and pane allocation.
+            let pane = self.new_session_with_history(
+                Some(project),
+                pending.provider.launch(),
+                split,
+                false,
+                worktree,
+                None,
+            );
+            if keep_selection || pane.is_none() {
+                self.active_session = previous_active;
+                self.view = previous_view;
+            }
+            pane.ok_or("The task's agent pane could not be created.")?
+        };
         pending.pane = Some(pane);
         let mut assigned = pending.expected.clone();
         assigned
@@ -418,7 +532,16 @@ impl Tessel {
                 .as_ref()
                 .map(|w| &w.path)
                 .unwrap_or(&details.source_cwd);
-            let valid = self.launch_context_current(&pending)
+            let valid = pending.existing.as_ref().is_none_or(|target| {
+                self.current_reviewer_target(target.project, target.pane)
+                    .as_ref()
+                    == Some(target)
+                    && !self.state.tasks.iter().any(|t| {
+                        t.id != pending.ticket.task_id()
+                            && t.column != 3
+                            && t.timeline.pane_id == Some(target.pane)
+                    })
+            }) && self.launch_context_current(&pending)
                 && self.sessions.iter().any(|s| {
                     s.id == pane
                         && s.project == Some(pending.ticket.project_id())
@@ -442,7 +565,12 @@ impl Tessel {
                                 && same_worker_directory(&c.cwd, cwd)
                         })
                         .ok_or_else(|| "Task chat is unavailable.".to_owned())
-                        .and_then(|c| c.begin_task_turn(&pending.prompt, attempted)),
+                        .and_then(|c| match &pending.existing {
+                            Some(target) => {
+                                c.begin_existing_task_turn(&pending.prompt, target.epoch)
+                            }
+                            None => c.begin_task_turn(&pending.prompt, attempted),
+                        }),
                     Provider::Claude => self
                         .claude_chats
                         .iter_mut()
@@ -452,7 +580,12 @@ impl Tessel {
                                 && same_worker_directory(&c.cwd, cwd)
                         })
                         .ok_or_else(|| "Task chat is unavailable.".to_owned())
-                        .and_then(|c| c.begin_task_turn(&pending.prompt, attempted)),
+                        .and_then(|c| match &pending.existing {
+                            Some(target) => {
+                                c.begin_existing_task_turn(&pending.prompt, target.epoch)
+                            }
+                            None => c.begin_task_turn(&pending.prompt, attempted),
+                        }),
                 }
             };
             match result {
@@ -499,6 +632,263 @@ impl Tessel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_task_reuses_each_native_pane_once_preserves_late_draft_and_completes() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let (temp, mut app, mut spec) = fixture(provider);
+            let pane = app
+                .new_session_with_history(
+                    Some(spec.project),
+                    provider.launch(),
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let rx = synthetic_chat(&mut app, provider, pane, spec.project, spec.source.clone());
+            let target = app.current_reviewer_target(spec.project, pane).unwrap();
+            spec.existing = Some(target.clone());
+            let duplicate = spec.clone();
+            let selected = app.active_session;
+            let id = app.start_owner_native_task(spec).unwrap();
+            assert!(app.start_owner_native_task(duplicate).is_err());
+            assert_eq!(app.sessions.len(), 1);
+            assert_eq!(app.active_session, selected);
+            assert_eq!(app.state.tasks[0].timeline.pane_id, Some(pane));
+            match provider {
+                Provider::Codex => app.chats[0].gpui_set_composer("Late owner draft".into()),
+                Provider::Claude => {
+                    app.claude_chats[0].gpui_set_composer("Late owner draft".into())
+                }
+            }
+            assert!(!app.poll_owner_task_launches());
+            assert!(rx.try_recv().is_err());
+            match provider {
+                Provider::Codex => {
+                    assert_eq!(app.chats[0].composer_state().1, "Late owner draft");
+                    app.chats[0].gpui_set_composer(String::new());
+                }
+                Provider::Claude => {
+                    assert_eq!(app.claude_chats[0].composer_state().1, "Late owner draft");
+                    app.claude_chats[0].gpui_set_composer(String::new());
+                }
+            }
+            assert!(app.poll_owner_task_launches());
+            rx.try_recv().unwrap();
+            assert!(!app.poll_owner_task_launches());
+            assert!(rx.try_recv().is_err());
+            assert_eq!(app.owner_task_turns.len(), 1);
+            assert_ne!(app.owner_task_turns[0].token, 0);
+            completed(&mut app, provider, true, true);
+            assert!(app.poll_owner_task_completions());
+            assert_eq!(app.state.tasks[0].column, 2);
+            drop(app);
+            let saved = workspace::Store::open(&temp.path().join("state"))
+                .unwrap()
+                .1;
+            assert_eq!(saved.tasks.iter().find(|t| t.id == id).unwrap().column, 2);
+        }
+    }
+
+    #[test]
+    fn existing_task_refuses_busy_stale_self_review_and_isolation_before_creating_cards() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            for case in ["draft", "stopped", "busy", "self-review", "isolated"] {
+                let (_temp, mut app, mut spec) = fixture(provider);
+                let pane = app
+                    .new_session_with_history(
+                        Some(spec.project),
+                        provider.launch(),
+                        None,
+                        false,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                let rx =
+                    synthetic_chat(&mut app, provider, pane, spec.project, spec.source.clone());
+                let target = app.current_reviewer_target(spec.project, pane).unwrap();
+                spec.existing = Some(target.clone());
+                match case {
+                    "self-review" => spec.reviewer = Some(target.clone()),
+                    "isolated" => spec.isolated = true,
+                    "draft" => match provider {
+                        Provider::Codex => app.chats[0].gpui_set_composer("Owner draft".into()),
+                        Provider::Claude => {
+                            app.claude_chats[0].gpui_set_composer("Owner draft".into())
+                        }
+                    },
+                    "stopped" => match provider {
+                        Provider::Codex => app.chats[0].gpui_stop(),
+                        Provider::Claude => app.claude_chats[0].gpui_stop(),
+                    },
+                    _ => {
+                        match provider {
+                            Provider::Codex => app.chats[0]
+                                .begin_review_turn("Existing owner work", target.epoch)
+                                .unwrap(),
+                            Provider::Claude => app.claude_chats[0]
+                                .begin_review_turn("Existing owner work", target.epoch)
+                                .unwrap(),
+                        };
+                        rx.try_recv().unwrap();
+                    }
+                }
+                assert!(app.start_owner_native_task(spec).is_err(), "{case}");
+                assert!(app.state.tasks.is_empty());
+                assert!(app.owner_task_launches.is_empty());
+                assert_eq!(app.sessions.len(), 1);
+                assert!(rx.try_recv().is_err());
+            }
+        }
+    }
+    #[test]
+    fn existing_task_rechecks_epoch_after_assignment_and_never_reconnects() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let (_temp, mut app, mut spec) = fixture(provider);
+            let pane = app
+                .new_session_with_history(
+                    Some(spec.project),
+                    provider.launch(),
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let rx = synthetic_chat(&mut app, provider, pane, spec.project, spec.source.clone());
+            spec.existing = app.current_reviewer_target(spec.project, pane);
+            app.start_owner_native_task(spec).unwrap();
+            let replacement = match provider {
+                Provider::Codex => {
+                    app.chats[0].gpui_stop();
+                    app.chats[0].ready_sender_for_test()
+                }
+                Provider::Claude => {
+                    app.claude_chats[0].gpui_stop();
+                    app.claude_chats[0].ready_sender_for_test()
+                }
+            };
+            assert!(app.poll_owner_task_launches());
+            assert!(rx.try_recv().is_err());
+            assert!(replacement.try_recv().is_err());
+            assert_eq!(app.state.tasks[0].column, 0);
+            assert!(app.owner_task_launches.is_empty());
+            assert_eq!(app.sessions.len(), 1);
+        }
+    }
+
+    #[test]
+    fn existing_task_retains_the_agents_existing_worktree_without_running_setup() {
+        let (temp, mut app, mut spec) = fixture(Provider::Codex);
+        let root = spec.source.clone();
+        let git = |args: &[&str]| {
+            let mut options = vec!["-c", "core.hooksPath=", "-c", "commit.gpgsign=false"];
+            options.extend_from_slice(args);
+            crate::git::run(&root, &options, None).unwrap()
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["config", "user.email", "fixture@example.invalid"]);
+        git(&["commit", "--allow-empty", "-m", "fixture"]);
+        let copy = temp.path().join("existing-copy");
+        git(&[
+            "worktree",
+            "add",
+            "-b",
+            "existing-copy",
+            copy.to_str().unwrap(),
+        ]);
+        app.worktree_state
+            .refresh_project(spec.project, root.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while app.worktree_state.summary(spec.project).is_none() {
+            app.poll_worktrees();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pane = app
+            .new_session_with_history(
+                Some(spec.project),
+                Launch::CodexChat,
+                None,
+                false,
+                Some(workspace::SavedWorktree {
+                    path: copy.clone(),
+                    branch: "existing-copy".into(),
+                }),
+                None,
+            )
+            .unwrap();
+        let rx = synthetic_chat(&mut app, Provider::Codex, pane, spec.project, copy.clone());
+        spec.existing = app.current_reviewer_target(spec.project, pane);
+        spec.run_setup = true; // An existing pane never enters copy preparation.
+        app.start_owner_native_task(spec).unwrap();
+        assert_eq!(app.sessions.len(), 1);
+        assert!(!app.worktree_state.is_busy());
+        let receipt = app.state.tasks[0]
+            .preparation
+            .as_ref()
+            .unwrap()
+            .worktree
+            .as_ref()
+            .unwrap();
+        assert!(same_worker_directory(&receipt.path, &copy));
+        assert!(same_worker_directory(&receipt.root, &root));
+        assert_eq!(receipt.branch, "existing-copy");
+        assert!(app.poll_owner_task_launches());
+        assert!(
+            rx.try_recv().unwrap()["params"]["input"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("existing-copy")
+        );
+    }
+    #[test]
+    fn existing_task_form_selects_a_captured_pane_and_excludes_self_review() {
+        use crate::new_task_form::{Command, Field};
+        for provider in [Provider::Codex, Provider::Claude] {
+            let (_temp, mut app, spec) = fixture(provider);
+            let pane = app
+                .new_session_with_history(
+                    Some(spec.project),
+                    provider.launch(),
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let rx = synthetic_chat(&mut app, provider, pane, spec.project, spec.source.clone());
+            app.agents = crate::agent_detection::Detection::model_picker_fixture("codex");
+            app.open_new_task();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while app.new_task.isolation.is_none() {
+                app.poll_worktrees();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let epoch = app.new_task.epoch;
+            app.new_task_command(epoch, Command::Reviewer(Some(pane)));
+            assert_eq!(app.new_task.reviewer, Some(pane));
+            app.new_task_command(epoch, Command::Provider(format!("pane:{pane}")));
+            assert!(app.new_task.reviewer.is_none());
+            assert!(!app.new_task.use_copy());
+            app.new_task_command(epoch, Command::Edit(Field::Title, "Reuse fixture".into()));
+            app.new_task_command(epoch, Command::RunSetup(true));
+            app.new_task_command(epoch, Command::Start);
+            assert!(!app.new_task.open, "{}", app.new_task.error);
+            assert_eq!(app.sessions.len(), 1);
+            assert_eq!(app.state.tasks[0].timeline.pane_id, Some(pane));
+            assert!(app.poll_owner_task_launches());
+            rx.try_recv().unwrap();
+            app.new_task_command(epoch, Command::Start);
+            assert_eq!(app.state.tasks.len(), 1);
+            assert!(rx.try_recv().is_err());
+        }
+    }
 
     fn synthetic_chat(
         app: &mut Tessel,
@@ -852,6 +1242,7 @@ mod tests {
             title: "Fixture task".into(),
             brief: "Synthetic instructions".into(),
             provider,
+            existing: None,
             reviewer: None,
             isolated: false,
             base_branch: None,

@@ -7,7 +7,7 @@ impl Tessel {
             self.error = tr("Select a project for native chat.").into();
             return;
         };
-        let choices = [("codex", "Codex"), ("claude", "Claude")]
+        let mut choices: Vec<Choice> = [("codex", "Codex"), ("claude", "Claude")]
             .into_iter()
             .map(|(id, name)| Choice {
                 id: id.into(),
@@ -19,6 +19,21 @@ impl Tessel {
                     .any(|(kind, installed)| kind == id && *installed),
             })
             .collect();
+        let existing: Vec<_> = self
+            .task_agent_choices(project.id)
+            .into_iter()
+            .filter_map(|c| {
+                Some(crate::native_review::Choice {
+                    target: self.current_reviewer_target(project.id, c.id)?,
+                    label: c.label,
+                })
+            })
+            .collect();
+        choices.extend(existing.iter().map(|c| Choice {
+            id: format!("pane:{}", c.target.pane),
+            label: c.label.clone(),
+            enabled: self.existing_task_available(&c.target, None),
+        }));
         let reviewers = self.task_reviewer_choices(project.id);
         self.new_task.begin(
             project.id,
@@ -27,6 +42,7 @@ impl Tessel {
             choices,
             reviewers,
         );
+        self.new_task.existing = existing;
         self.worktree_state
             .refresh_project(project.id, project.path);
         if !self.agents.loaded() && !self.agents.detecting() {
@@ -38,7 +54,18 @@ impl Tessel {
         if !self.new_task.open {
             return;
         }
+        let available: std::collections::HashSet<_> = self
+            .new_task
+            .existing
+            .iter()
+            .filter(|c| self.existing_task_available(&c.target, None))
+            .map(|c| format!("pane:{}", c.target.pane))
+            .collect();
         for choice in &mut self.new_task.choices {
+            if choice.id.starts_with("pane:") {
+                choice.enabled = available.contains(&choice.id);
+                continue;
+            }
             choice.enabled = self
                 .agents
                 .entries()
@@ -71,6 +98,13 @@ impl Tessel {
                     .any(|c| c.id == id && c.enabled)
                 {
                     self.new_task.provider = id;
+                    if self
+                        .new_task
+                        .selected_existing()
+                        .is_some_and(|t| Some(t.pane) == self.new_task.reviewer)
+                    {
+                        self.new_task.reviewer = None;
+                    }
                 }
             }
             Command::Isolated(value) => {
@@ -83,11 +117,14 @@ impl Tessel {
             Command::ReviewerMenu(open) => self.new_task.reviewer_menu = open,
             Command::Reviewer(id) => {
                 if id.is_none()
-                    || self
-                        .new_task
-                        .reviewers
-                        .iter()
-                        .any(|r| Some(r.target.pane) == id && self.reviewer_current(&r.target))
+                    || self.new_task.reviewers.iter().any(|r| {
+                        Some(r.target.pane) == id
+                            && self
+                                .new_task
+                                .selected_existing()
+                                .is_none_or(|t| t.pane != r.target.pane)
+                            && self.reviewer_current(&r.target)
+                    })
                 {
                     self.new_task.reviewer = id;
                     self.new_task.reviewer_menu = false;
@@ -116,10 +153,15 @@ impl Tessel {
                     None => None,
                 };
                 let form = &self.new_task;
-                let provider = match form.provider.as_str() {
-                    "codex" => task_launch::Provider::Codex,
-                    "claude" => task_launch::Provider::Claude,
-                    _ => return,
+                let existing = form.selected_existing().cloned();
+                let provider = match existing.as_ref().map(|t| t.kind) {
+                    Some(crate::native_review::Kind::Codex) => task_launch::Provider::Codex,
+                    Some(crate::native_review::Kind::Claude) => task_launch::Provider::Claude,
+                    None => match form.provider.as_str() {
+                        "codex" => task_launch::Provider::Codex,
+                        "claude" => task_launch::Provider::Claude,
+                        _ => return,
+                    },
                 };
                 let spec = task_launch::Spec {
                     project: form.project,
@@ -127,6 +169,7 @@ impl Tessel {
                     title: form.title.trim().into(),
                     brief: form.brief.trim().into(),
                     provider,
+                    existing,
                     reviewer,
                     isolated: form.use_copy(),
                     base_branch: (!form.branch.trim().is_empty())

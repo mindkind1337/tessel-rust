@@ -288,14 +288,20 @@ fn reviewer_popup(
     w: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> Option<AnyElement> {
-    if !panel.reviewer_menu || panel.reviewers.is_empty() {
+    let worker = panel.selected_existing().map(|t| t.pane);
+    let eligible: Vec<_> = panel
+        .reviewers
+        .iter()
+        .filter(|r| Some(r.target.pane) != worker)
+        .collect();
+    if !panel.reviewer_menu || eligible.is_empty() {
         view.review_menu_was_open = false;
         return None;
     }
     let bounds = view.review_anchor.lock().ok().and_then(|v| *v)?;
     let viewport = w.viewport_size();
     let width = f32::from(bounds.size.width).min((f32::from(viewport.width) - 32.).max(100.));
-    let height = (((panel.reviewers.len() + 1) as f32 * 38.) + 10.)
+    let height = (((eligible.len() + 1) as f32 * 38.) + 10.)
         .min(200.)
         .min((f32::from(viewport.height) - 40.).max(40.));
     let left =
@@ -311,7 +317,7 @@ fn reviewer_popup(
         if french { "personne" } else { "nobody" }.to_owned(),
         None,
     )];
-    options.extend(panel.reviewers.iter().map(|r| {
+    options.extend(eligible.iter().map(|r| {
         (
             format!("new-task-review-{}", r.target.pane),
             r.label.clone(),
@@ -429,7 +435,7 @@ pub(super) fn render(
     for choice in &panel.choices {
         choices = choices.child(button(
             &format!("new-task-agent-{}", choice.id),
-            format!("{} {}", t("Nouveau", "New"), choice.label),
+            choice.caption(french),
             choice.enabled,
             choice.id == panel.provider,
             Command::Provider(choice.id.clone()),
@@ -438,80 +444,101 @@ pub(super) fn render(
             cx,
         ));
     }
-    body = body.child(choices).child(div().text_size(px(11.)).text_color(tokens.text_dim).child(t("Nouvelles conversations Codex et Claude. Les agents existants et les terminaux ne sont pas encore disponibles ici.", "New Codex and Claude chats. Existing agents and terminals are not available here yet.")))
-        .child(t("Où il travaille", "Where it works"))
-        .child(button("new-task-own-copy", t("Dans sa propre copie — recommandé", "In its own copy — recommended").into(), panel.isolation == Some(true), panel.use_copy(), Command::Isolated(true), view, tokens, cx));
-    if panel.isolation.is_none() {
-        body = body.child(t(
-            "Vérification du dépôt Git…",
-            "Checking the Git repository…",
-        ));
-    } else if panel.isolation == Some(false) {
-        body = body.child(t(
-            "Aucune copie Git disponible pour ce projet.",
-            "A Git copy is not available for this project.",
-        ));
-    }
-    if panel.use_copy() {
+    body = body.child(choices).child(div().text_size(px(11.)).text_color(tokens.text_dim).child(t("Agents natifs Codex et Claude. Les agents de terminal ne sont pas encore disponibles ici.", "Native Codex and Claude agents. Terminal agents are not available here yet.")));
+    if panel.is_new() {
         body = body
-            .child(field(
-                view,
-                Field::Branch,
-                t("Branche de départ", "Start from branch"),
-                t("la branche courante", "the current branch"),
-                tokens,
-                cx,
-            ))
+            .child(t("Où il travaille", "Where it works"))
             .child(button(
-                "new-task-env",
-                format!(
-                    "{} {}",
-                    if panel.copy_env { "☑" } else { "☐" },
-                    t(
-                        "Copier les fichiers .env du projet",
-                        "Copy the project's .env files"
-                    )
-                ),
-                true,
-                panel.copy_env,
-                Command::CopyEnv(!panel.copy_env),
-                view,
-                tokens,
-                cx,
-            ))
-            .child(button(
-                "new-task-setup",
-                format!(
-                    "{} {}",
-                    if panel.run_setup { "☑" } else { "☐" },
-                    t(
-                        "Y lancer d’abord .tessel/setup.ps1 (si le projet en a un)",
-                        "Run .tessel/setup.ps1 in it first (if the project has one)"
-                    )
-                ),
-                true,
-                panel.run_setup,
-                Command::RunSetup(!panel.run_setup),
+                "new-task-own-copy",
+                t(
+                    "Dans sa propre copie — recommandé",
+                    "In its own copy — recommended",
+                )
+                .into(),
+                panel.isolation == Some(true),
+                panel.use_copy(),
+                Command::Isolated(true),
                 view,
                 tokens,
                 cx,
             ));
+        if panel.isolation.is_none() {
+            body = body.child(t(
+                "Vérification du dépôt Git…",
+                "Checking the Git repository…",
+            ));
+        } else if panel.isolation == Some(false) {
+            body = body.child(t(
+                "Aucune copie Git disponible pour ce projet.",
+                "A Git copy is not available for this project.",
+            ));
+        }
+        if panel.use_copy() {
+            body = body
+                .child(field(
+                    view,
+                    Field::Branch,
+                    t("Branche de départ", "Start from branch"),
+                    t("la branche courante", "the current branch"),
+                    tokens,
+                    cx,
+                ))
+                .child(button(
+                    "new-task-env",
+                    format!(
+                        "{} {}",
+                        if panel.copy_env { "☑" } else { "☐" },
+                        t(
+                            "Copier les fichiers .env du projet",
+                            "Copy the project's .env files"
+                        )
+                    ),
+                    true,
+                    panel.copy_env,
+                    Command::CopyEnv(!panel.copy_env),
+                    view,
+                    tokens,
+                    cx,
+                ))
+                .child(button(
+                    "new-task-setup",
+                    format!(
+                        "{} {}",
+                        if panel.run_setup { "☑" } else { "☐" },
+                        t(
+                            "Y lancer d’abord .tessel/setup.ps1 (si le projet en a un)",
+                            "Run .tessel/setup.ps1 in it first (if the project has one)"
+                        )
+                    ),
+                    true,
+                    panel.run_setup,
+                    Command::RunSetup(!panel.run_setup),
+                    view,
+                    tokens,
+                    cx,
+                ));
+        }
+        body = body.child(button(
+            "new-task-direct",
+            t(
+                "Directement dans le dossier du projet",
+                "Directly in the project folder",
+            )
+            .into(),
+            true,
+            !panel.use_copy(),
+            Command::Isolated(false),
+            view,
+            tokens,
+            cx,
+        ));
     }
-    body = body.child(button(
-        "new-task-direct",
-        t(
-            "Directement dans le dossier du projet",
-            "Directly in the project folder",
-        )
-        .into(),
-        true,
-        !panel.use_copy(),
-        Command::Isolated(false),
-        view,
-        tokens,
-        cx,
-    ));
-    if !panel.reviewers.is_empty() {
+    let worker = panel.selected_existing().map(|t| t.pane);
+    if panel
+        .reviewers
+        .iter()
+        .any(|r| Some(r.target.pane) != worker)
+    {
         let selected = panel
             .reviewers
             .iter()
@@ -625,8 +652,12 @@ mod tests {
         let view = cx.add_window(|w, cx| {
             w.activate();
             let mut root = TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+            let existing = root
+                .app
+                .install_existing_task_fixture(&temp.path().join("fixture"));
+            let existing_id = format!("pane:{}", existing.target.pane);
             root.app.new_task.begin(
-                7,
+                existing.target.project,
                 temp.path().join("fixture"),
                 "Fixture project".into(),
                 vec![Choice {
@@ -645,6 +676,12 @@ mod tests {
                     },
                 }],
             );
+            root.app.new_task.existing = vec![existing];
+            root.app.new_task.choices.push(Choice {
+                id: existing_id,
+                label: "Fixture existing agent".into(),
+                enabled: true,
+            });
             root.app.new_task.isolation = Some(true);
             root
         });
@@ -775,6 +812,32 @@ mod tests {
         cx.refresh().unwrap();
         view.update(cx, |root, w, cx| {
             assert!(!root.app.new_task.copy_env);
+            root.new_task_view
+                .focus
+                .get(&format!(
+                    "new-task-agent-pane:{}",
+                    root.app.new_task.existing[0].target.pane
+                ))
+                .unwrap()
+                .focus(w, cx);
+        })
+        .unwrap();
+        VisualTestContext::from_window(view.into(), cx).simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        view.update(cx, |root, w, cx| {
+            assert_eq!(
+                root.app.new_task.provider,
+                format!("pane:{}", root.app.new_task.existing[0].target.pane)
+            );
+            assert!(!root.app.new_task.use_copy());
+            assert!(root.app.new_task.reviewer.is_none());
+            let hidden = root.new_task_view.focus.get("new-task-setup").unwrap();
+            assert!(!root.new_task_view.order.iter().any(|f| f == hidden));
             let epoch = root.app.new_task.epoch;
             activate(root, epoch, Command::Cancel, w, cx);
             assert!(!root.app.new_task.open);

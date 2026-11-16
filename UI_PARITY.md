@@ -422,3 +422,5 @@ The first native owner-task turn now moves its unchanged card to Review only aft
 Optional connected native reviewers are now selectable in both New Task renderers. GPUI uses an anchored keyboard-operable selection menu. Their queued native delivery waits for idle and preserves drafts/permissions; terminal reviewers and later/manual completion paths remain pending.
 
 - Local New Task: optional `.tessel/setup.ps1` execution is connected in GPUI and Compatibility, defaults off, and is confined to newly created copies. Read-only review and broader existing-agent/terminal task entry points remain separate work.
+
+- New Task now includes captured connected native agents with availability labels. Existing selection hides copy/setup options and excludes that pane from reviewers. Terminal agents and disconnected-conversation startup remain outstanding.

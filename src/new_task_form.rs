@@ -35,6 +35,26 @@ pub(crate) struct Choice {
     pub label: String,
     pub enabled: bool,
 }
+impl Choice {
+    pub fn caption(&self, french: bool) -> String {
+        if self.id.starts_with("pane:") {
+            let prefix = if french {
+                "Déjà ouvert"
+            } else {
+                "Already open"
+            };
+            let state = match (french, self.enabled) {
+                (true, true) => "Libre",
+                (true, false) => "Indisponible",
+                (false, true) => "Free",
+                (false, false) => "Unavailable",
+            };
+            format!("{} · {prefix} · {state}", self.label)
+        } else {
+            format!("{} {}", if french { "Nouveau" } else { "New" }, self.label)
+        }
+    }
+}
 #[derive(Clone, Default)]
 pub(crate) struct Panel {
     pub open: bool,
@@ -53,6 +73,7 @@ pub(crate) struct Panel {
     pub reviewer_menu: bool,
     pub choices: Vec<Choice>,
     pub reviewers: Vec<crate::native_review::Choice>,
+    pub existing: Vec<crate::native_review::Choice>,
     pub isolation: Option<bool>,
     pub error: String,
     invalid: [bool; 3],
@@ -127,10 +148,19 @@ impl Panel {
                 .choices
                 .iter()
                 .any(|c| c.id == self.provider && c.enabled)
-            && (!self.isolated || self.isolation.is_some())
+            && (!self.is_new() || !self.isolated || self.isolation.is_some())
+    }
+    pub fn is_new(&self) -> bool {
+        matches!(self.provider.as_str(), "codex" | "claude")
+    }
+    pub fn selected_existing(&self) -> Option<&crate::native_review::Target> {
+        self.existing
+            .iter()
+            .find(|c| self.provider == format!("pane:{}", c.target.pane))
+            .map(|c| &c.target)
     }
     pub fn use_copy(&self) -> bool {
-        self.isolated && self.isolation == Some(true)
+        self.is_new() && self.isolated && self.isolation == Some(true)
     }
 }
 
@@ -158,9 +188,11 @@ pub(crate) fn show(
             }
             ui.label(t("Agent", "Agent"));
             for choice in &panel.choices {
-                ui.add_enabled_ui(choice.enabled, |ui| { ui.radio_value(&mut panel.provider, choice.id.clone(), format!("{} {}", t("Nouveau", "New"), choice.label)); });
+                ui.add_enabled_ui(choice.enabled, |ui| { ui.radio_value(&mut panel.provider, choice.id.clone(), choice.caption(french)); });
             }
-            ui.small(t("Les nouvelles conversations Codex et Claude sont disponibles. Le lancement dans un agent existant ou un terminal n’est pas encore disponible.", "New Codex and Claude chats are supported. Starting tasks in existing agents or terminals is not available yet."));
+            if panel.selected_existing().is_some_and(|target| Some(target.pane) == panel.reviewer) { panel.reviewer = None; }
+            ui.small(t("Agents natifs Codex et Claude. Les agents de terminal ne sont pas encore disponibles ici.", "Native Codex and Claude agents. Terminal agents are not available here yet."));
+            if panel.is_new() {
             ui.separator();
             ui.label(t("Où il travaille", "Where it works"));
             ui.add_enabled_ui(panel.isolation == Some(true), |ui| { ui.radio_value(&mut panel.isolated, true, t("Dans sa propre copie — recommandé", "In its own copy — recommended")); });
@@ -174,12 +206,14 @@ pub(crate) fn show(
                 ui.checkbox(&mut panel.run_setup, t("Y lancer d’abord .tessel/setup.ps1 (si le projet en a un)", "Run .tessel/setup.ps1 in it first (if the project has one)"));
             }
             ui.radio_value(&mut panel.isolated, false, t("Directement dans le dossier du projet", "Directly in the project folder"));
-            if !panel.reviewers.is_empty() {
+            }
+            let worker = panel.selected_existing().map(|t| t.pane);
+            if panel.reviewers.iter().any(|r| Some(r.target.pane) != worker) {
             ui.label(t("Une fois terminé, demander une revue à", "When it is done, ask for a review by"));
             let selected = panel.reviewers.iter().find(|r| Some(r.target.pane) == panel.reviewer).map(|r| r.label.as_str()).unwrap_or(t("personne", "nobody"));
             egui::ComboBox::from_id_salt(("task-reviewer", panel.epoch)).selected_text(selected).show_ui(ui, |ui| {
                 ui.selectable_value(&mut panel.reviewer, None, t("personne", "nobody"));
-                for reviewer in &panel.reviewers { ui.selectable_value(&mut panel.reviewer, Some(reviewer.target.pane), &reviewer.label); }
+                for reviewer in panel.reviewers.iter().filter(|r| Some(r.target.pane) != worker) { ui.selectable_value(&mut panel.reviewer, Some(reviewer.target.pane), &reviewer.label); }
             });
             ui.small(t("Agents natifs connectés uniquement. La demande attend la fin du travail, des approbations et du brouillon du réviseur.", "Connected native agents only. The request waits for the reviewer's work, approvals and draft to finish."));
             }
