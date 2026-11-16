@@ -24,7 +24,7 @@ pub struct Chat {
     pub pane: u64,
     pub project: u64,
     pub saved_session: Option<String>,
-    cwd: PathBuf,
+    pub(crate) cwd: PathBuf,
     transport: Option<transport::Transport>,
     connecting: Option<crate::native_connection::Pending<transport::Transport>>,
     session: String,

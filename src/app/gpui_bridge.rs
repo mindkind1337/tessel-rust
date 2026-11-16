@@ -1405,6 +1405,7 @@ impl Tessel {
             pending_close_session: None,
             pending_remove_project: None,
             pending_quick_command: None,
+            owner_task_launches: Vec::new(),
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -5058,6 +5059,7 @@ impl Tessel {
                 }
             }
             GpuiAction::ChatStop(pane_id) => {
+                self.cancel_owner_task_pane(pane_id);
                 if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
                     c.gpui_stop();
                 } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
@@ -5065,6 +5067,7 @@ impl Tessel {
                 }
             }
             GpuiAction::ChatInterrupt(pane_id) => {
+                self.cancel_owner_task_pane(pane_id);
                 if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
                     c.gpui_interrupt();
                 } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
@@ -5072,6 +5075,7 @@ impl Tessel {
                 }
             }
             GpuiAction::ChatNewConversation(pane_id) => {
+                self.cancel_owner_task_pane(pane_id);
                 if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
                     c.gpui_new_conversation();
                 }

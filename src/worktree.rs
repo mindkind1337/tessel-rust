@@ -75,6 +75,7 @@ impl GitRepoSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreatedWorktree {
+    pub root: PathBuf,
     pub path: PathBuf,
     pub branch: String,
     pub copied_env_files: usize,
@@ -751,6 +752,7 @@ pub fn create_worktree(
     };
 
     Ok(CreatedWorktree {
+        root: summary.toplevel,
         path: normalize_git_path(&wt_str),
         branch,
         copied_env_files,

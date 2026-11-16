@@ -18,6 +18,7 @@ const MAX_CONCURRENT_INSPECTS: usize = 2;
 
 #[derive(Clone, Debug)]
 pub enum WorktreeLaunchTarget {
+    Task(u64),
     ShellNewPane,
     Menu {
         item: LaunchMenuItem,

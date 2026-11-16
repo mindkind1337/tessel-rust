@@ -13,6 +13,8 @@ pub(crate) mod gpui_bridge;
 #[cfg(windows)]
 #[path = "app/native_terminals.rs"]
 mod native_terminals;
+#[path = "app/task_launch.rs"]
+mod task_launch;
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -700,6 +702,7 @@ pub struct Tessel {
     pending_close_session: Option<u64>,
     pending_remove_project: Option<u64>,
     pending_quick_command: Option<(u64, String, bool)>,
+    owner_task_launches: Vec<task_launch::Pending>,
     worktree_state: crate::worktree_state::WorktreeState,
     worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
     pending_transcript_trash: Option<crate::side_panels_model::SessionHistoryEntry>,
@@ -908,6 +911,7 @@ impl Tessel {
             pending_close_session: None,
             pending_remove_project: None,
             pending_quick_command: None,
+            owner_task_launches: Vec::new(),
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -1623,6 +1627,13 @@ impl Tessel {
             match ev {
                 WorktreeEvent::Inspected { .. } => {}
                 WorktreeEvent::Created {
+                    target: WorktreeLaunchTarget::Task(id),
+                    result,
+                    ..
+                } => {
+                    self.finish_owner_task_copy(id, result.map(|(copy, _)| copy));
+                }
+                WorktreeEvent::Created {
                     project_id,
                     source_cwd,
                     target,
@@ -1642,6 +1653,7 @@ impl Tessel {
                             branch: created.branch,
                         };
                         match target {
+                            WorktreeLaunchTarget::Task(_) => unreachable!("handled above"),
                             WorktreeLaunchTarget::ShellNewPane => {
                                 self.new_session_in_worktree(
                                     Some(project_id),
@@ -2031,6 +2043,7 @@ impl Tessel {
         }
         self.scm_state.poll();
         self.poll_worktrees();
+        native_changed |= self.poll_owner_task_launches();
         self.explorer_tree.poll();
         self.remote.poll();
         self.remote
@@ -2728,6 +2741,7 @@ impl Tessel {
         self.remove_session(id);
     }
     fn remove_session(&mut self, id: u64) {
+        self.cancel_owner_task_pane(id);
         self.team_mcp.revoke(id);
         let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
             return;
@@ -7096,6 +7110,7 @@ impl Tessel {
             && !self.remote.needs_close_confirmation()
             && !self.documents.iter().any(Document::dirty)
             && !self.git_result.busy()
+            && self.owner_task_launches.is_empty()
             && !self.worktree_state.is_busy()
             && !self.scm_state.busy()
             && !self.account_busy()
@@ -11985,6 +12000,7 @@ impl Tessel {
     }
 
     fn put_session_to_sleep(&mut self, id: u64) {
+        self.cancel_owner_task_pane(id);
         self.team_mcp.revoke(id);
         for worker in &mut self.teams_hub.workers {
             if worker.worker_pane_id == Some(id)

@@ -1469,3 +1469,16 @@ The Rust task prompt formatter follows App.vue taskPrompt for direct and isolate
 Rendering is descriptive only and grants no launch authority. The complete UTF-8 payload must fit the existing 64 KiB native first-turn boundary and contain no NUL; oversize instructions are refused, never silently truncated. The New Task form/controller and Linear task start remain outstanding. README is unchanged because this formatter alone does not enable a user-facing flow.
 
 Validation: both focused tests pass, covering all 13 exact reference vectors and payload rejection. Strict all-target/all-feature Clippy passes with warnings denied (50.99 seconds).
+
+
+## Owner native task launch controller (2026-11-16)
+
+The application now has an internal owner-task controller joining durable task preparation, optional asynchronous worktree creation, actual pane allocation and native first-turn delivery. Its pending operations live only in memory; restored task metadata cannot populate the queue. The captured card is compared before every transactional change, and project identity, pane identity/provider and directory are checked before sending. Settings replacement is refused while a pending launch exists.
+
+Like the Vue reference, an accepted task enters Doing during preparation and returns to To do on failure, unless the owner has changed the card meanwhile. The prepared copy is retained. The first-turn deadline is 30 seconds and a submitted or cancelled operation is never retried. Cancelling task delivery does not interrupt a manually started conversation in the same pane.
+
+This is not yet the completed New Task feature: both form renderers, existing-agent/terminal delivery, setup scripts and the Linear source adapter remain to be wired. The internal request currently supports newly created native Codex and Claude panes. No entry point accepts this request from a guest, persisted workspace or external issue. README remains unchanged until a complete user-facing path is connected.
+
+The receipt retains the actual Git repository root even when the project is a nested directory. Worktree failures identify a retained copy by its path. Explicit pane stop, interrupt, close and new-conversation actions cancel pending owner-task delivery; automatic cancellation preserves a manually started turn. New panes request a horizontal split of the current project pane and preserve the selected pane/view when another project has become active. Reviewer selection is validated against project-local session membership and task assignments.
+
+Validation: final run passes all 6 owner-controller tests (8.76 seconds) and both existing worktree-preparation regressions (6.58 seconds). Strict all-target/all-feature Clippy passes with warnings denied (31.10 seconds). Tests use isolated temporary repositories and synthetic native transports, with no provider process or real account.
