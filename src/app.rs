@@ -1557,14 +1557,17 @@ impl Tessel {
         let Some(proj) = self.state.projects.iter().find(|p| p.id == project_id) else {
             return;
         };
-        self.worktree_state.request_create(
-            project_id,
-            proj.path.clone(),
-            label.to_owned(),
-            self.state.general_prefs.clone(),
-            self.state.git_prefs.clone(),
-            target,
-        );
+        self.worktree_state
+            .request_create(crate::worktree_state::CreateRequest {
+                project_id,
+                cwd: proj.path.clone(),
+                label: label.to_owned(),
+                base_branch: None,
+                copy_env: true,
+                general_prefs: self.state.general_prefs.clone(),
+                git_prefs: self.state.git_prefs.clone(),
+                target,
+            });
     }
 
     fn close_sessions_for_worktree_paths(&mut self, project_id: u64, paths: &[PathBuf]) {
@@ -1591,20 +1594,45 @@ impl Tessel {
         }
     }
 
+    fn accept_prepared_worktree(
+        &mut self,
+        project_id: u64,
+        source: &std::path::Path,
+        prepared: &std::path::Path,
+    ) -> bool {
+        if self
+            .state
+            .projects
+            .iter()
+            .any(|p| p.id == project_id && p.path == source)
+        {
+            return true;
+        }
+        self.error = format!(
+            "The project folder changed. The prepared copy was kept at {}. No agent was started.",
+            prepared.display()
+        );
+        false
+    }
+
     fn poll_worktrees(&mut self) {
         use crate::finder_model::{LaunchMenuItem, LaunchPlacement};
         use crate::worktree_state::{WorktreeEvent, WorktreeLaunchTarget};
 
-        for ev in self.worktree_state.poll() {
+        for ev in self.worktree_state.poll(&self.state.projects) {
             match ev {
                 WorktreeEvent::Inspected { .. } => {}
                 WorktreeEvent::Created {
                     project_id,
+                    source_cwd,
                     target,
                     result,
                 } => match result {
                     Err(err) => self.error = err,
                     Ok((created, _)) => {
+                        if !self.accept_prepared_worktree(project_id, &source_cwd, &created.path) {
+                            continue;
+                        }
                         if self.state.active_project != Some(project_id) {
                             self.state.active_project = Some(project_id);
                             self.refresh_project();
@@ -14356,6 +14384,30 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_preparation_rejects_removed_or_retargeted_project_and_preserves_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let prepared = temp.path().join("prepared");
+        std::fs::create_dir(&prepared).unwrap();
+        std::fs::write(prepared.join("keep"), "fixture").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        assert!(!app.accept_prepared_worktree(7, &source, &prepared));
+        app.state.projects.push(workspace::Project {
+            id: 7,
+            name: "fixture".into(),
+            path: source.clone(),
+        });
+        assert!(app.accept_prepared_worktree(7, &source, &prepared));
+        app.state.projects[0].path = temp.path().join("different");
+        assert!(!app.accept_prepared_worktree(7, &source, &prepared));
+        assert!(app.error.contains("No agent was started"));
+        assert!(app.error.contains(prepared.to_str().unwrap()));
+        assert!(prepared.join("keep").exists());
+        assert!(app.sessions.is_empty());
+        assert!(app.state.active_project.is_none());
+    }
 
     #[test]
     fn issues_menu_github_without_project_clears_previous_repository_results() {

@@ -25,6 +25,18 @@ pub enum WorktreeLaunchTarget {
     },
 }
 
+/// Captured preparation options. External issue launches explicitly disable secret copying.
+pub struct CreateRequest {
+    pub project_id: u64,
+    pub cwd: PathBuf,
+    pub label: String,
+    pub base_branch: Option<String>,
+    pub copy_env: bool,
+    pub general_prefs: GeneralPreferences,
+    pub git_prefs: GitPreferences,
+    pub target: WorktreeLaunchTarget,
+}
+
 pub enum WorktreeEvent {
     Inspected {
         project_id: u64,
@@ -32,6 +44,7 @@ pub enum WorktreeEvent {
     },
     Created {
         project_id: u64,
+        source_cwd: PathBuf,
         target: WorktreeLaunchTarget,
         result: Result<(CreatedWorktree, Option<GitRepoSummary>), String>,
     },
@@ -133,23 +146,25 @@ impl WorktreeState {
         }
     }
 
-    pub fn request_create(
-        &mut self,
-        project_id: u64,
-        cwd: PathBuf,
-        label: String,
-        general_prefs: GeneralPreferences,
-        git_prefs: GitPreferences,
-        target: WorktreeLaunchTarget,
-    ) {
+    pub fn request_create(&mut self, request: CreateRequest) {
+        let CreateRequest {
+            project_id,
+            cwd,
+            label,
+            base_branch,
+            copy_env,
+            general_prefs,
+            git_prefs,
+            target,
+        } = request;
         self.busy_ops += 1;
         let tx = self.tx.clone();
         thread::spawn(move || {
             let result = worktree::create_worktree(
                 &cwd,
                 &label,
-                None,
-                true,
+                base_branch.as_deref(),
+                copy_env,
                 &general_prefs,
                 &git_prefs,
                 None,
@@ -160,6 +175,7 @@ impl WorktreeState {
             });
             let _ = tx.send(WorktreeEvent::Created {
                 project_id,
+                source_cwd: cwd,
                 target,
                 result,
             });
@@ -211,7 +227,7 @@ impl WorktreeState {
         });
     }
 
-    pub fn poll(&mut self) -> Vec<WorktreeEvent> {
+    pub fn poll(&mut self, projects: &[Project]) -> Vec<WorktreeEvent> {
         let mut out = Vec::new();
         while let Ok(ev) = self.rx.try_recv() {
             match &ev {
@@ -224,11 +240,17 @@ impl WorktreeState {
                 }
                 WorktreeEvent::Created {
                     project_id,
+                    source_cwd,
                     result: Ok((_, Some(summary))),
                     ..
                 } => {
                     self.busy_ops = self.busy_ops.saturating_sub(1);
-                    self.summaries.insert(*project_id, Some(summary.clone()));
+                    if projects
+                        .iter()
+                        .any(|p| p.id == *project_id && p.path == *source_cwd)
+                    {
+                        self.summaries.insert(*project_id, Some(summary.clone()));
+                    }
                 }
                 WorktreeEvent::Created { .. } | WorktreeEvent::CleanupScanned { .. } => {
                     self.busy_ops = self.busy_ops.saturating_sub(1);
@@ -250,5 +272,87 @@ impl WorktreeState {
             self.pump_inspect_queue();
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn worktree_preparation_uses_captured_base_and_secret_policy_without_rebinding_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| crate::git::run(&repo, args, None).unwrap();
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["config", "user.email", "fixture@example.test"]);
+        fs::write(repo.join(".gitignore"), ".env\n").unwrap();
+        fs::write(repo.join("version"), "base").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "base"]);
+        git(&["branch", "task-base"]);
+        fs::write(repo.join("version"), "head").unwrap();
+        git(&["commit", "-am", "head"]);
+        fs::write(repo.join(".env"), "SYNTHETIC_ONLY=fixture").unwrap();
+        for (copy_env, moved) in [(false, true), (true, false)] {
+            let mut state = WorktreeState::new();
+            state.request_create(CreateRequest {
+                project_id: 7,
+                cwd: repo.clone(),
+                label: format!("copy-{copy_env}"),
+                base_branch: Some("task-base".into()),
+                copy_env,
+                general_prefs: GeneralPreferences::default(),
+                git_prefs: GitPreferences::default(),
+                target: WorktreeLaunchTarget::ShellNewPane,
+            });
+            let projects = vec![Project {
+                id: 7,
+                name: "fixture".into(),
+                path: if moved {
+                    temp.path().join("different")
+                } else {
+                    repo.clone()
+                },
+            }];
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (source, created) = loop {
+                let mut result = None;
+                for event in state.poll(&projects) {
+                    if let WorktreeEvent::Created {
+                        source_cwd,
+                        result: outcome,
+                        ..
+                    } = event
+                    {
+                        result = Some((source_cwd, outcome.unwrap().0));
+                    }
+                }
+                if let Some(result) = result {
+                    break result;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "background worktree preparation timed out"
+                );
+                thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(source, repo);
+            assert_eq!(
+                fs::read_to_string(created.path.join("version")).unwrap(),
+                "base"
+            );
+            assert_eq!(created.path.join(".env").exists(), copy_env);
+            assert_eq!(created.copied_env_files, usize::from(copy_env));
+            assert_eq!(state.summary(7).is_some(), !moved);
+            assert!(!state.is_busy());
+            assert!(created.path.exists());
+        }
     }
 }

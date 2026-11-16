@@ -1429,3 +1429,12 @@ Both renderers now expose the source Issues toolbar button with GitHub followed 
 GPUI anchors the menu to the button's measured bounds, supports Enter/Space/arrow navigation and Escape with focus restoration, and closes the menu when resizing into compact toolbar mode. Compatibility uses its native popup/focus routing and the same service order. Opening Linear still uses the owner-local account controller; no credentials or remote actions are passed through the menu.
 
 Validation: both focused Issues menu tests pass, including native keyboard focus, the actual window-resize callback and clearing previous GitHub repository results without a selected project. The Linear filter runs 32 passing tests (including the new menu fixture). Strict all-target/all-feature Clippy passes with warnings denied (27.00 seconds); formatting and diff checks pass. All account fixtures remain synthetic. Full task preparation and Linear task launch remain pending.
+
+
+## Captured worktree preparation for New Task (2026-11-16)
+
+Background worktree creation now carries explicit base-branch and environment-copy options instead of hard-coding HEAD and secret copying in the worker. Existing worktree menu callers preserve their current defaults. Created events retain the requested project directory; a removed or retargeted project cannot receive that result's repository summary or launch an agent. An already-created copy is preserved and its path is reported rather than silently removed.
+
+This is a prerequisite for New Task and external-issue launches, not a completed task dialog. Setup-script execution, durable task instructions/reviewer/worktree metadata, provider first-turn delivery and the Linear state transition after a successful task start remain outstanding. Tests use temporary Git repositories and synthetic environment data only.
+
+Validation: both worktree-preparation tests pass (7.34 seconds): a real temporary repository verifies selected-base content versus current HEAD and synthetic .env copy on/off; removed/retargeted project checks retain the copy and reject launch. Strict all-target/all-feature Clippy passes with warnings denied (54.71 seconds), as do formatting and diff checks.
