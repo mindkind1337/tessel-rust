@@ -76,6 +76,12 @@ impl Scope {
             authority,
         }
     }
+    pub(super) fn same_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.authority, &other.authority)
+    }
+    pub(super) fn same_generation(&self, other: &Self) -> bool {
+        self.generation == other.generation && Arc::ptr_eq(&self.authority, &other.authority)
+    }
     pub fn is_current(&self) -> bool {
         !self.authority.closed.load(Ordering::Acquire)
             && !self.authority.gate.is_poisoned()

@@ -10,7 +10,9 @@ use std::{
 use zeroize::Zeroizing;
 mod body;
 mod parse;
+mod record;
 pub mod request;
+pub mod service;
 mod storage_path;
 
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
@@ -226,7 +228,13 @@ fn key_lock(path: &Path) -> Result<File, String> {
 }
 fn save_key_at(path: &Path, key: &str) -> Result<(), String> {
     let key = valid_key(key)?;
-    let protected = protect_key(key.as_bytes(), true)?;
+    save_plain_at(path, key.as_bytes())
+}
+fn save_plain_at(path: &Path, plain: &[u8]) -> Result<(), String> {
+    let protected = protect_key(plain, true)?;
+    if protected.len() > MAX_KEY_FILE as usize {
+        return Err("Protected Linear record is too large".into());
+    }
     let _lock = key_lock(path)?;
     let mut temp =
         tempfile::NamedTempFile::new_in(path.parent().ok_or("Invalid private storage directory")?)
@@ -239,13 +247,18 @@ fn save_key_at(path: &Path, key: &str) -> Result<(), String> {
         .map_err(|_| "Cannot save protected Linear key")?;
     Ok(())
 }
-fn load_key_at(path: &Path) -> Result<Option<Zeroizing<String>>, String> {
+fn load_plain_at(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     let _lock = key_lock(path)?;
     let Some(file) = storage_path::open(path, false)? else {
         return Ok(None);
     };
     let bytes = read_bounded(file, MAX_KEY_FILE as usize)?;
-    let plain = protect_key(&bytes, false)?;
+    Ok(Some(protect_key(&bytes, false)?))
+}
+fn load_key_at(path: &Path) -> Result<Option<Zeroizing<String>>, String> {
+    let Some(plain) = load_plain_at(path)? else {
+        return Ok(None);
+    };
     let key = std::str::from_utf8(&plain).map_err(|_| "Invalid protected Linear key")?;
     Ok(Some(Zeroizing::new(valid_key(key)?.to_owned())))
 }
