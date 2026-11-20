@@ -410,6 +410,7 @@ pub(crate) struct GpuiBrowserSnapshot {
     pub downloads_open: bool,
     pub downloads: Vec<crate::browser::DownloadSummaryRow>,
     pub error: String,
+    pub cookie_import_status: String,
 }
 
 #[allow(dead_code)]
@@ -868,6 +869,7 @@ pub(crate) enum GpuiAction {
     BrowserBack,
     BrowserForward,
     BrowserReload,
+    BrowserImportCookies,
     BrowserAcceptPopup,
     BrowserDismissPopup,
     BrowserToggleDownloads,
@@ -3255,6 +3257,7 @@ impl Tessel {
             downloads_open: self.browser.downloads_open(),
             downloads: self.browser.download_summaries(),
             error: self.browser.error_str().to_owned(),
+            cookie_import_status: self.browser.cookie_import_status().to_owned(),
         };
         #[cfg(not(windows))]
         let browser = GpuiBrowserSnapshot::default();
@@ -5574,6 +5577,10 @@ impl Tessel {
             GpuiAction::BrowserReload => {
                 #[cfg(windows)]
                 self.browser.reload_now();
+            }
+            GpuiAction::BrowserImportCookies => {
+                #[cfg(windows)]
+                self.browser.import_cookie_file_now();
             }
             GpuiAction::BrowserAcceptPopup => {
                 #[cfg(windows)]

@@ -1462,9 +1462,9 @@ pub(crate) fn render_browser_stage(
                     .text_size(px(12.5))
                     .text_color(tokens.text_dim)
                     .child(if french {
-                        "Profil de navigateur isolé pour Tessel Rust. Aucun cookie ni mot de passe externe n'est importé."
+                        "Profil de navigateur isolé pour Tessel Rust. Aucun cookie ni mot de passe externe n'est importé automatiquement."
                     } else {
-                        "Private browser profile for Tessel Rust. No external cookies or passwords are imported."
+                        "Private browser profile for Tessel Rust. No external cookies or passwords are imported automatically."
                     }),
             )
             .child(
@@ -1625,6 +1625,33 @@ pub(crate) fn render_browser_stage(
                             b.downloads.len()
                         ))),
                 ),
+        )
+        .child(
+            div()
+                .px(px(10.0))
+                .py(px(4.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .id("browser-import-cookies")
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded(px(4.0))
+                        .bg(tokens.surface_2)
+                        .text_size(px(11.0))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.dispatch(GpuiAction::BrowserImportCookies, cx);
+                        }))
+                        .child(if french {
+                            "Importer un fichier de cookies…"
+                        } else {
+                            "Import cookies from file…"
+                        }),
+                )
+                .child(SharedString::from(b.cookie_import_status.clone())),
         )
         .when_some(b.popup_url.as_ref(), |el, _popup| {
             el.child(

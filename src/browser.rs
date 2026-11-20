@@ -2,6 +2,7 @@
 use crate::i18n::tr;
 mod capture;
 mod control;
+mod cookie_import;
 mod downloads;
 mod private_fill;
 pub use private_fill::Reply as FillReply;
@@ -48,6 +49,7 @@ pub struct Browser {
     address_editing: bool,
     popup: Option<String>,
     error: String,
+    cookie_import_status: String,
     downloads: VecDeque<downloads::Record>,
     download_tracker: downloads::Downloads,
     capture: capture::Capture,
@@ -81,6 +83,7 @@ impl Default for Browser {
             address_editing: false,
             popup: None,
             error: String::new(),
+            cookie_import_status: String::new(),
             downloads: VecDeque::new(),
             download_tracker: Default::default(),
             capture: Default::default(),
@@ -743,6 +746,21 @@ impl Browser {
         }
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+        }
+        if self.agent_root.is_none() {
+            ui.horizontal(|ui| {
+                if ui
+                    .button(if crate::i18n::is_french() {
+                        "Importer un fichier de cookies…"
+                    } else {
+                        "Import cookies from file…"
+                    })
+                    .clicked()
+                {
+                    self.import_cookie_file_now();
+                }
+                ui.label(&self.cookie_import_status);
+            });
         }
         if self.downloads_open {
             if let Some(root) = &self.agent_root {

@@ -471,6 +471,43 @@ impl Probe {
                     {
                         return Err("Agent fixture cookies leaked to another profile".into());
                     }
+                    let export = r#"[
+                        {"domain":"example.test","name":"host_fixture","value":"synthetic","hostOnly":true,"secure":true,"httpOnly":true},
+                        {"domain":"example.test","name":"domain_fixture","value":"synthetic","hostOnly":false,"secure":true,"httpOnly":true},
+                        {"domain":"accounts.google.com","name":"excluded_fixture","value":"synthetic"}
+                    ]"#;
+                    if b.import_cookie_text(export).is_ok() {
+                        return Err("Agent browser accepted owner cookie import".into());
+                    }
+                    if owner.import_cookie_text(export)? != (2, 1) {
+                        return Err("Owner cookie import counts are incorrect".into());
+                    }
+                    let owner_view = owner.view.as_ref().unwrap();
+                    let exact = owner_view
+                        .cookies_for_url("https://example.test/")
+                        .map_err(|_| "Cannot inspect synthetic cookie import")?;
+                    let subdomain = owner_view
+                        .cookies_for_url("https://sub.example.test/")
+                        .map_err(|_| "Cannot inspect synthetic cookie scope")?;
+                    if exact.len() != 2
+                        || subdomain.len() != 1
+                        || subdomain[0].name() != "domain_fixture"
+                        || exact
+                            .iter()
+                            .any(|c| c.http_only() != Some(true) || c.secure() != Some(true))
+                    {
+                        return Err("Imported cookie scope or flags changed".into());
+                    }
+                    if !b
+                        .view
+                        .as_ref()
+                        .unwrap()
+                        .cookies_for_url("https://example.test/")
+                        .map_err(|_| "Cannot inspect agent isolation after import")?
+                        .is_empty()
+                    {
+                        return Err("Imported owner cookies reached the agent browser".into());
+                    }
                     self.owner = Some(owner);
                     Ok(())
                 })();
