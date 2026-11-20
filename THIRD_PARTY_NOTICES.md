@@ -357,3 +357,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 
 - `src/external_issue.rs` and the linked-issue controller restrictions follow Tessel renderer `externalIssues.js` under the existing Orca/Tessel MIT attribution. Rust reuses existing Linear origin/ID validation, adds external provenance and keeps the transient contract outside serialized state.
 - `src/app/linear_task.rs` and the Linear launch controls follow `externalIssues.js` and `components/LinearDialog.vue` under that same attribution, with captured account authority and native first-turn callbacks.
+
+- `src/cookie_import_model.rs` recovers the unfinished native cookie-export model based on Tessel `src/main/cookieImport/cookieFile.js`, `cookies.js` and `src/renderer/src/browser/cookieImportText.js`, under the Orca/Tessel MIT attribution above (Copyright (c) 2026 Lovecast Inc.). Only synthetic cookie fixtures are included; no browser profile or real credentials are bundled.
