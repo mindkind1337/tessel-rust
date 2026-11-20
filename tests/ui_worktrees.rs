@@ -841,3 +841,81 @@ fn worktree_origin_tracks_selected_ref_current_branch_and_detached_commit() {
         detached.base_commit
     );
 }
+
+#[test]
+fn worktree_base_requires_symbolic_branches_or_exact_full_object_identity() {
+    for format in ["sha1", "sha256"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        fs::create_dir(&root).unwrap();
+        git::run(
+            &root,
+            &["init", &format!("--object-format={format}"), "-b", "main"],
+            None,
+        )
+        .unwrap();
+        for (name, value) in [
+            ("user.name", "Fixture"),
+            ("user.email", "fixture@example.test"),
+            ("core.hooksPath", ""),
+            ("commit.gpgsign", "false"),
+        ] {
+            git::run(&root, &["config", name, value], None).unwrap();
+        }
+        fs::write(root.join("fixture.txt"), "synthetic").unwrap();
+        git::run(&root, &["add", "fixture.txt"], None).unwrap();
+        git::run(&root, &["commit", "-m", "fixture"], None).unwrap();
+        let sha = git::run(&root, &["rev-parse", "HEAD"], None)
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert_eq!(sha.len(), if format == "sha1" { 40 } else { 64 });
+        let general = GeneralPreferences::default();
+        let prefs = GitPreferences::default();
+        let create = |label: &str, base: &str| {
+            worktree::create_worktree(&root, label, Some(base), false, &general, &prefs, None)
+        };
+        for (label, base) in [("pinned", sha.to_uppercase()), ("local", "main".into())] {
+            let copy = create(label, &base).unwrap();
+            assert_eq!(copy.base_commit, sha);
+            assert_eq!(
+                git::run(&copy.path, &["rev-parse", "HEAD"], None)
+                    .unwrap()
+                    .trim(),
+                sha
+            );
+        }
+        git::run(
+            &root,
+            &["update-ref", "refs/remotes/origin/main", &sha],
+            None,
+        )
+        .unwrap();
+        assert_eq!(create("remote", "origin/main").unwrap().base_commit, sha);
+        git::run(&root, &["branch", "abcdef12"], None).unwrap();
+        assert_eq!(create("hex-branch", "abcdef12").unwrap().base_commit, sha);
+        git::run(&root, &["tag", "release"], None).unwrap();
+        let fake = "f".repeat(sha.len());
+        assert_ne!(fake, sha);
+        git::run(
+            &root,
+            &["update-ref", &format!("refs/heads/{fake}"), &sha],
+            None,
+        )
+        .unwrap();
+        let before = git::run(&root, &["worktree", "list", "--porcelain"], None).unwrap();
+        for base in ["release", "HEAD~0", &sha[..12], &fake, "main\nextra"] {
+            assert!(
+                create("rejected", base).is_err(),
+                "{format}: accepted {base}"
+            );
+        }
+        if format == "sha256" {
+            assert!(create("short-sha256", &sha[..40]).is_err());
+        }
+        assert_eq!(
+            git::run(&root, &["worktree", "list", "--porcelain"], None).unwrap(),
+            before
+        );
+    }
+}

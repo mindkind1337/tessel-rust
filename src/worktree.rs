@@ -637,6 +637,10 @@ fn copy_ignored_env_files(source_root: &Path, target_root: &Path) -> usize {
     copied
 }
 
+fn full_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn resolve_base_commit(
     toplevel: &Path,
     base_branch: Option<&str>,
@@ -662,33 +666,57 @@ fn resolve_base_commit(
             ],
         )?;
         let sha = sha.trim().to_owned();
+        if !full_object_id(&sha) {
+            return Err("The selected base does not point to a commit.".into());
+        }
         let label = reference
             .map(|r| r.strip_prefix("refs/heads/").unwrap_or(r).to_owned())
             .unwrap_or_else(|| sha.clone());
         return Ok((sha, label));
     };
-    if raw.starts_with('-') || raw.contains("..") || raw.chars().any(char::is_control) {
+    if raw.encode_utf16().count() > 1024 || raw.contains(['\r', '\n', '\0']) {
         return Err("Invalid base branch name.".into());
     }
-    for candidate in [
-        format!("refs/heads/{raw}"),
-        format!("refs/remotes/{raw}"),
-        raw.to_owned(),
-    ] {
-        if let Ok(sha) = run_git_readonly(
+    let pinned = full_object_id(raw);
+    let reference = if pinned {
+        raw.to_ascii_lowercase()
+    } else {
+        let symbolic = run_git_readonly(
             toplevel,
             &[
                 "rev-parse",
+                "--symbolic-full-name",
                 "--verify",
-                "--quiet",
                 "--end-of-options",
-                &format!("{candidate}^{{commit}}"),
+                raw,
             ],
-        ) {
-            return Ok((sha.trim().to_owned(), raw.to_owned()));
+        )?;
+        let symbolic = symbolic.trim();
+        if symbolic.contains(['\r', '\n'])
+            || !["refs/heads/", "refs/remotes/"].iter().any(|prefix| {
+                symbolic
+                    .strip_prefix(prefix)
+                    .is_some_and(|name| !name.is_empty())
+            })
+        {
+            return Err("The selected base branch was not found.".into());
         }
+        symbolic.to_owned()
+    };
+    let sha = run_git_readonly(
+        toplevel,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{reference}^{{commit}}"),
+        ],
+    )?;
+    let sha = sha.trim();
+    if !full_object_id(sha) || (pinned && !sha.eq_ignore_ascii_case(&reference)) {
+        return Err("The selected base does not match the requested commit.".into());
     }
-    Err(format!("Base branch '{raw}' could not be resolved."))
+    Ok((sha.to_owned(), raw.to_owned()))
 }
 
 /// Creates a new Git worktree on a fresh branch honoring `general_prefs.workspace_dir`,

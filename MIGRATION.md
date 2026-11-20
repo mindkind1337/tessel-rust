@@ -1605,3 +1605,9 @@ Validation: all five panel tests and both app integration tests pass, covering e
 ### Linear worker failure recovery
 
 A worker failure now clears the transient launch receipt as well as dropping its account authority. A delayed local preparation callback cannot write an old error into a reopened dialog. If the first turn was already submitted, the existing warning/close path remains in effect and cannot restart the task. All seven panel tests pass, including two new worker-failure regressions; strict all-target/all-feature Clippy passes with warnings denied (1m12s). No renderer or feature contract changed.
+
+## Worktree base selection alignment (2026-11-20)
+
+Explicit branch selection now uses Git's symbolic full-name resolution and requires a local or remote branch, matching Vue's resolveWorktreeBase contract. Tags, abbreviated objects and revision expressions no longer enter through the previous raw-revision fallback. Full 40/64-digit object identities are verified against the resolved commit exactly, so a hex-named reference cannot substitute another commit and a 40-digit SHA-256 abbreviation cannot impersonate a complete SHA-1 identity. Implicit/explicit HEAD retains the existing captured-symbolic-ref behavior and detached-commit origin.
+
+Validation: a real temporary-repository integration test passes for SHA-1 and SHA-256, including uppercase full identities, local/remote branches, a valid short hex-named branch, rejected tag/revision/abbreviation/shadow-reference cases and unchanged worktree inventory after rejection (11.46 seconds). The existing current/explicit/detached origin regression passes (3.29 seconds). Strict all-target/all-feature Clippy passes with warnings denied (1m15s); formatting and diff checks pass. This aligns base selection; the separately documented worktree trust-provenance integration is not claimed complete.

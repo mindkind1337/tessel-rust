@@ -6,6 +6,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Git worktree bases accept local or remote branch names and full SHA-1/SHA-256 commit identities. Tags and abbreviated revision expressions are rejected; a hex-named branch cannot substitute a different commit for a requested full identity.
+
 - Live Share excludes the protected Linear credential file (`linear.dat`) from guest browsing and access, including a copy placed inside a shared project. Both renderers now open an owner-local Linear dialog from the command palette, grouped Issues toolbar menu or toolbar overflow menu, with an encrypted account connection, team/state filters, issue details, refresh, copy/open actions and confirmed disconnect. Keys stay out of workspace state, snapshots and shared messages.
 - Linear issues can start a new local native Codex or Claude task from either renderer, with an optional isolated Git worktree. The dialog captures its project and account; external-issue launches disable optional environment-file copying and setup execution. An explicitly chosen Linear state is applied only after the first native turn is submitted. A state-update failure produces a warning without retrying the task. Terminal-agent and remote/guest issue launches remain unported.
 
