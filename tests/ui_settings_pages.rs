@@ -12,6 +12,7 @@ mod theme_palettes;
 mod workspace {
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct EditorPreferences {
+        pub font_size: u8,
         pub syntax_highlighting: bool,
         pub line_numbers: bool,
         pub word_wrap: bool,
@@ -27,6 +28,7 @@ mod workspace {
     impl Default for EditorPreferences {
         fn default() -> Self {
             Self {
+                font_size: 12,
                 syntax_highlighting: true,
                 line_numbers: true,
                 word_wrap: false,

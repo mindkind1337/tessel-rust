@@ -824,6 +824,20 @@ impl SettingsPagesState {
                     "Automatically writes modified UTF-8 files to disk after an idle delay."
                 },
             );
+            ui.horizontal(|ui| {
+                ui.label(if french {
+                    "Taille de police de l’éditeur"
+                } else {
+                    "Editor font size"
+                });
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut prefs.font_size)
+                            .range(6..=100)
+                            .suffix(" px"),
+                    )
+                    .changed();
+            });
             if prefs.auto_save {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {

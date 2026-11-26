@@ -247,6 +247,7 @@ const fn default_usage_refresh_minutes() -> u16 {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EditorPreferences {
+    pub font_size: u8,
     #[serde(default = "default_true")]
     pub syntax_highlighting: bool,
     #[serde(default = "default_true")]
@@ -274,6 +275,7 @@ pub struct EditorPreferences {
 impl Default for EditorPreferences {
     fn default() -> Self {
         Self {
+            font_size: 12,
             syntax_highlighting: true,
             line_numbers: true,
             word_wrap: true,
@@ -843,6 +845,9 @@ impl Workspace {
         }
         if self.projects.len() > 1000 || self.hosts.len() > 1000 || self.tasks.len() > 10000 {
             return Err("Workspace exceeds supported limits.".into());
+        }
+        if !(6..=100).contains(&self.editor_prefs.font_size) {
+            return Err("Invalid editor font size.".into());
         }
         if !(1..=8).contains(&self.editor_prefs.tab_size) {
             return Err("Invalid editor tab size.".into());

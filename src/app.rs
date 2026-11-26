@@ -6788,7 +6788,7 @@ impl Tessel {
             show_diff_document(
                 ui,
                 d,
-                self.state.font_size,
+                f32::from(self.state.editor_prefs.font_size),
                 self.state.editor_prefs.diff_word_wrap,
             );
         } else if let Some(source) = &d.playback {
@@ -6932,7 +6932,7 @@ impl Tessel {
             }
         } else {
             show_editor_bars(ui, d);
-            let font = egui::FontId::monospace(self.state.font_size);
+            let font = egui::FontId::monospace(f32::from(self.state.editor_prefs.font_size));
             let row_height = ui.fonts_mut(|f| f.row_height(&font)).max(14.0_f32);
             let lang = crate::syntax::SyntaxLang::from_path(&d.path);
             let theme_id = crate::theme::active(ui.ctx());
@@ -7013,8 +7013,9 @@ impl Tessel {
                         .layouter(&mut layouter)
                         .show(ui);
                     if let Some((gx_min, gx_max)) = gutter_bounds {
-                        let gutter_font =
-                            egui::FontId::monospace((self.state.font_size - 1.0_f32).max(10.0_f32));
+                        let gutter_font = egui::FontId::monospace(
+                            (f32::from(self.state.editor_prefs.font_size) - 1.0).max(6.0),
+                        );
                         let _ = crate::syntax::paint_editor_gutter(
                             ui.painter(),
                             gx_min,
@@ -13966,7 +13967,10 @@ impl eframe::App for Tessel {
             match self.view {
                 View::Work => self.work(ui),
                 View::Files => self.editor(ui),
-                View::Remote => self.remote.show(ui, &self.state.hosts),
+                View::Remote => {
+                    self.remote
+                        .show(ui, &self.state.hosts, self.state.editor_prefs.font_size)
+                }
                 #[cfg(windows)]
                 View::Browser => {
                     if !self.state.browser_prefs.separate_agent_session {

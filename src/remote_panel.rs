@@ -600,7 +600,7 @@ impl RemotePanel {
             crate::remote_tree_watch::Update::Fallback => self.tree_live = false,
         }
     }
-    pub fn show(&mut self, ui: &mut egui::Ui, hosts: &[Host]) {
+    pub fn show(&mut self, ui: &mut egui::Ui, hosts: &[Host], editor_font_size: u8) {
         self.poll();
         ui.heading(tr("Remote files · SFTP"));
         ui.label(tr("Uses OpenSSH config and existing key/agent authentication. Unknown host keys are refused. Connect from a terminal first when trust or authentication needs setup."));
@@ -984,6 +984,7 @@ impl RemotePanel {
                         ui.add(
                             egui::TextEdit::multiline(text)
                                 .code_editor()
+                                .font(egui::FontId::monospace(f32::from(editor_font_size)))
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(18),
                         );
@@ -1037,7 +1038,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| panel.show(ui, &[]));
+                    egui::CentralPanel::default().show(ctx, |ui| panel.show(ui, &[], 12));
                 },
             )
         };
@@ -1234,7 +1235,7 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default()
-                .show(ctx, |ui| panel.show(ui, std::slice::from_ref(&host)));
+                .show(ctx, |ui| panel.show(ui, std::slice::from_ref(&host), 12));
         });
         assert!(
             crate::files::playback::Source::take_presented(&ctx)

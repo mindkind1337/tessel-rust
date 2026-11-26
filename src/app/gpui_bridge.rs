@@ -717,6 +717,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub dark: bool,
     pub french: bool,
     pub font_size: f32,
+    pub editor_font_size: u8,
     pub renderer: RendererPreference,
     pub right_fullscreen: bool,
     pub right_tab: SideTab,
@@ -1072,6 +1073,10 @@ pub(crate) enum GpuiAction {
     UpdateGeneralPrefs(crate::workspace::GeneralPreferences),
     UpdateTerminalPrefs(crate::workspace::TerminalPreferences),
     UpdateEditorPrefs(crate::workspace::EditorPreferences),
+    SetEditorFontSize {
+        base: u32,
+        size: u32,
+    },
     SetAutoSaveDelay {
         base: u32,
         delay: u32,
@@ -3711,6 +3716,7 @@ impl Tessel {
             theme,
             dark: self.state.dark,
             french,
+            editor_font_size: self.state.editor_prefs.font_size,
             font_size,
             renderer: self.state.renderer,
             right_fullscreen: self.right_fullscreen,
@@ -6678,6 +6684,15 @@ impl Tessel {
             GpuiAction::UpdateTerminalPrefs(p) => {
                 self.state.terminal_prefs = p;
                 self.save();
+            }
+            GpuiAction::SetEditorFontSize { base, size } => {
+                if u32::from(self.state.editor_prefs.font_size) == base
+                    && (6..=100).contains(&size)
+                    && size != base
+                {
+                    self.state.editor_prefs.font_size = size as u8;
+                    self.save();
+                }
             }
             GpuiAction::SetAutoSaveDelay { base, delay } => {
                 let prefs = &mut self.state.editor_prefs;

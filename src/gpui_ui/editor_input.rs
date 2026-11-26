@@ -905,6 +905,67 @@ mod tests {
     }
 
     #[gpui::test]
+    fn editor_font_size_changes_source_and_diff_metrics_independently(test: &mut TestAppContext) {
+        let platform = gpui_platform::current_platform(true);
+        let cx = &mut TestAppContext::build_with_text_system(
+            test.dispatcher.clone(),
+            None,
+            platform.text_system(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("size.txt");
+        std::fs::write(&path, "abcdefghij").unwrap();
+        let docs = vec![
+            Document::open(dir.path(), &path).unwrap(),
+            Document::from_diff(dir.path(), path, "Diff".into(), "+abcdefghij".into(), false),
+        ];
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(docs, 0);
+            root
+        });
+        let width = |cx: &mut TestAppContext, tab| {
+            view.update(cx, |root, _, cx| {
+                root.dispatch(GpuiAction::SelectDocumentTab(tab), cx)
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let bounds = gpui::VisualTestContext::from_window(view.into(), cx)
+                .debug_bounds("native-local-editor")
+                .unwrap();
+            view.update(cx, |root, w, cx| {
+                let id = root.app.gpui_editor_document().unwrap().instance_id();
+                root.editor_input.get(id).unwrap().update(cx, |s, cx| {
+                    let start = s.bounds_for_range(0..0, bounds, w, cx).unwrap();
+                    let end = s.bounds_for_range(10..10, bounds, w, cx).unwrap();
+                    f32::from(end.origin.x - start.origin.x)
+                })
+            })
+            .unwrap()
+        };
+        let original = [width(cx, 0), width(cx, 1)];
+        let terminal = view
+            .update(cx, |root, _, cx| {
+                let snap = root.app.gpui_snapshot(960., 640., 4.);
+                assert_eq!(snap.editor_font_size, 12);
+                root.dispatch(GpuiAction::SetEditorFontSize { base: 12, size: 24 }, cx);
+                snap.font_size
+            })
+            .unwrap();
+        for (tab, baseline) in original.into_iter().enumerate() {
+            assert!(baseline > 0. && width(cx, tab) > baseline * 1.8);
+        }
+        let saved: crate::workspace::Workspace = serde_json::from_slice(
+            &std::fs::read(dir.path().join("state/workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.editor_prefs.font_size, 24);
+        assert_eq!(saved.font_size, terminal);
+        let previous: crate::workspace::EditorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(previous.font_size, 12);
+    }
+
+    #[gpui::test]
     fn source_wrap_is_shared_live_and_persisted_independently_of_diff(test: &mut TestAppContext) {
         // The default GPUI test text system gives each paragraph exactly one visual line.
         let platform = gpui_platform::current_platform(true);

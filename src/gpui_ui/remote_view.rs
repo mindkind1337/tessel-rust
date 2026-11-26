@@ -658,6 +658,8 @@ pub(crate) fn render(
             body = body.child(
                 div()
                     .id("remote-text-scroll")
+                    .text_size(px(f32::from(snapshot.editor_font_size)))
+                    .font_family(super::theme::mono_font_family())
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()

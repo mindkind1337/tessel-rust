@@ -1,5 +1,6 @@
 //! Native Settings workspace and page controls.
 
+use super::settings_number::Field;
 use super::{
     FocusInputTarget, TesselGpuiRoot,
     icons::GpuiIcon,
@@ -32,7 +33,7 @@ pub(super) fn render_settings_modal(
     viewport_width: f32,
     snapshot: &GpuiWorkspaceSnapshot,
     modal_query: &super::modal_query_input::Input,
-    controls: &super::auto_save_input::Controls,
+    controls: &super::settings_number::Controls,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -60,8 +61,9 @@ pub(super) fn render_settings_modal(
                 },
             })
             .collect();
+        rows.push(Field::Font.search_row(french));
         if s.editor_prefs.auto_save {
-            rows.push(super::auto_save_input::search_row(french));
+            rows.push(Field::Delay.search_row(french));
         }
         search_settings(&s.search_query, &rows, lang)
     });
@@ -237,8 +239,8 @@ pub(super) fn render_settings_modal(
                     cx,
                 ));
                 count += TOGGLES.iter().filter(|t| t.page == page).count().max(1);
-                if page == SettingsPageId::Editor && s.editor_prefs.auto_save {
-                    count += 1;
+                if page == SettingsPageId::Editor {
+                    count += 1 + usize::from(s.editor_prefs.auto_save);
                 }
             } else if page == SettingsPageId::Terminal
                 && !TOGGLES
@@ -258,9 +260,18 @@ pub(super) fn render_settings_modal(
                     && results
                         .matched_row_ids
                         .iter()
-                        .any(|id| id == super::auto_save_input::ID)
+                        .any(|id| id == Field::Font.id())
                 {
-                    body = body.child(controls.render(french, tokens, cx));
+                    body = body.child(controls.render(Field::Font, french, tokens, cx));
+                    count += 1;
+                }
+                if page == SettingsPageId::Editor
+                    && results
+                        .matched_row_ids
+                        .iter()
+                        .any(|id| id == Field::Delay.id())
+                {
+                    body = body.child(controls.render(Field::Delay, french, tokens, cx));
                     count += 1;
                 }
             }
@@ -353,7 +364,7 @@ fn render_settings_page_body(
     snapshot: &GpuiWorkspaceSnapshot,
     s: &GpuiSettingsSnapshot,
     focus_input: FocusInputTarget,
-    controls: &super::auto_save_input::Controls,
+    controls: &super::settings_number::Controls,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -755,7 +766,7 @@ fn render_terminal_page(
 
 fn render_editor_page(
     s: &GpuiSettingsSnapshot,
-    controls: &super::auto_save_input::Controls,
+    controls: &super::settings_number::Controls,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -779,8 +790,9 @@ fn render_editor_page(
             tokens,
         ))
         .children(page_toggles(SettingsPageId::Editor, s, french, tokens, cx))
+        .child(controls.render(Field::Font, french, tokens, cx))
         .when(ep.auto_save, |el| {
-            el.child(controls.render(french, tokens, cx))
+            el.child(controls.render(Field::Delay, french, tokens, cx))
         })
         .child(
             div()

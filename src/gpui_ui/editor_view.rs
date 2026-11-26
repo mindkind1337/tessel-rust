@@ -492,14 +492,16 @@ pub(crate) fn render_document_editor_stage(
             #[cfg(not(windows))]
             readable.into_any_element()
         }
-    } else if let Some(native) = editor_input.render(doc, snapshot.font_size, tokens, cx) {
+    } else if let Some(native) =
+        editor_input.render(doc, f32::from(snapshot.editor_font_size), tokens, cx)
+    {
         native
     } else {
         render_code_or_diff_surface(
             doc,
             snapshot.theme,
             snapshot.dark,
-            snapshot.font_size,
+            f32::from(snapshot.editor_font_size),
             tokens,
             cx,
         )
