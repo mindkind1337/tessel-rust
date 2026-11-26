@@ -8,6 +8,7 @@ type Outcome = Result<Snapshot, String>;
 pub(crate) struct Detection {
     entries: Snapshot,
     loaded: bool,
+    rescan: bool,
     error: Option<String>,
     pending: Option<Receiver<Outcome>>,
 }
@@ -54,16 +55,28 @@ impl Detection {
         }
     }
 
-    pub fn poll(&mut self) {
+    pub fn invalidate_custom(&mut self, changed: Option<&str>) {
+        self.entries.retain(|(id, _)| match changed {
+            Some(edited) => id != edited,
+            None => !id.starts_with("custom-"),
+        });
+        self.rescan = self.detecting();
+    }
+
+    /// Returns true when custom settings changed during the previous scan.
+    pub fn poll(&mut self) -> bool {
         let Some(receiver) = &self.pending else {
-            return;
+            return false;
         };
         let outcome = match receiver.try_recv() {
             Ok(outcome) => outcome,
-            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Empty) => return false,
             Err(TryRecvError::Disconnected) => Err("Agent detection stopped unexpectedly.".into()),
         };
         self.pending = None;
+        if std::mem::take(&mut self.rescan) {
+            return true;
+        }
         match outcome {
             Ok(entries) => {
                 self.entries = entries;
@@ -72,6 +85,7 @@ impl Detection {
             }
             Err(error) => self.error = Some(error),
         }
+        false
     }
 }
 
@@ -85,6 +99,26 @@ mod tests {
         tx
     }
 
+    #[test]
+    fn custom_edit_during_discovery_discards_stale_result_and_requests_one_rescan() {
+        let mut state = Detection::default();
+        let tx = pending(&mut state);
+        tx.send(Ok(vec![
+            ("codex".into(), true),
+            ("custom-old".into(), true),
+        ]))
+        .unwrap();
+        assert!(!state.poll());
+        let tx = pending(&mut state);
+        state.invalidate_custom(Some("custom-old"));
+        state.invalidate_custom(Some("custom-old"));
+        assert_eq!(state.entries(), &[("codex".into(), true)]);
+        assert!(!state.poll());
+        tx.send(Ok(vec![("custom-old".into(), true)])).unwrap();
+        assert!(state.poll());
+        assert!(!state.poll());
+        assert_eq!(state.entries(), &[("codex".into(), true)]);
+    }
     #[test]
     fn refresh_preserves_snapshot_until_success_and_never_blocks_poll() {
         let mut state = Detection::default();

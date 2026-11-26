@@ -111,6 +111,17 @@ pub fn for_pane_launch(
     prefs
 }
 
+pub fn display_name<'a>(state: &'a Workspace, id: &'a str) -> &'a str {
+    if let Some(preset) = crate::agent_catalog::find(id) {
+        return preset.name;
+    }
+    state
+        .custom_agents
+        .iter()
+        .find(|agent| agent.id == id)
+        .map_or(id, |agent| agent.name.as_str())
+}
+
 pub fn enabled(state: &Workspace, id: &str) -> bool {
     if id.starts_with("custom-") {
         return state

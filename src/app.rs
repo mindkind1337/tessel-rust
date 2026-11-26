@@ -1583,10 +1583,17 @@ impl Tessel {
         }
     }
     fn detect_agents(&mut self) {
-        self.agents.start(|| {
+        let custom = self.state.custom_agents.clone();
+        self.agents.start(move || {
             let search = crate::agent_paths::SearchPath::for_detection()?;
-            launch::discover(&search)
+            launch::discover(&search, &custom)
         });
+    }
+    fn refresh_custom_agents(&mut self, changed: Option<&str>) {
+        self.agents.invalidate_custom(changed);
+        if !self.agents.detecting() {
+            self.detect_agents();
+        }
     }
     fn choose_project(&self) {
         let sender = self.sender.clone();
@@ -2293,7 +2300,9 @@ impl Tessel {
             });
         }
         self.poll_automations();
-        self.agents.poll();
+        if self.agents.poll() {
+            self.detect_agents();
+        }
         self.refresh_new_task_agents();
         let mut launch_changed = self
             .model_discovery
@@ -3524,21 +3533,13 @@ impl Tessel {
         );
         for (agent_id, installed) in self.agents.entries() {
             if *installed && crate::agent_preferences::enabled(&self.state, agent_id) {
-                let agent_name =
-                    crate::agent_catalog::find(agent_id).map_or(agent_id.as_str(), |p| p.name);
+                let agent_name = crate::agent_preferences::display_name(&self.state, agent_id);
                 commands.push(PaletteCommand::new(
                     format!("new:agent:{agent_id}"),
                     new_group,
                     agent_name,
                 ));
             }
-        }
-        for custom in self.state.custom_agents.iter().filter(|c| c.enabled) {
-            commands.push(PaletteCommand::new(
-                format!("new:agent:{}", custom.id),
-                new_group,
-                &custom.name,
-            ));
         }
         if crate::agent_preferences::enabled(&self.state, "codex") {
             commands.push(PaletteCommand::new(
@@ -4166,12 +4167,11 @@ impl Tessel {
             id_str if id_str.starts_with("new:agent:") => {
                 if let Some(agent_id) = id_str.strip_prefix("new:agent:")
                     && crate::agent_preferences::enabled(&self.state, agent_id)
-                    && (agent_id.starts_with("custom-")
-                        || self
-                            .agents
-                            .entries()
-                            .iter()
-                            .any(|(known, installed)| *installed && known == agent_id))
+                    && self
+                        .agents
+                        .entries()
+                        .iter()
+                        .any(|(known, installed)| *installed && known == agent_id)
                 {
                     self.new_session(Launch::Agent(agent_id.into()));
                 }
@@ -5503,9 +5503,7 @@ impl Tessel {
                 if *installed && crate::agent_preferences::enabled(&self.state, name) {
                     entries.push(Entry {
                         id: format!("agent:{name}"),
-                        label: crate::agent_catalog::find(name)
-                            .map_or(name.as_str(), |p| p.name)
-                            .into(),
+                        label: crate::agent_preferences::display_name(&self.state, name).into(),
                         group: agents_group.clone(),
                         enabled: true,
                     });
@@ -7585,6 +7583,7 @@ impl Tessel {
         self.new_task.open = false;
         self.gpui_extra.new_task_title.clear();
         self.state = state;
+        self.refresh_custom_agents(None);
         self.remember_next_project_launch = self.state.launcher_prefs.remember_default.is_some();
         self.agents_panel = Default::default();
         self.agents_notice = None;
@@ -7791,6 +7790,7 @@ impl Tessel {
                 self.state.agent_prefs = defaults.agent_prefs;
                 self.state.agent_model_defaults = defaults.agent_model_defaults;
                 self.state.custom_agents = defaults.custom_agents;
+                self.refresh_custom_agents(None);
                 self.state.orchestration_prefs = defaults.orchestration_prefs;
                 self.state.notification_prefs = defaults.notification_prefs;
                 self.state.voice_prefs = defaults.voice_prefs;
@@ -8956,26 +8956,10 @@ impl Tessel {
                 .map(|(name, available)| LauncherEntry {
                     item: LaunchMenuItem::Agent {
                         id: name.clone(),
-                        name: crate::agent_catalog::find(name)
-                            .map_or(name.as_str(), |p| p.name)
-                            .into(),
+                        name: crate::agent_preferences::display_name(&self.state, name).into(),
                     },
                     available: *available,
                     reason: (!available).then(|| tr("not on PATH").into()),
-                }),
-        );
-        entries.extend(
-            self.state
-                .custom_agents
-                .iter()
-                .filter(|c| c.enabled)
-                .map(|c| LauncherEntry {
-                    item: LaunchMenuItem::Agent {
-                        id: c.id.clone(),
-                        name: c.name.clone(),
-                    },
-                    available: true,
-                    reason: None,
                 }),
         );
         let placements = if target_id.is_some() {
@@ -10419,6 +10403,7 @@ impl Tessel {
                 }
             }
             Act::UpsertCustomAgent(agent) => {
+                let id = agent.id.clone();
                 if let Some(existing) = self
                     .state
                     .custom_agents
@@ -10431,10 +10416,12 @@ impl Tessel {
                 {
                     self.state.custom_agents.push(agent);
                 }
+                self.refresh_custom_agents(Some(&id));
                 self.save();
             }
             Act::DeleteCustomAgent(id) => {
                 self.state.custom_agents.retain(|c| c.id != id);
+                self.refresh_custom_agents(Some(&id));
                 self.save();
             }
             Act::ToggleCustomAgent { id, enabled } => {

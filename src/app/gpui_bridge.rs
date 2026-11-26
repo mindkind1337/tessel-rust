@@ -3571,7 +3571,7 @@ impl Tessel {
             _ if cfg!(windows) => "PowerShell".into(),
             _ => "Shell".into(),
         };
-        let mut installed_agents: Vec<(String, String)> = self
+        let installed_agents: Vec<(String, String)> = self
             .agents
             .entries()
             .iter()
@@ -3579,15 +3579,10 @@ impl Tessel {
                 *installed && crate::agent_preferences::enabled(&self.state, id)
             })
             .map(|(id, _)| {
-                let label = crate::agent_catalog::find(id)
-                    .map_or_else(|| id.clone(), |entry| entry.name.to_owned());
+                let label = crate::agent_preferences::display_name(&self.state, id).to_owned();
                 (id.clone(), label)
             })
             .collect();
-        for custom in self.state.custom_agents.iter().filter(|c| c.enabled) {
-            installed_agents.push((custom.id.clone(), custom.name.clone()));
-        }
-
         let broadcast_count = self
             .sessions
             .iter()
@@ -7735,6 +7730,49 @@ mod panel_snapshot_tests {
                 assert!(loaded.tasks.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn custom_agent_settings_refresh_launcher_and_palette_with_detected_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        for (name, command) in [
+            (
+                "Installed fixture",
+                if cfg!(windows) { "cmd.exe /d" } else { "sh -i" },
+            ),
+            ("Missing fixture", "tessel-missing-command-fixture"),
+        ] {
+            app.apply_gpui_action(GpuiAction::SetCustomAgentDraft {
+                name: name.into(),
+                cmd: command.into(),
+            });
+            app.apply_gpui_action(GpuiAction::SubmitNewCustomAgent);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while app.agents.detecting() {
+            if app.agents.poll() {
+                app.detect_agents();
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let snap = app.gpui_snapshot(960., 640., 4.);
+        let rows: Vec<_> = snap
+            .toolbar
+            .installed_agents
+            .iter()
+            .filter(|(id, _)| id.starts_with("custom-"))
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "Installed fixture");
+        let names: Vec<_> = app
+            .build_palette_commands(snap.theme)
+            .into_iter()
+            .filter(|cmd| cmd.id.starts_with("new:agent:custom-"))
+            .map(|cmd| cmd.title)
+            .collect();
+        assert_eq!(names, ["Installed fixture"]);
     }
 
     #[test]

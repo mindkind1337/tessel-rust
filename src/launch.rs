@@ -21,51 +21,76 @@ impl Launch {
     }
 }
 
-pub fn discover(search: &crate::agent_paths::SearchPath) -> Result<Vec<(String, bool)>> {
+pub fn discover(
+    search: &crate::agent_paths::SearchPath,
+    custom: &[crate::settings_extra_model::CustomAgent],
+) -> Result<Vec<(String, bool)>> {
+    let mut commands: Vec<_> = crate::agent_catalog::ALL
+        .iter()
+        .map(|preset| (preset.id, preset.executable))
+        .collect();
+    commands.extend(custom.iter().map(|agent| {
+        let bin = crate::agent_names::js_trim(&agent.command)
+            .split(crate::agent_names::js_space)
+            .next()
+            .unwrap_or_default();
+        (agent.id.as_str(), bin)
+    }));
     #[cfg(windows)]
-    {
-        let names: Vec<_> = crate::agent_catalog::ALL
+    let found = {
+        let mut names: Vec<_> = commands
             .iter()
-            .map(|preset| preset.executable)
+            .map(|(_, bin)| *bin)
+            .filter(|bin| crate::command_lookup::valid_name(bin))
             .collect();
-        let found = crate::command_lookup::lookup(&names, &search.value)?;
-        Ok(crate::agent_catalog::ALL
-            .iter()
-            .map(|preset| {
-                let available = found
-                    .get(preset.executable)
-                    .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
-                (preset.id.to_owned(), available)
-            })
-            .collect())
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(crate::agent_catalog::ALL
-            .iter()
-            .map(|preset| (preset.id.to_owned(), installed_on(preset.id, search)))
-            .collect())
-    }
+        names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
+        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        let mut found = std::collections::HashMap::new();
+        for part in names.chunks(64) {
+            found.extend(crate::command_lookup::lookup(part, &search.value)?);
+        }
+        found
+    };
+    Ok(commands
+        .into_iter()
+        .map(|(id, bin)| {
+            #[cfg(windows)]
+            let available = found
+                .get(&bin.to_ascii_lowercase())
+                .is_some_and(|path| id != "kimi" || !legacy_kimi(path));
+            #[cfg(not(windows))]
+            let available =
+                crate::command_lookup::valid_name(bin) && program_on_path(id, bin, search);
+            (id.to_owned(), available)
+        })
+        .collect())
+}
+
+#[cfg(test)]
+pub fn installed_on(program: &str, search: &crate::agent_paths::SearchPath) -> bool {
+    crate::agent_catalog::find(program)
+        .is_some_and(|preset| program_on_path(preset.id, preset.executable, search))
 }
 
 #[cfg(any(not(windows), test))]
-pub fn installed_on(program: &str, search: &crate::agent_paths::SearchPath) -> bool {
-    let Some(preset) = crate::agent_catalog::find(program) else {
-        return false;
-    };
-    let program = preset.executable;
+fn program_on_path(id: &str, program: &str, search: &crate::agent_paths::SearchPath) -> bool {
     let first = search.directories.iter().find_map(|dir| {
-        if cfg!(windows) {
+        #[cfg(windows)]
+        {
             ["exe", "cmd", "bat", "ps1"]
                 .iter()
                 .map(|ext| dir.join(format!("{program}.{ext}")))
                 .find(|path| path.is_file())
-        } else {
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
             let path = dir.join(program);
-            path.is_file().then_some(path)
+            let metadata = path.metadata().ok()?;
+            (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(path)
         }
     });
-    first.is_some_and(|path| preset.id != "kimi" || !legacy_kimi(&path.to_string_lossy()))
+    first.is_some_and(|path| id != "kimi" || !legacy_kimi(&path.to_string_lossy()))
 }
 
 /// Source AGENT_PRESETS.kimi.notFrom: only the first resolved command counts.
@@ -227,7 +252,7 @@ pub fn command_with_shell(
                     .get(preset.executable)
                     .is_some_and(|path| preset.id != "kimi" || !legacy_kimi(path));
                 #[cfg(not(windows))]
-                let available = installed_on(program, &search);
+                let available = program_on_path(preset.id, preset.executable, &search);
                 let custom_command =
                     prefs.is_some_and(|p| !crate::agent_env::trim(&p.command).is_empty());
                 if !available && !custom_command {
@@ -336,6 +361,14 @@ mod tests {
         }
     }
 
+    fn write_command_fixture(path: &Path) {
+        std::fs::write(path, "synthetic fixture, never executed").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
     #[test]
     fn old_python_kimi_shadows_newer_install_until_path_order_changes() {
         let temp = tempfile::tempdir().unwrap();
@@ -344,7 +377,7 @@ mod tests {
         let filename = if cfg!(windows) { "kimi.exe" } else { "kimi" };
         for dir in [&old, &new] {
             std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(dir.join(filename), "fixture only").unwrap();
+            write_command_fixture(&dir.join(filename));
         }
         let old_first = crate::agent_paths::SearchPath::with_extras(
             std::ffi::OsStr::new(""),
@@ -358,10 +391,51 @@ mod tests {
         assert!(installed_on("kimi", &new_first));
     }
     #[test]
+    fn custom_detection_batches_commands_and_keeps_custom_names_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = if cfg!(windows) {
+            "fixture-agent.cmd"
+        } else {
+            "fixture-agent"
+        };
+        write_command_fixture(&dir.path().join(cmd));
+        let search = crate::agent_paths::SearchPath::with_extras(
+            std::ffi::OsStr::new(""),
+            &[dir.path().into()],
+        )
+        .unwrap();
+        let mut custom: Vec<_> = (0..30)
+            .map(|i| crate::settings_extra_model::CustomAgent {
+                id: format!("custom-{i}"),
+                name: format!("Agent {i}"),
+                command: format!("fixture-missing-{i} --chat"),
+                accent: "#abcdef".into(),
+                enabled: true,
+            })
+            .collect();
+        custom[24].command = "fixture-agent".into();
+        custom[25].command = "\u{feff}fixture-agent\u{00a0}--chat".into();
+        custom[26].command = "./fixture-agent".into();
+        custom[27].command = "fixture-agent;echo".into();
+        custom[28].command = "  ".into();
+        custom[29].command = if cfg!(windows) {
+            "FIXTURE-AGENT"
+        } else {
+            "fixture-agent"
+        }
+        .into();
+        let found = discover(&search, &custom).unwrap();
+        assert_eq!(found.len(), crate::agent_catalog::ALL.len() + custom.len());
+        for (i, agent) in custom.iter().enumerate() {
+            assert!(found.contains(&(agent.id.clone(), matches!(i, 24 | 25 | 29))));
+        }
+    }
+
+    #[test]
     fn detection_finds_catalog_executable_in_appended_installer_folder() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(if cfg!(windows) { "cn.cmd" } else { "cn" });
-        std::fs::write(file, "synthetic fixture, never executed").unwrap();
+        write_command_fixture(&file);
         let search = crate::agent_paths::SearchPath::with_extras(
             std::ffi::OsStr::new(""),
             &[dir.path().into()],

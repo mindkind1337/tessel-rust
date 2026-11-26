@@ -50,7 +50,6 @@ pub mod claude_model_file;
 mod claude_terminal;
 pub mod codex_sessions;
 mod codex_terminal;
-#[cfg(any(windows, test))]
 mod command_lookup;
 mod command_palette_panel;
 mod conversation_loader;

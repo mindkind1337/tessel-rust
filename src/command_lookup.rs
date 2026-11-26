@@ -1,6 +1,8 @@
 //! First command matches, following Tessel's commandLookup.js.
+#[cfg(any(windows, test))]
 use std::collections::HashMap;
 
+#[cfg(any(windows, test))]
 pub fn parse_where(output: &str, names: &[&str]) -> HashMap<String, String> {
     let lines: Vec<_> = output
         .split('\n')
@@ -31,6 +33,13 @@ pub fn parse_where(output: &str, names: &[&str]) -> HashMap<String, String> {
     found
 }
 
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.@+-".contains(&b))
+}
+
 #[cfg(windows)]
 pub fn lookup(names: &[&str], path: &std::ffi::OsStr) -> Result<HashMap<String, String>, String> {
     use std::{
@@ -44,14 +53,7 @@ pub fn lookup(names: &[&str], path: &std::ffi::OsStr) -> Result<HashMap<String, 
     if names.is_empty() {
         return Ok(HashMap::new());
     }
-    if names.len() > 64
-        || names.iter().any(|name| {
-            name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.@+-".contains(&b))
-        })
-    {
+    if names.len() > 64 || names.iter().any(|name| !valid_name(name)) {
         return Err("Invalid agent lookup batch.".into());
     }
     let root = std::env::var_os("SystemRoot").ok_or("Windows system directory unavailable.")?;

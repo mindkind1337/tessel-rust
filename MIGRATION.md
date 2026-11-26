@@ -1693,3 +1693,5 @@ The Windows GPUI HTML preview toolbar displays the decoded project-relative file
 The owner browser and editor share registered local and SSH drafts. The browser can serve an origin after the owner opens a page for that project and trust mode. Agent profiles retain separate browser state.
 
 Windows agent detection queries the Python user install scheme through python.exe and py.exe in PATH. Discovered directories are appended after configured tools and retained before pip creates them. Terminal launch reads the available snapshot without waiting for either interpreter.
+
+Custom agents participate in the CLI availability scan. Detection checks the first command word, batches Windows lookups in groups of up to 64, and repeats a scan if the user edits the custom list while discovery is running. The project launcher, compatibility launcher and command palette consume the same results.

@@ -238,7 +238,7 @@ mod tests {
         std::fs::create_dir_all(&scripts).unwrap();
         std::fs::write(scripts.join("aider.cmd"), "@exit /b 0").unwrap();
         assert!(
-            crate::launch::discover(&search)
+            crate::launch::discover(&search, &[])
                 .unwrap()
                 .contains(&("aider".into(), true))
         );
