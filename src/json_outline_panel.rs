@@ -103,19 +103,35 @@ enum Provider {
     Stylesheet(crate::css_outline::Language),
 }
 fn provider(doc: &Document) -> Option<Provider> {
-    let ext = doc.path.extension()?.to_str()?;
-    if ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm") {
-        Some(Provider::Html)
-    } else if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("jsonc") {
-        Some(Provider::Json)
-    } else if ext.eq_ignore_ascii_case("css") {
-        Some(Provider::Stylesheet(crate::css_outline::Language::Css))
-    } else if ext.eq_ignore_ascii_case("scss") {
-        Some(Provider::Stylesheet(crate::css_outline::Language::Scss))
-    } else if ext.eq_ignore_ascii_case("less") {
-        Some(Provider::Stylesheet(crate::css_outline::Language::Less))
+    // Tessel treats the leading dot of a dotfile as an extension delimiter.
+    let name = doc.path.file_name()?.to_str()?;
+    let (_, ext) = name.rsplit_once('.')?;
+    let lowercase;
+    let ext = if ext.bytes().any(|c| c.is_ascii_uppercase()) {
+        lowercase = ext.to_ascii_lowercase();
+        &lowercase
     } else {
-        None
+        ext
+    };
+    use crate::css_outline::Language;
+    match ext {
+        "html" | "htm" | "jsp" | "jspf" => Some(Provider::Html),
+        "json" | "jsonc" | "jsonl" => Some(Provider::Json),
+        "css" => Some(Provider::Stylesheet(Language::Css)),
+        "scss" => Some(Provider::Stylesheet(Language::Scss)),
+        "less" => Some(Provider::Stylesheet(Language::Less)),
+        // Scoped dotenv names take precedence over Monaco's extension fallbacks.
+        _ if name
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".env.")) =>
+        {
+            None
+        }
+        "shtml" | "xhtml" | "mdoc" | "asp" | "aspx" | "jshtm" | "handlebars" | "hbs" | "cshtml" => {
+            Some(Provider::Html)
+        }
+        "bowerrc" | "jshintrc" | "jscsrc" | "eslintrc" | "babelrc" | "har" => Some(Provider::Json),
+        _ => None,
     }
 }
 pub(crate) fn supported(doc: &Document) -> bool {
@@ -480,6 +496,37 @@ pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: boo
 mod tests {
     use super::*;
     use crate::files::OutlineCursor;
+
+    #[test]
+    fn outline_routes_editor_filename_aliases_and_dotfiles() {
+        let dir = tempfile::tempdir().unwrap();
+        for (file, text, expected) in [
+            ("view.JSPF", "<main/>", Some("main")),
+            ("page.cshtml", "<main>@Model.Title</main>", Some("main")),
+            ("view.hbs", "<section>{{title}}</section>", Some("section")),
+            (".env.jsp", "<aside/>", Some("aside")),
+            (".BABELRC", r#"{"presets":[]}"#, Some("presets")),
+            ("capture.har", r#"{"log":{}}"#, Some("log")),
+            (
+                "events.jsonl",
+                "{\"first\":1}\n{\"second\":2}",
+                Some("first"),
+            ),
+            (".scss", "$theme: red;", Some("$theme")),
+            (".env.hbs", "<main/>", None),
+            (".env.har", "{}", None),
+            ("component.vue", "<main/>", None),
+        ] {
+            let path = dir.path().join(file);
+            std::fs::write(&path, text).unwrap();
+            let doc = Document::open(dir.path(), &path).unwrap();
+            assert_eq!(supported(&doc), expected.is_some(), "{file}");
+            if let Some(name) = expected {
+                let cache = Cache::current(None, &doc, Sort::Position);
+                assert_eq!(cache.symbols[0].name, name, "{file}");
+            }
+        }
+    }
 
     #[test]
     fn html_outline_reveals_the_selected_element_in_the_unsaved_source() {
