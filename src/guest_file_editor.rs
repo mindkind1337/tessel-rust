@@ -13,6 +13,15 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub(crate) fn decode_text(value: &Value, limit: usize) -> Option<String> {
+    value
+        .get("data")
+        .and_then(Value::as_str)
+        .filter(|s| s.len() <= limit.div_ceil(3) * 4)
+        .and_then(|s| B64.decode(s).ok())
+        .filter(|bytes| bytes.len() <= limit)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
 const MAX_READ: usize = 8 * 1024 * 1024;
 // Fits the existing 256 KiB request envelope after base64 and a bounded path.
 pub const MAX_EDIT: usize = 180 * 1024;
@@ -282,13 +291,7 @@ impl Editor {
         };
         match pending.operation {
             Operation::Read(key) => {
-                let text = value
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .filter(|s| s.len() <= MAX_READ.div_ceil(3) * 4)
-                    .and_then(|s| B64.decode(s).ok())
-                    .filter(|bytes| bytes.len() <= MAX_READ)
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                let text = decode_text(&value, MAX_READ);
                 if let Some(text) = text {
                     let text = Arc::new(text);
                     self.notice = (text.len() > MAX_EDIT).then_some(Notice::TooLarge);

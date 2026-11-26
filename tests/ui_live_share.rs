@@ -35,6 +35,8 @@ mod process_job;
 #[allow(dead_code)]
 #[path = "../src/project_panel.rs"]
 mod project_panel;
+#[path = "../src/saved_version_diff.rs"]
+mod saved_version_diff;
 #[allow(dead_code)]
 #[path = "../src/share.rs"]
 mod share;

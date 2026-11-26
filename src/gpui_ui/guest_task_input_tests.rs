@@ -355,6 +355,7 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
         "guest-versions",
         "guest-version-0",
         "guest-version-text",
+        "guest-saved-diff",
     ] {
         let deadline = Instant::now() + Duration::from_secs(18);
         loop {
@@ -367,7 +368,13 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             cx.refresh().unwrap();
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             if let Some(bounds) = visual.debug_bounds(selector) {
-                if !matches!(selector, "guest-history-commit" | "guest-version-text") {
+                if selector == "guest-version-0" {
+                    std::fs::write(&file, "changed on host after opening").unwrap();
+                }
+                if !matches!(
+                    selector,
+                    "guest-history-commit" | "guest-version-text" | "guest-saved-diff"
+                ) {
                     visual.simulate_click(bounds.center(), Default::default());
                 }
                 break;
@@ -387,6 +394,12 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
         assert_eq!(
             files.version_text.unwrap().as_str(),
             "saved version before editing"
+        );
+        let patch = files.version_diff.unwrap();
+        assert!(
+            (0..patch.line_count()).any(|i| patch.line(i) == "-saved version before editing")
+                && (0..patch.line_count())
+                    .any(|i| patch.line(i) == "+changed on host after opening")
         );
         assert_eq!(files.document.unwrap().text.as_str(), "guest preview");
         assert_eq!(
@@ -408,7 +421,9 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             .share
             .guest_files
             .unwrap();
-        assert!(other.document.is_none() && other.history.is_none());
+        assert!(
+            other.document.is_none() && other.history.is_none() && other.version_diff.is_none()
+        );
     })
     .unwrap();
 }

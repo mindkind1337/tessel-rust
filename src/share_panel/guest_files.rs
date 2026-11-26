@@ -9,6 +9,7 @@ pub(crate) struct GuestFilesView {
     pub busy: bool,
     pub history: Option<std::sync::Arc<super::guest_history::Page>>,
     pub versions: Option<std::sync::Arc<Vec<super::guest_versions::Version>>>,
+    pub version_diff: Option<std::sync::Arc<crate::saved_version_diff::Patch>>,
     pub version_text: Option<std::sync::Arc<String>>,
     pub more: bool,
 }
@@ -44,6 +45,9 @@ impl SharePanel {
                 error.clone()
             });
         }
+        if self.guest_versions.diff_failed {
+            notices.push(super::guest_versions::comparison_error(french).into());
+        }
         if self.guest_versions.failed {
             notices.push(
                 if french {
@@ -56,6 +60,7 @@ impl SharePanel {
         }
         Some(GuestFilesView {
             versions: self.guest_versions.rows.clone(),
+            version_diff: self.guest_versions.diff.clone(),
             version_text: self.guest_versions.text.clone(),
             directory: self.guest_file_listing.path.clone(),
             entries: self.guest_file_listing.entries.clone(),
@@ -293,6 +298,26 @@ impl SharePanel {
                     } else {
                         "Local history unavailable."
                     });
+                }
+                if versions.diff_failed {
+                    ui.label(super::guest_versions::comparison_error(french));
+                }
+                if let Some(patch) = &versions.diff {
+                    ui.label(super::guest_versions::comparison_title(
+                        french,
+                        patch.line_count() == 0,
+                    ));
+                    if patch.line_count() > 0 {
+                        let height = ui.text_style_height(&egui::TextStyle::Monospace);
+                        ScrollArea::both()
+                            .id_salt("guest-saved-diff")
+                            .max_height(180.)
+                            .show_rows(ui, height, patch.line_count(), |ui, rows| {
+                                for i in rows {
+                                    ui.monospace(patch.line(i));
+                                }
+                            });
+                    }
                 }
                 if let Some(text) = &versions.text {
                     ScrollArea::both()

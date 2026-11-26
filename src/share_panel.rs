@@ -464,7 +464,9 @@ impl SharePanel {
             .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
             .map(|doc| &doc.key);
         changed |= self.guest_versions.bind(key);
-        changed |= self.guest_versions.poll(Instant::now());
+        changed |= self
+            .guest_versions
+            .poll(Instant::now(), self.guest_session.as_ref());
         changed |= self.guest_history.bind(key);
         changed |= self.guest_history.poll(Instant::now());
         if self.guest_sub_view == GuestSubView::Files
@@ -3747,7 +3749,7 @@ mod guest_files;
 #[path = "share_panel/guest_history.rs"]
 mod guest_history;
 #[path = "share_panel/guest_versions.rs"]
-mod guest_versions;
+pub(crate) mod guest_versions;
 
 #[path = "share_panel/guest_git.rs"]
 mod guest_git;

@@ -136,7 +136,7 @@ pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String
     let path = crate::files::confined(root, file)?;
     let current = bounded_text(&path, crate::files::MAX_TEXT)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    Ok(text_diff(&name, &old, &current))
+    Ok(crate::saved_version_diff::text_diff(&name, &old, &current))
 }
 
 fn version_text(dir: &Path, file: &Path, id: &str) -> Result<String, String> {
@@ -161,15 +161,6 @@ fn bounded_text(path: &Path, limit: usize) -> Result<String, String> {
         return Err("File exceeds the text editor limit.".into());
     }
     Ok(s)
-}
-
-fn text_diff(name: &str, old: &str, current: &str) -> String {
-    similar::TextDiff::configure()
-        .timeout(std::time::Duration::from_millis(500))
-        .diff_lines(old, current)
-        .unified_diff()
-        .header(&format!("a/{name}"), &format!("b/{name}"))
-        .to_string()
 }
 
 pub fn record(profile: &Path, file: &Path, text: &str) -> io::Result<()> {
@@ -224,7 +215,7 @@ pub(crate) fn remote_diff(
     let current = std::str::from_utf8(current).map_err(|_| "Remote file is not UTF-8 text.")?;
     let (dir, resource) = remote_resource(profile, alias, path).map_err(|e| e.to_string())?;
     let old = version_text(&dir, Path::new(&resource), id)?;
-    Ok(text_diff(
+    Ok(crate::saved_version_diff::text_diff(
         path.rsplit('/').next().unwrap_or(path),
         &old,
         current,

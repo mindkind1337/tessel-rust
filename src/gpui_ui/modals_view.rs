@@ -1116,6 +1116,37 @@ fn render_share_modal(
                             }
                             content = content.child(list);
                         }
+                        if let Some(patch) = &files.version_diff {
+                            let mut section = div()
+                                .debug_selector(|| "guest-saved-diff".into())
+                                .child(crate::share_panel::guest_versions::comparison_title(
+                                    french,
+                                    patch.line_count() == 0,
+                                ));
+                            if patch.line_count() > 0 {
+                                let patch = patch.clone();
+                                section = section.child(
+                                    gpui::uniform_list(
+                                        "guest-saved-diff-lines",
+                                        patch.line_count(),
+                                        cx.processor(
+                                            move |_, rows: std::ops::Range<usize>, _, _| {
+                                                rows.map(|i| {
+                                                    div()
+                                                        .font_family(
+                                                            super::theme::mono_font_family(),
+                                                        )
+                                                        .child(patch.line(i).to_owned())
+                                                })
+                                                .collect::<Vec<_>>()
+                                            },
+                                        ),
+                                    )
+                                    .h(px(180.)),
+                                );
+                            }
+                            content = content.child(section);
+                        }
                         if let Some(text) = &files.version_text {
                             content = content.child(
                                 div()

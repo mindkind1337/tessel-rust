@@ -39,6 +39,9 @@ pub(super) struct Versions {
     pending: Option<Pending>,
     pub rows: Option<Arc<Vec<Version>>>,
     pub text: Option<Arc<String>>,
+    comparison: Option<Receiver<Option<crate::saved_version_diff::Patch>>>,
+    pub diff: Option<Arc<crate::saved_version_diff::Patch>>,
+    pub diff_failed: bool,
     pub failed: bool,
 }
 impl Versions {
@@ -53,7 +56,7 @@ impl Versions {
         true
     }
     pub fn busy(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.comparison.is_some()
     }
     pub fn request(&mut self, session: &GuestSession, id: Option<&str>) {
         let Some(key) = self.key.as_ref() else { return };
@@ -75,6 +78,8 @@ impl Versions {
             self.rows = None;
         }
         self.text = None;
+        self.diff = None;
+        self.diff_failed = false;
         self.failed = false;
         match session.request(q) {
             Ok(reply) => {
@@ -87,7 +92,46 @@ impl Versions {
             Err(_) => self.failed = true,
         }
     }
-    pub fn poll(&mut self, now: Instant) -> bool {
+    fn compare(&mut self, session: Option<&GuestSession>, saved: Arc<String>) {
+        let Some(key) = &self.key else { return };
+        let Some(session) = session.filter(|s| s.generation() == key.scope.session) else {
+            self.diff_failed = true;
+            return;
+        };
+        let query = json!({"op":"files.read","projectId":key.scope.project,"path":key.path});
+        let Ok(reply) = session.request(query) else {
+            self.diff_failed = true;
+            return;
+        };
+        let name = key.path.rsplit('/').next().unwrap_or(&key.path).to_owned();
+        let (send, receive) = std::sync::mpsc::channel();
+        self.comparison = Some(receive);
+        std::thread::spawn(move || {
+            let patch = reply
+                .recv_timeout(Duration::from_secs(25))
+                .ok()
+                .and_then(Result::ok)
+                .and_then(|v| crate::guest_file_editor::decode_text(&v, 2 * 1024 * 1024))
+                .map(|current| {
+                    crate::saved_version_diff::Patch::new(crate::saved_version_diff::text_diff(
+                        &name, &saved, &current,
+                    ))
+                });
+            let _ = send.send(patch);
+        });
+    }
+    pub fn poll(&mut self, now: Instant, session: Option<&GuestSession>) -> bool {
+        if let Some(reply) = &self.comparison {
+            let patch = match reply.try_recv() {
+                Ok(patch) => patch,
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => None,
+            };
+            self.diff = patch.map(Arc::new);
+            self.diff_failed = self.diff.is_none();
+            self.comparison = None;
+            return true;
+        }
         let Some(p) = self.pending.as_ref() else {
             return false;
         };
@@ -105,6 +149,9 @@ impl Versions {
                 _ => None,
             });
             self.failed = self.text.is_none();
+            if let Some(text) = self.text.clone() {
+                self.compare(session, text);
+            }
         } else {
             self.rows = result
                 .filter(|v| v["rel"].as_str() == self.key.as_ref().map(|k| k.path.as_str()))
@@ -125,5 +172,21 @@ impl Versions {
             self.failed = self.rows.is_none();
         }
         true
+    }
+}
+
+pub(crate) fn comparison_title(fr: bool, empty: bool) -> &'static str {
+    match (fr, empty) {
+        (true, true) => "Aucune différence.",
+        (false, true) => "No differences.",
+        (true, false) => "Différences avec le fichier de l’hôte",
+        (false, false) => "Changes against host file",
+    }
+}
+pub(crate) fn comparison_error(fr: bool) -> &'static str {
+    if fr {
+        "Comparaison indisponible. Le fichier actuel doit être un texte UTF-8 accessible de 2 Mio ou moins."
+    } else {
+        "Comparison unavailable. The current host file must be accessible UTF-8 text of 2 MiB or less."
     }
 }

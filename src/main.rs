@@ -130,6 +130,7 @@ mod process_job;
 pub mod project_panel;
 pub mod prompt_before;
 mod regional_date;
+mod saved_version_diff;
 // Owner-local Linear UI; task-launch integration remains in progress.
 mod external_issue;
 pub mod initial_turn;
