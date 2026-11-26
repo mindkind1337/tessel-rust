@@ -378,6 +378,15 @@ mod tests {
 
     #[gpui::test]
     fn file_timeline_opens_clicked_commit_as_a_diff(cx: &mut TestAppContext) {
+        exercise_timeline_diff(cx, false);
+    }
+
+    #[gpui::test]
+    fn file_timeline_pin_survives_tab_switch_and_unpins(cx: &mut TestAppContext) {
+        exercise_timeline_diff(cx, true);
+    }
+
+    fn exercise_timeline_diff(cx: &mut TestAppContext, pin: bool) {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("repo");
         std::fs::create_dir(&folder).unwrap();
@@ -402,10 +411,14 @@ mod tests {
         git(&["commit", "-qm", "File history fixture"]);
         let hash = git(&["rev-parse", "HEAD"]).trim().to_owned();
         let doc = Document::open(&folder, &path).unwrap();
+        let other = folder.join("other.txt");
+        std::fs::write(&other, "another tab").unwrap();
+        let other_doc = Document::open(&folder, &other).unwrap();
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
             root.dispatch(GpuiAction::AddProjectPath(folder), cx);
-            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.app
+                .install_editor_input_fixture(vec![doc, other_doc], 0);
             root
         });
         cx.refresh().unwrap();
@@ -413,6 +426,18 @@ mod tests {
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             let button = visual.debug_bounds("timeline-toggle").unwrap().center();
             visual.simulate_click(button, Default::default());
+        }
+        if pin {
+            cx.refresh().unwrap();
+            {
+                let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+                let pin = visual.debug_bounds("timeline-pin").unwrap().center();
+                visual.simulate_click(pin, Default::default());
+            }
+            view.update(cx, |root, _, cx| {
+                root.dispatch(GpuiAction::SelectDocumentTab(1), cx)
+            })
+            .unwrap();
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let title = format!("history.txt ({})", &hash[..7]);
@@ -453,6 +478,26 @@ mod tests {
                 "click did not open commit diff"
             );
             std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        if pin {
+            view.update(cx, |root, _, cx| {
+                root.dispatch(GpuiAction::SelectDocumentTab(1), cx)
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let button = visual.debug_bounds("timeline-pin").unwrap().center();
+            visual.simulate_click(button, Default::default());
+            view.update(cx, |root, _, _| {
+                let timeline = root
+                    .app
+                    .gpui_snapshot(960., 640., super::super::theme::SPLIT_DIVIDER_PX)
+                    .side_panels
+                    .timeline;
+                assert!(!timeline.pinned);
+                assert_eq!(timeline.file.unwrap().file_name().unwrap(), "other.txt");
+            })
+            .unwrap();
         }
     }
 

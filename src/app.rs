@@ -538,13 +538,17 @@ enum Message {
         result: Result<Box<Document>, String>,
     },
     DiffDocument {
-        source_doc: Option<u64>,
+        source_doc: Option<TimelineOrigin>,
         root: PathBuf,
         path: PathBuf,
         title: String,
         pinned: bool,
         result: Result<String, String>,
     },
+}
+enum TimelineOrigin {
+    Tab(u64),
+    Pinned(Option<u64>),
 }
 #[derive(PartialEq)]
 enum View {
@@ -1897,14 +1901,30 @@ impl Tessel {
     }
     fn timeline_snapshot(&mut self, visible: bool) -> crate::file_timeline::Snapshot {
         let shown = visible && self.state.editor_prefs.timeline_shown;
-        let file = (shown && self.view == View::Files)
+        if self
+            .timeline
+            .pin
+            .as_ref()
+            .is_some_and(|p| p.project != self.state.active_project)
+        {
+            self.timeline.pin = None;
+        }
+        let active = (shown && self.view == View::Files)
             .then(|| self.documents.get(self.active_document))
             .flatten()
             .filter(|d| d.root.is_absolute() && d.path.is_absolute())
             .map(|d| d.path.clone());
+        let pin = self
+            .timeline
+            .pin
+            .as_ref()
+            .filter(|_| shown && self.view == View::Files);
+        let pinned = pin.is_some();
+        let file = pin.map(|p| p.path.clone()).or(active);
         self.timeline.select(file.clone());
         crate::file_timeline::Snapshot {
             shown,
+            pinned,
             file,
             data: self.timeline.data.clone(),
         }
@@ -1916,22 +1936,48 @@ impl Tessel {
                 self.state.editor_prefs.timeline_shown = !self.state.editor_prefs.timeline_shown;
                 self.save();
             }
+            Action::TogglePin(path) if self.timeline.file.as_ref() == Some(&path) => {
+                if self.timeline.pin.is_some() {
+                    self.timeline.pin = None;
+                } else if let Some(doc) = self
+                    .documents
+                    .get(self.active_document)
+                    .filter(|d| d.path == path && self.view == View::Files)
+                {
+                    self.timeline.pin = Some(crate::file_timeline::PinnedFile {
+                        project: self.state.active_project,
+                        root: doc.root.clone(),
+                        path,
+                    });
+                }
+            }
             Action::Refresh(path, more) if self.timeline.file.as_ref() == Some(&path) => {
                 self.timeline.refresh(more)
             }
             Action::Open(path, commit, pinned) if self.timeline.file.as_ref() == Some(&path) => {
-                let Some(doc) = self
+                if self.view != View::Files {
+                    return;
+                }
+                let (origin, root) = if let Some(pin) = self
+                    .timeline
+                    .pin
+                    .as_ref()
+                    .filter(|p| p.path == path && p.project == self.state.active_project)
+                {
+                    (TimelineOrigin::Pinned(pin.project), pin.root.clone())
+                } else if let Some(doc) = self
                     .documents
                     .get(self.active_document)
-                    .filter(|d| d.path == path && self.view == View::Files)
-                else {
+                    .filter(|d| d.path == path)
+                {
+                    (TimelineOrigin::Tab(doc.instance_id()), doc.root.clone())
+                } else {
                     return;
                 };
                 let Some(Ok(history)) = self.timeline.data.clone() else {
                     return;
                 };
-                let source_doc = Some(doc.instance_id());
-                let root = doc.root.clone();
+                let source_doc = Some(origin);
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let title = format!(
                     "{name} ({})",
@@ -2419,7 +2465,18 @@ impl Tessel {
                     }
                 }
                 Message::DiffDocument {
-                    source_doc: Some(id),
+                    source_doc: Some(TimelineOrigin::Pinned(project)),
+                    ref path,
+                    ..
+                } if self.view != View::Files
+                    || self.state.active_project != project
+                    || self
+                        .timeline
+                        .pin
+                        .as_ref()
+                        .is_none_or(|p| &p.path != path || p.project != project) => {}
+                Message::DiffDocument {
+                    source_doc: Some(TimelineOrigin::Tab(id)),
                     ..
                 } if self.view != View::Files
                     || self

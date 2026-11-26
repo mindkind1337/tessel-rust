@@ -2646,12 +2646,15 @@ fn render_timeline(
             div()
                 .flex()
                 .items_center()
-                .child(
-                    file.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                )
+                .child(snap.file_label(file, fr))
+                .child(render_chip(
+                    "timeline-pin",
+                    snap.pin_label(fr).into(),
+                    snap.pinned,
+                    tokens,
+                    GpuiAction::Timeline(Action::TogglePin(file.clone())),
+                    cx,
+                ))
                 .child(render_chip(
                     "timeline-refresh",
                     if fr { "Actualiser" } else { "Refresh" }.into(),

@@ -178,6 +178,7 @@ impl History {
 
 #[derive(Default)]
 pub struct State {
+    pub pin: Option<PinnedFile>,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
     limit: usize,
@@ -234,8 +235,16 @@ impl State {
 }
 
 #[derive(Clone, Debug)]
+pub struct PinnedFile {
+    pub project: Option<u64>,
+    pub root: PathBuf,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 pub enum Action {
     Toggle,
+    TogglePin(PathBuf),
     Refresh(PathBuf, bool),
     Open(PathBuf, Option<String>, bool),
 }
@@ -243,10 +252,27 @@ pub enum Action {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub shown: bool,
+    pub pinned: bool,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
 }
 impl Snapshot {
+    pub fn file_label(&self, file: &Path, fr: bool) -> String {
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        if self.pinned {
+            format!("{name} ({})", if fr { "épinglé" } else { "pinned" })
+        } else {
+            name.into_owned()
+        }
+    }
+    pub fn pin_label(&self, fr: bool) -> &'static str {
+        match (self.pinned, fr) {
+            (true, true) => "Désépingler",
+            (true, false) => "Unpin",
+            (false, true) => "Épingler",
+            (false, false) => "Pin",
+        }
+    }
     pub fn status(&self, fr: bool) -> Option<&str> {
         match (&self.file, &self.data) {
             (None, _) => Some(if fr {
@@ -298,7 +324,13 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
     }
     if let Some(file) = &snap.file {
         ui.horizontal(|ui| {
-            ui.label(file.file_name().unwrap_or_default().to_string_lossy());
+            ui.label(snap.file_label(file, fr));
+            if ui
+                .selectable_label(snap.pinned, snap.pin_label(fr))
+                .clicked()
+            {
+                action = Some(Action::TogglePin(file.clone()));
+            }
             if ui
                 .small_button(if fr { "Actualiser" } else { "Refresh" })
                 .clicked()
