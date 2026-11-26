@@ -2,6 +2,8 @@ use super::*;
 use crate::guest_file_editor::Key as FileKey;
 #[derive(Clone, Debug)]
 pub(crate) struct GuestFilesView {
+    pub image: Option<(FileKey, std::sync::Arc<gpui::RenderImage>)>,
+    pub image_menu: bool,
     pub download_menu: Option<FileKey>,
     pub directory: String,
     pub entries: Vec<crate::guest_file_listing::Entry>,
@@ -60,7 +62,12 @@ impl SharePanel {
             );
         }
         notices.extend(self.guest_download.status(french));
+        if self.guest_image.failed {
+            notices.push(super::guest_image::ImagePreview::error(french).into());
+        }
         Some(GuestFilesView {
+            image: self.guest_image.key.clone().zip(self.guest_image.native()),
+            image_menu: self.guest_image.menu,
             download_menu: self.guest_download.menu.clone(),
             versions: self.guest_versions.rows.clone(),
             version_diff: self.guest_versions.diff.clone(),
@@ -69,7 +76,8 @@ impl SharePanel {
             entries: self.guest_file_listing.entries.clone(),
             document: doc,
             notices,
-            busy: self.guest_file_listing.busy()
+            busy: self.guest_image.busy()
+                || self.guest_file_listing.busy()
                 || self.guest_file_editor.busy()
                 || self.guest_versions.busy()
                 || self.guest_history.busy(),
@@ -89,7 +97,22 @@ impl SharePanel {
         let Some(session) = &self.guest_session else {
             return false;
         };
+        if self.guest_image.busy() {
+            return false;
+        }
         self.confirm_guest_file_discard = false;
+        if self.guest_files_scope == Some(key.scope)
+            && crate::guest_file_editor::valid_path(&key.path)
+            && !self.guest_file_editor.busy()
+            && !self.guest_file_editor.has_draft()
+        {
+            if super::guest_image::ImagePreview::supports(&key.path) {
+                self.guest_file_editor.discard();
+                self.guest_image.open(key, session);
+                return true;
+            }
+            self.guest_image = Default::default();
+        }
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
     }
@@ -222,6 +245,40 @@ impl SharePanel {
             && let Some(scope) = self.guest_files_scope
         {
             self.open_guest_file(FileKey { scope, path });
+        }
+        if self.guest_image.busy() {
+            ui.spinner();
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
+        if self.guest_image.failed {
+            ui.label(super::guest_image::ImagePreview::error(french));
+        }
+        if let Some(key) = self.guest_image.key.clone()
+            && let Some(texture) = self.guest_image.texture(ui.ctx())
+        {
+            ui.strong(&key.path);
+            let mut save = false;
+            ui.add(
+                egui::Image::new(texture)
+                    .max_size(egui::vec2(ui.available_width(), 270.))
+                    .sense(egui::Sense::click()),
+            )
+            .context_menu(|ui| {
+                if ui
+                    .button(if french {
+                        "Télécharger l’original…"
+                    } else {
+                        "Download original…"
+                    })
+                    .clicked()
+                {
+                    save = true;
+                    ui.close();
+                }
+            });
+            if save {
+                self.choose_guest_download(&key);
+            }
         }
         self.render_guest_file_editor(ui, french);
     }

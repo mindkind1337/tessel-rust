@@ -5,6 +5,9 @@ mod agent_env;
 #[path = "../src/git/process.rs"]
 mod git;
 #[allow(dead_code)]
+#[path = "../src/gpui_pixels.rs"]
+mod gpui_pixels;
+#[allow(dead_code)]
 #[path = "../src/guest_file_editor.rs"]
 mod guest_file_editor;
 #[allow(dead_code)]
@@ -35,6 +38,8 @@ mod process_job;
 #[allow(dead_code)]
 #[path = "../src/project_panel.rs"]
 mod project_panel;
+#[path = "../src/raster_preview.rs"]
+mod raster_preview;
 #[path = "../src/saved_version_diff.rs"]
 mod saved_version_diff;
 #[allow(dead_code)]
@@ -650,6 +655,73 @@ fn draw_guest_files(
             panel.show_dialog_modal(ctx, &[], false);
         },
     )
+}
+#[test]
+fn compatibility_guest_image_preview_downloads_png_and_preserves_dirty_text() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let path = dir.path().join("p1/poster.png");
+    image::RgbaImage::from_pixel(64, 48, image::Rgba([255u8, 50, 100, 255]))
+        .save(&path)
+        .unwrap();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let key = guest_file_editor::Key {
+        scope,
+        path: "poster.png".into(),
+    };
+    panel.open_guest_file(key.clone());
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let pos = loop {
+        panel.poll_guest_requests();
+        let out = draw_guest_files(&ctx, &mut panel, vec![]);
+        let meshes = ctx.tessellate(out.shapes, out.pixels_per_point);
+        if let Some(pos) = meshes.iter().find_map(|c| match &c.primitive {
+            egui::epaint::Primitive::Mesh(m) if m.texture_id != egui::TextureId::default() => {
+                Some(m.calc_bounds().intersect(c.clip_rect).center())
+            }
+            _ => None,
+        }) {
+            break pos;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    for pressed in [true, false] {
+        draw_guest_files(
+            &ctx,
+            &mut panel,
+            vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(egui::Popup::is_any_open(&ctx));
+    let dest = dir.path().join("copy.png");
+    panel.download_guest_file(&key, |name| {
+        assert_eq!(name, "poster.png");
+        Some(dest.clone())
+    });
+    while panel.guest_requests_busy() {
+        panel.poll_guest_requests();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read(&dest).unwrap(), std::fs::read(path).unwrap());
+    let text = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(text.clone());
+    await_guest_document(&mut panel, &text);
+    panel.edit_guest_file(&text, "draft".into());
+    panel.open_guest_file(key);
+    assert_eq!(panel.guest_file_document().unwrap().text.as_str(), "draft");
 }
 #[test]
 fn guest_download_context_and_binary_transfer_preserve_original_bytes() {

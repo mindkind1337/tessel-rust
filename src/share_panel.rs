@@ -199,6 +199,7 @@ pub struct SharePanel {
     pub guest_term_input: String,
     guest_file_editor: crate::guest_file_editor::Editor,
     guest_file_listing: crate::guest_file_listing::Listing,
+    guest_image: guest_image::ImagePreview,
     guest_download: guest_download::Download,
     guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
@@ -253,6 +254,7 @@ impl Default for SharePanel {
             guest_term_input: String::new(),
             guest_file_editor: Default::default(),
             guest_file_listing: Default::default(),
+            guest_image: Default::default(),
             guest_download: Default::default(),
             guest_versions: Default::default(),
             guest_history: Default::default(),
@@ -391,6 +393,7 @@ impl SharePanel {
         self.guest_file_listing.bind(None);
         self.guest_history.bind(None);
         self.guest_versions.bind(None);
+        self.guest_image = Default::default();
         self.guest_git.bind(None, false);
         self.confirm_guest_git_discard = false;
         self.guest_files_scope = None;
@@ -410,6 +413,7 @@ impl SharePanel {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
+            || self.guest_image.busy()
             || self.guest_download.busy()
             || self.guest_versions.busy()
             || self.guest_history.busy()
@@ -466,6 +470,7 @@ impl SharePanel {
             .as_ref()
             .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
             .map(|doc| &doc.key);
+        changed |= self.guest_image.poll();
         changed |= self.guest_download.poll();
         changed |= self.guest_versions.bind(key);
         changed |= self
@@ -520,6 +525,7 @@ impl SharePanel {
         changed |= self.guest_file_listing.bind(scope);
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
+            self.guest_image = Default::default();
             self.guest_download = Default::default();
             self.guest_history.bind(None);
             self.guest_versions.bind(None);
@@ -3381,6 +3387,7 @@ pub(crate) enum ShareGpuiAction {
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
     GuestFileMenu(crate::guest_file_editor::Key),
+    GuestImageMenu(crate::guest_file_editor::Key),
     GuestDownload(crate::guest_file_editor::Key),
     GuestOpenFile(crate::guest_file_editor::Key),
     GuestVersion(crate::guest_file_editor::Key, Option<String>),
@@ -3646,7 +3653,17 @@ impl SharePanel {
                         (self.guest_download.menu.as_ref() != Some(&key)).then_some(key);
                 }
             }
-            ShareGpuiAction::GuestDownload(key) => self.choose_guest_download(&key),
+            ShareGpuiAction::GuestImageMenu(key) => {
+                self.poll_guest_scope();
+                if self.guest_image.key.as_ref() == Some(&key) {
+                    self.guest_image.menu = true;
+                }
+            }
+            ShareGpuiAction::GuestDownload(key) => {
+                self.guest_image.menu = false;
+                self.choose_guest_download(&key);
+            }
+
             ShareGpuiAction::GuestOpenFile(key) => {
                 self.open_guest_file(key);
             }
@@ -3773,6 +3790,8 @@ mod guest_download;
 mod guest_files;
 #[path = "share_panel/guest_history.rs"]
 mod guest_history;
+#[path = "share_panel/guest_image.rs"]
+mod guest_image;
 #[path = "share_panel/guest_versions.rs"]
 pub(crate) mod guest_versions;
 

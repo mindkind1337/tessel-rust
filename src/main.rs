@@ -129,6 +129,7 @@ mod preview;
 mod process_job;
 pub mod project_panel;
 pub mod prompt_before;
+mod raster_preview;
 mod regional_date;
 mod saved_version_diff;
 // Owner-local Linear UI; task-launch integration remains in progress.

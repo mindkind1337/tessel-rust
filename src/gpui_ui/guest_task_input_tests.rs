@@ -310,6 +310,82 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
 }
 
 #[gpui::test]
+fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, scope) = joined_guest(cx);
+    let file = dir.path().join("project-1/poster.PNG");
+    image::RgbaImage::from_pixel(80, 48, image::Rgba([51u8, 103, 222, 255]))
+        .save_with_format(&file, image::ImageFormat::Png)
+        .unwrap();
+    for selector in [
+        "guest-tab-files",
+        "guest-entry-0",
+        "guest-image-preview",
+        "guest-image-download",
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(rect) = visual.debug_bounds(selector) {
+                if selector == "guest-image-preview" {
+                    visual.simulate_mouse_down(
+                        rect.center(),
+                        gpui::MouseButton::Right,
+                        Default::default(),
+                    );
+                    visual.simulate_mouse_up(
+                        rect.center(),
+                        gpui::MouseButton::Right,
+                        Default::default(),
+                    );
+                } else if selector != "guest-image-download" {
+                    visual.simulate_click(rect.center(), Default::default());
+                }
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    view.update(cx, |root, _, cx| {
+        let files = root
+            .app
+            .gpui_snapshot(1100., 850., 4.)
+            .modals
+            .share
+            .guest_files
+            .unwrap();
+        let (key, image) = files.image.unwrap();
+        assert_eq!(key.path, "poster.PNG");
+        assert_eq!(image.size(0).width.0, 80);
+        assert!(files.document.is_none());
+        root.dispatch(
+            GpuiAction::Share(ShareGpuiAction::GuestProject {
+                session: scope.session,
+                project: 2,
+            }),
+            cx,
+        );
+        assert!(
+            root.app
+                .gpui_snapshot(1100., 850., 4.)
+                .modals
+                .share
+                .guest_files
+                .unwrap()
+                .image
+                .is_none()
+        );
+    })
+    .unwrap();
+}
+#[gpui::test]
 fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
     let (dir, host, _cards, view, scope) = joined_guest(cx);
     let project = dir.path().join("project-1");

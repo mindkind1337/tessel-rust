@@ -1083,6 +1083,44 @@ fn render_share_modal(
                             }
                         }
                     }
+                    if let Some((key, pixels)) = &files.image {
+                        let size = pixels.size(0);
+                        let scale = (600.0f32 / size.width.0 as f32)
+                            .min(270. / size.height.0 as f32)
+                            .min(1.);
+                        let action =
+                            GpuiAction::Share(ShareGpuiAction::GuestImageMenu(key.clone()));
+                        content = content.child(key.path.clone()).child(
+                            div()
+                                .id("guest-image-preview")
+                                .debug_selector(|| "guest-image-preview".into())
+                                .w(px(scale * size.width.0 as f32))
+                                .h(px(scale * size.height.0 as f32))
+                                .on_mouse_down(
+                                    gpui::MouseButton::Right,
+                                    cx.listener(move |root, _, _, cx| {
+                                        cx.stop_propagation();
+                                        root.dispatch_action(action.clone(), cx);
+                                    }),
+                                )
+                                .child(gpui::img(pixels.clone()).size_full()),
+                        );
+                        if files.image_menu {
+                            content = content.child(modal_btn(
+                                "guest-image-download",
+                                if french {
+                                    "Télécharger l’original…"
+                                } else {
+                                    "Download original…"
+                                }
+                                .into(),
+                                false,
+                                tokens,
+                                GpuiAction::Share(ShareGpuiAction::GuestDownload(key.clone())),
+                                cx,
+                            ));
+                        }
+                    }
                     if let Some(doc) = &files.document {
                         let (preview, partial) = doc.preview();
                         content = content

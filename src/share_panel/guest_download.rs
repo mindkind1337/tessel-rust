@@ -81,7 +81,7 @@ impl Download {
     }
 }
 
-fn prepare(value: serde_json::Value, dest: &Path) -> Option<NamedTempFile> {
+pub(super) fn original_bytes(value: &serde_json::Value) -> Option<Vec<u8>> {
     let size = usize::try_from(value["size"].as_u64()?).ok()?;
     if size > crate::share::MAX_FILE {
         return None;
@@ -94,6 +94,10 @@ fn prepare(value: serde_json::Value, dest: &Path) -> Option<NamedTempFile> {
     if bytes.len() != size {
         return None;
     }
+    Some(bytes)
+}
+fn prepare(value: serde_json::Value, dest: &Path) -> Option<NamedTempFile> {
+    let bytes = original_bytes(&value)?;
     let mut file = NamedTempFile::new_in(dest.parent()?).ok()?;
     file.write_all(&bytes).ok()?;
     file.as_file().sync_all().ok()?;
@@ -103,11 +107,12 @@ fn prepare(value: serde_json::Value, dest: &Path) -> Option<NamedTempFile> {
 impl SharePanel {
     pub(super) fn downloadable(&self, key: &Key) -> bool {
         self.guest_files_scope == Some(key.scope)
-            && self
-                .guest_file_listing
-                .entries
-                .iter()
-                .any(|e| !e.directory && e.path == key.path)
+            && (self.guest_image.key.as_ref() == Some(key)
+                || self
+                    .guest_file_listing
+                    .entries
+                    .iter()
+                    .any(|e| !e.directory && e.path == key.path))
     }
     pub(crate) fn download_guest_file(
         &mut self,

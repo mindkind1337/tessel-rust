@@ -1506,7 +1506,17 @@ impl Render for TesselGpuiRoot {
             GpuiCenterMode::RemoteSftp => snapshot.remote.pixels.clone(),
             _ => None,
         };
-        for retired in self.presented_images.replace(media) {
+        for retired in self.presented_images.replace(
+            media.into_iter().chain(
+                snapshot
+                    .modals
+                    .share
+                    .guest_files
+                    .as_ref()
+                    .filter(|_| snapshot.modals.share_modal_open)
+                    .and_then(|f| f.image.as_ref().map(|(_, img)| img.clone())),
+            ),
+        ) {
             cx.drop_image(retired, Some(window));
         }
         if self.app.gpui_issues_menu_open() && chrome::toolbar_fit_level(&snapshot, viewport_w) != 0

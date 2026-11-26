@@ -470,19 +470,7 @@ impl Document {
             if bytes.len() > 16 * 1024 * 1024 {
                 return Err("Image limit is 16 MiB".into());
             }
-            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-                .with_guessed_format()
-                .map_err(|e| e.to_string())?;
-            let mut limits = image::Limits::default();
-            limits.max_image_width = Some(4096);
-            limits.max_image_height = Some(4096);
-            limits.max_alloc = Some(64 * 1024 * 1024);
-            reader.limits(limits);
-            let decoded = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
-            let image = eframe::egui::ColorImage::from_rgba_unmultiplied(
-                [decoded.width() as usize, decoded.height() as usize],
-                decoded.as_raw(),
-            );
+            let image = crate::raster_preview::decode(&bytes)?;
             return Ok(Self {
                 instance_id: Self::next_instance_id(),
                 root: root.to_owned(),
