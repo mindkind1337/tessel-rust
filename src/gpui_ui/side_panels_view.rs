@@ -2737,6 +2737,8 @@ fn render_timeline(
             let commit = row.key();
             let hover_key = commit.clone();
             let hover_history = history.clone();
+            let owner = cx.weak_entity();
+            let hover_path = file.clone();
             let theme = *tokens;
             let key = format!("timeline-{}", commit.as_deref().unwrap_or("working"));
             let path = file.clone();
@@ -2774,6 +2776,8 @@ fn render_timeline(
                                 .detach();
                             }
                             TimelineTooltip {
+                                owner: owner.clone(),
+                                path: hover_path.clone(),
                                 details,
                                 fr,
                                 tokens: theme,
@@ -2833,6 +2837,8 @@ fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
 }
 
 struct TimelineTooltip {
+    owner: gpui::WeakEntity<TesselGpuiRoot>,
+    path: std::path::PathBuf,
     fr: bool,
     details: Option<crate::file_timeline::Details>,
     tokens: GpuiThemeTokens,
@@ -2899,14 +2905,56 @@ impl gpui::Render for TimelineTooltip {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()));
                     }))
                     .child(crate::file_timeline::copy_hash_label(self.fr));
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(hash.clone())
-                        .child(action),
-                );
+                let owner = self.owner.clone();
+                let path = self.path.clone();
+                let id = hash.clone();
+                let open = div()
+                    .id("timeline-open-commit")
+                    .debug_selector(|| "timeline-open-commit".into())
+                    .cursor_pointer()
+                    .text_color(self.tokens.accent)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        let _ = owner.update(cx, |root, cx| {
+                            root.dispatch_action(
+                                GpuiAction::Timeline(crate::file_timeline::Action::Open(
+                                    path.clone(),
+                                    Some(id.clone()),
+                                    false,
+                                )),
+                                cx,
+                            )
+                        });
+                    }))
+                    .child(hash[..7].to_owned());
+                let mut commands = div().flex().flex_wrap().gap_1().child(open).child(action);
+                if let Some(url) = d.github_url() {
+                    let owner = self.owner.clone();
+                    commands = commands.child(
+                        div()
+                            .id("timeline-open-github")
+                            .debug_selector(|| "timeline-open-github".into())
+                            .cursor_pointer()
+                            .text_color(self.tokens.accent)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                let _ = owner.update(cx, |root, cx| {
+                                    root.dispatch_action(
+                                        GpuiAction::Timeline(
+                                            crate::file_timeline::Action::OpenGitHub(url.clone()),
+                                        ),
+                                        cx,
+                                    )
+                                });
+                            }))
+                            .child(if self.fr {
+                                "Ouvrir sur GitHub"
+                            } else {
+                                "Open on GitHub"
+                            }),
+                    );
+                }
+                panel = panel.child(commands);
             }
         }
         panel

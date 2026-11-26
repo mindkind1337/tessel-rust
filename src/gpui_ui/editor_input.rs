@@ -528,6 +528,14 @@ mod tests {
             crate::git::run(&folder, &options, None).unwrap()
         };
         git(&["init", "-q"]);
+        if pin {
+            git(&[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/fixture.git",
+            ]);
+        }
         let path = folder.join("history.txt");
         std::fs::write(&path, "timeline fixture\n").unwrap();
         git(&["add", "."]);
@@ -602,8 +610,17 @@ mod tests {
                             Some(hash.as_str())
                         );
                         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
-                        visual.simulate_mouse_move(bounds.center(), None, Default::default());
-                        visual.simulate_click(bounds.center(), Default::default());
+                        assert_eq!(visual.debug_bounds("timeline-open-github").is_some(), pin);
+                        let open = if pin {
+                            visual
+                                .debug_bounds("timeline-open-commit")
+                                .unwrap()
+                                .center()
+                        } else {
+                            bounds.center()
+                        };
+                        visual.simulate_mouse_move(open, None, Default::default());
+                        visual.simulate_click(open, Default::default());
                         break;
                     }
                     assert!(

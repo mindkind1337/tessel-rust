@@ -4990,7 +4990,11 @@ impl Tessel {
                 if let Some(action) =
                     crate::file_timeline::compat(ui, &timeline, crate::i18n::is_french())
                 {
-                    self.timeline_action(action);
+                    if let crate::file_timeline::Action::OpenGitHub(url) = action {
+                        self.open_web_link(ui.ctx(), url);
+                    } else {
+                        self.timeline_action(action);
+                    }
                 }
             });
         let old_prefs = self.state.editor_prefs;

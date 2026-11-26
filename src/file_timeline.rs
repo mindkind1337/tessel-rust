@@ -20,6 +20,7 @@ pub struct Commit {
 
 #[derive(Debug, Default)]
 pub struct History {
+    github_repo: Arc<std::sync::OnceLock<Option<String>>>,
     scm_unavailable: bool,
     pub saves: Vec<crate::local_file_history::Entry>,
     root: PathBuf,
@@ -125,6 +126,7 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
         None,
     )?;
     Ok(History {
+        github_repo: Default::default(),
         scm_unavailable: false,
         saves: Vec::new(),
         root,
@@ -352,6 +354,7 @@ pub enum Action {
     ToggleSource(Source),
     Refresh(PathBuf, bool),
     Open(PathBuf, Option<String>, bool),
+    OpenGitHub(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -567,19 +570,59 @@ impl Stats {
         )
     }
 }
+fn github_repository(remote: &str) -> Option<String> {
+    let remote = remote.trim();
+    let path = if let Some(path) = remote.strip_prefix("git@github.com:") {
+        path.to_owned()
+    } else {
+        let url = url::Url::parse(remote).ok()?;
+        if !matches!(url.scheme(), "https" | "http" | "ssh" | "git")
+            || !url
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return None;
+        }
+        url.path().strip_prefix('/')?.to_owned()
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, repo) = path.split_once('/')?;
+    if ![owner, repo].iter().all(|p| {
+        !p.is_empty()
+            && *p != "."
+            && *p != ".."
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    }) {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}"))
+}
+
 impl Commit {
-    fn request_stats(&self, root: &Path) -> StatsReceiver {
+    fn request_stats(
+        &self,
+        root: &Path,
+        origin: &Arc<std::sync::OnceLock<Option<String>>>,
+    ) -> StatsReceiver {
         self.stats
             .get_or_init(|| {
                 let (tx, rx) = tokio::sync::watch::channel(None);
                 let root = root.to_owned();
                 let id = self.id.clone();
+                let origin = origin.clone();
                 let _ = thread::Builder::new()
                     .name("timeline-commit-stats".into())
                     .spawn(move || {
-                        if let Some(stats) = Stats::read(&root, &id) {
-                            tx.send_replace(Some(stats));
-                        }
+                        origin.get_or_init(|| {
+                            git::run(&root, &["remote", "get-url", "origin"], None)
+                                .ok()
+                                .and_then(|s| github_repository(&s))
+                        });
+                        tx.send_replace(Stats::read(&root, &id));
                     });
                 rx
             })
@@ -596,6 +639,7 @@ pub fn copy_hash_label(fr: bool) -> &'static str {
 }
 
 pub struct Details {
+    origin: Arc<std::sync::OnceLock<Option<String>>>,
     pub stats: Option<StatsReceiver>,
     pub heading: String,
     pub text: String,
@@ -603,12 +647,22 @@ pub struct Details {
     pub avatar: Option<Avatar>,
 }
 
+impl Details {
+    pub fn github_url(&self) -> Option<String> {
+        Some(format!(
+            "{}/commit/{}",
+            self.origin.get()?.as_ref()?,
+            self.hash.as_ref()?
+        ))
+    }
+}
 impl History {
     pub fn details(&self, key: Option<&str>, fr: bool, now: i64) -> Option<Details> {
         let date = |ms| crate::regional_date::long_local(ms, fr).unwrap_or_default();
         if let Some(id) = key.and_then(|s| s.strip_prefix("local:")) {
             let save = self.saves.iter().find(|e| e.id == id)?;
             return Some(Details {
+                origin: self.github_repo.clone(),
                 stats: None,
                 heading: date(save.timestamp),
                 text: if fr {
@@ -629,7 +683,8 @@ impl History {
                 format!("{} <{}>", commit.author, commit.email)
             };
             return Some(Details {
-                stats: Some(commit.request_stats(&self.root)),
+                origin: self.github_repo.clone(),
+                stats: Some(commit.request_stats(&self.root, &self.github_repo)),
                 heading: format!(
                     "{author} · {} ({})",
                     time_words(commit.time, now, fr, true),
@@ -645,6 +700,7 @@ impl History {
             });
         }
         self.dirty.then(|| Details {
+            origin: self.github_repo.clone(),
             stats: None,
             heading: format!(
                 "{} · {}",
@@ -792,6 +848,7 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                             fr,
                             chrono::Utc::now().timestamp(),
                         ) {
+                            let github = details.github_url();
                             ui.horizontal(|ui| {
                                 if let Some(icon) = details.avatar {
                                     use eframe::egui::{Color32, Rect, Sense, vec2};
@@ -843,9 +900,34 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                             }
                             if let Some(hash) = details.hash {
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.monospace(&hash);
+                                    if ui
+                                        .link(&hash[..7])
+                                        .on_hover_text(if fr {
+                                            "Ouvrir le commit"
+                                        } else {
+                                            "Open Commit"
+                                        })
+                                        .clicked()
+                                    {
+                                        action = Some(Action::Open(
+                                            file.clone(),
+                                            Some(hash.clone()),
+                                            false,
+                                        ));
+                                    }
                                     if ui.small_button(copy_hash_label(fr)).clicked() {
                                         ui.ctx().copy_text(hash);
+                                    }
+                                    if let Some(url) = github
+                                        && ui
+                                            .link(if fr {
+                                                "Ouvrir sur GitHub"
+                                            } else {
+                                                "Open on GitHub"
+                                            })
+                                            .clicked()
+                                    {
+                                        action = Some(Action::OpenGitHub(url));
                                     }
                                 });
                             }
@@ -924,6 +1006,7 @@ mod tests {
             old_path: None,
         };
         let h = History {
+            github_repo: Default::default(),
             scm_unavailable: false,
             saves: Vec::new(),
             root: PathBuf::new(),
@@ -1013,11 +1096,42 @@ mod tests {
         assert!(h.diff(None).unwrap().contains("+working"));
     }
 
+    #[test]
+    fn file_timeline_github_links_use_only_the_owner_and_repository() {
+        let expected = Some("https://github.com/example/project");
+        for origin in [
+            "git@github.com:example/project.git",
+            "ssh://git@github.com/example/project.git",
+            "https://fixture:synthetic@github.com/example/project.git/",
+            "https://github.com/example/project",
+        ] {
+            assert_eq!(github_repository(origin).as_deref(), expected);
+        }
+        for origin in [
+            "https://notgithub.com/example/project",
+            "https://github.com.invalid/example/project",
+            "file:///github.com/example/project",
+            "https://github.com/example/project?token=synthetic",
+            "git@github.com:../project",
+            "https://github.com/example/project/extra",
+        ] {
+            assert!(github_repository(origin).is_none());
+        }
+    }
     #[tokio::test]
     async fn file_timeline_hover_stats_count_the_entire_commit_and_cache_the_result() {
         let repo = tempfile::tempdir().unwrap();
         let root = repo.path();
         git_fixture(root, &["init", "-q"]);
+        git_fixture(
+            root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:example/project.git",
+            ],
+        );
         let file = root.join("viewed.txt");
         std::fs::write(&file, "old line\n").unwrap();
         git_fixture(root, &["add", "."]);
@@ -1042,6 +1156,13 @@ mod tests {
         .unwrap()
         .unwrap()
         .unwrap();
+        assert_eq!(
+            history.details(key, false, 0).unwrap().github_url(),
+            Some(format!(
+                "https://github.com/example/project/commit/{}",
+                commit.id
+            ))
+        );
         assert_eq!(
             stats,
             Stats {
