@@ -1946,7 +1946,7 @@ impl Tessel {
                 self.state.editor_prefs.timeline_shown = !self.state.editor_prefs.timeline_shown;
                 self.save();
             }
-            Action::EmailAuthor(target) => {
+            Action::OpenMail(target) => {
                 if let Err(error) = open::that_detached(target) {
                     self.error = error.to_string();
                 }
@@ -4995,7 +4995,7 @@ impl Tessel {
                 if let Some(action) =
                     crate::file_timeline::compat(ui, &timeline, crate::i18n::is_french())
                 {
-                    if let crate::file_timeline::Action::OpenGitHub(url) = action {
+                    if let crate::file_timeline::Action::OpenWeb(url) = action {
                         self.open_web_link(ui.ctx(), url);
                     } else {
                         self.timeline_action(action);

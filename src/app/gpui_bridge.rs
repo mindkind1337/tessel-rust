@@ -5850,13 +5850,13 @@ impl Tessel {
                 self.state.editor_prefs.show_git_ignored = next;
                 self.save();
             }
-            GpuiAction::Timeline(crate::file_timeline::Action::OpenGitHub(url)) => {
+            GpuiAction::Timeline(crate::file_timeline::Action::OpenWeb(url)) => {
                 if cfg!(windows)
                     && self.state.browser_prefs.open_links_in
                         != crate::workspace::OpenLinksTarget::System
                 {
                     self.open_tessel_url_headless(url);
-                } else if let Err(e) = webbrowser::open(&url) {
+                } else if let Err(e) = open::that_detached(&url) {
                     self.error = e.to_string();
                 }
             }

@@ -354,8 +354,8 @@ pub enum Action {
     ToggleSource(Source),
     Refresh(PathBuf, bool),
     Open(PathBuf, Option<String>, bool),
-    OpenGitHub(String),
-    EmailAuthor(String),
+    OpenWeb(String),
+    OpenMail(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -665,6 +665,51 @@ pub fn message_lines(message: &str) -> impl Iterator<Item = (bool, &str)> {
     })
 }
 
+#[derive(Debug)]
+pub struct MessagePart<'a> {
+    pub text: &'a str,
+    pub code: bool,
+    pub action: Option<Action>,
+}
+
+pub fn inline_parts<'a>(line: &'a str, repo: Option<&str>) -> Vec<MessagePart<'a>> {
+    static INLINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r##"https?://[^\s<>()]+[^\s<>().,;:!?'"]|(?-u:[\w.+-]+@[\w-]+(?:\.[\w-]+)+)|`[^`]+`|#[0-9]+(?-u:\b)"##).unwrap()
+    });
+    let plain = |text| MessagePart {
+        text,
+        code: false,
+        action: None,
+    };
+    let mut parts = Vec::new();
+    let mut end = 0;
+    for m in INLINE.find_iter(line) {
+        if end < m.start() {
+            parts.push(plain(&line[end..m.start()]));
+        }
+        let value = m.as_str();
+        let mut part = plain(value);
+        if value.starts_with('`') {
+            part.code = true;
+            part.text = &value[1..value.len() - 1];
+        } else if let Some(issue) = value.strip_prefix('#') {
+            part.action = repo.map(|r| Action::OpenWeb(format!("{r}/issues/{issue}")));
+        } else if value.starts_with("http://") || value.starts_with("https://") {
+            if url::Url::parse(value).is_ok_and(|url| url.has_host()) {
+                part.action = Some(Action::OpenWeb(value.to_owned()));
+            }
+        } else {
+            part.action = author_mailto(value).map(Action::OpenMail);
+        }
+        parts.push(part);
+        end = m.end();
+    }
+    if end < line.len() {
+        parts.push(plain(&line[end..]));
+    }
+    parts
+}
+
 /// Keep commit metadata inside one recipient, including literal URI punctuation.
 fn author_mailto(address: &str) -> Option<String> {
     let (local, domain) = address.rsplit_once('@')?;
@@ -682,6 +727,10 @@ fn author_mailto(address: &str) -> Option<String> {
 }
 
 impl Details {
+    pub fn repository_url(&self) -> Option<&str> {
+        self.origin.get()?.as_deref()
+    }
+
     pub fn github_url(&self) -> Option<String> {
         Some(format!(
             "{}/commit/{}",
@@ -881,6 +930,7 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                             chrono::Utc::now().timestamp(),
                         ) {
                             let github = details.github_url();
+                            let repo = details.origin.get().and_then(Option::as_deref);
                             ui.horizontal(|ui| {
                                 if let Some(icon) = details.avatar {
                                     use eframe::egui::{Color32, Rect, Sense, vec2};
@@ -913,7 +963,7 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                             .on_hover_text(&target)
                                             .clicked()
                                         {
-                                            action = Some(Action::EmailAuthor(target));
+                                            action = Some(Action::OpenMail(target));
                                         }
                                     } else {
                                         ui.strong(author);
@@ -922,14 +972,23 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                 ui.label(details.heading);
                             });
                             for (bullet, line) in message_lines(&details.text) {
-                                if bullet {
-                                    ui.horizontal_top(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    if bullet {
                                         ui.label("•");
-                                        ui.label(line);
-                                    });
-                                } else {
-                                    ui.label(line);
-                                }
+                                    }
+                                    ui.spacing_mut().item_spacing.x = 0.;
+                                    for part in inline_parts(line, repo) {
+                                        if let Some(target) = part.action {
+                                            if ui.link(part.text).clicked() {
+                                                action = Some(target);
+                                            }
+                                        } else if part.code {
+                                            ui.label(eframe::egui::RichText::new(part.text).code());
+                                        } else {
+                                            ui.label(part.text);
+                                        }
+                                    }
+                                });
                             }
                             if let Some(rx) = details.stats {
                                 if let Some(stats) = *rx.borrow() {
@@ -981,7 +1040,7 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                             })
                                             .clicked()
                                     {
-                                        action = Some(Action::OpenGitHub(url));
+                                        action = Some(Action::OpenWeb(url));
                                     }
                                 });
                             }
@@ -1006,6 +1065,27 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_timeline_inline_message_routes_links_and_preserves_code_and_punctuation() {
+        let parts = inline_parts(
+            "é `#1` #12 https://example.org/a. dev+tag@example.org!",
+            Some("https://github.com/o/r"),
+        );
+        assert!(parts[1].code && parts[1].text == "#1" && parts[1].action.is_none());
+        assert!(
+            matches!(&parts[3].action, Some(Action::OpenWeb(url)) if url == "https://github.com/o/r/issues/12")
+        );
+        assert!(
+            matches!(&parts[5].action, Some(Action::OpenWeb(url)) if url == "https://example.org/a")
+        );
+        assert_eq!(parts[6].text, ". ");
+        assert!(
+            matches!(&parts[7].action, Some(Action::OpenMail(url)) if url == "mailto:dev%2Btag@example.org")
+        );
+        assert_eq!(parts[8].text, "!");
+        assert!(inline_parts("#12", None)[0].action.is_none());
+    }
+
     #[test]
     fn file_timeline_author_link_has_one_recipient_and_no_headers() {
         assert_eq!(

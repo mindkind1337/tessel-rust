@@ -2844,7 +2844,7 @@ struct TimelineTooltip {
     tokens: GpuiThemeTokens,
 }
 impl gpui::Render for TimelineTooltip {
-    fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut panel = div()
             .debug_selector(|| "timeline-hover".into())
             .flex()
@@ -2894,9 +2894,7 @@ impl gpui::Render for TimelineTooltip {
                                 let _ = owner.update(cx, |root, cx| {
                                     root.dispatch_action(
                                         GpuiAction::Timeline(
-                                            crate::file_timeline::Action::EmailAuthor(
-                                                target.clone(),
-                                            ),
+                                            crate::file_timeline::Action::OpenMail(target.clone()),
                                         ),
                                         cx,
                                     )
@@ -2908,8 +2906,48 @@ impl gpui::Render for TimelineTooltip {
                 };
             }
             panel = panel.child(head.child(d.heading.clone()));
-            for (bullet, line) in crate::file_timeline::message_lines(&d.text) {
-                let text = div().min_w_0().child(line.to_owned());
+            for (index, (bullet, line)) in crate::file_timeline::message_lines(&d.text).enumerate()
+            {
+                let mut label = String::new();
+                let mut runs = Vec::new();
+                let mut ranges = Vec::new();
+                let mut actions = Vec::new();
+                for part in crate::file_timeline::inline_parts(line, d.repository_url()) {
+                    let start = label.len();
+                    label.push_str(part.text);
+                    let mut run = window.text_style().to_run(part.text.len());
+                    run.color = gpui::rgb_to_hsla(self.tokens.text);
+                    if let Some(action) = part.action {
+                        ranges.push(start..label.len());
+                        actions.push(action);
+                        run.color = gpui::rgb_to_hsla(self.tokens.accent);
+                    } else if part.code {
+                        run.font = gpui::font(super::theme::mono_font_family());
+                        run.background_color = Some(gpui::rgb_to_hsla(self.tokens.surface));
+                    }
+                    runs.push(run);
+                }
+                let styled = gpui::StyledText::new(label).with_runs(runs);
+                let mut text = div().min_w_0();
+                if ranges.is_empty() {
+                    text = text.child(styled);
+                } else {
+                    let owner = self.owner.clone();
+                    text = text
+                        .debug_selector(|| "timeline-inline-links".into())
+                        .child(
+                            gpui::InteractiveText::new(("timeline-message", index), styled)
+                                .on_click(ranges, move |i, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = owner.update(cx, |root, cx| {
+                                        root.dispatch_action(
+                                            GpuiAction::Timeline(actions[i].clone()),
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        );
+                }
                 panel = panel.child(if bullet {
                     div()
                         .flex()
@@ -2984,7 +3022,7 @@ impl gpui::Render for TimelineTooltip {
                                 let _ = owner.update(cx, |root, cx| {
                                     root.dispatch_action(
                                         GpuiAction::Timeline(
-                                            crate::file_timeline::Action::OpenGitHub(url.clone()),
+                                            crate::file_timeline::Action::OpenWeb(url.clone()),
                                         ),
                                         cx,
                                     )

@@ -544,7 +544,7 @@ mod tests {
             "-qm",
             "File history fixture",
             "-m",
-            "- change details",
+            "- see `details` in #42",
         ]);
         let hash = git(&["rev-parse", "HEAD"]).trim().to_owned();
         let doc = Document::open(&folder, &path).unwrap();
@@ -609,6 +609,7 @@ mod tests {
                     if visual.debug_bounds("timeline-hover-stats").is_some() {
                         assert!(visual.debug_bounds("timeline-email-author").is_some());
                         assert!(visual.debug_bounds("timeline-message-bullet").is_some());
+                        assert_eq!(visual.debug_bounds("timeline-inline-links").is_some(), pin);
                         let copy = visual.debug_bounds("timeline-copy-hash").unwrap().center();
                         visual.simulate_mouse_move(copy, None, Default::default());
                         visual.simulate_click(copy, Default::default());
