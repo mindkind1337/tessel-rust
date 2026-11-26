@@ -1170,6 +1170,12 @@ mod tests {
         assert_eq!(image.pixels[0].to_array(), [128, 0, 0, 128]);
         assert_eq!(image.pixels[3].to_array(), [0; 4]);
         assert!(!view.path.exists());
+        let avif = include_bytes!("../tests/fixtures/alpha-bars.avif");
+        let view = prepare_preview("/server/image.AVIF", avif)
+            .unwrap()
+            .unwrap();
+        assert_eq!(view.image.unwrap().size, [64, 48]);
+        assert!(!view.path.exists());
         assert!(prepare_preview("broken.png", b"invalid").unwrap().is_err());
         assert!(prepare_preview("script.html", b"<script>bad</script>").is_none());
     }

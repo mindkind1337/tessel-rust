@@ -671,10 +671,17 @@ fn compatibility_guest_image_preview_downloads_original_svg() {
     verify_guest_image("poster.SVG");
 }
 
+#[test]
+fn compatibility_guest_image_preview_downloads_original_avif() {
+    verify_guest_image("poster.AVIF");
+}
+
 fn verify_guest_image(filename: &str) {
     let (dir, _host, mut panel) = guest_file_fixture();
     let path = dir.path().join("p1").join(filename);
-    if filename.ends_with(".SVG") {
+    if filename.ends_with(".AVIF") {
+        std::fs::write(&path, include_bytes!("fixtures/alpha-bars.avif")).unwrap();
+    } else if filename.ends_with(".SVG") {
         std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><circle cx="32" cy="24" r="20" fill="red"/></svg>"#).unwrap();
     } else {
         image::RgbaImage::from_pixel(64, 48, image::Rgba([255u8, 50, 100, 255]))

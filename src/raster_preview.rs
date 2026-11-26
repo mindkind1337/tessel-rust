@@ -1,8 +1,14 @@
 pub(crate) fn supported(extension: &str) -> bool {
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"].contains(&extension)
+    [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg", "avif",
+    ]
+    .contains(&extension)
 }
 
 pub(crate) fn decode(extension: &str, bytes: &[u8]) -> Result<eframe::egui::ColorImage, String> {
+    if extension == "avif" {
+        return avif(bytes);
+    }
     if extension == "svg" {
         return svg(bytes);
     }
@@ -18,6 +24,34 @@ pub(crate) fn decode(extension: &str, bytes: &[u8]) -> Result<eframe::egui::Colo
     Ok(eframe::egui::ColorImage::from_rgba_unmultiplied(
         [decoded.width() as usize, decoded.height() as usize],
         decoded.as_raw(),
+    ))
+}
+
+fn avif(bytes: &[u8]) -> Result<eframe::egui::ColorImage, String> {
+    use imgalifier_avif::{Av1Backend, Decoder, Limits};
+    const MAX_SIDE: u32 = 4096;
+    let limits = Limits {
+        max_pixels: u64::from(MAX_SIDE * MAX_SIDE),
+        max_item_bytes: 16 * 1024 * 1024,
+        max_threads: 1,
+        ..Default::default()
+    };
+    let backend = Av1Backend {
+        max_pixels: MAX_SIDE * MAX_SIDE,
+        threads: 1,
+    };
+    let decoder = Decoder::new(bytes, backend, limits).map_err(|e| e.to_string())?;
+    let info = decoder.info().map_err(|e| e.to_string())?;
+    if info.width > MAX_SIDE || info.height > MAX_SIDE {
+        return Err("Image dimensions exceed 4096 pixels".into());
+    }
+    let image = decoder.decode_primary().map_err(|e| e.to_string())?;
+    if image.width > MAX_SIDE || image.height > MAX_SIDE {
+        return Err("Image dimensions exceed 4096 pixels".into());
+    }
+    Ok(eframe::egui::ColorImage::from_rgba_unmultiplied(
+        [image.width as usize, image.height as usize],
+        &image.data,
     ))
 }
 
@@ -89,6 +123,31 @@ fn svg(bytes: &[u8]) -> Result<eframe::egui::ColorImage, String> {
 mod tests {
     use super::decode;
     use base64::Engine as _;
+
+    #[test]
+    fn avif_preserves_color_and_alpha() {
+        let image = decode("avif", include_bytes!("../tests/fixtures/alpha-bars.avif")).unwrap();
+        assert_eq!(image.size, [64, 48]);
+        for (index, expected) in [(8, [240u8, 32, 16, 255]), (56, [12, 40, 230, 128])] {
+            let actual = image.pixels[index].to_srgba_unmultiplied();
+            assert!(
+                actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 4),
+                "{actual:?}"
+            );
+        }
+        assert!(decode("avif", b"invalid").is_err());
+    }
+
+    #[test]
+    fn avif_rejects_large_declared_dimensions_before_pixel_decode() {
+        let mut bytes = include_bytes!("../tests/fixtures/alpha-bars.avif").to_vec();
+        let ispe = bytes.windows(4).position(|tag| tag == b"ispe").unwrap();
+        bytes[ispe + 8..ispe + 12].copy_from_slice(&4097_u32.to_be_bytes());
+        assert_eq!(
+            decode("avif", &bytes).unwrap_err(),
+            "Image dimensions exceed 4096 pixels"
+        );
+    }
 
     #[test]
     fn svg_uses_embedded_pixels_and_ignores_external_files() {
