@@ -1,7 +1,62 @@
-//! Continuous PDF pages for the Compatibility viewport.
+//! Continuous PDF pages for the native and Compatibility viewports.
 use super::{MAX_PIXELS, MAX_ZOOM, MIN_ZOOM, PdfView, Rendered, dimensions, manual_zoom, tr};
 use eframe::egui;
 use std::{collections::BTreeMap, time::Duration};
+
+pub(super) struct Plan {
+    pub extent: egui::Vec2,
+    pub visible_pages: Vec<(usize, egui::Rect)>,
+    pub wanted: Vec<usize>,
+}
+pub(super) fn plan_pages(
+    sizes: &[[f32; 2]],
+    viewport: egui::Rect,
+    scale: f32,
+    widest: f32,
+) -> Plan {
+    let width = viewport.width().max(widest * scale + 48.);
+    let mut visible_pages = Vec::new();
+    let render_scale = scale.clamp(MIN_ZOOM, MAX_ZOOM);
+    let mut top = 16.;
+    let mut nearby = Vec::new();
+    let visible = viewport.expand2(egui::vec2(0., 600.));
+    for (index, &[w, h]) in sizes.iter().enumerate() {
+        let size = egui::vec2((w * scale).floor(), (h * scale).floor());
+        let rect = egui::Rect::from_min_size(egui::pos2((width - size.x) / 2., top), size);
+        top += size.y + 12.;
+        if !visible.intersects(rect) {
+            continue;
+        }
+        let distance = rect.distance_to_pos(viewport.center());
+        nearby.push((index, distance));
+        if viewport.intersects(rect) {
+            visible_pages.push((index, rect));
+        }
+    }
+
+    nearby.sort_by(|a, b| a.1.total_cmp(&b.1));
+    // Prefer visible pages; reserve at most two full-resolution pages' worth
+    // of textures. Small pages share that budget.
+    let mut remaining = MAX_PIXELS * 2;
+    let mut wanted = Vec::new();
+    for (index, _) in nearby {
+        let [w, h] = sizes[index];
+        let pixels = dimensions(w, h, render_scale).map_or(1, |s| {
+            ((w * s).ceil() as usize)
+                .saturating_mul((h * s).ceil() as usize)
+                .min(MAX_PIXELS)
+        });
+        if pixels <= remaining {
+            remaining -= pixels;
+            wanted.push(index);
+        }
+    }
+    Plan {
+        extent: egui::vec2(width, top + 4.),
+        visible_pages,
+        wanted,
+    }
+}
 
 #[derive(Default)]
 pub(super) struct ContinuousPages {
@@ -30,52 +85,23 @@ impl ContinuousPages {
         scale: f32,
         widest: f32,
     ) -> Option<usize> {
-        let width = viewport.width().max(widest * scale + 48.);
-        let origin = ui.min_rect().min;
+        let plan = plan_pages(&self.sizes, viewport, scale, widest);
         let render_scale = scale.clamp(MIN_ZOOM, MAX_ZOOM);
-        let mut top = 16.;
-        let mut nearby = Vec::new();
-        let visible = viewport.expand2(egui::vec2(0., 600.));
-        for (index, &[w, h]) in self.sizes.iter().enumerate() {
-            let size = egui::vec2((w * scale).floor(), (h * scale).floor());
-            let rect = egui::Rect::from_min_size(egui::pos2((width - size.x) / 2., top), size);
-            top += size.y + 12.;
-            if !visible.intersects(rect) {
-                continue;
-            }
-            let distance = rect.distance_to_pos(viewport.center());
-            nearby.push((index, distance));
-            if viewport.intersects(rect) {
-                let screen = rect.translate(origin.to_vec2());
-                ui.painter().rect_filled(screen, 0., egui::Color32::WHITE);
-                if let Some((_, texture)) = self.textures.get(&index) {
-                    ui.painter().image(
-                        texture.id(),
-                        screen,
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                        egui::Color32::WHITE,
-                    );
-                }
+        let origin = ui.min_rect().min;
+        for (index, rect) in plan.visible_pages {
+            let screen = rect.translate(origin.to_vec2());
+            ui.painter().rect_filled(screen, 0., egui::Color32::WHITE);
+            if let Some((_, texture)) = self.textures.get(&index) {
+                ui.painter().image(
+                    texture.id(),
+                    screen,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                    egui::Color32::WHITE,
+                );
             }
         }
-        ui.set_min_size(egui::vec2(width, top + 4.));
-        nearby.sort_by(|a, b| a.1.total_cmp(&b.1));
-        // Prefer visible pages; reserve at most two full-resolution pages' worth
-        // of textures. Small pages share that budget.
-        let mut remaining = MAX_PIXELS * 2;
-        let mut wanted = Vec::new();
-        for (index, _) in nearby {
-            let [w, h] = self.sizes[index];
-            let pixels = dimensions(w, h, render_scale).map_or(1, |s| {
-                ((w * s).ceil() as usize)
-                    .saturating_mul((h * s).ceil() as usize)
-                    .min(MAX_PIXELS)
-            });
-            if pixels <= remaining {
-                remaining -= pixels;
-                wanted.push(index);
-            }
-        }
+        ui.set_min_size(plan.extent);
+        let wanted = plan.wanted;
         self.textures.retain(|index, _| wanted.contains(index));
         wanted.into_iter().find(|index| {
             self.failures
@@ -237,7 +263,6 @@ mod tests {
                 index,
                 1.,
                 Rendered {
-                    points: raster.page_sizes[index],
                     pages: 2,
                     widest: 600.,
                     page_sizes: raster.page_sizes,

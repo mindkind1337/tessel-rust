@@ -25,7 +25,6 @@ pub(crate) enum Command {
     Discard,
     ImageMenu(String, Option<(f32, f32)>),
     Download(String),
-    PdfPage(isize),
     PdfZoom(f32),
     PdfFit(String),
     OfficeSection(usize),
@@ -149,7 +148,6 @@ impl RemotePanel {
                 .map(crate::office::OfficeView::gpui_poll_summary);
             if let Some(view) = &mut preview.pdf {
                 pdf = Some(view.gpui_poll_summary());
-                pixels = view.gpui_image();
             } else {
                 if preview.gpui_image.is_none() {
                     preview.gpui_image = preview
@@ -220,9 +218,9 @@ impl RemotePanel {
             .pdf
             .as_mut()
     }
-    pub(crate) fn set_pdf_viewport(&mut self, path: &str, width: f32) -> bool {
+    pub(crate) fn set_pdf_viewport(&mut self, path: &str, viewport: egui::Rect) -> bool {
         self.document_pdf(path)
-            .is_some_and(|pdf| pdf.set_viewport(width))
+            .is_some_and(|pdf| pdf.set_native_viewport(viewport))
     }
 
     pub(crate) fn command(&mut self, command: Command, hosts: &[Host]) {
@@ -255,16 +253,6 @@ impl RemotePanel {
                     .and_then(|doc| doc.office.as_mut())
                 {
                     office.select_section(index);
-                }
-            }
-            Command::PdfPage(delta) => {
-                if let Some(pdf) = self
-                    .document
-                    .as_mut()
-                    .and_then(|doc| doc.preview.as_mut())
-                    .and_then(|doc| doc.pdf.as_mut())
-                {
-                    pdf.step_page(delta);
                 }
             }
             Command::PdfFit(path) => {
@@ -539,7 +527,7 @@ mod tests {
             first.as_bytes(0).unwrap(),
             &[0, 0, 255, 255, 255, 0, 0, 255]
         );
-        panel.command(Command::PdfPage(1), &[]); // no PDF, never mutates image bytes
+        panel.command(Command::PdfZoom(0.25), &[]); // no PDF, never mutates image bytes
         let second = panel.snapshot(&[]).pixels.unwrap();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         assert_eq!(panel.document.as_ref().unwrap().original, original);

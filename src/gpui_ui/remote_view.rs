@@ -590,7 +590,6 @@ pub(crate) fn render(
         } else if let Some(summary) = &remote.pdf {
             body = body.child(super::editor_view::render_pdf_stage(
                 summary,
-                remote.pixels.as_ref(),
                 super::editor_view::PdfTarget::Remote(path.clone()),
                 fr,
                 tokens,

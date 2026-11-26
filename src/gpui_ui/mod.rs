@@ -1506,8 +1506,22 @@ impl Render for TesselGpuiRoot {
             GpuiCenterMode::RemoteSftp => snapshot.remote.pixels.clone(),
             _ => None,
         };
+        let pdf = match snapshot.center_mode {
+            GpuiCenterMode::DocumentEditor => snapshot
+                .active_document
+                .as_ref()
+                .and_then(|d| d.pdf_summary.as_ref()),
+            GpuiCenterMode::RemoteSftp => snapshot.remote.pdf.as_ref(),
+            _ => None,
+        };
+        let pages = pdf.into_iter().flat_map(|summary| {
+            summary
+                .visible
+                .iter()
+                .filter_map(|page| page.pixels.clone())
+        });
         for retired in self.presented_images.replace(
-            media.into_iter().chain(
+            media.into_iter().chain(pages).chain(
                 snapshot
                     .modals
                     .share

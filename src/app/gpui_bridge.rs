@@ -881,7 +881,6 @@ pub(crate) enum GpuiAction {
         base: String,
         text: String,
     },
-    StepPdfPage(isize),
     ImageMenu(u64, Option<(f32, f32)>),
     DownloadImage(u64),
     PdfFit(u64),
@@ -2313,18 +2312,22 @@ impl Tessel {
         }
     }
 
-    pub(crate) fn set_local_pdf_viewport(&mut self, id: u64, width: f32) -> bool {
+    pub(crate) fn set_local_pdf_viewport(&mut self, id: u64, viewport: eframe::egui::Rect) -> bool {
         self.view == View::Files
             && self
                 .documents
                 .get_mut(self.active_document)
                 .filter(|doc| doc.instance_id() == id)
                 .and_then(|doc| doc.pdf.as_mut())
-                .is_some_and(|pdf| pdf.set_viewport(width))
+                .is_some_and(|pdf| pdf.set_native_viewport(viewport))
     }
 
-    pub(crate) fn set_remote_pdf_viewport(&mut self, path: &str, width: f32) -> bool {
-        self.view == View::Remote && self.remote.set_pdf_viewport(path, width)
+    pub(crate) fn set_remote_pdf_viewport(
+        &mut self,
+        path: &str,
+        viewport: eframe::egui::Rect,
+    ) -> bool {
+        self.view == View::Remote && self.remote.set_pdf_viewport(path, viewport)
     }
 
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
@@ -3694,11 +3697,7 @@ impl Tessel {
                 .as_ref()
                 .and_then(crate::gpui_pixels::from_color_image);
         }
-        let media_pixels = doc
-            .pdf
-            .as_ref()
-            .and_then(crate::pdf::PdfView::gpui_image)
-            .or_else(|| doc.gpui_image.clone());
+        let media_pixels = doc.gpui_image.clone();
 
         GpuiActiveDocumentSummary {
             instance_id: doc.instance_id(),
@@ -5670,15 +5669,6 @@ impl Tessel {
                     && !doc.preview_mode
                 {
                     doc.apply_native_edit(instance_id, &base, text);
-                }
-            }
-            GpuiAction::StepPdfPage(delta) => {
-                if let Some(pdf) = self
-                    .documents
-                    .get_mut(self.active_document)
-                    .and_then(|d| d.pdf.as_mut())
-                {
-                    pdf.step_page(delta);
                 }
             }
             GpuiAction::ImageMenu(id, position) => {

@@ -28,7 +28,6 @@ fn manual_zoom(scale: f32, step: f32) -> f32 {
 
 pub struct Rendered {
     page_sizes: Vec<[f32; 2]>,
-    pub points: [f32; 2],
     pub widest: f32,
     pub image: egui::ColorImage,
     pub pages: usize,
@@ -304,24 +303,28 @@ fn decode(bytes: &[u8], index: usize) -> Result<Rendered, String> {
         widest = widest.max(size[0]);
         page_sizes.push(size);
     }
-    let points = page_sizes[index];
     Ok(Rendered {
         page_sizes,
         widest,
-        points,
         image: egui::ColorImage::from_rgba_unmultiplied([width, height], &bytes[pixel_offset..]),
         pages,
     })
 }
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct PageLayout {
-    pub viewport: f32,
-    pub size: Option<[f32; 2]>,
+    pub viewport: egui::Rect,
+    pub extent: egui::Vec2,
     pub fit: bool,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
+pub struct PagePreview {
+    pub index: usize,
+    pub rect: egui::Rect,
+    pub pixels: Option<Arc<gpui::RenderImage>>,
+}
+#[derive(Clone, Debug)]
 pub struct PdfSummary {
-    pub page: usize,
+    pub visible: Vec<PagePreview>,
     pub pages: usize,
     pub scale: f32,
     pub busy: bool,
@@ -331,17 +334,18 @@ pub struct PdfSummary {
 
 pub struct PdfView {
     bytes: Arc<Vec<u8>>,
-    page: usize,
     pages: usize,
     scale: f32,
     fit: bool,
-    points: Option<[f32; 2]>,
     widest: f32,
     viewport: f32,
     continuous: continuous::ContinuousPages,
     requested_page: usize,
     requested_scale: f32,
-    gpui_image: Option<Arc<gpui::RenderImage>>,
+    native_sizes: Vec<[f32; 2]>,
+    native_pages: std::collections::BTreeMap<usize, (f32, Arc<gpui::RenderImage>)>,
+    native_failures: std::collections::BTreeMap<usize, (f32, String)>,
+    native_viewport: egui::Rect,
     pending: Option<Receiver<Result<Rendered, String>>>,
     cancel: Arc<AtomicBool>,
     error: String,
@@ -359,17 +363,18 @@ impl PdfView {
         }
         Ok(Self {
             bytes: Arc::new(bytes),
-            page: 0,
             pages: 0,
             scale: 1.5,
             fit: true,
-            points: None,
             widest: 0.,
             viewport: 0.,
             continuous: Default::default(),
             requested_page: 0,
             requested_scale: 1.5,
-            gpui_image: None,
+            native_sizes: Vec::new(),
+            native_pages: Default::default(),
+            native_failures: Default::default(),
+            native_viewport: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO),
             pending: None,
             cancel: Arc::new(AtomicBool::new(false)),
             error: String::new(),
@@ -395,48 +400,88 @@ impl PdfView {
             match result {
                 Ok(page) => {
                     self.widest = page.widest;
-                    self.points = Some(page.points);
                     self.pages = page.pages;
-                    self.gpui_image = crate::gpui_pixels::from_color_image(&page.image);
+                    self.native_sizes = page.page_sizes;
+                    if let Some(image) = crate::gpui_pixels::from_color_image(&page.image) {
+                        self.native_pages
+                            .insert(self.requested_page, (self.requested_scale, image));
+                        self.native_failures.remove(&self.requested_page);
+                    }
                 }
-                Err(e) => self.error = e,
+                Err(e) => {
+                    self.native_failures
+                        .insert(self.requested_page, (self.requested_scale, e));
+                }
             }
         }
-        if self.gpui_image.is_none() && self.pending.is_none() && self.error.is_empty() {
-            self.request();
+        let scale = self.effective_scale();
+        let render_scale = scale.clamp(MIN_ZOOM, MAX_ZOOM);
+        let plan =
+            continuous::plan_pages(&self.native_sizes, self.native_viewport, scale, self.widest);
+        if self.native_viewport.is_positive() {
+            self.native_pages.retain(|i, _| plan.wanted.contains(i));
         }
-        self.refresh_fit_resolution();
+        let wanted = if self.native_sizes.is_empty() {
+            &[0][..]
+        } else {
+            plan.wanted.as_slice()
+        };
+        if self.pending.is_none()
+            && let Some(index) = wanted.iter().copied().find(|i| {
+                self.native_pages
+                    .get(i)
+                    .is_none_or(|(s, _)| *s != render_scale)
+                    && self
+                        .native_failures
+                        .get(i)
+                        .is_none_or(|(s, _)| *s != render_scale)
+            })
+        {
+            self.start_page_worker(index, render_scale);
+        }
+        let error = wanted
+            .iter()
+            .find_map(|i| {
+                self.native_failures
+                    .get(i)
+                    .filter(|(s, _)| *s == render_scale)
+            })
+            .map(|(_, e)| e.clone())
+            .unwrap_or_default();
         PdfSummary {
-            page: self.page,
+            visible: plan
+                .visible_pages
+                .into_iter()
+                .map(|(index, rect)| PagePreview {
+                    index,
+                    rect,
+                    pixels: self
+                        .native_pages
+                        .get(&index)
+                        .map(|(_, image)| image.clone()),
+                })
+                .collect(),
             pages: self.pages,
-            scale: self.effective_scale(),
+            scale,
             busy: self.pending.is_some(),
-            error: self.error.clone(),
+            error,
             layout: PageLayout {
-                viewport: self.viewport,
-                size: self.display_size(),
+                viewport: self.native_viewport,
+                extent: plan.extent,
                 fit: self.fit,
             },
         }
     }
-
+    pub fn set_native_viewport(&mut self, rect: egui::Rect) -> bool {
+        if !rect.is_finite() || !rect.is_positive() || rect == self.native_viewport {
+            return false;
+        }
+        self.native_viewport = rect;
+        self.set_viewport(rect.width());
+        true
+    }
     pub(crate) fn is_rendering(&self) -> bool {
         self.pending.is_some()
-    }
-
-    pub fn step_page(&mut self, delta: isize) {
-        if self.pending.is_some() {
-            return;
-        }
-        let next = if delta < 0 {
-            self.page.saturating_sub(delta.unsigned_abs())
-        } else {
-            (self.page + delta as usize).min(self.pages.saturating_sub(1))
-        };
-        if next != self.page {
-            self.page = next;
-            self.request();
-        }
     }
 
     pub fn set_viewport(&mut self, width: f32) -> bool {
@@ -460,52 +505,20 @@ impl PdfView {
         }
     }
 
-    pub fn display_size(&self) -> Option<[f32; 2]> {
-        self.points
-            .map(|size| size.map(|n| n * self.effective_scale()))
-    }
-
-    pub fn gpui_image(&self) -> Option<Arc<gpui::RenderImage>> {
-        self.gpui_image.clone()
-    }
-
     pub fn step_zoom(&mut self, delta: f32) {
-        if self.pending.is_some() {
-            return;
-        }
         let next = manual_zoom(self.effective_scale(), delta);
         if self.fit || (next - self.scale).abs() > 0.01 {
             self.scale = next;
             self.fit = false;
-            self.request();
         }
     }
     #[cfg(feature = "visual-test")]
     pub fn prime(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        let page = render(&self.bytes, self.page, self.scale, &self.cancel)?;
+        let page = render(&self.bytes, 0, self.scale, &self.cancel)?;
         self.widest = page.widest;
-        self.points = Some(page.points);
         self.pages = page.pages;
-        self.continuous.store(ctx, self.page, self.scale, page);
+        self.continuous.store(ctx, 0, self.scale, page);
         Ok(())
-    }
-    fn refresh_fit_resolution(&mut self) {
-        if self.fit && self.points.is_some() && self.pending.is_none() && self.error.is_empty() {
-            let target = self.effective_scale().clamp(MIN_ZOOM, MAX_ZOOM);
-            if (target - self.scale).abs() > 0.01 {
-                self.scale = target;
-                self.start_worker();
-            }
-        }
-    }
-
-    fn request(&mut self) {
-        self.gpui_image = None;
-        self.start_worker();
-    }
-
-    fn start_worker(&mut self) {
-        self.start_page_worker(self.page, self.scale);
     }
     fn start_page_worker(&mut self, index: usize, scale: f32) {
         let bytes = self.bytes.clone();
@@ -575,6 +588,13 @@ mod tests {
         let path = dir.path().join("fixture.pdf");
         std::fs::write(&path, fixture()).unwrap();
         let mut view = PdfView::open(&path).unwrap();
+        view.fit = false;
+        view.scale = 1.;
+        view.requested_scale = 1.;
+        view.set_native_viewport(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(500., 400.),
+        ));
         let (sender, receiver) = mpsc::channel();
         view.pending = Some(receiver);
         let raster = raster(fixture(), 0, 1.).unwrap();
@@ -583,24 +603,61 @@ mod tests {
             .send(Ok(Rendered {
                 image: egui::ColorImage::from_rgba_unmultiplied([width, height], &raster.rgba),
                 pages: raster.page_sizes.len(),
-                points: raster.page_sizes[0],
                 widest: raster.page_sizes[0][0],
                 page_sizes: raster.page_sizes,
             }))
             .unwrap();
         let summary = view.gpui_poll_summary();
         assert_eq!(summary.pages, 2);
-        let image = view.gpui_image().unwrap();
+        let image = view.native_pages[&0].1.clone();
         assert_eq!(image.as_bytes(0).unwrap().len(), width * height * 4);
-        assert!(Arc::ptr_eq(&image, &view.gpui_image().unwrap()));
+        assert!(Arc::ptr_eq(
+            &image,
+            summary.visible[0].pixels.as_ref().unwrap()
+        ));
         let (sender, receiver) = mpsc::channel();
         view.pending = Some(receiver);
-        view.gpui_image = None;
+        assert_eq!(view.requested_page, 1);
         drop(sender);
         let summary = view.gpui_poll_summary();
         assert!(!summary.busy);
         assert!(summary.error.contains("stopped"));
         assert!(view.pending.is_none());
+    }
+    #[test]
+    fn scrolling_releases_distant_pdf_pages_from_the_cache_and_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.pdf");
+        std::fs::write(&path, fixture()).unwrap();
+        let mut view = PdfView::open(&path).unwrap();
+        view.fit = false;
+        view.scale = 1.;
+        view.native_sizes = vec![[300., 800.]; 8];
+        let pixels = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[1, 2, 3, 255]);
+        let first = crate::gpui_pixels::from_color_image(&pixels).unwrap();
+        view.native_pages.insert(0, (1., first.clone()));
+        let mut atlas = crate::gpui_pixels::PresentedImages::default();
+        for (offset, expected) in [(0., 0), (5700., 7)] {
+            view.set_native_viewport(egui::Rect::from_min_size(
+                egui::pos2(0., offset),
+                egui::vec2(500., 400.),
+            ));
+            if expected == 7 {
+                view.native_pages.insert(
+                    7,
+                    (1., crate::gpui_pixels::from_color_image(&pixels).unwrap()),
+                );
+            }
+            let summary = view.gpui_poll_summary();
+            assert_eq!(summary.visible.len(), 1);
+            assert_eq!(summary.visible[0].index, expected);
+            let retired = atlas.replace(summary.visible.into_iter().filter_map(|page| page.pixels));
+            if expected == 7 {
+                assert!(!view.native_pages.contains_key(&0));
+                assert_eq!(retired.len(), 1);
+                assert!(Arc::ptr_eq(&retired[0], &first));
+            }
+        }
     }
     #[test]
     fn worker_reply_validates_the_entire_page_table_before_reading_pixels() {
@@ -613,7 +670,7 @@ mod tests {
         }
         reply.extend([0, 0, 255, 255]);
         let page = decode(&reply, 1).unwrap();
-        assert_eq!(page.points, [600., 320.]);
+        assert_eq!(page.page_sizes[1], [600., 320.]);
         assert_eq!(page.page_sizes, [[300., 180.], [600., 320.]]);
         assert!(decode(&reply, 2).is_err());
         assert!(decode(&reply[..reply.len() - 1], 0).is_err());
@@ -645,37 +702,44 @@ mod tests {
         std::fs::write(&path, fixture()).unwrap();
         let mut view = PdfView::open(&path).unwrap();
         view.widest = first.page_sizes[1][0];
-        view.points = Some(first.page_sizes[0]);
         view.set_viewport(948.);
-        assert_eq!(view.display_size(), Some([450., 270.]));
+        assert_eq!(view.effective_scale(), 1.5);
         view.set_viewport(648.);
-        assert_eq!(view.display_size(), Some([300., 180.]));
+        assert_eq!(view.effective_scale(), 1.);
         view.step_zoom(0.25);
-        assert_eq!(view.display_size(), Some([375., 225.]));
+        assert_eq!(view.effective_scale(), 1.25);
         view.set_viewport(948.);
-        assert_eq!(view.display_size(), Some([375., 225.]));
+        assert_eq!(view.effective_scale(), 1.25);
         view.fit_width();
-        assert_eq!(view.display_size(), Some([450., 270.]));
+        assert_eq!(view.effective_scale(), 1.5);
         view.set_viewport(20.);
         assert_eq!(view.effective_scale(), 0.2);
     }
 
     #[cfg(feature = "visual-test")]
     #[gpui::test]
-    fn native_fit_button_sizes_pdf_pixels_to_the_rendered_pane(cx: &mut gpui::TestAppContext) {
+    fn native_pdf_fits_and_scrolls_between_original_pages(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fixture.pdf");
-        std::fs::write(&path, fixture()).unwrap();
+        let mut source = fixture();
+        let offset = source.windows(7).rposition(|v| v == b"300 180").unwrap();
+        source[offset..offset + 7].copy_from_slice(b"300 980");
+        std::fs::write(&path, &source).unwrap();
         let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
         let pdf = doc.pdf.as_mut().unwrap();
-        let raster = raster(fixture(), 0, 1.).unwrap();
-        let image = egui::ColorImage::from_rgba_unmultiplied(raster.size, &raster.rgba);
         pdf.fit = false;
         pdf.scale = 1.;
-        pdf.points = Some(raster.page_sizes[0]);
-        pdf.widest = raster.page_sizes[0][0];
-        pdf.pages = raster.page_sizes.len();
-        pdf.gpui_image = crate::gpui_pixels::from_color_image(&image);
+        for index in 0..2 {
+            let raster = raster(source.clone(), index, 1.).unwrap();
+            let image = egui::ColorImage::from_rgba_unmultiplied(raster.size, &raster.rgba);
+            pdf.widest = 300.;
+            pdf.pages = raster.page_sizes.len();
+            pdf.native_sizes = raster.page_sizes;
+            pdf.native_pages.insert(
+                index,
+                (1., crate::gpui_pixels::from_color_image(&image).unwrap()),
+            );
+        }
         let window = cx.add_window(|_, cx| {
             let mut root = crate::gpui_ui::TesselGpuiRoot::new_in_dir(
                 Some(dir.path().join("state")),
@@ -691,7 +755,7 @@ mod tests {
         });
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        let before = visual.debug_bounds("pdf-page-image").unwrap();
+        let before = visual.debug_bounds("pdf-page-image-0").unwrap();
         assert_eq!(f32::from(before.size.width), 300.);
         let position = visual.debug_bounds("pdf-fit").unwrap().center();
         visual.simulate_click(position, Default::default());
@@ -700,10 +764,27 @@ mod tests {
         let expected = (f32::from(visual.debug_bounds("pdf-page-viewport").unwrap().size.width)
             - 48.)
             .clamp(60., 1200.);
-        let actual = f32::from(visual.debug_bounds("pdf-page-image").unwrap().size.width);
+        let actual = f32::from(visual.debug_bounds("pdf-page-image-0").unwrap().size.width);
         assert!(
             (expected - actual).abs() < 2.,
             "expected {expected}, got {actual}"
+        );
+        let pane = visual.debug_bounds("pdf-page-viewport").unwrap();
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: pane.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-2500.))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("pdf-page-image-0").is_none());
+        let next = visual
+            .debug_bounds("pdf-page-image-1")
+            .expect("second PDF page");
+        assert!(next.origin.y < pane.origin.y);
+        assert!(
+            ((f32::from(next.size.height) / f32::from(next.size.width)) - 980. / 300.).abs() < 0.03
         );
     }
 

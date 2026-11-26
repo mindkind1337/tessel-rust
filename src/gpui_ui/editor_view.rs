@@ -219,15 +219,8 @@ pub(crate) fn render_document_editor_stage(
     let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
     let content = if let Some(pdf) = &doc.pdf_summary {
-        render_pdf_stage(
-            pdf,
-            doc.media_pixels.as_ref(),
-            PdfTarget::Local(doc.instance_id),
-            french,
-            tokens,
-            cx,
-        )
-        .into_any_element()
+        render_pdf_stage(pdf, PdfTarget::Local(doc.instance_id), french, tokens, cx)
+            .into_any_element()
     } else if doc.office_summary.is_some() {
         render_office_stage(doc, french, tokens, cx).into_any_element()
     } else if let Some(dims) = doc.image_dims {
@@ -1180,7 +1173,6 @@ pub(super) enum PdfTarget {
 
 pub(super) fn render_pdf_stage(
     summary: &crate::pdf::PdfSummary,
-    image: Option<&std::sync::Arc<gpui::RenderImage>>,
     target: PdfTarget,
     french: bool,
     tokens: &GpuiThemeTokens,
@@ -1188,7 +1180,7 @@ pub(super) fn render_pdf_stage(
 ) -> impl IntoElement {
     use crate::remote_panel::control::Command;
     let crate::pdf::PdfSummary {
-        page,
+        visible,
         pages,
         scale,
         busy,
@@ -1210,10 +1202,6 @@ pub(super) fn render_pdf_stage(
             })
             .child(label)
     };
-    let turn = |delta| match target {
-        PdfTarget::Local(_) => GpuiAction::StepPdfPage(delta),
-        PdfTarget::Remote(_) => GpuiAction::Remote(Command::PdfPage(delta)),
-    };
     let zoom = |delta| match target {
         PdfTarget::Local(_) => GpuiAction::StepPdfZoom(delta),
         PdfTarget::Remote(_) => GpuiAction::Remote(Command::PdfZoom(delta)),
@@ -1231,35 +1219,16 @@ pub(super) fn render_pdf_stage(
         .bg(tokens.chrome)
         .border_b_1()
         .border_color(tokens.border)
-        .child(button(
-            "pdf-prev",
-            if french { "Précédent" } else { "Previous" },
-            !busy && *page > 0,
-            turn(-1),
-        ))
-        .child(SharedString::from(format!(
-            "Page {} / {}",
-            page + 1,
-            if *pages > 0 {
-                pages.to_string()
-            } else {
-                "…".into()
-            }
-        )))
-        .child(button(
-            "pdf-next",
-            if french { "Suivant" } else { "Next" },
-            !busy && page + 1 < *pages,
-            turn(1),
-        ))
-        .child(button(
-            "pdf-zoom-out",
-            "−",
-            !busy && *scale > 0.25,
-            zoom(-0.25),
-        ))
+        .when(*pages > 0, |el| {
+            el.child(SharedString::from(format!(
+                "{pages} {}",
+                if *pages == 1 { "page" } else { "pages" }
+            )))
+        })
+        .child(div().flex_1())
+        .child(button("pdf-zoom-out", "−", *scale > 0.25, zoom(-0.25)))
         .child(SharedString::from(format!("{:.0} %", scale * 100.)))
-        .child(button("pdf-zoom-in", "+", !busy && *scale < 4., zoom(0.25)))
+        .child(button("pdf-zoom-in", "+", *scale < 4., zoom(0.25)))
         .child(button(
             "pdf-fit",
             if french {
@@ -1271,20 +1240,34 @@ pub(super) fn render_pdf_stage(
             fit,
         ));
     let owner = cx.weak_entity();
-    let previous_width = layout.viewport;
+    let previous = layout.viewport;
+    let stage_id = match &target {
+        PdfTarget::Local(id) => format!("local-pdf-scroll-{id}"),
+        PdfTarget::Remote(path) => format!("remote-pdf-scroll-{path}"),
+    };
     let probe = canvas(
         |_, _, _| (),
-        move |bounds, (), _, cx| {
-            let width = f32::from(bounds.size.width).round();
-            if width > 0. && width != previous_width {
+        move |bounds, (), window, cx| {
+            let clip = window.content_mask().bounds;
+            let viewport = eframe::egui::Rect::from_min_size(
+                eframe::egui::pos2(
+                    f32::from(clip.origin.x - bounds.origin.x).round(),
+                    f32::from(clip.origin.y - bounds.origin.y).round(),
+                ),
+                eframe::egui::vec2(
+                    f32::from(clip.size.width).round(),
+                    f32::from(clip.size.height).round(),
+                ),
+            );
+            if viewport.is_positive() && viewport != previous {
                 let target = target.clone();
                 let owner = owner.clone();
                 cx.defer(move |cx| {
                     let _ = owner.update(cx, |root, cx| {
                         let changed = match &target {
-                            PdfTarget::Local(id) => root.app.set_local_pdf_viewport(*id, width),
+                            PdfTarget::Local(id) => root.app.set_local_pdf_viewport(*id, viewport),
                             PdfTarget::Remote(path) => {
-                                root.app.set_remote_pdf_viewport(path, width)
+                                root.app.set_remote_pdf_viewport(path, viewport)
                             }
                         };
                         if changed {
@@ -1298,45 +1281,57 @@ pub(super) fn render_pdf_stage(
     .absolute()
     .top_0()
     .left_0()
-    .w_full()
-    .h(px(1.));
-    let mut stage = div()
-        .id("native-media-pixels")
+    .size_full();
+    let mut content = div()
+        .relative()
+        .flex_none()
+        .w(px(layout.extent.x))
+        .h(px(layout.extent.y))
+        .min_w_full()
+        .min_h_full();
+    for page in visible {
+        let index = page.index;
+        let rect = page.rect;
+        let placeholder = div()
+            .absolute()
+            .left(px(rect.left()))
+            .top(px(rect.top()))
+            .w(px(rect.width()))
+            .h(px(rect.height()))
+            .bg(gpui::white());
+        content = content.child(placeholder.when_some(page.pixels.clone(), |el, pixels| {
+            el.child(
+                img(pixels)
+                    .id(("pdf-page-image", index))
+                    .debug_selector(move || format!("pdf-page-image-{index}"))
+                    .size_full(),
+            )
+        }));
+    }
+    let stage = div()
+        .id(SharedString::from(stage_id))
         .debug_selector(|| "pdf-page-viewport".into())
         .flex_1()
         .min_h_0()
         .w_full()
         .overflow_scroll()
-        .p(px(24.));
-    if let Some(image) = image
-        && let Some([width, height]) = layout.size
-    {
-        stage = stage.child(
-            img(image.clone())
-                .flex_none()
-                .mx_auto()
-                .id("pdf-page-image")
-                .debug_selector(|| "pdf-page-image".into())
-                .w(px(width))
-                .h(px(height)),
-        );
-    } else if !error.is_empty() {
-        stage = stage.child(SharedString::from(error.clone()));
-    } else if *busy {
-        stage = stage.child(if french {
-            "Chargement de la page…"
-        } else {
-            "Rendering page…"
-        });
-    }
+        .child(content.child(probe));
     div()
-        .relative()
         .size_full()
         .flex()
         .flex_col()
         .child(toolbar)
+        .when(!error.is_empty(), |el| {
+            el.child(SharedString::from(error.clone()))
+        })
+        .when(*pages == 0 && *busy, |el| {
+            el.child(if french {
+                "Chargement…"
+            } else {
+                "Loading…"
+            })
+        })
         .child(stage)
-        .child(probe)
 }
 
 fn render_office_stage(
