@@ -1071,6 +1071,61 @@ fn render_share_modal(
                                 cx,
                             ));
                         }
+                        if !files.busy {
+                            content = content.child(modal_btn(
+                                "guest-versions",
+                                if french {
+                                    "Historique local"
+                                } else {
+                                    "Local History"
+                                }
+                                .into(),
+                                false,
+                                tokens,
+                                GpuiAction::Share(ShareGpuiAction::GuestVersion(
+                                    doc.key.clone(),
+                                    None,
+                                )),
+                                cx,
+                            ));
+                        }
+                        if let Some(rows) = &files.versions {
+                            let mut list = div()
+                                .id("guest-version-list")
+                                .max_h(px(140.))
+                                .overflow_y_scroll();
+                            if rows.is_empty() {
+                                list = list.child(if french {
+                                    "Aucune sauvegarde."
+                                } else {
+                                    "No saved versions."
+                                });
+                            }
+                            for (index, row) in rows.iter().enumerate() {
+                                list = list.child(modal_btn(
+                                    format!("guest-version-{index}"),
+                                    row.label(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::Share(ShareGpuiAction::GuestVersion(
+                                        doc.key.clone(),
+                                        Some(row.id.clone()),
+                                    )),
+                                    cx,
+                                ));
+                            }
+                            content = content.child(list);
+                        }
+                        if let Some(text) = &files.version_text {
+                            content = content.child(
+                                div()
+                                    .id("guest-version-text")
+                                    .debug_selector(|| "guest-version-text".into())
+                                    .max_h(px(180.))
+                                    .overflow_y_scroll()
+                                    .child(text.as_ref().clone()),
+                            );
+                        }
                         if let Some(page) = &files.history {
                             if page.uncommitted {
                                 content = content.child(if french {

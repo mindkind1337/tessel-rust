@@ -27,6 +27,7 @@ impl Drop for ReadSlot {
     }
 }
 struct Grant {
+    history: Option<HistoryStore>,
     ignored: Arc<ignored_paths::IgnoredPaths>,
     roots: Vec<PathBuf>,
     project: SharedProject,
@@ -49,6 +50,7 @@ fn authorize(inner: &HostInner, guest: &str, project: Option<u64>) -> Result<Gra
         return Err("Guest session is not active.".into());
     }
     Ok(Grant {
+        history: inner.history.clone(),
         ignored: inner.ignored_paths.clone(),
         roots: inner
             .shared_projects
@@ -164,6 +166,52 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             };
             Ok(json!({"entries": filtered, "readOnly": !rights.edit}))
         }
+        "history.local" | "history.localRead" => {
+            let root = &grant.project.path;
+            let relative = req
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or("File unavailable")?;
+            let target = share_new_path_checked(root, relative, hide_ignored)?;
+            match std::fs::symlink_metadata(&target) {
+                Ok(meta) if meta.is_file() => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                _ => return Err("File unavailable".into()),
+            }
+            check_path(grant, relative, &target)?;
+            let store = grant.history.as_ref().ok_or("History unavailable")?;
+            let profile = store
+                .profile
+                .canonicalize()
+                .map_err(|_| "History unavailable")?;
+            if grant
+                .roots
+                .iter()
+                .any(|r| profile.starts_with(r) || r.starts_with(profile.join("History")))
+            {
+                return Err("History unavailable".into());
+            }
+            let id = if req["op"] == "history.localRead" {
+                Some(
+                    req["id"]
+                        .as_str()
+                        .filter(|s| {
+                            (6..=32).contains(&s.len())
+                                && s.bytes()
+                                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+                        })
+                        .ok_or("Invalid version")?,
+                )
+            } else {
+                None
+            };
+            let mut result =
+                (store.read)(&profile, &target, id).map_err(|_| "History unavailable")?;
+            if id.is_none() {
+                result["rel"] = json!(relative);
+            }
+            Ok(result)
+        }
         "files.read" => {
             let proj = &grant.project;
             let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
@@ -219,6 +267,7 @@ fn legacy_grant(inner: &HostInner, token: &[u8]) -> Result<Grant> {
         .find(|p| invite.projects.contains(&p.id))
         .ok_or("No shared project")?;
     Ok(Grant {
+        history: None,
         project: project.clone(),
         rights: ShareRights::view_only(),
         hide: inner.settings.hide_ignored,
@@ -293,6 +342,49 @@ mod tests {
             },
         });
         (dir, host)
+    }
+
+    #[test]
+    fn guest_saved_versions_recheck_project_paths_and_invite_scope() {
+        let (dir, host) = fixture();
+        let profile = tempfile::tempdir().unwrap();
+        let request = |op: &str, path: &str, id: &str, project| {
+            dispatch_session_rpc(
+                &host.inner,
+                "guest",
+                &json!({"op":op,"path":path,"id":id,"projectId":project}),
+            )
+        };
+        host.set_history(Some(HistoryStore {
+            profile: profile.path().to_owned(),
+            read: |_, file, id| {
+                assert_eq!(file.file_name().unwrap(), "sample.txt");
+                Ok(if id.is_none() {
+                    json!({"entries":[]})
+                } else {
+                    json!({"text":"saved"})
+                })
+            },
+        }));
+        std::fs::write(dir.path().join("sample.txt"), "current").unwrap();
+        assert_eq!(
+            request("history.local", "sample.txt", "", 1)["result"]["rel"],
+            "sample.txt"
+        );
+        assert_eq!(
+            request("history.localRead", "sample.txt", "abc123", 1)["result"]["text"],
+            "saved"
+        );
+        std::fs::remove_file(dir.path().join("sample.txt")).unwrap();
+        assert!(request("history.local", "sample.txt", "", 1)["result"]["entries"].is_array());
+        for (file, id, project) in [
+            (".git/config", "abc123", 1),
+            ("../outside", "abc123", 1),
+            ("sample.txt", "../id", 1),
+            ("sample.txt", "abc123", 2),
+        ] {
+            assert!(request("history.localRead", file, id, project)["error"].is_string());
+        }
     }
 
     const IGNORE_PROBE: &str = "TESSEL_SYNTHETIC_IGNORE_PROBE";

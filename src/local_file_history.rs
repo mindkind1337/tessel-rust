@@ -23,6 +23,8 @@ pub struct Entry {
     pub id: String,
     pub timestamp: i64,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -81,6 +83,51 @@ pub fn list(profile: &Path, file: &Path) -> io::Result<Vec<Entry>> {
     let mut entries = index(&dir, file)?.entries;
     entries.reverse();
     Ok(entries)
+}
+
+/// Project permission checks happen in the host dispatcher. Only return versions
+/// recorded against exactly this resource, including on case-sensitive volumes.
+pub(crate) fn shared_read(
+    profile: &Path,
+    file: &Path,
+    id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let dir = folder(profile, file).ok_or("Invalid history path")?;
+    let exact = format!(
+        "{:x}",
+        Sha256::digest(file.to_str().ok_or("Invalid resource")?.as_bytes())
+    );
+    for p in [
+        profile.join("History"),
+        dir.clone(),
+        dir.join("entries.json"),
+    ] {
+        match p.canonicalize() {
+            Ok(real) if real == p => {}
+            Err(e)
+                if e.kind() == io::ErrorKind::NotFound
+                    && fs::symlink_metadata(&p)
+                        .is_err_and(|e| e.kind() == io::ErrorKind::NotFound) => {}
+            _ => return Err("History unavailable".into()),
+        }
+    }
+    let index = index(&dir, file).map_err(|_| "History unavailable")?;
+    let mut entries = index
+        .entries
+        .into_iter()
+        .rev()
+        .filter(|e| e.resource_key.as_ref() == Some(&exact));
+    if let Some(id) = id {
+        let entry = entries.find(|e| e.id == id).ok_or("Version unavailable")?;
+        let path = dir.join(entry.id);
+        if path.canonicalize().ok().as_ref() != Some(&path) {
+            return Err("Version unavailable".into());
+        }
+        return Ok(serde_json::json!({"text":bounded_text(&path, MAX_BYTES)?}));
+    }
+    Ok(
+        serde_json::json!({"entries":entries.map(|e| serde_json::json!({"id":e.id,"source":if e.source=="save" {"save"} else {"other"},"timestamp":e.timestamp})).collect::<Vec<_>>() }),
+    )
 }
 
 pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String, String> {
@@ -197,7 +244,16 @@ fn append(dir: &Path, file: &Path, text: &str) -> io::Result<bool> {
         .open(dir.join(".lock"))?;
     fs2::FileExt::lock_exclusive(&lock)?;
     let mut index = index(dir, file)?;
+    let resource_key = format!(
+        "{:x}",
+        Sha256::digest(
+            file.to_str()
+                .ok_or_else(|| io::Error::other("Invalid resource"))?
+                .as_bytes()
+        )
+    );
     if let Some(last) = index.entries.last()
+        && last.resource_key.as_ref() == Some(&resource_key)
         && fs::read(dir.join(&last.id)).is_ok_and(|s| s == text.as_bytes())
     {
         return Ok(false);
@@ -214,6 +270,7 @@ fn append(dir: &Path, file: &Path, text: &str) -> io::Result<bool> {
         id,
         timestamp: chrono::Utc::now().timestamp_millis(),
         source: "save".into(),
+        resource_key: Some(resource_key),
     });
     let obsolete = (index.entries.len() > LIMIT).then(|| index.entries.remove(0));
     if let Err(e) =
@@ -231,6 +288,26 @@ fn append(dir: &Path, file: &Path, text: &str) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_saved_versions_only_return_entries_for_the_exact_resource() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let upper = root.join("Sample.txt");
+        let lower = root.join("sample.txt");
+        record(&root, &upper, "first").unwrap();
+        record(&root, &lower, "second").unwrap();
+        let entries = shared_read(&root, &upper, None).unwrap();
+        let rows = entries["entries"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].as_object().unwrap().len(), 3);
+        let id = rows[0]["id"].as_str().unwrap();
+        assert_eq!(
+            shared_read(&root, &upper, Some(id)).unwrap()["text"],
+            "first"
+        );
+        assert!(shared_read(&root, &lower, Some(id)).is_err());
+        assert!(shared_read(&root, &upper, Some("../entries.json")).is_err());
+    }
     #[test]
     fn local_file_history_failed_save_preserves_versions_and_original_file() {
         let dir = tempfile::tempdir().unwrap();

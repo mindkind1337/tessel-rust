@@ -8,6 +8,8 @@ pub(crate) struct GuestFilesView {
     pub notices: Vec<String>,
     pub busy: bool,
     pub history: Option<std::sync::Arc<super::guest_history::Page>>,
+    pub versions: Option<std::sync::Arc<Vec<super::guest_versions::Version>>>,
+    pub version_text: Option<std::sync::Arc<String>>,
     pub more: bool,
 }
 
@@ -42,13 +44,26 @@ impl SharePanel {
                 error.clone()
             });
         }
+        if self.guest_versions.failed {
+            notices.push(
+                if french {
+                    "Historique local indisponible."
+                } else {
+                    "Local history unavailable."
+                }
+                .into(),
+            );
+        }
         Some(GuestFilesView {
+            versions: self.guest_versions.rows.clone(),
+            version_text: self.guest_versions.text.clone(),
             directory: self.guest_file_listing.path.clone(),
             entries: self.guest_file_listing.entries.clone(),
             document: doc,
             notices,
             busy: self.guest_file_listing.busy()
                 || self.guest_file_editor.busy()
+                || self.guest_versions.busy()
                 || self.guest_history.busy(),
             history: self.guest_history.page.clone(),
             more: self.guest_history.page.as_ref().is_some_and(|p| p.has_more)
@@ -231,6 +246,62 @@ impl SharePanel {
             {
                 self.guest_history.bind(Some(&document.key));
                 self.guest_history.show(ui, french, session);
+                self.guest_versions.bind(Some(&document.key));
+                let versions = &mut self.guest_versions;
+                if ui
+                    .add_enabled(
+                        !versions.busy(),
+                        egui::Button::new(if french {
+                            "Historique local"
+                        } else {
+                            "Local History"
+                        }),
+                    )
+                    .clicked()
+                {
+                    versions.request(session, None);
+                }
+                let mut selected = None;
+                if let Some(rows) = &versions.rows {
+                    if rows.is_empty() {
+                        ui.label(if french {
+                            "Aucune sauvegarde."
+                        } else {
+                            "No saved versions."
+                        });
+                    }
+                    ScrollArea::vertical()
+                        .id_salt("guest-version-list")
+                        .max_height(120.)
+                        .show(ui, |ui| {
+                            for row in rows.iter() {
+                                if ui
+                                    .add_enabled(!versions.busy(), egui::Button::new(row.label()))
+                                    .clicked()
+                                {
+                                    selected = Some(row.id.clone());
+                                }
+                            }
+                        });
+                }
+                if let Some(id) = selected {
+                    versions.request(session, Some(&id));
+                }
+                if versions.failed {
+                    ui.label(if french {
+                        "Historique local indisponible."
+                    } else {
+                        "Local history unavailable."
+                    });
+                }
+                if let Some(text) = &versions.text {
+                    ScrollArea::both()
+                        .id_salt("guest-version-text")
+                        .max_height(180.)
+                        .show(ui, |ui| {
+                            ui.monospace(text.as_str());
+                        });
+                }
             }
             ScrollArea::vertical()
                 .id_salt("guest-file-content")

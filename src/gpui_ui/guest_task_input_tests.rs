@@ -311,7 +311,7 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
 
 #[gpui::test]
 fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
-    let (dir, _host, _cards, view, scope) = joined_guest(cx);
+    let (dir, host, _cards, view, scope) = joined_guest(cx);
     let project = dir.path().join("project-1");
     std::fs::write(project.join("notes.txt"), "guest preview").unwrap();
     for args in [
@@ -340,11 +340,21 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    let profile = dir.path().join("private-history");
+    let file = project.join("notes.txt").canonicalize().unwrap();
+    crate::local_file_history::record(&profile, &file, "saved version before editing").unwrap();
+    host.set_history(Some(crate::share::HistoryStore {
+        profile,
+        read: crate::local_file_history::shared_read,
+    }));
     for selector in [
         "guest-tab-files",
         "guest-entry-0",
         "guest-history-refresh",
         "guest-history-commit",
+        "guest-versions",
+        "guest-version-0",
+        "guest-version-text",
     ] {
         let deadline = Instant::now() + Duration::from_secs(18);
         loop {
@@ -357,7 +367,7 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             cx.refresh().unwrap();
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             if let Some(bounds) = visual.debug_bounds(selector) {
-                if selector != "guest-history-commit" {
+                if !matches!(selector, "guest-history-commit" | "guest-version-text") {
                     visual.simulate_click(bounds.center(), Default::default());
                 }
                 break;
@@ -374,6 +384,10 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             .share
             .guest_files
             .unwrap();
+        assert_eq!(
+            files.version_text.unwrap().as_str(),
+            "saved version before editing"
+        );
         assert_eq!(files.document.unwrap().text.as_str(), "guest preview");
         assert_eq!(
             files.history.unwrap().items[0].message,

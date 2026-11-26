@@ -1224,7 +1224,15 @@ struct GuestSlot {
     decision: GuestDecision,
 }
 
+pub(crate) type HistoryRead = fn(&Path, &Path, Option<&str>) -> Result<Value>;
+#[derive(Clone)]
+pub(crate) struct HistoryStore {
+    pub profile: PathBuf,
+    pub read: HistoryRead,
+}
+
 struct HostInner {
+    history: Option<HistoryStore>,
     ignored_paths: Arc<ignored_paths::IgnoredPaths>,
     stopped: Arc<AtomicBool>,
     task_board: task_board::TaskBoard,
@@ -1366,6 +1374,10 @@ pub struct Host {
 }
 
 impl Host {
+    pub(crate) fn set_history(&self, history: Option<HistoryStore>) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).history = history;
+    }
+
     /// Backwards-compatible single-folder starter (used by legacy fixtures and tests).
     pub fn start(root: &Path, bind: SocketAddr, advertise: IpAddr) -> Result<Self> {
         let canonical = root.canonicalize().map_err(|e| e.to_string())?;
@@ -1433,6 +1445,7 @@ impl Host {
 
         let stop = Arc::new(AtomicBool::new(false));
         let mut inner_data = HostInner {
+            history: None,
             ignored_paths: Arc::new(ignored_paths::IgnoredPaths::default()),
             stopped: Arc::clone(&stop),
             task_board: task_board::TaskBoard::default(),
@@ -2269,7 +2282,10 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     ) {
         return guest_file_mutations::dispatch(inner, guest_id, req);
     }
-    if matches!(op, "files.list" | "files.read") {
+    if matches!(
+        op,
+        "files.list" | "files.read" | "history.local" | "history.localRead"
+    ) {
         return guest_file_reads::dispatch(inner, guest_id, req);
     }
     if op.starts_with("scm.") {

@@ -9204,6 +9204,13 @@ impl Tessel {
     }
 
     fn sync_live_share(&mut self) {
+        if self.share.history_store.is_none() {
+            self.share.history_store =
+                self.store.as_ref().map(|store| crate::share::HistoryStore {
+                    profile: store.directory().to_owned(),
+                    read: crate::local_file_history::shared_read,
+                });
+        }
         let all_projects = self.live_share_project_list();
         let (panes, pages) = if self.share.hosting() {
             let panes = self

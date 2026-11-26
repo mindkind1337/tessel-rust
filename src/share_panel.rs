@@ -162,6 +162,7 @@ pub enum ShareUiAction {
 }
 
 pub struct SharePanel {
+    pub(crate) history_store: Option<crate::share::HistoryStore>,
     host: Option<Host>,
     guest_session: Option<GuestSession>,
     guest_identity_hex: String,
@@ -198,6 +199,7 @@ pub struct SharePanel {
     pub guest_term_input: String,
     guest_file_editor: crate::guest_file_editor::Editor,
     guest_file_listing: crate::guest_file_listing::Listing,
+    guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
@@ -220,6 +222,7 @@ impl Default for SharePanel {
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_else(|_| "Host".into());
         Self {
+            history_store: None,
             host: None,
             guest_session: None,
             guest_identity_hex: String::new(),
@@ -249,6 +252,7 @@ impl Default for SharePanel {
             guest_term_input: String::new(),
             guest_file_editor: Default::default(),
             guest_file_listing: Default::default(),
+            guest_versions: Default::default(),
             guest_history: Default::default(),
             guest_files_scope: None,
             confirm_guest_file_discard: false,
@@ -384,6 +388,7 @@ impl SharePanel {
         self.guest_file_editor.bind(None, false);
         self.guest_file_listing.bind(None);
         self.guest_history.bind(None);
+        self.guest_versions.bind(None);
         self.guest_git.bind(None, false);
         self.confirm_guest_git_discard = false;
         self.guest_files_scope = None;
@@ -403,6 +408,7 @@ impl SharePanel {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
+            || self.guest_versions.busy()
             || self.guest_history.busy()
             || self.guest_git.busy()
     }
@@ -457,6 +463,8 @@ impl SharePanel {
             .as_ref()
             .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
             .map(|doc| &doc.key);
+        changed |= self.guest_versions.bind(key);
+        changed |= self.guest_versions.poll(Instant::now());
         changed |= self.guest_history.bind(key);
         changed |= self.guest_history.poll(Instant::now());
         if self.guest_sub_view == GuestSubView::Files
@@ -507,6 +515,7 @@ impl SharePanel {
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
             self.guest_history.bind(None);
+            self.guest_versions.bind(None);
             self.confirm_guest_file_discard = false;
         }
         self.guest_files_scope = scope;
@@ -665,6 +674,7 @@ impl SharePanel {
             ip,
         ) {
             Ok(host) => {
+                host.set_history(self.history_store.clone());
                 self.host = Some(host);
                 self.confirm_stop_sharing = false;
                 self.error.clear();
@@ -3356,6 +3366,7 @@ pub(crate) enum ShareGpuiAction {
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
     GuestOpenFile(crate::guest_file_editor::Key),
+    GuestVersion(crate::guest_file_editor::Key, Option<String>),
     GuestHistory(crate::guest_file_editor::Key, bool),
     GuestProject {
         session: u64,
@@ -3614,6 +3625,20 @@ impl SharePanel {
             ShareGpuiAction::GuestOpenFile(key) => {
                 self.open_guest_file(key);
             }
+            ShareGpuiAction::GuestVersion(key, id) => {
+                self.poll_guest_scope();
+                if self.guest_files_scope == Some(key.scope)
+                    && self
+                        .guest_file_editor
+                        .document
+                        .as_ref()
+                        .is_some_and(|d| d.key == key)
+                    && let Some(session) = &self.guest_session
+                {
+                    self.guest_versions.bind(Some(&key));
+                    self.guest_versions.request(session, id.as_deref());
+                }
+            }
             ShareGpuiAction::GuestHistory(key, more) => {
                 self.poll_guest_scope();
                 if self.guest_files_scope == Some(key.scope)
@@ -3721,6 +3746,8 @@ impl SharePanel {
 mod guest_files;
 #[path = "share_panel/guest_history.rs"]
 mod guest_history;
+#[path = "share_panel/guest_versions.rs"]
+mod guest_versions;
 
 #[path = "share_panel/guest_git.rs"]
 mod guest_git;
