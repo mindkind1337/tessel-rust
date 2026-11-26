@@ -347,8 +347,12 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
         profile,
         read: crate::local_file_history::shared_read,
     }));
+    let mut checked_download = false;
     for selector in [
         "guest-tab-files",
+        "guest-entry-0",
+        "guest-download-0",
+        "guest-file-menu-0",
         "guest-entry-0",
         "guest-history-refresh",
         "guest-history-commit",
@@ -368,6 +372,23 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             cx.refresh().unwrap();
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             if let Some(bounds) = visual.debug_bounds(selector) {
+                if selector == "guest-entry-0" && !checked_download {
+                    visual.simulate_mouse_down(
+                        bounds.center(),
+                        gpui::MouseButton::Right,
+                        Default::default(),
+                    );
+                    visual.simulate_mouse_up(
+                        bounds.center(),
+                        gpui::MouseButton::Right,
+                        Default::default(),
+                    );
+                    checked_download = true;
+                    break;
+                }
+                if selector == "guest-download-0" {
+                    break;
+                }
                 if selector == "guest-version-0" {
                     std::fs::write(&file, "changed on host after opening").unwrap();
                 }

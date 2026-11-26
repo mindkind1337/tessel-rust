@@ -212,11 +212,14 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
             }
             Ok(result)
         }
-        "files.read" => {
+        "files.read" | "fs.download" => {
             let proj = &grant.project;
             let relative = req.get("path").and_then(Value::as_str).unwrap_or("");
             let target = share_path_checked(&proj.path, relative, hide_ignored)?;
             check_path(grant, relative, &target)?;
+            if !target.is_file() {
+                return Err("File unavailable".into());
+            }
             let hooks = hook_paths::discover(&proj.path, &grant.roots)?;
             let mut bytes = Vec::new();
             std::fs::File::open(&target)
@@ -226,6 +229,11 @@ fn read(grant: &Grant, req: &Value) -> Result<Value> {
                 .map_err(|_| "File read failed")?;
             if bytes.len() > MAX_FILE {
                 return Err("Guest file limit is 8 MiB.".into());
+            }
+            if req["op"] == "fs.download" {
+                return Ok(
+                    json!({"size":bytes.len(),"base64":base64::engine::general_purpose::STANDARD.encode(bytes)}),
+                );
             }
             Ok(json!({
                 "name": target.file_name().unwrap_or_default().to_string_lossy(),

@@ -1027,14 +1027,61 @@ fn render_share_modal(
                                 path: entry.path.clone(),
                             })
                         };
-                        content = content.child(modal_btn(
+                        let button = modal_btn(
                             format!("guest-entry-{index}"),
                             format!("{} {}", if entry.directory { "▸" } else { "·" }, entry.name),
                             false,
                             tokens,
                             GpuiAction::Share(action),
                             cx,
-                        ));
+                        );
+                        if entry.directory {
+                            content = content.child(button);
+                        } else {
+                            let key = crate::guest_file_editor::Key {
+                                scope,
+                                path: entry.path.clone(),
+                            };
+                            let menu =
+                                GpuiAction::Share(ShareGpuiAction::GuestFileMenu(key.clone()));
+                            let right_click = menu.clone();
+                            content = content.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Right,
+                                        cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.dispatch_action(right_click.clone(), cx);
+                                        }),
+                                    )
+                                    .child(button)
+                                    .child(modal_btn(
+                                        format!("guest-file-menu-{index}"),
+                                        "⋯".into(),
+                                        false,
+                                        tokens,
+                                        menu,
+                                        cx,
+                                    )),
+                            );
+                            if files.download_menu.as_ref() == Some(&key) {
+                                content = content.child(modal_btn(
+                                    format!("guest-download-{index}"),
+                                    if french {
+                                        "Télécharger…"
+                                    } else {
+                                        "Download…"
+                                    }
+                                    .into(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::Share(ShareGpuiAction::GuestDownload(key)),
+                                    cx,
+                                ));
+                            }
+                        }
                     }
                     if let Some(doc) = &files.document {
                         let (preview, partial) = doc.preview();

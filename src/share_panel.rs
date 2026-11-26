@@ -199,6 +199,7 @@ pub struct SharePanel {
     pub guest_term_input: String,
     guest_file_editor: crate::guest_file_editor::Editor,
     guest_file_listing: crate::guest_file_listing::Listing,
+    guest_download: guest_download::Download,
     guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
@@ -252,6 +253,7 @@ impl Default for SharePanel {
             guest_term_input: String::new(),
             guest_file_editor: Default::default(),
             guest_file_listing: Default::default(),
+            guest_download: Default::default(),
             guest_versions: Default::default(),
             guest_history: Default::default(),
             guest_files_scope: None,
@@ -408,6 +410,7 @@ impl SharePanel {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
+            || self.guest_download.busy()
             || self.guest_versions.busy()
             || self.guest_history.busy()
             || self.guest_git.busy()
@@ -463,6 +466,7 @@ impl SharePanel {
             .as_ref()
             .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
             .map(|doc| &doc.key);
+        changed |= self.guest_download.poll();
         changed |= self.guest_versions.bind(key);
         changed |= self
             .guest_versions
@@ -516,6 +520,7 @@ impl SharePanel {
         changed |= self.guest_file_listing.bind(scope);
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
+            self.guest_download = Default::default();
             self.guest_history.bind(None);
             self.guest_versions.bind(None);
             self.confirm_guest_file_discard = false;
@@ -1637,7 +1642,15 @@ impl SharePanel {
         });
         ui.separator();
 
-        ScrollArea::vertical()
+        // The centered modal measures its scroll area before remote rows arrive.
+        // Let the Files view grow to the available height after that first frame.
+        let scroll = ScrollArea::vertical();
+        let scroll = if self.tab == DialogTab::Join && self.guest_sub_view == GuestSubView::Files {
+            scroll.min_scrolled_height(max_scroll_h)
+        } else {
+            scroll
+        };
+        scroll
             .id_salt("live-share-dialog-scroll")
             .max_height(max_scroll_h)
             .show(ui, |ui| {
@@ -3367,6 +3380,8 @@ pub(crate) enum ShareGpuiAction {
     GuestDraftTouch(crate::guest_task_board::Scope),
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
+    GuestFileMenu(crate::guest_file_editor::Key),
+    GuestDownload(crate::guest_file_editor::Key),
     GuestOpenFile(crate::guest_file_editor::Key),
     GuestVersion(crate::guest_file_editor::Key, Option<String>),
     GuestHistory(crate::guest_file_editor::Key, bool),
@@ -3624,6 +3639,14 @@ impl SharePanel {
                     self.list_guest_files(path);
                 }
             }
+            ShareGpuiAction::GuestFileMenu(key) => {
+                self.poll_guest_scope();
+                if self.downloadable(&key) {
+                    self.guest_download.menu =
+                        (self.guest_download.menu.as_ref() != Some(&key)).then_some(key);
+                }
+            }
+            ShareGpuiAction::GuestDownload(key) => self.choose_guest_download(&key),
             ShareGpuiAction::GuestOpenFile(key) => {
                 self.open_guest_file(key);
             }
@@ -3744,6 +3767,8 @@ impl SharePanel {
     }
 }
 
+#[path = "share_panel/guest_download.rs"]
+mod guest_download;
 #[path = "share_panel/guest_files.rs"]
 mod guest_files;
 #[path = "share_panel/guest_history.rs"]

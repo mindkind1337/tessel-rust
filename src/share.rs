@@ -29,7 +29,7 @@ use subtle::ConstantTimeEq;
 type Result<T> = std::result::Result<T, String>;
 
 const MAX_REQUEST: usize = 256 * 1024;
-const MAX_FILE: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_FILE: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE: usize = 12 * 1024 * 1024;
 pub const MAX_INVITES: usize = 20;
 pub const MAX_TRUSTED: usize = 64;
@@ -2284,7 +2284,7 @@ fn dispatch_session_rpc(inner: &Arc<Mutex<HostInner>>, guest_id: &str, req: &Val
     }
     if matches!(
         op,
-        "files.list" | "files.read" | "history.local" | "history.localRead"
+        "files.list" | "files.read" | "fs.download" | "history.local" | "history.localRead"
     ) {
         return guest_file_reads::dispatch(inner, guest_id, req);
     }

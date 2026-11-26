@@ -2,6 +2,7 @@ use super::*;
 use crate::guest_file_editor::Key as FileKey;
 #[derive(Clone, Debug)]
 pub(crate) struct GuestFilesView {
+    pub download_menu: Option<FileKey>,
     pub directory: String,
     pub entries: Vec<crate::guest_file_listing::Entry>,
     pub document: Option<crate::guest_file_editor::Document>,
@@ -58,7 +59,9 @@ impl SharePanel {
                 .into(),
             );
         }
+        notices.extend(self.guest_download.status(french));
         Some(GuestFilesView {
+            download_menu: self.guest_download.menu.clone(),
             versions: self.guest_versions.rows.clone(),
             version_diff: self.guest_versions.diff.clone(),
             version_text: self.guest_versions.text.clone(),
@@ -159,25 +162,58 @@ impl SharePanel {
         if let Some(notice) = &self.guest_file_listing.notice {
             ui.colored_label(Color32::LIGHT_RED, notice.text(french));
         }
+        if let Some(status) = self.guest_download.status(french) {
+            ui.label(status);
+        }
+        let mut download = None;
         let mut open = None;
         for entry in &self.guest_file_listing.entries {
-            if ui
-                .add_enabled(
-                    !self.guest_file_listing.busy() && !self.guest_file_editor.busy(),
-                    egui::Button::new(format!(
-                        "{} {}",
-                        if entry.directory { "▸" } else { "·" },
-                        entry.name
-                    )),
-                )
-                .clicked()
+            let row = ui.add_enabled(
+                !self.guest_file_listing.busy() && !self.guest_file_editor.busy(),
+                egui::Button::new(format!(
+                    "{} {}",
+                    if entry.directory { "▸" } else { "·" },
+                    entry.name
+                )),
+            );
+            if !entry.directory
+                && let Some(scope) = self.guest_files_scope
             {
+                let key = FileKey {
+                    scope,
+                    path: entry.path.clone(),
+                };
+                if row.secondary_clicked() {
+                    self.guest_download.menu = Some(key.clone());
+                }
+                if self.guest_download.menu.as_ref() == Some(&key)
+                    && ui
+                        .add_enabled(
+                            !self.guest_download.busy(),
+                            egui::Button::new(if french {
+                                "Télécharger…"
+                            } else {
+                                "Download…"
+                            }),
+                        )
+                        .clicked()
+                {
+                    download = Some(entry.path.clone());
+                }
+            }
+            if row.clicked() {
+                self.guest_download.menu = None;
                 if entry.directory {
                     list = Some(entry.path.clone());
                 } else {
                     open = Some(entry.path.clone());
                 }
             }
+        }
+        if let Some(path) = download
+            && let Some(scope) = self.guest_files_scope
+        {
+            self.choose_guest_download(&FileKey { scope, path });
         }
         if let Some(path) = list {
             self.list_guest_files(path);

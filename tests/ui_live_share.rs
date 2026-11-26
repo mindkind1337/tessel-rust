@@ -652,6 +652,74 @@ fn draw_guest_files(
     )
 }
 #[test]
+fn guest_download_context_and_binary_transfer_preserve_original_bytes() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let bytes = [0, 0xff, 0x80, 0, 1, 3].repeat(512 * 1024);
+    std::fs::write(dir.path().join("p1/a.txt"), &bytes).unwrap();
+    let dest = dir.path().join("chosen.bin");
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        panel.poll_guest_requests();
+        let out = draw_guest_files(&ctx, &mut panel, vec![]);
+        if find_text_center(&out.shapes, "· a.txt").is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for _ in 0..3 {
+        draw_guest_files(&ctx, &mut panel, vec![]);
+    }
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    let pos = find_text_center(&out.shapes, "· a.txt").unwrap();
+    draw_guest_files(&ctx, &mut panel, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        draw_guest_files(
+            &ctx,
+            &mut panel,
+            vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+    let mut out = draw_guest_files(&ctx, &mut panel, vec![]);
+    for _ in 0..8 {
+        if has_text_containing(&out.shapes, "Download") {
+            break;
+        }
+        out = draw_guest_files(&ctx, &mut panel, vec![]);
+    }
+    assert!(
+        has_text_containing(&out.shapes, "Download"),
+        "{:?}",
+        painted_texts(&out.shapes)
+    );
+    let key = guest_file_editor::Key {
+        scope: panel.guest_task_snapshot().scope.unwrap(),
+        path: "a.txt".into(),
+    };
+    for expected in [bytes.as_slice(), b"existing file".as_slice()] {
+        if expected != bytes {
+            std::fs::write(&dest, expected).unwrap();
+        }
+        panel.download_guest_file(&key, |name| {
+            assert_eq!(name, "a.txt");
+            Some(dest.clone())
+        });
+        while panel.guest_requests_busy() {
+            panel.poll_guest_requests();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(std::fs::read(&dest).unwrap(), expected);
+    }
+    assert!(panel.guest_file_document().is_none());
+}
+#[test]
 fn compatibility_guest_timeline_opens_history_for_the_selected_file() {
     let (dir, _host, mut panel) = guest_file_fixture();
     let project = dir.path().join("p1");
