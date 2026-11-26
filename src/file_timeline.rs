@@ -426,6 +426,10 @@ impl Snapshot {
     }
 }
 fn relative_time(time: i64, now: i64, fr: bool) -> String {
+    time_words(time, now, fr, false)
+}
+
+fn time_words(time: i64, now: i64, fr: bool, ago: bool) -> String {
     let delta = now.saturating_sub(time);
     if (-30..30).contains(&delta) {
         return if fr { "maintenant" } else { "now" }.into();
@@ -441,6 +445,29 @@ fn relative_time(time: i64, now: i64, fr: bool) -> String {
         _ => (31536000, ("yr", "yrs"), ("an", "ans")),
     };
     let n = (seconds + scale / 2) / scale;
+    if ago {
+        let (en, french) = match scale {
+            1 => ("second", "seconde"),
+            60 => ("minute", "minute"),
+            3600 => ("hour", "heure"),
+            86400 => ("day", "jour"),
+            604800 => ("week", "semaine"),
+            2592000 => ("month", "mois"),
+            _ => ("year", "an"),
+        };
+        let word = if fr { french } else { en };
+        let plural = if n == 1 || (fr && word == "mois") {
+            ""
+        } else {
+            "s"
+        };
+        return match (fr, delta < 0) {
+            (true, true) => format!("dans {n} {word}{plural}"),
+            (true, false) => format!("il y a {n} {word}{plural}"),
+            (false, true) => format!("in {n} {word}{plural}"),
+            (false, false) => format!("{n} {word}{plural} ago"),
+        };
+    }
     let units = if fr { french } else { english };
     let prefix = if delta >= 0 {
         ""
@@ -451,6 +478,110 @@ fn relative_time(time: i64, now: i64, fr: bool) -> String {
     };
     let unit = if n == 1 { units.0 } else { units.1 };
     format!("{prefix}{n} {unit}")
+}
+
+#[derive(Clone, Debug)]
+pub struct Avatar {
+    pub cells: [bool; 25],
+    pub rgb: [u8; 3],
+}
+
+impl Avatar {
+    fn for_author(seed: &str) -> Self {
+        // Match the renderer's cyrb128 hash over JavaScript UTF-16 code units.
+        let [mut a, mut b, mut c, mut d] = [1779033703u32, 3144134277, 1013904242, 2773480762];
+        for unit in seed.trim().to_lowercase().encode_utf16() {
+            let k = u32::from(unit);
+            a = b ^ (a ^ k).wrapping_mul(597399067);
+            b = c ^ (b ^ k).wrapping_mul(2869860233);
+            c = d ^ (c ^ k).wrapping_mul(951274213);
+            d = a ^ (d ^ k).wrapping_mul(2716044179);
+        }
+        a = (c ^ (a >> 18)).wrapping_mul(597399067);
+        b = (d ^ (b >> 22)).wrapping_mul(2869860233);
+        c = (a ^ (c >> 17)).wrapping_mul(951274213);
+        d = (b ^ (d >> 19)).wrapping_mul(2716044179);
+        a ^= b ^ c ^ d;
+        b ^= a;
+        let cells = std::array::from_fn(|i| {
+            let col = i % 5;
+            a & (1 << (col.min(4 - col) * 5 + i / 5)) != 0
+        });
+        let hue = f64::from(b % 360);
+        let saturation = f64::from(45 + ((b >> 9) % 20)) / 100.;
+        let light = f64::from(50 + ((b >> 17) % 15)) / 100.;
+        let rgb = [0., 8., 4.].map(|n| {
+            let k = (n + hue / 30.) % 12.;
+            let channel =
+                light - saturation * light.min(1. - light) * (k - 3.).min(9. - k).clamp(-1., 1.);
+            (channel * 255.).round() as u8
+        });
+        Self { cells, rgb }
+    }
+}
+
+pub struct Details {
+    pub heading: String,
+    pub text: String,
+    pub hash: Option<String>,
+    pub avatar: Option<Avatar>,
+}
+
+impl History {
+    pub fn details(&self, key: Option<&str>, fr: bool, now: i64) -> Option<Details> {
+        let date = |ms| crate::regional_date::long_local(ms, fr).unwrap_or_default();
+        if let Some(id) = key.and_then(|s| s.strip_prefix("local:")) {
+            let save = self.saves.iter().find(|e| e.id == id)?;
+            return Some(Details {
+                heading: date(save.timestamp),
+                text: if fr {
+                    "Fichier enregistré"
+                } else {
+                    "File Saved"
+                }
+                .into(),
+                hash: None,
+                avatar: None,
+            });
+        }
+        if let Some(id) = key {
+            let commit = self.commits.iter().find(|c| c.id == id)?;
+            let author = if commit.email.is_empty() {
+                commit.author.clone()
+            } else {
+                format!("{} <{}>", commit.author, commit.email)
+            };
+            return Some(Details {
+                heading: format!(
+                    "{author} · {} ({})",
+                    time_words(commit.time, now, fr, true),
+                    date(commit.time.saturating_mul(1000))
+                ),
+                text: commit.message.clone(),
+                hash: Some(commit.id.clone()),
+                avatar: Some(Avatar::for_author(if commit.email.is_empty() {
+                    &commit.author
+                } else {
+                    &commit.email
+                })),
+            });
+        }
+        self.dirty.then(|| Details {
+            heading: format!(
+                "{} · {}",
+                if fr { "Vous" } else { "You" },
+                date(now.saturating_mul(1000))
+            ),
+            text: if fr {
+                "Modifications non commitées"
+            } else {
+                "Uncommitted Changes"
+            }
+            .into(),
+            hash: None,
+            avatar: None,
+        })
+    }
 }
 
 pub struct Row<'a> {
@@ -576,14 +707,45 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                             response
                         })
                         .inner;
-                    let r = if let Some(c) = row.commit {
-                        r.on_hover_text(format!(
-                            "{} <{}>\n{}\n{}",
-                            c.author, c.email, c.id, c.message
-                        ))
-                    } else {
-                        r
-                    };
+                    let r = r.on_hover_ui(|ui| {
+                        if let Some(details) = history.details(
+                            row.key().as_deref(),
+                            fr,
+                            chrono::Utc::now().timestamp(),
+                        ) {
+                            ui.horizontal(|ui| {
+                                if let Some(icon) = details.avatar {
+                                    use eframe::egui::{Color32, Rect, Sense, vec2};
+                                    let (rect, _) =
+                                        ui.allocate_exact_size(vec2(24., 24.), Sense::hover());
+                                    ui.painter().rect_filled(rect, 0., Color32::from_gray(240));
+                                    for (i, _) in
+                                        icon.cells.iter().enumerate().filter(|(_, on)| **on)
+                                    {
+                                        let pos = rect.min
+                                            + vec2(
+                                                2. + (i % 5) as f32 * 4.,
+                                                2. + (i / 5) as f32 * 4.,
+                                            );
+                                        ui.painter().rect_filled(
+                                            Rect::from_min_size(pos, vec2(4., 4.)),
+                                            0.,
+                                            Color32::from_rgb(
+                                                icon.rgb[0],
+                                                icon.rgb[1],
+                                                icon.rgb[2],
+                                            ),
+                                        );
+                                    }
+                                }
+                                ui.strong(details.heading);
+                            });
+                            ui.label(details.text);
+                            if let Some(hash) = details.hash {
+                                ui.monospace(hash);
+                            }
+                        }
+                    });
                     if r.clicked() {
                         action = Some(Action::Open(file.clone(), row.key(), r.double_clicked()));
                     }
@@ -603,6 +765,30 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_timeline_hover_uses_vue_author_icons_and_full_time_words() {
+        for (seed, cells, rgb) in [
+            (
+                " Fixture@EXAMPLE.invalid ",
+                "1000100000101010101001110",
+                [216, 184, 110],
+            ),
+            ("Été😀", "1010100000111110101011111", [70, 139, 200]),
+        ] {
+            let avatar = Avatar::for_author(seed);
+            let mask: String = avatar
+                .cells
+                .iter()
+                .map(|b| if *b { '1' } else { '0' })
+                .collect();
+            assert_eq!(mask, cells);
+            assert_eq!(avatar.rgb, rgb);
+        }
+        assert_eq!(time_words(0, 300, true, true), "il y a 5 minutes");
+        assert_eq!(time_words(300, 0, false, true), "in 5 minutes");
+        assert_eq!(time_words(0, 2592000, true, true), "il y a 1 mois");
+    }
+
     #[test]
     fn file_timeline_relative_time_rounds_and_groups_like_vue() {
         for (delta, en, fr) in [

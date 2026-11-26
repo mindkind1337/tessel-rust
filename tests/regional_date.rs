@@ -27,3 +27,15 @@ fn regional_medium_date_short_time_matches_intl_examples() {
         );
     }
 }
+
+#[test]
+fn local_history_dates_spell_out_the_month_in_the_selected_language() {
+    let june = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+        .unwrap()
+        .timestamp_millis();
+    for (fr, month) in [(false, "june"), (true, "juin")] {
+        let label = regional_date::long_local(june, fr).unwrap().to_lowercase();
+        assert!(label.contains(month) && label.contains("2026"), "{label}");
+    }
+    assert!(regional_date::long_local(i64::MAX, false).is_none());
+}

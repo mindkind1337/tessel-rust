@@ -574,6 +574,18 @@ mod tests {
             cx.refresh().unwrap();
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             if let Some(bounds) = visual.debug_bounds("timeline-entry-0") {
+                let position = bounds.center();
+                visual.simulate_mouse_move(position, None, Default::default());
+                cx.run_until_parked();
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(550));
+                cx.run_until_parked();
+                cx.refresh().unwrap();
+                let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+                assert!(
+                    visual.debug_bounds("timeline-hover").is_some(),
+                    "commit tooltip missing"
+                );
                 visual.simulate_click(bounds.center(), Default::default());
                 break;
             }

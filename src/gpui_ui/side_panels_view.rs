@@ -2735,12 +2735,26 @@ fn render_timeline(
             .enumerate()
         {
             let commit = row.key();
+            let hover_key = commit.clone();
+            let hover_history = history.clone();
+            let theme = *tokens;
             let key = format!("timeline-{}", commit.as_deref().unwrap_or("working"));
             let path = file.clone();
             list = list.child(
                 div()
                     .id(SharedString::from(key))
                     .debug_selector(move || format!("timeline-entry-{index}"))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| TimelineTooltip {
+                            details: hover_history.details(
+                                hover_key.as_deref(),
+                                fr,
+                                chrono::Utc::now().timestamp(),
+                            ),
+                            tokens: theme,
+                        })
+                        .into()
+                    })
                     .cursor_pointer()
                     .text_size(px(12.))
                     .flex()
@@ -2790,6 +2804,53 @@ fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
         .text_color(tokens.text_dim)
         .child(SharedString::from(text.to_owned()))
         .into_any_element()
+}
+
+struct TimelineTooltip {
+    details: Option<crate::file_timeline::Details>,
+    tokens: GpuiThemeTokens,
+}
+impl gpui::Render for TimelineTooltip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        let mut panel = div()
+            .debug_selector(|| "timeline-hover".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .max_w(px(480.))
+            .p(px(8.))
+            .rounded(px(5.))
+            .bg(self.tokens.surface_3)
+            .text_color(self.tokens.text)
+            .text_size(px(12.))
+            .whitespace_normal();
+        if let Some(d) = &self.details {
+            let mut head = div().flex().items_center().gap_1();
+            if let Some(icon) = &d.avatar {
+                let mut grid = div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .p(px(2.))
+                    .bg(gpui::rgb(0xf0f0f0));
+                let color = rgb_tuple((icon.rgb[0], icon.rgb[1], icon.rgb[2]));
+                for row in icon.cells.chunks_exact(5) {
+                    grid = grid.child(
+                        div().flex().children(
+                            row.iter()
+                                .map(|on| div().size(px(4.)).when(*on, |cell| cell.bg(color))),
+                        ),
+                    );
+                }
+                head = head.child(grid);
+            }
+            panel = panel
+                .child(head.child(d.heading.clone()))
+                .child(d.text.clone())
+                .children(d.hash.clone());
+        }
+        panel
+    }
 }
 
 struct TaskTimingTooltip {

@@ -19,9 +19,16 @@ pub fn locale(french: bool, preferred: &[String]) -> &str {
 }
 
 pub fn format<T: chrono::TimeZone>(date: &chrono::DateTime<T>, locale: &str) -> Option<String> {
+    format_date(date, locale, fieldsets::YMD::medium())
+}
+
+fn format_date<T: chrono::TimeZone>(
+    date: &chrono::DateTime<T>,
+    locale: &str,
+    style: fieldsets::YMD,
+) -> Option<String> {
     let locale: icu_locale_core::Locale = locale.replace('_', "-").parse().ok()?;
-    let formatter =
-        DateTimeFormatter::try_new(locale.into(), fieldsets::YMD::medium().with_time_hm()).ok()?;
+    let formatter = DateTimeFormatter::try_new(locale.into(), style.with_time_hm()).ok()?;
     let input = DateTime {
         date: Date::try_new_iso(date.year(), date.month() as u8, date.day() as u8).ok()?,
         time: Time::try_new(date.hour() as u8, date.minute() as u8, 0, 0).ok()?,
@@ -32,6 +39,15 @@ pub fn format<T: chrono::TimeZone>(date: &chrono::DateTime<T>, locale: &str) -> 
             .format(&input)
             .to_string()
             .replace('\u{202f}', " "),
+    )
+}
+
+pub fn long_local(timestamp: i64, french: bool) -> Option<String> {
+    let date = chrono::DateTime::from_timestamp_millis(timestamp)?;
+    format_date(
+        &date.with_timezone(&chrono::Local),
+        preferred_locale(french),
+        fieldsets::YMD::long(),
     )
 }
 
