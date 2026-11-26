@@ -198,6 +198,7 @@ pub struct SharePanel {
     pub guest_term_input: String,
     guest_file_editor: crate::guest_file_editor::Editor,
     guest_file_listing: crate::guest_file_listing::Listing,
+    guest_history: guest_history::Timeline,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
     pub guest_new_file_name: String,
@@ -248,6 +249,7 @@ impl Default for SharePanel {
             guest_term_input: String::new(),
             guest_file_editor: Default::default(),
             guest_file_listing: Default::default(),
+            guest_history: Default::default(),
             guest_files_scope: None,
             confirm_guest_file_discard: false,
             guest_new_file_name: String::new(),
@@ -381,6 +383,7 @@ impl SharePanel {
         self.guest_task_board.bind(None, false);
         self.guest_file_editor.bind(None, false);
         self.guest_file_listing.bind(None);
+        self.guest_history.bind(None);
         self.guest_git.bind(None, false);
         self.confirm_guest_git_discard = false;
         self.guest_files_scope = None;
@@ -397,6 +400,7 @@ impl SharePanel {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
+            || self.guest_history.busy()
             || self.guest_git.busy()
     }
     pub fn guest_task_snapshot(&self) -> crate::guest_task_board::Snapshot {
@@ -444,6 +448,14 @@ impl SharePanel {
         let mut changed = self.poll_guest_scope();
         changed |= self.guest_task_board.poll(Instant::now());
         changed |= self.guest_file_editor.poll(Instant::now());
+        let key = self
+            .guest_file_editor
+            .document
+            .as_ref()
+            .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
+            .map(|doc| &doc.key);
+        changed |= self.guest_history.bind(key);
+        changed |= self.guest_history.poll(Instant::now());
         changed |= self.guest_file_listing.poll(Instant::now());
         changed |= self.guest_git.poll(Instant::now());
         if self.guest_task_board.take_reconcile()
@@ -485,6 +497,7 @@ impl SharePanel {
         changed |= self.guest_file_listing.bind(scope);
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
+            self.guest_history.bind(None);
             self.confirm_guest_file_discard = false;
         }
         self.guest_files_scope = scope;
@@ -3654,6 +3667,8 @@ impl SharePanel {
 
 #[path = "share_panel/guest_files.rs"]
 mod guest_files;
+#[path = "share_panel/guest_history.rs"]
+mod guest_history;
 
 #[path = "share_panel/guest_git.rs"]
 mod guest_git;

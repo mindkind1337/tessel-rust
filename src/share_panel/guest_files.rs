@@ -167,6 +167,17 @@ impl SharePanel {
                     }
                 }
             });
+            if self.guest_files_scope == Some(document.key.scope)
+                && self
+                    .guest_file_editor
+                    .document
+                    .as_ref()
+                    .is_some_and(|doc| doc.key == document.key)
+                && let Some(session) = &self.guest_session
+            {
+                self.guest_history.bind(Some(&document.key));
+                self.guest_history.show(ui, french, session);
+            }
             ScrollArea::vertical()
                 .id_salt("guest-file-content")
                 .max_height(180.)

@@ -650,6 +650,82 @@ fn draw_guest_files(
     )
 }
 #[test]
+fn compatibility_guest_timeline_opens_history_for_the_selected_file() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let project = dir.path().join("p1");
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "a.txt"],
+        vec!["commit", "-qm", "first guest timeline entry"],
+    ] {
+        let out = std::process::Command::new("git")
+            .current_dir(&project)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let key = guest_file_editor::Key {
+        scope: panel.guest_task_snapshot().scope.unwrap(),
+        path: "a.txt".into(),
+    };
+    assert!(panel.open_guest_file(key.clone()));
+    await_guest_document(&mut panel, &key);
+    let ctx = egui::Context::default();
+    let _ = draw_guest_files(&ctx, &mut panel, vec![]);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let pos = loop {
+        panel.poll_guest_requests();
+        let out = draw_guest_files(&ctx, &mut panel, vec![]);
+        if has_text_containing(&out.shapes, "· b.txt") {
+            break find_text_center(&out.shapes, "Timeline").expect("Timeline control");
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    draw_guest_files(&ctx, &mut panel, click_events(pos));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        panel.poll_guest_requests();
+        let out = draw_guest_files(&ctx, &mut panel, vec![]);
+        if has_text_containing(&out.shapes, "first guest timeline entry") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{:?}",
+            painted_texts(&out.shapes)
+        );
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    let other = guest_file_editor::Key {
+        path: "b.txt".into(),
+        ..key
+    };
+    assert!(panel.open_guest_file(other.clone()));
+    await_guest_document(&mut panel, &other);
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(!has_text_containing(
+        &out.shapes,
+        "first guest timeline entry"
+    ));
+}
+
+#[test]
 fn compatibility_guest_file_reads_and_saves_exact_project_and_path() {
     let (dir, _host, mut panel) = guest_file_fixture();
     let scope = panel.guest_task_snapshot().scope.unwrap();
