@@ -1,3 +1,7 @@
+pub(crate) fn supported(extension: &str) -> bool {
+    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"].contains(&extension)
+}
+
 pub(crate) fn decode(bytes: &[u8]) -> Result<eframe::egui::ColorImage, String> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()

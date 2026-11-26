@@ -65,10 +65,8 @@ fn prepare_preview(
 ) -> Option<Result<Box<crate::files::Document>, String>> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
     if !crate::office::supported(&extension)
-        && !matches!(
-            extension.as_str(),
-            "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-        )
+        && extension != "pdf"
+        && !crate::raster_preview::supported(&extension)
     {
         return None;
     }

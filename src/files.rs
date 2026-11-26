@@ -457,10 +457,7 @@ impl Document {
                 sheet_cache: None,
             });
         }
-        if matches!(
-            extension.as_str(),
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-        ) {
+        if crate::raster_preview::supported(&extension) {
             let mut bytes = Vec::new();
             fs::File::open(&path)
                 .map_err(|e| e.to_string())?

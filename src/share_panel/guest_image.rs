@@ -20,12 +20,8 @@ pub(super) struct ImagePreview {
 }
 impl ImagePreview {
     pub fn supports(path: &str) -> bool {
-        path.rsplit_once('.').is_some_and(|(_, ext)| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp"
-            )
-        })
+        path.rsplit_once('.')
+            .is_some_and(|(_, ext)| crate::raster_preview::supported(&ext.to_ascii_lowercase()))
     }
     pub fn open(&mut self, key: Key, session: &GuestSession) {
         *self = Self::default();

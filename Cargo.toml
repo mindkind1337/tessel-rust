@@ -62,7 +62,7 @@ russh-sftp = "3"
 hayro = { version = "0.8", features = ["embed-fonts"] }
 scraper = "0.29"
 pulldown-cmark = "0.13"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }
 similar = { version = "2.7.0", default-features = false, features = ["text"] }
 
 [target.'cfg(windows)'.dependencies]

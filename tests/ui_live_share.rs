@@ -658,15 +658,24 @@ fn draw_guest_files(
 }
 #[test]
 fn compatibility_guest_image_preview_downloads_png_and_preserves_dirty_text() {
+    verify_guest_image("poster.png");
+}
+
+#[test]
+fn compatibility_guest_image_preview_downloads_original_icon() {
+    verify_guest_image("poster.ICO");
+}
+
+fn verify_guest_image(filename: &str) {
     let (dir, _host, mut panel) = guest_file_fixture();
-    let path = dir.path().join("p1/poster.png");
+    let path = dir.path().join("p1").join(filename);
     image::RgbaImage::from_pixel(64, 48, image::Rgba([255u8, 50, 100, 255]))
         .save(&path)
         .unwrap();
     let scope = panel.guest_task_snapshot().scope.unwrap();
     let key = guest_file_editor::Key {
         scope,
-        path: "poster.png".into(),
+        path: filename.into(),
     };
     panel.open_guest_file(key.clone());
     let ctx = egui::Context::default();
@@ -702,9 +711,9 @@ fn compatibility_guest_image_preview_downloads_png_and_preserves_dirty_text() {
         );
     }
     assert!(egui::Popup::is_any_open(&ctx));
-    let dest = dir.path().join("copy.png");
+    let dest = dir.path().join(filename);
     panel.download_guest_file(&key, |name| {
-        assert_eq!(name, "poster.png");
+        assert_eq!(name, filename);
         Some(dest.clone())
     });
     while panel.guest_requests_busy() {
