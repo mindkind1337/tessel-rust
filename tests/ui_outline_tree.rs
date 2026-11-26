@@ -43,6 +43,9 @@ fn reference_tree_sort_filter_folds_and_cursor_vectors() {
         let mut tree = c.input;
         keyed(&mut tree, "");
         sort_symbols(&mut tree, c.by);
+        for visible in visible_rows(&tree, &c.collapsed, &c.query, c.highlight) {
+            assert_eq!(visible.row.key, visible.symbol.key);
+        }
         assert_eq!(tree, c.tree, "tree {i}");
         assert_eq!(parent_keys(&tree), c.parents, "parents {i}");
         assert_eq!(
@@ -94,4 +97,10 @@ fn keys_survive_line_edits_and_sibling_twins_remain_distinct() {
         before.iter().map(|r| &r.key).collect::<HashSet<_>>().len(),
         before.len()
     );
+}
+
+#[test]
+fn partial_utf16_hits_paint_whole_scalars() {
+    let name = "a😀bé";
+    assert_eq!(highlight_ranges(name, &[[1, 2], [4, 5]]), vec![1..5, 6..8]);
 }

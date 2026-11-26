@@ -263,6 +263,7 @@ pub struct EditorPreferences {
     pub show_git_ignored: bool,
     pub compact_folders: bool,
     pub outline_follow_cursor: bool,
+    pub outline_filter_on_type: bool,
     pub outline_sort: crate::outline_tree::Sort,
     pub diff_word_wrap: bool,
 }
@@ -280,6 +281,7 @@ impl Default for EditorPreferences {
             show_git_ignored: true,
             compact_folders: false,
             outline_follow_cursor: true,
+            outline_filter_on_type: true,
             outline_sort: Default::default(),
             diff_word_wrap: false,
         }

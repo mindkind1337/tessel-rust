@@ -168,6 +168,38 @@ pub struct Row {
     pub matches: Vec<[usize; 2]>,
 }
 
+/// Convert the reference provider's UTF-16 spans to whole UTF-8 characters for painting.
+pub fn highlight_ranges(name: &str, matches: &[[usize; 2]]) -> Vec<std::ops::Range<usize>> {
+    if matches.is_empty() {
+        return Vec::new();
+    }
+    let mut output: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut utf16 = 0;
+    let mut spans = matches.iter().peekable();
+    for (byte, c) in name.char_indices() {
+        while spans.peek().is_some_and(|span| span[1] <= utf16) {
+            spans.next();
+        }
+        let Some(span) = spans.peek() else { break };
+        utf16 += c.len_utf16();
+        if span[0] < utf16 {
+            let end = byte + c.len_utf8();
+            if let Some(last) = output.last_mut().filter(|last| last.end == byte) {
+                last.end = end;
+            } else {
+                output.push(byte..end);
+            }
+        }
+    }
+    output
+}
+
+/// Borrow the original symbols so both views can navigate the ranges of filtered rows.
+pub struct VisibleRow<'a> {
+    pub symbol: &'a Symbol,
+    pub row: Row,
+}
+
 type MatchInfo = HashMap<String, (Option<Vec<[usize; 2]>>, bool)>;
 
 pub fn rows(
@@ -176,7 +208,20 @@ pub fn rows(
     query: &str,
     highlight: bool,
 ) -> Vec<Row> {
-    let filtering = !query.trim().is_empty();
+    visible_rows(symbols, collapsed, query, highlight)
+        .into_iter()
+        .map(|entry| entry.row)
+        .collect()
+}
+
+pub fn visible_rows<'a>(
+    symbols: &'a [Symbol],
+    collapsed: &HashSet<String>,
+    query: &str,
+    highlight: bool,
+) -> Vec<VisibleRow<'a>> {
+    let query = query.trim();
+    let filtering = !query.is_empty();
     fn scan(list: &[Symbol], query: &str, filtering: bool, info: &mut MatchInfo) -> bool {
         let mut any = false;
         for s in list {
@@ -192,28 +237,31 @@ pub fn rows(
         }
         any
     }
-    struct Walk<'a> {
+    struct Walk<'a, 's> {
         collapsed: &'a HashSet<String>,
         filter: bool,
         info: MatchInfo,
-        out: Vec<Row>,
+        out: Vec<VisibleRow<'s>>,
     }
-    impl Walk<'_> {
-        fn visit(&mut self, list: &[Symbol], depth: usize, parent: Option<&str>) {
+    impl<'s> Walk<'_, 's> {
+        fn visit(&mut self, list: &'s [Symbol], depth: usize, parent: Option<&str>) {
             for s in list {
-                let (matches, keep) = &self.info[&s.key];
-                if self.filter && !keep {
+                let info = self.info.get(&s.key);
+                if self.filter && info.is_some_and(|(_, keep)| !keep) {
                     continue;
                 }
                 let has_children = !s.children.is_empty();
                 let open = has_children && (self.filter || !self.collapsed.contains(&s.key));
-                self.out.push(Row {
-                    key: s.key.clone(),
-                    depth,
-                    parent: parent.map(str::to_owned),
-                    has_children,
-                    open,
-                    matches: matches.clone().unwrap_or_default(),
+                self.out.push(VisibleRow {
+                    symbol: s,
+                    row: Row {
+                        key: s.key.clone(),
+                        depth,
+                        parent: parent.map(str::to_owned),
+                        has_children,
+                        open,
+                        matches: info.and_then(|(m, _)| m.clone()).unwrap_or_default(),
+                    },
                 });
                 if open {
                     self.visit(&s.children, depth + 1, Some(&s.key));
@@ -227,7 +275,9 @@ pub fn rows(
         info: HashMap::new(),
         out: Vec::new(),
     };
-    scan(symbols, query, filtering, &mut walk.info);
+    if filtering {
+        scan(symbols, query, true, &mut walk.info);
+    }
     walk.visit(symbols, 0, None);
     walk.out
 }

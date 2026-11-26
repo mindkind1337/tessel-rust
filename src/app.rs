@@ -4822,6 +4822,17 @@ impl Tessel {
                         {
                             ui.close();
                         }
+                        let label = if crate::i18n::is_french() {
+                            "Filtrer à la frappe"
+                        } else {
+                            "Filter on Type"
+                        };
+                        if ui
+                            .checkbox(&mut self.state.editor_prefs.outline_filter_on_type, label)
+                            .clicked()
+                        {
+                            ui.close();
+                        }
                         for (mode, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
                             let label = if crate::i18n::is_french() { fr } else { en };
                             if ui
@@ -4851,6 +4862,7 @@ impl Tessel {
                         doc,
                         self.state.editor_prefs.outline_sort,
                         self.state.editor_prefs.outline_follow_cursor,
+                        self.state.editor_prefs.outline_filter_on_type,
                     );
                 });
             });
@@ -15070,7 +15082,35 @@ $lock.Dispose()
         let row = locate(frame(vec![]), "target");
         frame(pointer(row, true));
         frame(pointer(row, false));
+        frame(vec![egui::Event::Text("tgt".into())]);
+        let filtered = frame(vec![]);
+        assert!(!filtered.shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "last")
+        ));
+        locate(filtered, "target");
         frame(vec![egui::Event::Text("ignored".into())]);
+        let _ = locate(
+            frame(vec![]),
+            if crate::i18n::is_french() {
+                "Aucun résultat trouvé."
+            } else {
+                "No results found."
+            },
+        );
+        frame(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]);
+        frame(vec![]);
+        for _ in 0..20 {
+            frame(vec![]);
+        }
+        let row = locate(frame(vec![]), "target");
+        frame(pointer(row, true));
+        frame(pointer(row, false));
         frame(pointer(row, true));
         frame(pointer(row, false));
         frame(vec![egui::Event::Text("replacement".into())]);
