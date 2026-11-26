@@ -2404,5 +2404,1478 @@
         "children": []
       }
     ]
+  },
+  {
+    "extension": "js",
+    "text": "items.filter(x=>x);",
+    "expected": [
+      {
+        "name": "items.filter() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "events.on('save', ()=>{const done=1});",
+    "expected": [
+      {
+        "name": "events.on('save') callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 19,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 19,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "children": [
+          {
+            "name": "done",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 36
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 36
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function outer(){ return () => 1 }",
+    "expected": [
+      {
+        "name": "outer",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "children": [
+          {
+            "name": "<function>",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 26,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 26,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "doIt(function named(){},function(){});",
+    "expected": [
+      {
+        "name": "doIt() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "children": []
+      },
+      {
+        "name": "named",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 6,
+          "endLineNumber": 1,
+          "endColumn": 24
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 6,
+          "endLineNumber": 1,
+          "endColumn": 24
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const x=foo(()=>1).map(()=>2);",
+    "expected": [
+      {
+        "name": "x",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "children": [
+          {
+            "name": "foo() callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 18
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 18
+            },
+            "children": []
+          },
+          {
+            "name": "map() callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const wrapper=(x=>x); const c = ()=>()=>1;",
+    "expected": [
+      {
+        "name": "c",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 29,
+          "endLineNumber": 1,
+          "endColumn": 42
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 29,
+          "endLineNumber": 1,
+          "endColumn": 42
+        },
+        "children": [
+          {
+            "name": "<function>",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "wrapper",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "children": [
+          {
+            "name": "<function>",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 16,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 16,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "let other; function z(){}; b(()=>1);a(()=>2);b(()=>3);",
+    "expected": [
+      {
+        "name": "a() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 39,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 39,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "children": []
+      },
+      {
+        "name": "b() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 30,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 30,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "children": []
+      },
+      {
+        "name": "b() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 53
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 53
+        },
+        "children": []
+      },
+      {
+        "name": "other",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 5,
+          "endLineNumber": 1,
+          "endColumn": 10
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 5,
+          "endLineNumber": 1,
+          "endColumn": 10
+        },
+        "children": []
+      },
+      {
+        "name": "z",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 12,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 12,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const c=class Named {act(){}}; consume(class {}, class Foo {});",
+    "expected": [
+      {
+        "name": "<class>",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 40,
+          "endLineNumber": 1,
+          "endColumn": 48
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 40,
+          "endLineNumber": 1,
+          "endColumn": 48
+        },
+        "children": []
+      },
+      {
+        "name": "c",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "children": [
+          {
+            "name": "act",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 22,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 22,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "Foo",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 50,
+          "endLineNumber": 1,
+          "endColumn": 62
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 50,
+          "endLineNumber": 1,
+          "endColumn": 62
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "new Thing(()=>1); (function(){})(); obj['set'](()=>1);",
+    "expected": [
+      {
+        "name": "<function>",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 32
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 32
+        },
+        "children": []
+      },
+      {
+        "name": "<function>",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 11,
+          "endLineNumber": 1,
+          "endColumn": 16
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 11,
+          "endLineNumber": 1,
+          "endColumn": 16
+        },
+        "children": []
+      },
+      {
+        "name": "<function>",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 53
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 53
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "export default ()=>{ const x=1 };",
+    "expected": [
+      {
+        "name": "default",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 34
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 34
+        },
+        "children": [
+          {
+            "name": "x",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 28,
+              "endLineNumber": 1,
+              "endColumn": 31
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 28,
+              "endLineNumber": 1,
+              "endColumn": 31
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "events.on('multiple', 'strings', ()=>{}); f(v=>({data:v}));",
+    "expected": [
+      {
+        "name": "events.on('multiple', 'strings') callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 34,
+          "endLineNumber": 1,
+          "endColumn": 40
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 34,
+          "endLineNumber": 1,
+          "endColumn": 40
+        },
+        "children": []
+      },
+      {
+        "name": "f() callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 45,
+          "endLineNumber": 1,
+          "endColumn": 58
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 45,
+          "endLineNumber": 1,
+          "endColumn": 58
+        },
+        "children": [
+          {
+            "name": "data",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 50,
+              "endLineNumber": 1,
+              "endColumn": 56
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 50,
+              "endLineNumber": 1,
+              "endColumn": 56
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "function outer(){try{}catch(err){ const message=err; }}",
+    "expected": [
+      {
+        "name": "outer",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "children": [
+          {
+            "name": "err",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 29,
+              "endLineNumber": 1,
+              "endColumn": 32
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 29,
+              "endLineNumber": 1,
+              "endColumn": 32
+            },
+            "children": []
+          },
+          {
+            "name": "message",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 41,
+              "endLineNumber": 1,
+              "endColumn": 52
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 41,
+              "endLineNumber": 1,
+              "endColumn": 52
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const active = records.filter((row) => row.tags.some(t => t === 'ok'));",
+    "expected": [
+      {
+        "name": "active",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 71
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 71
+        },
+        "children": [
+          {
+            "name": "records.filter() callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 31,
+              "endLineNumber": 1,
+              "endColumn": 70
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 31,
+              "endLineNumber": 1,
+              "endColumn": 70
+            },
+            "children": [
+              {
+                "name": "row.tags.some() callback",
+                "kind": 11,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 54,
+                  "endLineNumber": 1,
+                  "endColumn": 69
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 54,
+                  "endLineNumber": 1,
+                  "endColumn": 69
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "obj . on(`event-${id}`, ()=>42);",
+    "expected": [
+      {
+        "name": "obj.on(`event-${id}`) callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 31
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 31
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function set(h){ hooks={...hooks,...h}; }",
+    "expected": [
+      {
+        "name": "set",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 42
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 42
+        },
+        "children": [
+          {
+            "name": "hooks",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "children": []
+          },
+          {
+            "name": "h",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 38
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 38
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const obj={...first,...a.b,...f(),...[1],...{x:1},...z};",
+    "expected": [
+      {
+        "name": "obj",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "children": [
+          {
+            "name": "first",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 28,
+              "endLineNumber": 1,
+              "endColumn": 34
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 28,
+              "endLineNumber": 1,
+              "endColumn": 34
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 35,
+              "endLineNumber": 1,
+              "endColumn": 41
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 35,
+              "endLineNumber": 1,
+              "endColumn": 41
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 42,
+              "endLineNumber": 1,
+              "endColumn": 50
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 42,
+              "endLineNumber": 1,
+              "endColumn": 50
+            },
+            "children": []
+          },
+          {
+            "name": "z",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 51,
+              "endLineNumber": 1,
+              "endColumn": 55
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 51,
+              "endLineNumber": 1,
+              "endColumn": 55
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function outer(){const a=[...foo];use(...args); const o={...a,...a};}",
+    "expected": [
+      {
+        "name": "outer",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 70
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 70
+        },
+        "children": [
+          {
+            "name": "a",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 34
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 34
+            },
+            "children": []
+          },
+          {
+            "name": "o",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 55,
+              "endLineNumber": 1,
+              "endColumn": 68
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 55,
+              "endLineNumber": 1,
+              "endColumn": 68
+            },
+            "children": [
+              {
+                "name": "a",
+                "kind": 6,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 58,
+                  "endLineNumber": 1,
+                  "endColumn": 62
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 58,
+                  "endLineNumber": 1,
+                  "endColumn": 62
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "let fn; fn = () => 1;",
+    "expected": [
+      {
+        "name": "fn",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "children": []
+      },
+      {
+        "name": "fn",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 5,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 5,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const a = events.on('topic', ()=>1, ()=>2);",
+    "expected": [
+      {
+        "name": "a",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 43
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 43
+        },
+        "children": [
+          {
+            "name": "events.on('topic') callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 35
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 35
+            },
+            "children": []
+          },
+          {
+            "name": "events.on('topic') callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const action = registry.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(()=>true);",
+    "expected": [
+      {
+        "name": "action",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 190
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 190
+        },
+        "children": [
+          {
+            "name": "registry.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... callback",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 181,
+              "endLineNumber": 1,
+              "endColumn": 189
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 181,
+              "endLineNumber": 1,
+              "endColumn": 189
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "dispatch('ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé', ()=>true);",
+    "expected": [
+      {
+        "name": "dispatch('ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé...) callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 169,
+          "endLineNumber": 1,
+          "endColumn": 177
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 169,
+          "endLineNumber": 1,
+          "endColumn": 177
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "sink(`line\nnext`, ()=>1);",
+    "expected": [
+      {
+        "name": "sink(`linenext`) callback",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 2,
+          "startColumn": 8,
+          "endLineNumber": 2,
+          "endColumn": 13
+        },
+        "selectionRange": {
+          "startLineNumber": 2,
+          "startColumn": 8,
+          "endLineNumber": 2,
+          "endColumn": 13
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const x=1; export {x, x as y};",
+    "expected": [
+      {
+        "name": "x",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 10
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 10
+        },
+        "children": []
+      },
+      {
+        "name": "x",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "children": []
+      },
+      {
+        "name": "y",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 23,
+          "endLineNumber": 1,
+          "endColumn": 29
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 23,
+          "endLineNumber": 1,
+          "endColumn": 29
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "export {type A as B, C} from './types'; export * as all from './all';",
+    "expected": [
+      {
+        "name": "B",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 9,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 9,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "children": []
+      },
+      {
+        "name": "C",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 22,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 22,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "export {x as 'renamed'} from 'pkg';",
+    "expected": [
+      {
+        "name": "'renamed'",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 9,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 9,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "class Test {add(){} constructor(){} apply(){}}",
+    "expected": [
+      {
+        "name": "Test",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 47
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 47
+        },
+        "children": [
+          {
+            "name": "constructor",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 36
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 36
+            },
+            "children": []
+          },
+          {
+            "name": "add",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "children": []
+          },
+          {
+            "name": "apply",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 46
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 46
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const v={...a,...b,...a,...foo(),...foo()};",
+    "expected": [
+      {
+        "name": "v",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 43
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 43
+        },
+        "children": [
+          {
+            "name": "a",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 10,
+              "endLineNumber": 1,
+              "endColumn": 14
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 10,
+              "endLineNumber": 1,
+              "endColumn": 14
+            },
+            "children": []
+          },
+          {
+            "name": "b",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 19
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 19
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "children": []
+          },
+          {
+            "name": "<unknown>",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
   }
 ]

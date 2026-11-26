@@ -4,7 +4,10 @@ use crate::outline_tree::{Range, Symbol};
 use oxc_allocator::Allocator;
 use oxc_ast::{
     AstKind,
-    ast::{BindingPattern, ClassType, FunctionType, MethodDefinitionKind, PropertyKey},
+    ast::{
+        Argument, BindingPattern, CallExpression, ClassType, Expression, FunctionType,
+        MethodDefinitionKind, PropertyKey,
+    },
 };
 use oxc_ast_visit::Visit;
 use oxc_parser::{Parser, ParserReturn, config::TokensParserConfig};
@@ -59,6 +62,65 @@ impl<'s> Positions<'s> {
     }
 }
 
+// The navigation service displays at most 150 UTF-16 units of each call label.
+fn label_text(raw: &str) -> String {
+    let units: Vec<_> = raw.encode_utf16().take(151).collect();
+    let mut text = String::from_utf16_lossy(&units[..units.len().min(150)]);
+    if units.len() > 150 {
+        text.push_str("...");
+    }
+    let newline = |c: char| matches!(c, '\r' | '\n' | '\u{2028}' | '\u{2029}');
+    let mut chars = text.chars().peekable();
+    let mut label = String::new();
+    while let Some(c) = chars.next() {
+        if !(newline(c) || c == '\\' && chars.peek().copied().is_some_and(newline)) {
+            label.push(c);
+        }
+    }
+    label
+}
+
+fn callback_name(call: &CallExpression<'_>, source: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut base = &call.callee;
+    while let Expression::StaticMemberExpression(member) = base {
+        parts.push(member.property.name.as_str());
+        base = &member.object;
+    }
+    if let Expression::Identifier(id) = base {
+        parts.push(id.name.as_str());
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    parts.reverse();
+    let name = label_text(&parts.join("."));
+    if name.encode_utf16().count() > 150 {
+        return Some(format!("{name} callback"));
+    }
+    let args = call
+        .arguments
+        .iter()
+        .filter(|a| matches!(a, Argument::StringLiteral(_) | Argument::TemplateLiteral(_)))
+        .map(|a| a.span().source_text(source))
+        .collect::<Vec<_>>();
+    Some(format!("{name}({}) callback", label_text(&args.join(", "))))
+}
+
+// TypeScript sorts equal names by syntax kind and gives spreads an unnamed sort key.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NavigationKind {
+    Constructor,
+    Expression,
+    Arrow,
+    Other,
+    Declaration,
+    Property,
+    Shorthand,
+    ExportSpecifier,
+    Spread,
+}
+type NavigationKinds = std::collections::BTreeMap<Range, NavigationKind>;
 struct Outline<'a> {
     positions: Positions<'a>,
     parsed_source: &'a str,
@@ -66,17 +128,70 @@ struct Outline<'a> {
     open: Vec<Symbol>,
     roots: Vec<Symbol>,
     count: usize,
+    kinds: NavigationKinds,
+    spread_names: std::collections::HashSet<(u32, &'a str)>,
+    call_names: std::collections::HashMap<(u32, u32), Option<String>>,
 }
 impl Outline<'_> {
     fn key_span(key: &PropertyKey<'_>) -> Option<Span> {
         (!key.is_computed()).then(|| key.span())
     }
-    fn entry(&self, node: AstKind<'_>) -> Option<(String, u8, Span)> {
+    fn entry(&mut self, node: AstKind<'_>) -> Option<(String, u8, Span)> {
         use AstKind::*;
         let source = self.parsed_source;
         let parent = self.ancestors.last().map(|&(p, _)| p);
         let mut span = node.span();
         let default = matches!(parent, Some(ExportDefaultDeclaration(_)));
+        // A direct initializer is already represented by its variable or member.
+        let expression = match node {
+            ArrowFunctionExpression(_) => Some((None, 11)),
+            Function(f) if f.r#type == FunctionType::FunctionExpression => {
+                Some((f.id.as_ref().map(|id| id.name.as_str()), 11))
+            }
+            Class(c) if c.r#type == ClassType::ClassExpression => {
+                Some((c.id.as_ref().map(|id| id.name.as_str()), 4))
+            }
+            _ => None,
+        };
+        if let Some((id, kind)) = expression {
+            if matches!(
+                parent,
+                Some(
+                    VariableDeclarator(_)
+                        | ObjectProperty(_)
+                        | MethodDefinition(_)
+                        | PropertyDefinition(_)
+                        | AssignmentPattern(_)
+                )
+            ) {
+                return None;
+            }
+            let name = if let Some(id) = id {
+                label_text(id)
+            } else if let Some(AssignmentExpression(a)) = parent
+                && a.operator.is_assign()
+            {
+                a.left
+                    .span()
+                    .source_text(source)
+                    .split_whitespace()
+                    .collect()
+            } else if let Some(ExportDefaultDeclaration(export)) = parent {
+                span = export.span;
+                "default".into()
+            } else if kind == 4 {
+                "<class>".into()
+            } else if let Some(CallExpression(call)) = parent {
+                self.call_names
+                    .entry((call.span.start, call.span.end))
+                    .or_insert_with(|| callback_name(call, source))
+                    .clone()
+                    .unwrap_or_else(|| "<function>".into())
+            } else {
+                "<function>".into()
+            };
+            return Some((name, kind, span));
+        }
         let (name, kind) = match node {
             Function(f)
                 if matches!(
@@ -124,9 +239,18 @@ impl Outline<'_> {
                 }
                 (id.name.as_str(), 12)
             }
+            CatchParameter(p) => (p.pattern.get_identifier_name()?.as_str(), 12),
             FormalParameter(p) if p.accessibility.is_some() || p.readonly || p.r#override => {
                 (p.pattern.get_identifier_name()?.as_str(), 6)
             }
+            SpreadElement(element) if matches!(parent, Some(ObjectExpression(_))) => (
+                if let Expression::Identifier(id) = &element.argument {
+                    id.name.as_str()
+                } else {
+                    "<unknown>"
+                },
+                6,
+            ),
             MethodDefinition(m) => (
                 Self::key_span(&m.key)?.source_text(source),
                 match m.kind {
@@ -159,6 +283,7 @@ impl Outline<'_> {
             TSPropertySignature(p) => (Self::key_span(&p.key)?.source_text(source), 6),
             TSEnumDeclaration(d) => (d.id.name.as_str(), 9),
             TSEnumMember(m) => (m.id.span().source_text(source), 12),
+            ExportSpecifier(e) => (e.exported.span().source_text(source), 12),
             ImportSpecifier(i) => (i.local.name.as_str(), 12),
             ImportDefaultSpecifier(i) => (i.local.name.as_str(), 12),
             ImportNamespaceSpecifier(i) => (i.local.name.as_str(), 12),
@@ -172,17 +297,35 @@ impl Outline<'_> {
 }
 // The TypeScript navigation tree folds function overloads into one entry. Monaco
 // uses the first declaration's span; declarations in later bodies still contribute children.
-fn finish_level(symbols: &mut Vec<Symbol>) {
+fn finish_level(symbols: &mut Vec<Symbol>, kinds: &NavigationKinds) {
+    let kind = |s: &Symbol| {
+        kinds
+            .get(&s.range)
+            .copied()
+            .unwrap_or(NavigationKind::Other)
+    };
     symbols.sort_by(|a, b| {
-        crate::outline_tree::compare_names(
-            a.name.trim_matches(['\'', '"']),
-            b.name.trim_matches(['\'', '"']),
-        )
+        let ka = kind(a);
+        let kb = kind(b);
+        match (
+            matches!(ka, NavigationKind::Constructor | NavigationKind::Spread),
+            matches!(kb, NavigationKind::Constructor | NavigationKind::Spread),
+        ) {
+            (true, true) => ka.cmp(&kb),
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => crate::outline_tree::compare_names(
+                a.name.trim_matches(['\'', '"']),
+                b.name.trim_matches(['\'', '"']),
+            )
+            .then(ka.cmp(&kb)),
+        }
     });
     symbols.dedup_by(|later, first| {
-        if first.kind == 11 && later.kind == 11 && first.name == later.name {
+        let k = kind(first);
+        if first.name == later.name && k == kind(later) && k == NavigationKind::Declaration {
             first.children.append(&mut later.children);
-            finish_level(&mut first.children);
+            finish_level(&mut first.children, kinds);
             true
         } else {
             false
@@ -190,6 +333,22 @@ fn finish_level(symbols: &mut Vec<Symbol>) {
     });
 }
 impl<'a> Visit<'a> for Outline<'a> {
+    fn visit_spread_element(&mut self, spread: &oxc_ast::ast::SpreadElement<'a>) {
+        if let Some((AstKind::ObjectExpression(object), _)) = self.ancestors.last() {
+            if let Expression::Identifier(id) = &spread.argument
+                && !self
+                    .spread_names
+                    .insert((object.span.start, id.name.as_str()))
+            {
+                return;
+            }
+            let node = AstKind::SpreadElement(self.alloc(spread));
+            self.enter_node(node);
+            self.leave_node(node);
+        } else {
+            oxc_ast_visit::walk::walk_spread_element(self, spread);
+        }
+    }
     // The TypeScript navigation tree treats a type alias as a single item.
     fn visit_ts_type_alias_declaration(
         &mut self,
@@ -211,6 +370,31 @@ impl<'a> Visit<'a> for Outline<'a> {
         let opened = entry.is_some();
         if let Some((name, kind, span)) = entry {
             let range = self.positions.range(span);
+            let navigation_kind = match node {
+                AstKind::ObjectProperty(p)
+                    if !p.method && p.kind == oxc_ast::ast::PropertyKind::Init =>
+                {
+                    Some(if p.shorthand {
+                        NavigationKind::Shorthand
+                    } else {
+                        NavigationKind::Property
+                    })
+                }
+                AstKind::SpreadElement(_) => Some(NavigationKind::Spread),
+                AstKind::MethodDefinition(m) if m.kind == MethodDefinitionKind::Constructor => {
+                    Some(NavigationKind::Constructor)
+                }
+                AstKind::ExportSpecifier(_) => Some(NavigationKind::ExportSpecifier),
+                AstKind::ArrowFunctionExpression(_) => Some(NavigationKind::Arrow),
+                AstKind::Function(f) if f.r#type == FunctionType::FunctionExpression => {
+                    Some(NavigationKind::Expression)
+                }
+                AstKind::Function(_) => Some(NavigationKind::Declaration),
+                _ => None,
+            };
+            if let Some(k) = navigation_kind {
+                self.kinds.insert(range, k);
+            }
             self.open.push(Symbol {
                 name,
                 kind,
@@ -228,7 +412,7 @@ impl<'a> Visit<'a> for Outline<'a> {
     fn leave_node(&mut self, node: AstKind<'a>) {
         if self.ancestors.pop().unwrap().1 {
             let mut symbol = self.open.pop().unwrap();
-            finish_level(&mut symbol.children);
+            finish_level(&mut symbol.children, &self.kinds);
             // Parameter properties belong to the class; declarations in the body belong to the constructor.
             let parent_depth = if matches!(node, AstKind::FormalParameter(_))
                 && self.open.last().is_some_and(|s| s.name == "constructor")
@@ -318,8 +502,11 @@ fn symbols_from_program(
         open: Vec::new(),
         roots: Vec::new(),
         count: 0,
+        kinds: Default::default(),
+        spread_names: Default::default(),
+        call_names: Default::default(),
     };
     outline.visit_program(&parsed.program);
-    finish_level(&mut outline.roots);
+    finish_level(&mut outline.roots, &outline.kinds);
     outline.roots
 }
