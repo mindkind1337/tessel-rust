@@ -555,7 +555,7 @@ impl Document {
     pub fn dirty(&self) -> bool {
         !self.media && self.text.as_bytes() != self.original
     }
-    pub fn save(&mut self) -> Result<()> {
+    pub fn save(&mut self, profile: Option<&Path>) -> Result<()> {
         if self.media {
             return Err("This document is read-only".into());
         }
@@ -570,6 +570,9 @@ impl Document {
             return Err("Text editor limit is 2 MiB.".into());
         }
         atomic_write(&self.path, self.text.as_bytes())?;
+        if let Some(profile) = profile {
+            let _ = crate::local_file_history::record(profile, &self.path, &self.text);
+        }
         self.original = self.text.as_bytes().to_vec();
         self.last_edited_at = None;
         Ok(())
@@ -614,11 +617,11 @@ mod tests {
         fs::write(&path, "a\r\nb\r\n").unwrap();
         let mut doc = Document::open(dir.path(), &path).unwrap();
         doc.text.push('c');
-        doc.save().unwrap();
+        doc.save(None).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "a\r\nb\r\nc");
         fs::write(&path, "someone else").unwrap();
         doc.text.push('d');
-        assert!(doc.save().is_err());
+        assert!(doc.save(None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
     }
     #[test]
@@ -633,7 +636,7 @@ mod tests {
         assert!(doc.media);
         assert_eq!(doc.image.as_ref().unwrap().size, [2, 2]);
         assert!(!doc.dirty());
-        assert!(doc.save().is_err());
+        assert!(doc.save(None).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
         image::RgbaImage::from_pixel(4097, 1, image::Rgba([0, 0, 0, 255]))
             .save(&path)

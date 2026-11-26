@@ -5437,7 +5437,7 @@ impl Tessel {
             }
             GpuiAction::SaveActiveDocument => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
-                    match doc.save() {
+                    match doc.save(self.store.as_ref().map(|s| s.directory())) {
                         Ok(()) => doc.error.clear(),
                         Err(e) => doc.error = e,
                     }
@@ -7053,7 +7053,7 @@ impl Tessel {
             GpuiAction::ConfirmModalPrimary => {
                 if let Some(idx) = self.pending_close.take() {
                     if let Some(doc) = self.documents.get_mut(idx) {
-                        match doc.save() {
+                        match doc.save(self.store.as_ref().map(|s| s.directory())) {
                             Ok(()) => self.remove_document(idx),
                             Err(e) => self.error = e,
                         }

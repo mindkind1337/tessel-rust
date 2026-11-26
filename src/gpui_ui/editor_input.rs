@@ -377,6 +377,73 @@ mod tests {
     }
 
     #[gpui::test]
+    fn file_timeline_saved_version_opens_outside_git(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("project");
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("notes.txt");
+        std::fs::write(&path, "original\n").unwrap();
+        let mut doc = Document::open(&folder, &path).unwrap();
+        doc.text = "saved text\n".into();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(folder), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        view.update(cx, |root, _, cx| {
+            root.dispatch(
+                GpuiAction::Timeline(crate::file_timeline::Action::Toggle),
+                cx,
+            );
+            root.dispatch(GpuiAction::SaveActiveDocument, cx);
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved text\n");
+        std::fs::write(&path, "current text\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds("timeline-entry-0") {
+                visual.simulate_click(bounds.center(), Default::default());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "saved version missing"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        loop {
+            let opened = view
+                .update(cx, |root, _, cx| {
+                    root.poll_backend(cx);
+                    root.app.gpui_editor_document().is_some_and(|d| {
+                        d.diff_title.is_some()
+                            && d.text.contains("-saved text")
+                            && d.text.contains("+current text")
+                    })
+                })
+                .unwrap();
+            if opened {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "saved version diff did not open"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+
+    #[gpui::test]
     fn file_timeline_opens_clicked_commit_as_a_diff(cx: &mut TestAppContext) {
         exercise_timeline_diff(cx, false);
     }

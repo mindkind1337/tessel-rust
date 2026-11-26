@@ -17,8 +17,9 @@ pub struct Commit {
     old_path: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct History {
+    pub saves: Vec<crate::local_file_history::Entry>,
     root: PathBuf,
     relative: String,
     pub commits: Vec<Commit>,
@@ -121,6 +122,7 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
         None,
     )?;
     Ok(History {
+        saves: Vec::new(),
         root,
         relative,
         commits,
@@ -128,6 +130,25 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
         untracked: status.bytes.starts_with(b"?? "),
         more,
     })
+}
+
+fn load(file: &Path, limit: usize, profile: Option<&Path>) -> Result<History, String> {
+    let saves = profile
+        .map(|dir| crate::local_file_history::list(dir, file))
+        .transpose();
+    let mut history = match read(file, limit) {
+        Ok(h) => h,
+        Err(_)
+            if saves
+                .as_ref()
+                .is_ok_and(|v| v.as_ref().is_some_and(|s| !s.is_empty())) =>
+        {
+            History::default()
+        }
+        Err(e) => return Err(saves.err().map(|err| err.to_string()).unwrap_or(e)),
+    };
+    history.saves = saves.ok().flatten().unwrap_or_default();
+    Ok(history)
 }
 
 impl History {
@@ -179,10 +200,12 @@ impl History {
 #[derive(Default)]
 pub struct State {
     pub pin: Option<PinnedFile>,
+    pub profile: Option<PathBuf>,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
     limit: usize,
     revision: u64,
+    save_cursor: u64,
     last_age_update: Option<std::time::Instant>,
     pending: Option<(u64, mpsc::Receiver<Result<History, String>>)>,
 }
@@ -213,12 +236,16 @@ impl State {
         };
         let (tx, rx) = mpsc::channel();
         let limit = self.limit;
+        let profile = self.profile.clone();
         self.pending = Some((self.revision, rx));
         thread::spawn(move || {
-            let _ = tx.send(read(&file, limit));
+            let _ = tx.send(load(&file, limit, profile.as_deref()));
         });
     }
     pub fn poll(&mut self) -> bool {
+        if crate::local_file_history::changed_since(&mut self.save_cursor, self.file.as_deref()) {
+            self.refresh(false);
+        }
         let Some((revision, rx)) = &self.pending else {
             if self
                 .last_age_update
@@ -238,7 +265,7 @@ impl State {
             self.last_age_update = result
                 .as_ref()
                 .ok()
-                .filter(|h| !h.commits.is_empty())
+                .filter(|h| !h.commits.is_empty() || !h.saves.is_empty())
                 .map(|_| std::time::Instant::now());
             self.data = Some(result.map(Arc::new));
         }
@@ -300,11 +327,13 @@ impl Snapshot {
                 "Loading timeline…"
             }),
             (_, Some(Err(e))) => Some(e),
-            (_, Some(Ok(h))) if !h.dirty && h.commits.is_empty() => Some(if fr {
-                "Aucune modification Git pour ce fichier."
-            } else {
-                "No Git changes for this file."
-            }),
+            (_, Some(Ok(h))) if !h.dirty && h.commits.is_empty() && h.saves.is_empty() => {
+                Some(if fr {
+                    "Aucune modification Git pour ce fichier."
+                } else {
+                    "No Git changes for this file."
+                })
+            }
             _ => None,
         }
     }
@@ -339,31 +368,52 @@ fn relative_time(time: i64, now: i64, fr: bool) -> String {
 
 pub struct Row<'a> {
     pub commit: Option<&'a Commit>,
+    pub saved: Option<&'a crate::local_file_history::Entry>,
     pub label: &'a str,
     pub age: Option<String>,
 }
 
+impl Row<'_> {
+    pub fn key(&self) -> Option<String> {
+        self.saved
+            .map(|s| format!("local:{}", s.id))
+            .or_else(|| self.commit.map(|c| c.id.clone()))
+    }
+}
 impl History {
     pub fn rows(&self, now: i64, fr: bool) -> Vec<Row<'_>> {
-        let working = self.dirty.then_some((now, None));
+        let working = self.dirty.then_some((now.saturating_mul(1000), None, None));
         let mut entries: Vec<_> = working
             .into_iter()
-            .chain(self.commits.iter().map(|c| (c.time, Some(c))))
+            .chain(
+                self.commits
+                    .iter()
+                    .map(|c| (c.time.saturating_mul(1000), Some(c), None)),
+            )
+            .chain(self.saves.iter().map(|e| (e.timestamp, None, Some(e))))
             .collect();
-        entries.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+        entries.sort_by_key(|(time, _, _)| std::cmp::Reverse(*time));
         let mut previous = String::new();
         entries
             .into_iter()
-            .map(|(time, commit)| {
-                let age = relative_time(time, now, fr);
+            .map(|(time, commit, saved)| {
+                let age = relative_time(time.div_euclid(1000), now, fr);
                 let visible = (age != previous).then(|| age.clone());
                 previous = age;
                 let label = match commit {
                     Some(c) => c.message.lines().next().unwrap_or("").trim(),
+                    None if saved.is_some() => {
+                        if fr {
+                            "Fichier enregistré"
+                        } else {
+                            "File Saved"
+                        }
+                    }
                     None if fr => "Modifications non commitées",
                     None => "Uncommitted Changes",
                 };
                 Row {
+                    saved,
                     commit,
                     label,
                     age: visible,
@@ -415,8 +465,8 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                             if let Some(c) = row.commit {
                                 response |= ui.selectable_label(false, &c.author);
                             }
-                            if let Some(age) = row.age {
-                                response |= ui.selectable_label(false, age);
+                            if let Some(age) = &row.age {
+                                response |= ui.selectable_label(false, age.as_str());
                             }
                             response
                         })
@@ -430,11 +480,7 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                         r
                     };
                     if r.clicked() {
-                        action = Some(Action::Open(
-                            file.clone(),
-                            row.commit.map(|c| c.id.clone()),
-                            r.double_clicked(),
-                        ));
+                        action = Some(Action::Open(file.clone(), row.key(), r.double_clicked()));
                     }
                 }
                 if history.more
@@ -481,6 +527,7 @@ mod tests {
             old_path: None,
         };
         let h = History {
+            saves: Vec::new(),
             root: PathBuf::new(),
             relative: String::new(),
             commits: vec![commit(300), commit(0), commit(-2)],

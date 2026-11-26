@@ -95,6 +95,7 @@ mod launch;
 mod launch_fingerprint;
 pub mod launcher_panel;
 pub mod layout_broadcast_ui;
+mod local_file_history;
 pub mod muse_catalog;
 pub mod muse_model_probe;
 pub mod muse_protocol;

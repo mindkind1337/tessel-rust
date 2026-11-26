@@ -2680,7 +2680,7 @@ fn render_timeline(
             .into_iter()
             .enumerate()
         {
-            let commit = row.commit.map(|c| c.id.clone());
+            let commit = row.key();
             let key = format!("timeline-{}", commit.as_deref().unwrap_or("working"));
             let path = file.clone();
             list = list.child(

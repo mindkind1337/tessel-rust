@@ -1921,6 +1921,7 @@ impl Tessel {
             .filter(|_| shown && self.view == View::Files);
         let pinned = pin.is_some();
         let file = pin.map(|p| p.path.clone()).or(active);
+        self.timeline.profile = self.store.as_ref().map(|s| s.directory().to_owned());
         self.timeline.select(file.clone());
         crate::file_timeline::Snapshot {
             shown,
@@ -1979,16 +1980,46 @@ impl Tessel {
                 };
                 let source_doc = Some(origin);
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let title = format!(
-                    "{name} ({})",
-                    commit
-                        .as_deref()
-                        .and_then(|c| c.get(..7))
-                        .unwrap_or(tr("Working tree"))
-                );
+                let saved = commit
+                    .as_deref()
+                    .and_then(|id| id.strip_prefix("local:"))
+                    .and_then(|id| history.saves.iter().find(|e| e.id == id));
+                let title = if let Some(saved) = saved {
+                    let date = chrono::DateTime::from_timestamp_millis(saved.timestamp)
+                        .map(|d| {
+                            d.with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M:%S%.3f")
+                                .to_string()
+                        })
+                        .unwrap_or_default();
+                    let label = if crate::i18n::is_french() {
+                        "Fichier enregistré"
+                    } else {
+                        "File Saved"
+                    };
+                    format!("{name} ({label} • {date}) ↔ {name}")
+                } else {
+                    format!(
+                        "{name} ({})",
+                        commit
+                            .as_deref()
+                            .and_then(|c| c.get(..7))
+                            .unwrap_or(tr("Working tree"))
+                    )
+                };
+                let profile = self.timeline.profile.clone();
                 let sender = self.sender.clone();
                 thread::spawn(move || {
-                    let result = history.diff(commit.as_deref());
+                    let result = if let Some(id) =
+                        commit.as_deref().and_then(|s| s.strip_prefix("local:"))
+                    {
+                        profile
+                            .as_deref()
+                            .ok_or_else(|| "Local history unavailable".to_owned())
+                            .and_then(|dir| crate::local_file_history::diff(dir, &root, &path, id))
+                    } else {
+                        history.diff(commit.as_deref())
+                    };
                     let _ = sender.send(Message::DiffDocument {
                         source_doc,
                         root,
@@ -2545,7 +2576,7 @@ impl Tessel {
                     && doc.dirty()
                     && let Some(edited) = doc.last_edited_at
                     && now.saturating_duration_since(edited) >= delay
-                    && let Err(err) = doc.save()
+                    && let Err(err) = doc.save(self.store.as_ref().map(|s| s.directory()))
                 {
                     doc.last_edited_at = None;
                     doc.error = err;
@@ -6680,8 +6711,13 @@ impl Tessel {
                     | "jsonl"
                     | "ndjson"
             );
-        let (close_clicked, prefs_changed) =
-            document_toolbar(ui, d, readable, &mut self.state.editor_prefs);
+        let (close_clicked, prefs_changed) = document_toolbar(
+            ui,
+            d,
+            readable,
+            &mut self.state.editor_prefs,
+            self.store.as_ref().map(|s| s.directory()),
+        );
         if close_clicked {
             close = Some(self.active_document);
         }
@@ -10975,7 +11011,8 @@ impl Tessel {
                         self.pending_close = None;
                     }
                     if ui.button(tr("Save and close")).clicked() {
-                        match self.documents[index].save() {
+                        match self.documents[index].save(self.store.as_ref().map(|s| s.directory()))
+                        {
                             Ok(()) => {
                                 self.remove_document(index);
                                 self.pending_close = None;
@@ -11230,7 +11267,7 @@ impl Tessel {
                         .documents
                         .iter_mut()
                         .filter(|d| d.dirty())
-                        .try_for_each(Document::save)
+                        .try_for_each(|doc| doc.save(self.store.as_ref().map(|s| s.directory())))
                     {
                         Ok(()) => {
                             self.finish_exit(ctx);
@@ -14619,6 +14656,7 @@ fn document_toolbar(
     d: &mut Document,
     readable: bool,
     editor_prefs: &mut crate::workspace::EditorPreferences,
+    profile: Option<&std::path::Path>,
 ) -> (bool, bool) {
     let source_mode = !d.media && d.diff_title.is_none() && !(readable && d.preview_mode);
     let mut prefs_changed = false;
@@ -14667,7 +14705,7 @@ fn document_toolbar(
                     && (save_clicked
                         || ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S)))
                 {
-                    match d.save() {
+                    match d.save(profile) {
                         Ok(()) => {
                             d.error.clear();
                             d.unpinned_preview = false;
@@ -15289,7 +15327,7 @@ $lock.Dispose()
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
                         let mut prefs = crate::workspace::EditorPreferences::default();
-                        close = document_toolbar(ui, &mut document, false, &mut prefs).0;
+                        close = document_toolbar(ui, &mut document, false, &mut prefs, None).0;
                     });
                 });
             });
