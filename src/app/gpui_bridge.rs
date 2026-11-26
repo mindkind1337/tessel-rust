@@ -694,6 +694,8 @@ pub(crate) struct GpuiModalsSnapshot {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiWorkspaceSnapshot {
+    #[cfg(windows)]
+    pub held_html_link: Option<(u64, url::Url)>,
     pub theme: ThemeId,
     pub dark: bool,
     pub french: bool,
@@ -908,6 +910,8 @@ pub(crate) enum GpuiAction {
     SelectOfficeSection(usize),
     HtmlLinkMenu(u64, String, (f32, f32)),
     CloseHtmlLinkMenu,
+    #[cfg(windows)]
+    ResolveHtmlExternal(u64, url::Url, bool),
     OpenHtmlLinkMenuTarget(u64),
     FollowDocumentLink(String),
     // Embedded Browser Tab actions
@@ -2061,6 +2065,9 @@ impl Tessel {
     }
     #[cfg(windows)]
     pub(crate) fn poll_html_page(&mut self) -> bool {
+        if self.editor_page.poll_external() {
+            return true;
+        }
         if self.view == View::Files
             && self.gpui_media_unobscured()
             && let Some(doc) = self.documents.get(self.active_document)
@@ -3571,6 +3578,8 @@ impl Tessel {
         };
 
         GpuiWorkspaceSnapshot {
+            #[cfg(windows)]
+            held_html_link: self.editor_page.external_prompt(),
             theme,
             dark: self.state.dark,
             french,
@@ -5898,6 +5907,23 @@ impl Tessel {
                 {
                     doc.tools.html_link_menu =
                         Some((pos, href, matches!(target, crate::preview::Link::Web(_))));
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::ResolveHtmlExternal(id, shown, open) => {
+                let active = match self.view {
+                    View::Files => self.documents.get(self.active_document).is_some_and(|d| {
+                        d.instance_id() == id && d.preview_mode && d.tools.html_plain_text.is_none()
+                    }),
+                    View::Remote => self.remote.active_html_page(id).is_some(),
+                    _ => false,
+                };
+                if active
+                    && self.gpui_media_unobscured()
+                    && let Some(url) = self.editor_page.resolve_external(id, &shown)
+                    && open
+                {
+                    self.open_tessel_url_headless(url.into());
                 }
             }
             GpuiAction::CloseHtmlLinkMenu => {}

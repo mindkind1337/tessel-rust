@@ -21,6 +21,19 @@ struct LinkGesture {
     position: Option<(f32, f32)>,
 }
 
+fn hold_external(slot: &RefCell<Option<Url>>, base: &Url, address: &str) {
+    if address.len() <= 8192
+        && let Ok(url) = Url::parse(address)
+        && matches!(url.scheme(), "http" | "https")
+        && url.host().is_some()
+        && url.origin() != base.origin()
+        && url.username().is_empty()
+        && url.password().is_none()
+    {
+        slot.replace(Some(url));
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct EditorPage {
     view: Option<WebView>,
@@ -31,6 +44,8 @@ pub(crate) struct EditorPage {
     rect: Option<wry::Rect>,
     origin: (f32, f32),
     hidden: bool,
+    incoming: Rc<RefCell<Option<Url>>>,
+    held: Option<Url>,
     pending: Rc<RefCell<Option<LinkGesture>>>,
 }
 impl EditorPage {
@@ -40,6 +55,8 @@ impl EditorPage {
             self.pages = Pages::default();
             self.document = None;
             self.rect = None;
+            self.held = None;
+            self.incoming = Default::default();
             self.pending = Default::default();
             self.hidden = false;
         } else if obscured
@@ -61,6 +78,27 @@ impl EditorPage {
             self.retain(None, false);
             Ok(())
         }
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn queue_external_fixture(&mut self, id: u64, url: Url) {
+        self.document = Some(id);
+        self.incoming.replace(Some(url));
+    }
+    pub(crate) fn poll_external(&mut self) -> bool {
+        if let Some(url) = self.incoming.take() {
+            self.held = Some(url);
+            return true;
+        }
+        false
+    }
+    pub(crate) fn external_prompt(&self) -> Option<(u64, Url)> {
+        Some((self.document?, self.held.clone()?))
+    }
+    pub(crate) fn resolve_external(&mut self, id: u64, shown: &Url) -> Option<Url> {
+        if self.document != Some(id) || self.held.as_ref() != Some(shown) {
+            return None;
+        }
+        self.held.take()
     }
     pub(crate) fn action(&self, active: u64) -> Option<GpuiAction> {
         let LinkGesture {
@@ -155,8 +193,11 @@ impl EditorPage {
             .with_clipboard(false)
             .with_devtools(false)
             .with_navigation_handler({
+                let base = base.clone();
+                let incoming = self.incoming.clone();
                 let origin = base.origin();
                 move |u| {
+                    hold_external(&incoming, &base, &u);
                     if remote {
                         Url::parse(&u).is_ok_and(|url| {
                             url.origin() == origin
@@ -169,13 +210,21 @@ impl EditorPage {
                 }
             })
             .with_download_started_handler(|_, _| false)
-            .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+            .with_new_window_req_handler({
+                let incoming = self.incoming.clone();
+                let base = base.clone();
+                move |address, _| {
+                    hold_external(&incoming, &base, &address);
+                    wry::NewWindowResponse::Deny
+                }
+            })
             .with_drag_drop_handler(|_| true);
         // The remote page browses within its isolated project origin using native links.
         // Only the local document uses the editor's application link menu.
         let builder = if remote {
             builder
         } else {
+            let incoming = self.incoming.clone();
             builder
                 .with_initialization_script(LINKS)
                 .with_ipc_handler(move |msg| {
@@ -194,6 +243,10 @@ impl EditorPage {
                         || !target.username().is_empty()
                         || target.password().is_some()
                     {
+                        return;
+                    }
+                    if kind == "click" && target.origin() != base.origin() {
+                        hold_external(&incoming, &base, &raw);
                         return;
                     }
                     let href = if target.origin() == base.origin() {
@@ -227,6 +280,68 @@ impl EditorPage {
 mod tests {
     use super::*;
     use crate::webview_test_support::{hidden_parent, pump, wait_for};
+    #[test]
+    fn held_destinations_are_external_web_links_without_credentials() {
+        let incoming = RefCell::default();
+        let base = Url::parse("http://preview.localhost/index.html").unwrap();
+        for raw in [
+            "http://preview.localhost/other",
+            "file:///secret",
+            "javascript:void(0)",
+            "https://user:password@example.org/",
+        ] {
+            hold_external(&incoming, &base, raw);
+            assert!(incoming.borrow().is_none());
+        }
+        hold_external(&incoming, &base, "https://example.org:444/report");
+        assert_eq!(incoming.take().unwrap().port(), Some(444));
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_editor_page_holds_external_navigation_until_a_scoped_decision() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("index.html");
+        std::fs::write(&path, "<h1>Index</h1>").unwrap();
+        let doc = Document::open(root.path(), &path).unwrap();
+        let parent = hidden_parent();
+        let mut editor = EditorPage::default();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(300., 200.),
+        );
+        editor.sync(&parent, &doc, bounds, 1.);
+        let view = editor.view.as_ref().unwrap();
+        wait_for(
+            view,
+            "document.querySelector('h1')?.textContent === 'Index'",
+        );
+        view.evaluate_script("location.assign('https://example.invalid/report')")
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !editor.poll_external() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "external navigation was never reported"
+            );
+            pump();
+        }
+        let (id, url) = editor.external_prompt().unwrap();
+        assert_eq!(url.as_str(), "https://example.invalid/report");
+        wait_for(
+            editor.view.as_ref().unwrap(),
+            "document.querySelector('h1')?.textContent === 'Index'",
+        );
+        assert!(editor.resolve_external(id.wrapping_add(1), &url).is_none());
+        assert!(
+            editor
+                .resolve_external(id, &Url::parse("https://different.invalid/").unwrap())
+                .is_none()
+        );
+        assert_eq!(editor.resolve_external(id, &url), Some(url));
+        assert!(editor.external_prompt().is_none());
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn native_ssh_editor_renders_draft_and_keeps_navigation_in_the_project() {

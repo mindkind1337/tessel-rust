@@ -16,6 +16,59 @@ use crate::{
 };
 use serde_json::json;
 
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
+fn html_external_prompt_dismisses_or_opens_in_the_owner_browser(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let path = project.join("index.html");
+    std::fs::write(&path, "<p>Index</p>").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        root
+    });
+    for (selector, open) in [("dismiss-held-link", false), ("open-held-link", true)] {
+        view.update(cx, |root, _, cx| {
+            let id = root
+                .app
+                .gpui_snapshot(960., 640., 4.)
+                .active_document
+                .unwrap()
+                .instance_id;
+            root.app.editor_page.queue_external_fixture(
+                id,
+                url::Url::parse("https://example.invalid/report").unwrap(),
+            );
+            assert!(root.app.poll_html_page());
+            cx.notify();
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let button = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(button, Default::default());
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            let snapshot = root.app.gpui_snapshot(960., 640., 4.);
+            assert!(snapshot.held_html_link.is_none());
+            assert_eq!(
+                snapshot.center_mode,
+                if open {
+                    super::GpuiCenterMode::BrowserTab
+                } else {
+                    super::GpuiCenterMode::DocumentEditor
+                }
+            );
+        })
+        .unwrap();
+    }
+}
+
 #[cfg(feature = "visual-test")]
 #[gpui::test]
 fn html_plain_mode_displays_selectable_body_and_switches_back_to_source(

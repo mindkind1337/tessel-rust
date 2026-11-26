@@ -208,10 +208,11 @@ pub fn layout_mermaid_sequence(
 pub(super) fn html_viewport(
     id: u64,
     readable: gpui::AnyElement,
+    snapshot: &GpuiWorkspaceSnapshot,
     cx: &Context<TesselGpuiRoot>,
 ) -> gpui::AnyElement {
     let owner = cx.weak_entity();
-    div()
+    let viewport = div()
         .relative()
         .flex_1()
         .min_h_0()
@@ -236,6 +237,54 @@ pub(super) fn html_viewport(
             .absolute()
             .inset_0(),
         )
+        .into_any_element();
+    let Some((_, url)) = snapshot
+        .held_html_link
+        .as_ref()
+        .filter(|(owner, _)| *owner == id)
+    else {
+        return viewport;
+    };
+    let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+    let fr = snapshot.french;
+    let mut bar = div()
+        .flex()
+        .gap(px(10.))
+        .px(px(8.))
+        .py(px(4.))
+        .child(if fr {
+            format!("Un lien vers {host} a été bloqué.")
+        } else {
+            format!("A link to {host} was held back.")
+        });
+    for (open, label) in [
+        (true, if fr { "Ouvrir" } else { "Open it" }),
+        (false, if fr { "Ignorer" } else { "Dismiss" }),
+    ] {
+        let url = url.clone();
+        let selector = if open {
+            "open-held-link"
+        } else {
+            "dismiss-held-link"
+        };
+        bar = bar.child(
+            div()
+                .id(selector)
+                .debug_selector(move || selector.into())
+                .cursor_pointer()
+                .on_click(cx.listener(move |root, _, _, cx| {
+                    root.dispatch(GpuiAction::ResolveHtmlExternal(id, url.clone(), open), cx)
+                }))
+                .child(label),
+        );
+    }
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(bar)
+        .child(viewport)
         .into_any_element()
 }
 
@@ -293,7 +342,7 @@ pub(crate) fn render_document_editor_stage(
             let readable = render_readable_html_stage(doc, tokens, cx).into_any_element();
             #[cfg(windows)]
             {
-                html_viewport(doc.instance_id, readable, cx)
+                html_viewport(doc.instance_id, readable, snapshot, cx)
             }
             #[cfg(not(windows))]
             readable.into_any_element()

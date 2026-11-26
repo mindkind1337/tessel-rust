@@ -654,7 +654,7 @@ pub(crate) fn render(
                 .child(SharedString::from(fallback.clone()))
                 .into_any_element();
             #[cfg(windows)]
-            let text = super::editor_view::html_viewport(*_id, text, cx);
+            let text = super::editor_view::html_viewport(*_id, text, snapshot, cx);
             body = body.child(text);
         } else if remote.html_plain.is_some() {
             if let Some(state) = editor_input.plain() {
