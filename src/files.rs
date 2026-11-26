@@ -16,6 +16,16 @@ pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub fn save_download(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(bytes)?;
+    temp.as_file().sync_all()?;
+    temp.persist_noclobber(path)?;
+    Ok(())
+}
+
 fn read(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     fs::File::open(path)
@@ -37,6 +47,8 @@ pub enum OutlineCursor {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub image_menu: Option<(f32, f32)>,
+    pub image_download_notice: String,
     pub outline_cursor: Option<OutlineCursor>,
     pub outline_scroll_generation: u64,
     pub outline_selected: Option<String>,
@@ -473,7 +485,7 @@ impl Document {
                 root: root.to_owned(),
                 path,
                 text: String::new(),
-                original: vec![],
+                original: bytes,
                 error: String::new(),
                 preview_mode: true,
                 preview: None,
@@ -534,6 +546,33 @@ impl Document {
             sheet_cache: None,
         })
     }
+    pub fn save_image_copy(
+        &mut self,
+        french: bool,
+        choose: impl FnOnce(&std::ffi::OsStr) -> Option<PathBuf>,
+    ) {
+        self.tools.image_menu = None;
+        if !self.media || self.original.is_empty() {
+            return;
+        }
+        let Some(destination) = self.path.file_name().and_then(choose) else {
+            return;
+        };
+        self.tools.image_download_notice = match save_download(&destination, &self.original) {
+            Ok(()) if french => format!("Fichier enregistré dans {}", destination.display()),
+            Ok(()) => format!("File saved to {}", destination.display()),
+            Err(e) => e.to_string(),
+        };
+    }
+
+    pub fn choose_image_copy(&mut self, french: bool) {
+        self.save_image_copy(french, |name| {
+            rfd::FileDialog::new()
+                .set_file_name(name.to_string_lossy())
+                .save_file()
+        });
+    }
+
     pub fn original_text(&self) -> Option<&str> {
         std::str::from_utf8(&self.original).ok()
     }
@@ -566,6 +605,29 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_image_copy_preserves_opened_bytes_and_existing_destinations() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("poster.avif");
+        let dest = dir.path().join("copy.avif");
+        let bytes = include_bytes!("../tests/fixtures/alpha-bars.avif");
+        std::fs::write(&source, bytes).unwrap();
+        let mut doc = super::Document::open(dir.path(), &source).unwrap();
+        std::fs::remove_file(&source).unwrap();
+        doc.save_image_copy(false, |_| None);
+        assert!(doc.tools.image_download_notice.is_empty());
+        doc.save_image_copy(true, |name| {
+            assert_eq!(name, "poster.avif");
+            Some(dest.clone())
+        });
+        assert!(doc.tools.image_download_notice.contains("enregistré"));
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        std::fs::write(&dest, b"keep").unwrap();
+        doc.save_image_copy(false, |_| Some(dest.clone()));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"keep");
+        assert!(!doc.dirty());
+    }
+
     #[test]
     fn native_editor_edits_reject_stale_reopened_readonly_and_oversized_events() {
         let dir = tempfile::tempdir().unwrap();

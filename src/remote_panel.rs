@@ -5,10 +5,7 @@ use crate::{
     workspace::Host,
 };
 use eframe::egui;
-use std::{
-    io::Write,
-    sync::mpsc::{self, Receiver},
-};
+use std::sync::mpsc::{self, Receiver};
 type Versions = Vec<crate::local_file_history::Entry>;
 type PreparedReply = Result<
     (

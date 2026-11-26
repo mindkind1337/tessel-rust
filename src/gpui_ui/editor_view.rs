@@ -19,7 +19,7 @@ use crate::{
 };
 use gpui::{
     Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder, Rgba,
-    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, img, point,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, canvas, div, img, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -223,7 +223,7 @@ pub(crate) fn render_document_editor_stage(
     } else if doc.office_summary.is_some() {
         render_office_stage(doc, french, tokens, cx).into_any_element()
     } else if let Some(dims) = doc.image_dims {
-        render_image_stage(doc, dims, french, tokens).into_any_element()
+        render_image_stage(doc, dims, french, tokens, cx).into_any_element()
     } else if doc.preview_mode {
         if let Some(sheet) = &doc.sheet {
             super::sheet_view::render(sheet.clone(), french, tokens, cx).into_any_element()
@@ -1403,29 +1403,82 @@ fn render_image_stage(
     dims: [usize; 2],
     french: bool,
     tokens: &GpuiThemeTokens,
+    cx: &Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
-    let label = if french {
-        format!(
-            "Aperçu d'image en lecture seule · {} × {} px ({})",
-            dims[0], dims[1], doc.title
-        )
-    } else {
-        format!(
-            "Read-only image preview · {} × {} px ({})",
-            dims[0], dims[1], doc.title
-        )
-    };
-    div()
+    let id = doc.instance_id;
+    let mut stage = div()
         .size_full()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .px(px(12.))
-                .py(px(6.))
-                .child(SharedString::from(label.clone())),
-        )
-        .child(render_media_pixels(doc, label, tokens))
+        .items_center()
+        .justify_center()
+        .p(px(20.));
+    if let Some(image) = &doc.media_pixels {
+        stage = stage.child(
+            img(image.clone())
+                .id("local-preview-image")
+                .debug_selector(|| "local-preview-image".into())
+                .w(px(dims[0] as f32))
+                .h(px(dims[1] as f32))
+                .max_w_full()
+                .max_h_full()
+                .object_fit(gpui::ObjectFit::Contain)
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |root, event: &gpui::MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        root.dispatch(
+                            GpuiAction::ImageMenu(
+                                id,
+                                Some((event.position.x.into(), event.position.y.into())),
+                            ),
+                            cx,
+                        );
+                    }),
+                ),
+        );
+    }
+    if let Some((x, y)) = doc.image_menu {
+        let menu = div()
+            .id("local-image-menu")
+            .debug_selector(|| "local-image-menu".into())
+            .occlude()
+            .bg(tokens.surface)
+            .rounded(px(4.))
+            .p(px(4.))
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(move |root, _: &gpui::MouseDownEvent, _, cx| {
+                root.dispatch(GpuiAction::ImageMenu(id, None), cx);
+            }))
+            .child(
+                div()
+                    .id("local-image-download")
+                    .cursor_pointer()
+                    .px(px(9.))
+                    .py(px(5.))
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.dispatch(GpuiAction::DownloadImage(id), cx)
+                    }))
+                    .child(if french {
+                        "Télécharger…"
+                    } else {
+                        "Download…"
+                    }),
+            );
+        stage = stage.child(
+            gpui::deferred(
+                gpui::anchored()
+                    .position(point(px(x), px(y)))
+                    .snap_to_window_with_margin(px(4.))
+                    .child(menu),
+            )
+            .priority(2),
+        );
+    }
+    if !doc.image_download_notice.is_empty() {
+        stage = stage.child(SharedString::from(doc.image_download_notice.clone()));
+    }
+    stage
 }
 
 // ---------------------------------------------------------------------------

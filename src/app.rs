@@ -6779,16 +6779,35 @@ impl Tessel {
                     egui::TextureOptions::LINEAR,
                 ));
             }
+            let french = self.state.language == crate::i18n::Language::French;
+            if !d.tools.image_download_notice.is_empty() {
+                ui.label(&d.tools.image_download_notice);
+            }
             if let Some(texture) = &d.texture {
-                egui::ScrollArea::both()
-                    .id_salt((&d.path, "image"))
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Image::new(texture)
-                                .max_width(ui.available_width())
-                                .maintain_aspect_ratio(true),
-                        );
-                    });
+                let available = ui.available_rect_before_wrap();
+                let bounds = (available.size() - egui::Vec2::splat(40.)).max(egui::Vec2::splat(1.));
+                let natural = texture.size_vec2();
+                let scale = (bounds.x / natural.x).min(bounds.y / natural.y).min(1.);
+                let rect = egui::Rect::from_center_size(available.center(), natural * scale);
+                let response = ui.put(
+                    rect,
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(rect.size())
+                        .sense(egui::Sense::click()),
+                );
+                response.context_menu(|ui| {
+                    if ui
+                        .button(if french {
+                            "Télécharger…"
+                        } else {
+                            "Download…"
+                        })
+                        .clicked()
+                    {
+                        ui.close();
+                        d.choose_image_copy(french);
+                    }
+                });
             }
         } else if readable && d.preview_mode {
             if matches!(extension.as_str(), "csv" | "tsv") {
@@ -15227,6 +15246,64 @@ $lock.Dispose()
         assert!(!frame(true, true)); // Holding W must not close successive panes.
         assert!(!frame(false, true));
         assert!(frame(true, true));
+    }
+
+    #[test]
+    fn compatibility_local_image_fits_and_opens_its_menu() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("portrait.png");
+        image::RgbaImage::from_pixel(100, 400, image::Rgba([0u8, 90, 80, 255]))
+            .save(&path)
+            .unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(tmp.path().join("state")), false, || {});
+        app.documents = vec![Document::open(tmp.path(), &path).unwrap()];
+        app.active_document = 0;
+        app.view = View::Files;
+        let ctx = egui::Context::default();
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640., 320.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.editor(ui));
+                },
+            )
+        };
+        let output = frame(vec![]);
+        let rect = ctx
+            .tessellate(output.shapes, output.pixels_per_point)
+            .into_iter()
+            .find_map(|shape| {
+                if let egui::epaint::Primitive::Mesh(mesh) = shape.primitive
+                    && mesh.texture_id != egui::TextureId::default()
+                {
+                    Some(mesh.calc_bounds())
+                } else {
+                    None
+                }
+            })
+            .expect("displayed image");
+        assert!(rect.height() < 320. && (rect.height() / rect.width() - 4.).abs() < 0.1);
+        assert!((rect.center().x - 320.).abs() < 2.);
+        let pos = rect.center();
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]);
+        }
+        assert!(egui::Popup::is_any_open(&ctx));
     }
 
     #[test]

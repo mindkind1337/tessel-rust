@@ -413,6 +413,8 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub readable_blocks: Vec<crate::preview::ReadableBlock>,
     pub pdf_summary: Option<crate::pdf::PdfSummaryTuple>,
     pub office_summary: Option<std::sync::Arc<crate::office::OfficeSummary>>,
+    pub image_menu: Option<(f32, f32)>,
+    pub image_download_notice: String,
     pub image_dims: Option<[usize; 2]>,
     pub media_pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub error: String,
@@ -880,6 +882,8 @@ pub(crate) enum GpuiAction {
         text: String,
     },
     StepPdfPage(isize),
+    ImageMenu(u64, Option<(f32, f32)>),
+    DownloadImage(u64),
     StepPdfZoom(f32),
     SelectOfficeSection(usize),
     FollowDocumentLink(String),
@@ -3716,6 +3720,8 @@ impl Tessel {
             readable_blocks,
             pdf_summary,
             office_summary,
+            image_menu: doc.tools.image_menu,
+            image_download_notice: doc.tools.image_download_notice.clone(),
             image_dims,
             media_pixels,
             error: doc.error.clone(),
@@ -5658,6 +5664,26 @@ impl Tessel {
                     .and_then(|d| d.pdf.as_mut())
                 {
                     pdf.step_page(delta);
+                }
+            }
+            GpuiAction::ImageMenu(id, position) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.image.is_some()
+                {
+                    doc.tools.image_menu = position;
+                }
+            }
+            GpuiAction::DownloadImage(id) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.tools.image_menu.is_some()
+                {
+                    doc.choose_image_copy(self.state.language == crate::i18n::Language::French);
                 }
             }
             GpuiAction::StepPdfZoom(delta) => {

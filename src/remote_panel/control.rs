@@ -407,18 +407,8 @@ impl RemotePanel {
             .unwrap_or("download.bin")
             .replace(['\\', ':'], "_");
         let Some(path) = choose(&name) else { return };
-        let result = (|| -> Result<(), String> {
-            let mut file =
-                tempfile::NamedTempFile::new_in(path.parent().ok_or("Missing download folder")?)
-                    .map_err(|e| e.to_string())?;
-            file.write_all(&doc.original).map_err(|e| e.to_string())?;
-            file.as_file().sync_all().map_err(|e| e.to_string())?;
-            file.persist_noclobber(path)
-                .map_err(|_| "Destination exists or cannot be saved; existing files were kept")?;
-            Ok(())
-        })();
-        if let Err(error) = result {
-            self.error = error;
+        if let Err(error) = crate::files::save_download(&path, &doc.original) {
+            self.error = error.to_string();
         }
     }
 }

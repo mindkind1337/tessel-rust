@@ -16,6 +16,43 @@ use crate::{
 };
 use serde_json::json;
 
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn local_image_menu_opens_on_the_displayed_pixels(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let path = project.join("test.avif");
+    std::fs::write(
+        &path,
+        include_bytes!("../../tests/fixtures/alpha-bars.avif"),
+    )
+    .unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let pos = visual.debug_bounds("local-preview-image").unwrap().center();
+    visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
+    visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("local-image-menu").is_some());
+    visual.simulate_click(gpui::point(gpui::px(5.), gpui::px(5.)), Default::default());
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("local-image-menu")
+            .is_none()
+    );
+}
+
 #[test]
 fn gpui_remote_files_routes_palette_commands_and_editable_fields_to_the_real_panel() {
     use crate::remote_panel::control::Command;
