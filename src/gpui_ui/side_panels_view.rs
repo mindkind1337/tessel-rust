@@ -668,7 +668,7 @@ fn render_explorer_tab(
         );
     }
 
-    let mut outline = div().flex().flex_col().child(render_chip(
+    let mut heading = div().flex().items_center().child(render_chip(
         "explorer-outline-toggle",
         if french { "Plan" } else { "Outline" }.into(),
         sp.outline_open,
@@ -676,6 +676,24 @@ fn render_explorer_tab(
         GpuiAction::OutlineToggle,
         cx,
     ));
+    if sp.outline_open
+        && let Some((id, tree)) = &sp.outline
+    {
+        let expand = crate::outline_tree::all_collapsed(tree, &sp.outline_folds);
+        heading = heading.child(render_chip(
+            "explorer-outline-fold-all",
+            crate::json_outline_panel::fold_all_label(expand, french).into(),
+            false,
+            tokens,
+            GpuiAction::OutlineRow(
+                *id,
+                tree.clone(),
+                crate::app::gpui_bridge::OutlineRowAction::SetAllFolds { expand },
+            ),
+            cx,
+        ));
+    }
+    let mut outline = div().flex().flex_col().child(heading);
     if sp.outline_open {
         let mut body = div()
             .id("explorer-outline-scroll")
@@ -2363,7 +2381,8 @@ fn render_chip(
 ) -> AnyElement {
     let id_shared: SharedString = id.into();
     div()
-        .id(id_shared)
+        .id(id_shared.clone())
+        .debug_selector(move || id_shared.to_string())
         .px(px(6.0))
         .py(px(2.0))
         .rounded(px(tokens.radius_px - 1.0))

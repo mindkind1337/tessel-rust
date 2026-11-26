@@ -204,6 +204,23 @@ mod tests {
             root
         });
         cx.refresh().unwrap();
+        for children_visible in [false, true] {
+            {
+                let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+                let button = visual
+                    .debug_bounds("explorer-outline-fold-all")
+                    .unwrap()
+                    .center();
+                visual.simulate_click(button, Default::default());
+            }
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert_eq!(
+                visual.debug_bounds("outline-name-/17:😀/15:0").is_some(),
+                children_visible
+            );
+        }
+        cx.refresh().unwrap();
         cx.simulate_keystrokes(view.into(), "ctrl-f");
         cx.refresh().unwrap();
         view.update(cx, |root, window, cx| {

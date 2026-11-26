@@ -42,6 +42,7 @@ pub(crate) struct NativeScmScope {
 #[derive(Clone, Debug)]
 pub(crate) enum OutlineRowAction {
     Fold(String),
+    SetAllFolds { expand: bool },
     Reveal(crate::outline_tree::Range, bool),
 }
 
@@ -5748,6 +5749,9 @@ impl Tessel {
                     })
                 {
                     match action {
+                        OutlineRowAction::SetAllFolds { expand } => {
+                            crate::json_outline_panel::set_all_folds(doc, &tree, expand);
+                        }
                         OutlineRowAction::Fold(key) => {
                             crate::json_outline_panel::toggle_fold(doc, &key)
                         }
@@ -8127,7 +8131,7 @@ mod panel_snapshot_tests {
     fn outline_fold_and_reveal_stay_with_the_displayed_document() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
-        let text = r#"{"😀": [1,2]}"#;
+        let text = r#"{"😀": [{"nested":[1]},2]}"#;
         for name in ["one.json", "two.json"] {
             let path = dir.path().join(name);
             std::fs::write(&path, text).unwrap();
@@ -8142,6 +8146,15 @@ mod panel_snapshot_tests {
         let (id, tree) = app.build_side_panels_snapshot(false).outline.unwrap();
         let action = |row| GpuiAction::OutlineRow(id, tree.clone(), row);
         let key = tree[0].key.clone();
+        app.apply_gpui_action(action(OutlineRowAction::SetAllFolds { expand: false }));
+        let parents = crate::outline_tree::parent_keys(&tree);
+        assert_eq!(parents.len(), 3);
+        assert_eq!(
+            app.documents[0].tools.outline_folds,
+            parents.into_iter().collect()
+        );
+        app.apply_gpui_action(action(OutlineRowAction::SetAllFolds { expand: true }));
+        assert!(app.documents[0].tools.outline_folds.is_empty());
         app.apply_gpui_action(action(OutlineRowAction::Fold(key.clone())));
         assert!(
             app.build_side_panels_snapshot(false)

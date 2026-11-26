@@ -42,6 +42,13 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) {
     let cache = ui.data(|data| data.get_temp::<Cache>(id));
     let cache = Cache::current(cache, doc);
     ui.data_mut(|data| data.insert_temp(id, cache.clone()));
+    let expand = crate::outline_tree::all_collapsed(&cache.symbols, &doc.tools.outline_folds);
+    if ui
+        .small_button(fold_all_label(expand, crate::i18n::is_french()))
+        .clicked()
+    {
+        set_all_folds(doc, &cache.symbols, expand);
+    }
     if cache.symbols.is_empty() {
         ui.label(if crate::i18n::is_french() {
             "Aucun symbole dans ce document."
@@ -100,6 +107,24 @@ fn draw(ui: &mut egui::Ui, symbols: &[Symbol], doc: &mut Document) {
                 draw(ui, &symbol.children, doc)
             });
         }
+    }
+}
+
+pub(crate) fn fold_all_label(expand: bool, french: bool) -> &'static str {
+    match (expand, french) {
+        (true, true) => "Tout développer",
+        (false, true) => "Tout réduire",
+        (true, false) => "Expand All",
+        (false, false) => "Collapse All",
+    }
+}
+
+pub(crate) fn set_all_folds(doc: &mut Document, symbols: &[Symbol], expand: bool) {
+    doc.tools.outline_folds.clear();
+    if !expand {
+        doc.tools
+            .outline_folds
+            .extend(crate::outline_tree::parent_keys(symbols));
     }
 }
 
