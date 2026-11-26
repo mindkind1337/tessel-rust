@@ -122,6 +122,7 @@ pub(crate) struct TesselGpuiRoot {
     linear_view: linear_view::View,
     new_task_view: new_task_view::View,
     issues_menu: issues_menu::Menu,
+    agent_swatches: [gpui::FocusHandle; 8],
     image_menu_item: FocusHandle,
     image_menu_viewport: Option<gpui::Size<gpui::Pixels>>,
     _poller_task: Task<()>,
@@ -333,6 +334,7 @@ impl TesselGpuiRoot {
             linear_view: Default::default(),
             new_task_view: Default::default(),
             issues_menu: issues_menu::Menu::new(cx),
+            agent_swatches: std::array::from_fn(|_| cx.focus_handle()),
             image_menu_item: cx.focus_handle(),
             image_menu_viewport: None,
             _poller_task: poller_task,
@@ -1705,6 +1707,7 @@ impl Render for TesselGpuiRoot {
                 settings_view::render_settings_modal(
                     &snapshot,
                     &self.modal_query_input,
+                    &self.agent_swatches,
                     focus_input,
                     &tokens,
                     cx,

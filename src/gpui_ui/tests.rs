@@ -18,6 +18,52 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn custom_agent_color_arrows_wrap_and_move_focus(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::OpenSettingsPage("agents".into()));
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let position = visual.debug_bounds("settings-body").unwrap().center();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-10000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let first = visual.debug_bounds("agent-color-0").unwrap().center();
+    visual.simulate_click(first, Default::default());
+    view.update(cx, |root, w, _| {
+        assert!(root.agent_swatches[0].is_focused(w))
+    })
+    .unwrap();
+    for (key, index) in [("left", 7), ("down", 0), ("right", 1), ("up", 0)] {
+        gpui::VisualTestContext::from_window(view.into(), cx).simulate_keystrokes(key);
+        view.update(cx, |root, w, cx| {
+            assert!(root.agent_swatches[index].is_focused(w));
+            assert_eq!(
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .settings
+                    .unwrap()
+                    .new_custom_agent_accent,
+                index
+            );
+            cx.notify();
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+    }
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn html_folder_trust_controls_cover_decline_reconsider_grant_and_revoke(
     cx: &mut gpui::TestAppContext,
 ) {

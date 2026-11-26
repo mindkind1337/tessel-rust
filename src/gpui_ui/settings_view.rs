@@ -30,6 +30,7 @@ use gpui::{
 pub(crate) fn render_settings_modal(
     snapshot: &GpuiWorkspaceSnapshot,
     modal_query: &super::modal_query_input::Input,
+    swatches: &[gpui::FocusHandle; 8],
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -141,7 +142,7 @@ pub(crate) fn render_settings_modal(
         .child(modal_query.render(FocusInputTarget::SettingsSearch, french, tokens, cx))
         .child(nav_scroll);
 
-    let page_body = render_settings_page_body(snapshot, s, focus_input, tokens, cx);
+    let page_body = render_settings_page_body(snapshot, s, focus_input, swatches, tokens, cx);
 
     let right_col = div()
         .flex_1()
@@ -188,6 +189,7 @@ pub(crate) fn render_settings_modal(
         .child(
             div()
                 .id("gpui-settings-body-scroll")
+                .debug_selector(|| "settings-body".into())
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
@@ -235,6 +237,7 @@ fn render_settings_page_body(
     snapshot: &GpuiWorkspaceSnapshot,
     s: &GpuiSettingsSnapshot,
     focus_input: FocusInputTarget,
+    swatches: &[gpui::FocusHandle; 8],
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -247,7 +250,7 @@ fn render_settings_page_body(
         "browser" => render_browser_page(s, french, tokens, cx),
         "passwords" => render_passwords_page(s, french, tokens, cx),
         "git" => render_git_page(s, french, tokens, cx),
-        "agents" => render_agents_page(s, focus_input, french, tokens, cx),
+        "agents" => render_agents_page(s, focus_input, swatches, french, tokens, cx),
         "accounts" => render_accounts_page(s, focus_input, french, tokens, cx),
         "skills" => render_skills_page(s, focus_input, french, tokens, cx),
         "mcp" => render_mcp_page(s, french, tokens, cx),
@@ -1187,9 +1190,105 @@ fn render_git_page(
         .into_any_element()
 }
 
+fn agent_monogram(name: &str, accent: &str) -> AnyElement {
+    let (r, g, b) = crate::settings_extra_model::parse_hex_rgb(accent).unwrap_or((138, 147, 166));
+    let bg = gpui::rgb(u32::from_be_bytes([0, r, g, b]));
+    let light = 299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b) > 150000;
+    div()
+        .size(px(22.))
+        .flex_none()
+        .rounded(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(bg)
+        .text_color(gpui::rgb(if light { 0x14161b } else { 0xffffff }))
+        .child(
+            name.trim()
+                .chars()
+                .next()
+                .unwrap_or('?')
+                .to_uppercase()
+                .to_string(),
+        )
+        .into_any_element()
+}
+
+fn agent_colors(
+    handles: &[gpui::FocusHandle; 8],
+    selected: usize,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    use crate::settings_extra_model::CUSTOM_AGENT_SWATCHES;
+    let label = if french { "Couleur" } else { "Color" };
+    let names = if french {
+        [
+            "Gris", "Orange", "Jaune", "Vert", "Sarcelle", "Bleu", "Violet", "Rose",
+        ]
+    } else {
+        [
+            "Gray", "Orange", "Yellow", "Green", "Teal", "Blue", "Purple", "Pink",
+        ]
+    };
+    let mut group = div()
+        .id("custom-agent-colors")
+        .role(gpui::Role::RadioGroup)
+        .aria_label(label)
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(label);
+    for (index, hex) in CUSTOM_AGENT_SWATCHES.iter().enumerate() {
+        let color = u32::from_str_radix(&hex[1..], 16).expect("constant swatch");
+        group = group.child(
+            div()
+                .id(("agent-color", index))
+                .debug_selector(move || format!("agent-color-{index}"))
+                .track_focus(&handles[index])
+                .tab_stop(index == selected)
+                .role(gpui::Role::RadioButton)
+                .aria_label(names[index])
+                .aria_toggled((index == selected).into())
+                .size(px(18.))
+                .rounded_full()
+                .bg(gpui::rgb(color))
+                .border_2()
+                .border_color(if index == selected {
+                    tokens.text_strong
+                } else {
+                    gpui::rgba(0)
+                })
+                .focus_visible(|s| s.border_color(tokens.accent))
+                .cursor_pointer()
+                .on_click(cx.listener(move |root, _, w, cx| {
+                    root.focus_input = FocusInputTarget::None;
+                    root.agent_swatches[index].focus(w, cx);
+                    root.dispatch_action(GpuiAction::SetCustomAgentAccent(index), cx);
+                }))
+                .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, w, cx| {
+                    let len = CUSTOM_AGENT_SWATCHES.len();
+                    let next = match event.keystroke.key.as_str() {
+                        "right" | "down" => (index + 1) % len,
+                        "left" | "up" => (index + len - 1) % len,
+                        "space" => index,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    root.focus_input = FocusInputTarget::None;
+                    root.agent_swatches[next].focus(w, cx);
+                    root.dispatch_action(GpuiAction::SetCustomAgentAccent(next), cx);
+                })),
+        );
+    }
+    group.into_any_element()
+}
+
 fn render_agents_page(
     s: &GpuiSettingsSnapshot,
     focus_input: FocusInputTarget,
+    swatches: &[gpui::FocusHandle; 8],
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -1392,12 +1491,21 @@ fn render_agents_page(
             div()
                 .flex()
                 .gap(px(6.0))
+                .items_center()
+                .child(agent_monogram(
+                    &s.new_custom_agent_name,
+                    crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[s.new_custom_agent_accent],
+                ))
                 .child(div().flex_1().child(render_focus_input_box(
                     "gpui-st-ca-name",
                     FocusInputTarget::CustomAgentName,
                     focus_input == FocusInputTarget::CustomAgentName,
                     &s.new_custom_agent_name,
-                    "Agent name…",
+                    if french {
+                        "Nom, p. ex. Crush"
+                    } else {
+                        "Name, e.g. Crush"
+                    },
                     tokens,
                     cx,
                 )))
@@ -1406,13 +1514,35 @@ fn render_agents_page(
                     FocusInputTarget::CustomAgentCmd,
                     focus_input == FocusInputTarget::CustomAgentCmd,
                     &s.new_custom_agent_cmd,
-                    "Command (e.g. my-agent --chat)…",
+                    if french {
+                        "Commande, p. ex. crush --yolo"
+                    } else {
+                        "Command, e.g. crush --yolo"
+                    },
                     tokens,
                     cx,
-                )))
+                ))),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(agent_colors(
+                    swatches,
+                    s.new_custom_agent_accent,
+                    french,
+                    tokens,
+                    cx,
+                ))
                 .child(setting_btn(
                     "gpui-st-ca-add",
-                    "Add".to_owned(),
+                    if french {
+                        "Ajouter un agent"
+                    } else {
+                        "Add agent"
+                    }
+                    .to_owned(),
                     true,
                     tokens,
                     GpuiAction::SubmitNewCustomAgent,
@@ -1447,6 +1577,10 @@ fn render_agents_page(
                         .font_family(mono_font_family())
                         .text_size(px(11.5))
                         .text_color(tokens.text_strong)
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(agent_monogram(&ca.name, &ca.accent))
                         .child(SharedString::from(format!("{} — {}", ca.name, ca.command))),
                 )
                 .child(

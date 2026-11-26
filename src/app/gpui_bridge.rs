@@ -76,6 +76,7 @@ pub(crate) struct GpuiExtraUiState {
     pub new_ssh_folder: String,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
+    pub new_custom_agent_accent: usize,
     pub new_account_label: String,
     pub secret_key_idx: usize,
     pub secret_value_draft: String,
@@ -122,6 +123,7 @@ impl Default for GpuiExtraUiState {
             new_ssh_folder: String::new(),
             new_custom_agent_name: String::new(),
             new_custom_agent_cmd: String::new(),
+            new_custom_agent_accent: 0,
             new_account_label: String::new(),
             secret_key_idx: 0,
             secret_value_draft: String::new(),
@@ -552,6 +554,7 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
+    pub new_custom_agent_accent: usize,
     pub claude_accounts: crate::settings_extra_model::ManagedAccountsRoster,
     pub codex_accounts: crate::settings_extra_model::ManagedAccountsRoster,
     pub claude_system_email: Option<String>,
@@ -1097,6 +1100,7 @@ pub(crate) enum GpuiAction {
         name: String,
         cmd: String,
     },
+    SetCustomAgentAccent(usize),
     SubmitNewCustomAgent,
     SetAccountLabelDraft(String),
     SelectSecretKeyIndex(usize),
@@ -4648,6 +4652,7 @@ impl Tessel {
             custom_agents: self.state.custom_agents.clone(),
             new_custom_agent_name: self.gpui_extra.new_custom_agent_name.clone(),
             new_custom_agent_cmd: self.gpui_extra.new_custom_agent_cmd.clone(),
+            new_custom_agent_accent: self.gpui_extra.new_custom_agent_accent,
             claude_accounts: self.claude_managed_accounts.clone(),
             codex_accounts: self.codex_managed_accounts.clone(),
             claude_system_email: self.claude_system_email.clone(),
@@ -6807,6 +6812,11 @@ impl Tessel {
                 self.gpui_extra.new_custom_agent_name = name;
                 self.gpui_extra.new_custom_agent_cmd = cmd;
             }
+            GpuiAction::SetCustomAgentAccent(index) => {
+                if index < crate::settings_extra_model::CUSTOM_AGENT_SWATCHES.len() {
+                    self.gpui_extra.new_custom_agent_accent = index;
+                }
+            }
             GpuiAction::SubmitNewCustomAgent => {
                 let name = self.gpui_extra.new_custom_agent_name.trim();
                 let command = self.gpui_extra.new_custom_agent_cmd.trim();
@@ -6822,7 +6832,9 @@ impl Tessel {
                     id,
                     name: name.into(),
                     command: command.into(),
-                    accent: crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[0].into(),
+                    accent: crate::settings_extra_model::CUSTOM_AGENT_SWATCHES
+                        [self.gpui_extra.new_custom_agent_accent]
+                        .into(),
                     enabled: true,
                 })
                 .and_then(|agent| self.save_custom_agent(agent));
@@ -7747,6 +7759,8 @@ mod panel_snapshot_tests {
         };
         submit(&mut app, "First Agent");
         let saved = app.state.custom_agents.clone();
+        app.apply_gpui_action(GpuiAction::SetCustomAgentAccent(5));
+        app.apply_gpui_action(GpuiAction::SetCustomAgentAccent(usize::MAX));
         submit(&mut app, "first AGENT");
         assert_eq!(app.state.custom_agents, saved);
         assert_eq!(persisted(), saved);
@@ -7759,6 +7773,8 @@ mod panel_snapshot_tests {
         submit(&mut app, "Second Agent");
         assert!(app.settings_extra.custom_error.is_empty());
         assert_eq!(persisted().len(), 2);
+        assert_eq!(persisted()[1].accent, "#5b8def");
+        assert_eq!(app.gpui_extra.new_custom_agent_accent, 5);
         let id = app.state.custom_agents[0].id.clone();
         let ctx = app.gpui_extra.dummy_egui_ctx.clone();
         use crate::settings_extra_panel::SettingsExtraAction as Action;
