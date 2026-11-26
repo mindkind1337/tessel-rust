@@ -2675,27 +2675,12 @@ fn render_timeline(
             .overflow_y_scroll()
             .flex()
             .flex_col();
-        let working = history.dirty.then(|| {
-            (
-                None,
-                if fr {
-                    "Modifications non validées"
-                } else {
-                    "Uncommitted Changes"
-                }
-                .to_owned(),
-            )
-        });
-        for (index, (commit, label)) in working
+        for (index, row) in history
+            .rows(chrono::Utc::now().timestamp(), fr)
             .into_iter()
-            .chain(
-                history
-                    .commits
-                    .iter()
-                    .map(|c| (Some(c.id.clone()), c.label())),
-            )
             .enumerate()
         {
+            let commit = row.commit.map(|c| c.id.clone());
             let key = format!("timeline-{}", commit.as_deref().unwrap_or("working"));
             let path = file.clone();
             list = list.child(
@@ -2704,7 +2689,15 @@ fn render_timeline(
                     .debug_selector(move || format!("timeline-entry-{index}"))
                     .cursor_pointer()
                     .text_size(px(12.))
-                    .child(label)
+                    .flex()
+                    .gap_1()
+                    .items_center()
+                    .child(div().flex_1().overflow_hidden().child(row.label.to_owned()))
+                    .children(
+                        row.commit
+                            .map(|c| div().overflow_hidden().child(c.author.clone())),
+                    )
+                    .children(row.age)
                     .on_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
                         root.dispatch_action(
                             GpuiAction::Timeline(Action::Open(

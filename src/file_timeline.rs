@@ -183,6 +183,7 @@ pub struct State {
     pub data: Option<Result<Arc<History>, String>>,
     limit: usize,
     revision: u64,
+    last_age_update: Option<std::time::Instant>,
     pending: Option<(u64, mpsc::Receiver<Result<History, String>>)>,
 }
 impl State {
@@ -200,6 +201,7 @@ impl State {
         }
         self.revision = self.revision.wrapping_add(1);
         self.data = None;
+        self.last_age_update = None;
         self.start();
     }
     fn start(&mut self) {
@@ -218,6 +220,13 @@ impl State {
     }
     pub fn poll(&mut self) -> bool {
         let Some((revision, rx)) = &self.pending else {
+            if self
+                .last_age_update
+                .is_some_and(|t| t.elapsed().as_secs() >= 30)
+            {
+                self.last_age_update = Some(std::time::Instant::now());
+                return true;
+            }
             return false;
         };
         let result = match rx.try_recv() {
@@ -226,6 +235,11 @@ impl State {
             Err(mpsc::TryRecvError::Disconnected) => Err("File history worker stopped.".into()),
         };
         if *revision == self.revision {
+            self.last_age_update = result
+                .as_ref()
+                .ok()
+                .filter(|h| !h.commits.is_empty())
+                .map(|_| std::time::Instant::now());
             self.data = Some(result.map(Arc::new));
         }
         self.pending = None;
@@ -295,20 +309,67 @@ impl Snapshot {
         }
     }
 }
-impl Commit {
-    pub fn label(&self) -> String {
-        let date = chrono::DateTime::from_timestamp(self.time, 0)
-            .map(|d| {
-                d.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d")
-                    .to_string()
+fn relative_time(time: i64, now: i64, fr: bool) -> String {
+    let delta = now.saturating_sub(time);
+    if (-30..30).contains(&delta) {
+        return if fr { "maintenant" } else { "now" }.into();
+    }
+    let seconds = delta.unsigned_abs();
+    let (scale, english, french) = match seconds {
+        0..60 => (1, ("sec", "secs"), ("s", "s")),
+        60..3600 => (60, ("min", "mins"), ("min", "min")),
+        3600..86400 => (3600, ("hr", "hrs"), ("h", "h")),
+        86400..604800 => (86400, ("day", "days"), ("jour", "jours")),
+        604800..2592000 => (604800, ("wk", "wks"), ("sem.", "sem.")),
+        2592000..31536000 => (2592000, ("mo", "mos"), ("mois", "mois")),
+        _ => (31536000, ("yr", "yrs"), ("an", "ans")),
+    };
+    let n = (seconds + scale / 2) / scale;
+    let units = if fr { french } else { english };
+    let prefix = if delta >= 0 {
+        ""
+    } else if fr {
+        "dans "
+    } else {
+        "in "
+    };
+    let unit = if n == 1 { units.0 } else { units.1 };
+    format!("{prefix}{n} {unit}")
+}
+
+pub struct Row<'a> {
+    pub commit: Option<&'a Commit>,
+    pub label: &'a str,
+    pub age: Option<String>,
+}
+
+impl History {
+    pub fn rows(&self, now: i64, fr: bool) -> Vec<Row<'_>> {
+        let working = self.dirty.then_some((now, None));
+        let mut entries: Vec<_> = working
+            .into_iter()
+            .chain(self.commits.iter().map(|c| (c.time, Some(c))))
+            .collect();
+        entries.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+        let mut previous = String::new();
+        entries
+            .into_iter()
+            .map(|(time, commit)| {
+                let age = relative_time(time, now, fr);
+                let visible = (age != previous).then(|| age.clone());
+                previous = age;
+                let label = match commit {
+                    Some(c) => c.message.lines().next().unwrap_or("").trim(),
+                    None if fr => "Modifications non commitées",
+                    None => "Uncommitted Changes",
+                };
+                Row {
+                    commit,
+                    label,
+                    age: visible,
+                }
             })
-            .unwrap_or_default();
-        format!(
-            "{} · {} · {date}",
-            self.message.lines().next().unwrap_or(&self.id),
-            self.author
-        )
+            .collect()
     }
 }
 pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Action> {
@@ -347,28 +408,31 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
             .id_salt("timeline")
             .max_height(160.)
             .show(ui, |ui| {
-                if history.dirty {
-                    let r = ui.selectable_label(
-                        false,
-                        if fr {
-                            "Modifications non validées"
-                        } else {
-                            "Uncommitted Changes"
-                        },
-                    );
-                    if r.clicked() {
-                        action = Some(Action::Open(file.clone(), None, r.double_clicked()));
-                    }
-                }
-                for c in &history.commits {
-                    let r = ui.selectable_label(false, c.label()).on_hover_text(format!(
-                        "{} <{}>\n{}\n{}",
-                        c.author, c.email, c.id, c.message
-                    ));
+                for row in history.rows(chrono::Utc::now().timestamp(), fr) {
+                    let r = ui
+                        .horizontal(|ui| {
+                            let mut response = ui.selectable_label(false, row.label);
+                            if let Some(c) = row.commit {
+                                response |= ui.selectable_label(false, &c.author);
+                            }
+                            if let Some(age) = row.age {
+                                response |= ui.selectable_label(false, age);
+                            }
+                            response
+                        })
+                        .inner;
+                    let r = if let Some(c) = row.commit {
+                        r.on_hover_text(format!(
+                            "{} <{}>\n{}\n{}",
+                            c.author, c.email, c.id, c.message
+                        ))
+                    } else {
+                        r
+                    };
                     if r.clicked() {
                         action = Some(Action::Open(
                             file.clone(),
-                            Some(c.id.clone()),
+                            row.commit.map(|c| c.id.clone()),
                             r.double_clicked(),
                         ));
                     }
@@ -388,6 +452,69 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_timeline_relative_time_rounds_and_groups_like_vue() {
+        for (delta, en, fr) in [
+            (-300, "in 5 mins", "dans 5 min"),
+            (-30, "now", "maintenant"),
+            (29, "now", "maintenant"),
+            (30, "30 secs", "30 s"),
+            (89, "1 min", "1 min"),
+            (90, "2 mins", "2 min"),
+            (3599, "60 mins", "60 min"),
+            (3600, "1 hr", "1 h"),
+            (86400, "1 day", "1 jour"),
+            (604800, "1 wk", "1 sem."),
+            (2592000, "1 mo", "1 mois"),
+            (63072000, "2 yrs", "2 ans"),
+        ] {
+            assert_eq!(relative_time(0, delta, false), en);
+            assert_eq!(relative_time(0, delta, true), fr);
+        }
+        let commit = |time: i64| Commit {
+            id: time.to_string(),
+            author: String::new(),
+            email: String::new(),
+            time,
+            message: " title\nbody".into(),
+            path: String::new(),
+            old_path: None,
+        };
+        let h = History {
+            root: PathBuf::new(),
+            relative: String::new(),
+            commits: vec![commit(300), commit(0), commit(-2)],
+            dirty: true,
+            untracked: false,
+            more: false,
+        };
+        let rows = h.rows(0, false);
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.label, r.age.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("title", Some("in 5 mins")),
+                ("Uncommitted Changes", Some("now")),
+                ("title", None),
+                ("title", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn file_timeline_age_tick_repaints_without_reading_git_again() {
+        let mut state = State {
+            last_age_update: Some(std::time::Instant::now() - std::time::Duration::from_secs(30)),
+            ..Default::default()
+        };
+        assert!(state.poll());
+        assert!(state.pending.is_none());
+        assert!(!state.poll());
+        state.refresh(false);
+        assert!(state.last_age_update.is_none());
+    }
+
     fn git_fixture(dir: &Path, args: &[&str]) -> String {
         let mut opts = vec![
             "-c",
