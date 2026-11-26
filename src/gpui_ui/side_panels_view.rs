@@ -2877,9 +2877,22 @@ impl gpui::Render for TimelineTooltip {
                 }
                 head = head.child(grid);
             }
-            panel = panel
-                .child(head.child(d.heading.clone()))
-                .child(d.text.clone());
+            panel = panel.child(head.child(d.heading.clone()));
+            for (bullet, line) in crate::file_timeline::message_lines(&d.text) {
+                let text = div().min_w_0().child(line.to_owned());
+                panel = panel.child(if bullet {
+                    div()
+                        .flex()
+                        .debug_selector(|| "timeline-message-bullet".into())
+                        .items_start()
+                        .gap_1()
+                        .pl_2()
+                        .child("•")
+                        .child(text)
+                } else {
+                    text
+                });
+            }
             if let Some(stats) = d.stats.as_ref().and_then(|rx| *rx.borrow()) {
                 let (files, added, removed) = stats.labels(self.fr);
                 panel = panel.child(

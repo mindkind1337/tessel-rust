@@ -647,6 +647,22 @@ pub struct Details {
     pub avatar: Option<Avatar>,
 }
 
+/// A Timeline message displays each nonempty line as a paragraph or list item.
+pub fn message_lines(message: &str) -> impl Iterator<Item = (bool, &str)> {
+    message.split(['\r', '\n']).filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        if let Some(rest) = line.strip_prefix(['-', '*', '+'])
+            && rest.starts_with(char::is_whitespace)
+        {
+            return Some((true, rest.trim_start()));
+        }
+        Some((false, line))
+    })
+}
+
 impl Details {
     pub fn github_url(&self) -> Option<String> {
         Some(format!(
@@ -876,7 +892,16 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                 }
                                 ui.strong(details.heading);
                             });
-                            ui.label(details.text);
+                            for (bullet, line) in message_lines(&details.text) {
+                                if bullet {
+                                    ui.horizontal_top(|ui| {
+                                        ui.label("•");
+                                        ui.label(line);
+                                    });
+                                } else {
+                                    ui.label(line);
+                                }
+                            }
                             if let Some(rx) = details.stats {
                                 if let Some(stats) = *rx.borrow() {
                                     let (files, added, removed) = stats.labels(fr);
@@ -952,6 +977,22 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_timeline_message_paragraphs_and_bullets() {
+        let message = " Title  \r\n\r\n - first\r* second\n+\tthird\n+literal\n- ";
+        assert_eq!(
+            message_lines(message).collect::<Vec<_>>(),
+            [
+                (false, "Title"),
+                (true, "first"),
+                (true, "second"),
+                (true, "third"),
+                (false, "+literal"),
+                (false, "-")
+            ]
+        );
+    }
+
     #[test]
     fn file_timeline_hover_uses_vue_author_icons_and_full_time_words() {
         for (seed, cells, rgb) in [
