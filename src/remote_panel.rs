@@ -502,6 +502,8 @@ impl RemotePanel {
                     self.new_name.clear();
                     self.request(Action::List(parent));
                 }
+                #[cfg(windows)]
+                Ok(Reply::PreviewTooLarge) => self.error = "Remote preview exceeds 50 MiB".into(),
                 Ok(Reply::Saved) => {
                     if let Some(bytes) = self.submitted.take()
                         && let Some(doc) = &mut self.document

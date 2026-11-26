@@ -12,6 +12,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(windows)]
+pub(crate) const MAX_PREVIEW_BYTES: usize = 50 * 1024 * 1024;
 const MAX_FILE: usize = 16 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Entry {
@@ -67,6 +69,8 @@ pub enum Reply {
         path: String,
         bytes: Vec<u8>,
     },
+    #[cfg(windows)]
+    PreviewTooLarge,
     Saved,
     Created {
         parent: String,
@@ -234,6 +238,25 @@ async fn scoped(session: &RawSftpSession, root: &str, path: &str) -> Result<Stri
     Ok(path)
 }
 async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttributes), String> {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let limit = if crate::files::playback::mime(&extension).is_some() {
+        crate::files::playback::MAX_BYTES
+    } else {
+        MAX_FILE
+    };
+    read_bounded(session, path, limit)
+        .await?
+        .ok_or_else(|| format!("Remote download limit is {} MiB", limit / (1024 * 1024)))
+}
+async fn read_bounded(
+    session: &RawSftpSession,
+    path: &str,
+    limit: usize,
+) -> Result<Option<(Vec<u8>, FileAttributes)>, String> {
     let handle = session
         .open(path, OpenFlags::READ, FileAttributes::default())
         .await
@@ -244,21 +267,8 @@ async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttr
         if attrs.file_type() != russh_sftp::protocol::FileType::File {
             return Err("Only regular remote files can be opened".into());
         }
-        let extension = std::path::Path::new(path)
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let limit = if crate::files::playback::mime(&extension).is_some() {
-            crate::files::playback::MAX_BYTES
-        } else {
-            MAX_FILE
-        };
         if attrs.size.is_some_and(|n| n > limit as u64) {
-            return Err(format!(
-                "Remote download limit is {} MiB",
-                limit / (1024 * 1024)
-            ));
+            return Ok(None);
         }
         let mut bytes = Vec::new();
         loop {
@@ -268,10 +278,7 @@ async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttr
                         return Err("Server returned an empty non-EOF read".into());
                     }
                     if bytes.len() + data.data.len() > limit {
-                        return Err(format!(
-                            "Remote download limit is {} MiB",
-                            limit / (1024 * 1024)
-                        ));
+                        return Ok(None);
                     }
                     bytes.extend_from_slice(&data.data);
                 }
@@ -279,7 +286,7 @@ async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttr
                 Err(e) => return Err(remote_error(e)),
             }
         }
-        Ok((bytes, attrs))
+        Ok(Some((bytes, attrs)))
     }
     .await;
     let closed = session.close(handle).await.map_err(remote_error);
@@ -517,7 +524,9 @@ async fn operate_inner(
                     return Err("Invalid preview index".into());
                 }
             }
-            let (bytes, _) = read(session, &path).await?;
+            let Some((bytes, _)) = read_bounded(session, &path, MAX_PREVIEW_BYTES).await? else {
+                return Ok(Reply::PreviewTooLarge);
+            };
             Ok(Reply::File {
                 root: root.into(),
                 path,
@@ -628,6 +637,15 @@ mod tests {
         std::fs::write(dir.path().join("pages/index.html"), "page").unwrap();
         std::fs::write(dir.path().join("site.css"), "body{}").unwrap();
         std::fs::write(dir.path().join(".hidden"), "hidden").unwrap();
+        for (name, size) in [
+            ("asset.bin", MAX_FILE + 1),
+            ("large.bin", MAX_PREVIEW_BYTES + 1),
+        ] {
+            std::fs::File::create(dir.path().join(name))
+                .unwrap()
+                .set_len(size as u64)
+                .unwrap();
+        }
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -689,6 +707,29 @@ mod tests {
                     .await
                     .is_err()
                 );
+                for (name, large) in [("asset.bin", false), ("large.bin", true)] {
+                    let path = format!("{root}/{name}");
+                    assert!(read(&session, &path).await.is_err());
+                    let result = operate(
+                        &session,
+                        &root,
+                        Action::PreviewAsset {
+                            expected_root: root.clone(),
+                            path,
+                        },
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                    match result {
+                        Reply::PreviewTooLarge => assert!(large),
+                        Reply::File { bytes, .. } => {
+                            assert!(!large);
+                            assert_eq!(bytes.len(), MAX_FILE + 1);
+                        }
+                        _ => panic!("unexpected preview response"),
+                    }
+                }
                 let _ = session.close_session();
                 let _ = child.kill().await;
                 let _ = child.wait().await;

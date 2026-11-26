@@ -85,6 +85,11 @@ fn mime(path: &Path) -> &'static str {
     {
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" | "map" => "application/json; charset=utf-8",
+        "webmanifest" => "application/manifest+json; charset=utf-8",
+        "xml" => "application/xml; charset=utf-8",
+        "wasm" => "application/wasm",
         "svg" => "image/svg+xml",
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",
@@ -269,7 +274,11 @@ impl Pages {
     ) -> Reply {
         let head = req.method() == "HEAD";
         if !head && req.method() != "GET" {
-            return empty(405);
+            let mut reply = empty(405);
+            reply
+                .headers_mut()
+                .insert("Allow", "GET, HEAD".parse().unwrap());
+            return reply;
         }
         let Some(authority) = req.uri().authority() else {
             return empty(404);
@@ -325,27 +334,40 @@ impl Pages {
             if crate::remote::preview_relative(root, &requested).is_none() {
                 return empty(404);
             }
-            if let Ok(crate::remote::Reply::File {
-                root: actual,
-                path: resolved,
-                bytes,
-            }) = read_remote(
+            return match read_remote(
                 host.clone(),
                 crate::remote::Action::PreviewAsset {
                     expected_root: root.into(),
                     path: requested,
                 },
-            ) && actual == root
-                && crate::remote::preview_relative(root, &resolved).is_some()
-            {
-                return response(
-                    200,
-                    mime(Path::new(&resolved)),
-                    bytes.len() as u64,
-                    if head { vec![] } else { bytes },
-                );
-            }
-            return empty(404);
+            ) {
+                Ok(crate::remote::Reply::File {
+                    root: actual,
+                    path: resolved,
+                    bytes,
+                }) if actual == root
+                    && crate::remote::preview_relative(root, &resolved).is_some() =>
+                {
+                    let path = Path::new(&resolved);
+                    if let Some((_, draft)) = site.drafts.iter().find(|(p, _)| p == path) {
+                        response(
+                            200,
+                            mime(path),
+                            draft.len() as u64,
+                            if head { vec![] } else { draft.to_vec() },
+                        )
+                    } else {
+                        response(
+                            200,
+                            mime(path),
+                            bytes.len() as u64,
+                            if head { vec![] } else { bytes },
+                        )
+                    }
+                }
+                Ok(crate::remote::Reply::PreviewTooLarge) => empty(413),
+                _ => empty(404),
+            };
         }
         let mut path = site.root.clone();
         path.extend(parts.iter().map(|s| s.as_ref()));
@@ -440,6 +462,76 @@ impl Pages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_directory_links_serve_registered_index_drafts_and_report_oversized_assets() {
+        let pages = Pages::default();
+        let host = crate::workspace::Host {
+            alias: "fixture".into(),
+            ..Default::default()
+        };
+        let entry = pages
+            .open_remote(host, "/site", "/site/docs/index.html", "unsaved")
+            .unwrap()
+            .replace("http://tesselpreview.", "tesselpreview://");
+        let directory = entry.strip_suffix("/index.html").unwrap();
+        for method in ["GET", "HEAD"] {
+            let req = Request::builder()
+                .method(method)
+                .uri(directory)
+                .body(vec![])
+                .unwrap();
+            let reply = pages.serve_with(req, |_, action| {
+                assert!(matches!(action, crate::remote::Action::PreviewAsset {path, ..} if path == "/site/docs"));
+                Ok(crate::remote::Reply::File {root:"/site".into(), path:"/site/docs/index.html".into(),bytes:b"disk".to_vec()})
+            });
+            assert_eq!(reply.status(), 200);
+            assert_eq!(reply.headers()["content-length"], "7");
+            assert_eq!(
+                reply.body().as_ref(),
+                if method == "HEAD" {
+                    &b""[..]
+                } else {
+                    &b"unsaved"[..]
+                }
+            );
+        }
+        let reply = pages.serve_with(Request::get(directory).body(vec![]).unwrap(), |_, _| {
+            Ok(crate::remote::Reply::PreviewTooLarge)
+        });
+        assert_eq!(reply.status(), 413);
+    }
+
+    #[test]
+    fn site_serves_web_asset_types_with_restricted_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("index.html");
+        std::fs::write(&file, "index").unwrap();
+        let pages = Pages::default();
+        let entry = pages
+            .open(root.path(), &file, "index")
+            .unwrap()
+            .replace("http://tesselpreview.", "tesselpreview://");
+        let base = entry.strip_suffix("index.html").unwrap();
+        for (name, expected) in [
+            ("a.JS", "text/javascript; charset=utf-8"),
+            ("a.mjs", "text/javascript; charset=utf-8"),
+            ("a.json", "application/json; charset=utf-8"),
+            ("a.map", "application/json; charset=utf-8"),
+            ("a.webmanifest", "application/manifest+json; charset=utf-8"),
+            ("a.xml", "application/xml; charset=utf-8"),
+            ("a.wasm", "application/wasm"),
+            ("a.unknown", "application/octet-stream"),
+        ] {
+            std::fs::write(root.path().join(name), "sample").unwrap();
+            let res = pages.serve(Request::get(format!("{base}{name}")).body(vec![]).unwrap());
+            assert_eq!(res.headers()["content-type"], expected);
+            assert_eq!(res.headers()["content-security-policy"], POLICY);
+        }
+        let refused = pages.serve(Request::post(entry).body(vec![]).unwrap());
+        assert_eq!(refused.status(), 405);
+        assert_eq!(refused.headers()["allow"], "GET, HEAD");
+    }
+
     #[test]
     fn ssh_preview_keeps_drafts_and_assets_scoped_to_the_selected_host_and_posix_root() {
         let pages = Pages::default();
