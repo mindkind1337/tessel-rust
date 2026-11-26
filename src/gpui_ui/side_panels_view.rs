@@ -2834,7 +2834,7 @@ impl gpui::Render for TimelineTooltip {
                     .p(px(2.))
                     .bg(gpui::rgb(0xf0f0f0));
                 let color = rgb_tuple((icon.rgb[0], icon.rgb[1], icon.rgb[2]));
-                for row in icon.cells.chunks_exact(5) {
+                for row in icon.cells.as_chunks::<5>().0 {
                     grid = grid.child(
                         div().flex().children(
                             row.iter()
