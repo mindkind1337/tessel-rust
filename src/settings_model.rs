@@ -564,6 +564,7 @@ pub struct SettingsSearchRow {
 pub struct SettingsSearchResult {
     pub searching: bool,
     pub matched_pages: Vec<SettingsPageId>,
+    pub whole_pages: Vec<SettingsPageId>,
     pub matched_row_ids: Vec<String>,
     pub result_count: usize,
 }
@@ -601,6 +602,7 @@ pub fn search_settings(
         .iter()
         .any(|name| contains_all_words(name, &words));
 
+    let mut whole_pages = Vec::new();
     let mut matched_pages: Vec<SettingsPageId> = Vec::new();
     let mut matched_row_ids: Vec<String> = Vec::new();
     let mut seen_rows: HashSet<String> = HashSet::new();
@@ -612,6 +614,7 @@ pub fn search_settings(
         let page_rows: Vec<&SettingsSearchRow> = rows.iter().filter(|r| r.page == page).collect();
 
         if title_hit {
+            whole_pages.push(page);
             matched_pages.push(page);
             if page_rows.is_empty() {
                 result_count += 1;
@@ -652,6 +655,7 @@ pub fn search_settings(
 
     SettingsSearchResult {
         searching: true,
+        whole_pages,
         matched_pages,
         matched_row_ids,
         result_count,

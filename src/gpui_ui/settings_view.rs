@@ -6,6 +6,9 @@ use super::{
     side_panels_view::render_focus_input_box,
     theme::{GpuiThemeTokens, TOOLBAR_HEIGHT_PX, mono_font_family},
 };
+use crate::settings_model::{
+    SettingsLang, SettingsPageId, SettingsSearchRow, search_count_label, search_settings,
+};
 use crate::{
     app::gpui_bridge::{GpuiAction, GpuiSettingsSnapshot, GpuiWorkspaceSnapshot},
     settings_extra_model::{
@@ -36,6 +39,26 @@ pub(crate) fn render_settings_modal(
 ) -> Option<AnyElement> {
     let s = snapshot.settings.as_ref()?;
     let french = snapshot.french;
+
+    let searching = !s.search_query.trim().is_empty();
+    let lang = if french {
+        SettingsLang::Fr
+    } else {
+        SettingsLang::En
+    };
+    let results = searching.then(|| {
+        let rows: Vec<_> = TOGGLES
+            .iter()
+            .map(|t| SettingsSearchRow {
+                page: t.page,
+                group_anchor: None,
+                group_title: String::new(),
+                row_id: t.id.into(),
+                text: t.label(french).into(),
+            })
+            .collect();
+        search_settings(&s.search_query, &rows, lang)
+    });
 
     let back_label = if french {
         "Retour à l'application"
@@ -109,13 +132,17 @@ pub(crate) fn render_settings_modal(
                 .child(SharedString::from(group_title.to_uppercase())),
         );
         for (p_idx, (page_id, page_label)) in pages.iter().enumerate() {
-            let active = s.active_page_id == *page_id;
+            let active = !searching && s.active_page_id == *page_id;
+            let dim = results
+                .as_ref()
+                .is_some_and(|r| !r.matched_pages.iter().any(|p| p.as_str() == page_id));
             let pid = page_id.clone();
             grp = grp.child(
                 div()
                     .id(SharedString::from(format!(
                         "gpui-settings-nav-{g_idx}-{p_idx}"
                     )))
+                    .when(dim, |el| el.opacity(0.5))
                     .px(px(8.0))
                     .py(px(5.0))
                     .rounded(px(tokens.radius_px - 1.0))
@@ -147,7 +174,7 @@ pub(crate) fn render_settings_modal(
 
     #[cfg(windows)]
     {
-        let active = s.active_page_id == "passwords";
+        let active = !searching && s.active_page_id == "passwords";
         nav_scroll = nav_scroll.child(
             div()
                 .id("gpui-settings-nav-passwords")
@@ -181,7 +208,78 @@ pub(crate) fn render_settings_modal(
         );
     }
 
-    let page_body = render_settings_page_body(snapshot, s, focus_input, swatches, tokens, cx);
+    let page_body = if let Some(results) = results {
+        let mut body = div().flex().flex_col().gap(px(8.));
+        let mut count = 0;
+        for page in results.matched_pages {
+            if !s
+                .groups
+                .iter()
+                .any(|(_, pages)| pages.iter().any(|(id, _)| id == page.as_str()))
+            {
+                continue;
+            }
+            body = body.child(section_title(page.title(lang), tokens));
+            if results.whole_pages.contains(&page) {
+                body = body.child(render_settings_page_body(
+                    page.as_str(),
+                    snapshot,
+                    s,
+                    focus_input,
+                    swatches,
+                    tokens,
+                    cx,
+                ));
+                count += TOGGLES.iter().filter(|t| t.page == page).count().max(1);
+            } else if page == SettingsPageId::Terminal
+                && !TOGGLES
+                    .iter()
+                    .any(|t| t.page == page && results.matched_row_ids.iter().any(|id| id == t.id))
+            {
+                body = body.child(font_size_control(snapshot, tokens, cx));
+                count += 1;
+            } else {
+                for toggle in TOGGLES.iter().filter(|t| {
+                    t.page == page && results.matched_row_ids.iter().any(|id| id == t.id)
+                }) {
+                    body = body.child(toggle.render(s, french, tokens, cx));
+                    count += 1;
+                }
+            }
+        }
+        let msg = if count > 0 {
+            search_count_label(count, lang)
+        } else if french {
+            format!(
+                "Aucun paramètre ne correspond à « {} ».",
+                s.search_query.trim()
+            )
+        } else {
+            format!("No settings match “{}”.", s.search_query.trim())
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .id("settings-results")
+                    .role(gpui::Role::Status)
+                    .child(msg),
+            )
+            .child(body)
+            .into_any_element()
+    } else {
+        render_settings_page_body(
+            &s.active_page_id,
+            snapshot,
+            s,
+            focus_input,
+            swatches,
+            tokens,
+            cx,
+        )
+    };
     let wide = s.active_page_id == "skills" && s.search_query.trim().is_empty();
     let (horizontal, top, bottom) = if viewport_width <= 760. {
         (20., 24., 40.)
@@ -233,6 +331,7 @@ pub(crate) fn render_settings_modal(
 }
 
 fn render_settings_page_body(
+    page_id: &str,
     snapshot: &GpuiWorkspaceSnapshot,
     s: &GpuiSettingsSnapshot,
     focus_input: FocusInputTarget,
@@ -241,7 +340,7 @@ fn render_settings_page_body(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     let french = snapshot.french;
-    match s.active_page_id.as_str() {
+    match page_id {
         "appearance" => render_appearance_page(snapshot, tokens, cx),
         "general" => render_general_page(snapshot, s, tokens, cx),
         "terminal" => render_terminal_page(s, french, tokens, cx),
@@ -267,6 +366,58 @@ fn render_settings_page_body(
         "updates" => render_updates_page(snapshot, tokens, cx),
         _ => render_general_page(snapshot, s, tokens, cx),
     }
+}
+
+fn font_size_control(
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let french = snapshot.french;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(section_title(
+            if french {
+                "Taille de police"
+            } else {
+                "Font size"
+            },
+            tokens,
+        ))
+        .child(setting_btn(
+            "gpui-st-font-dec",
+            "−".to_owned(),
+            false,
+            tokens,
+            GpuiAction::ZoomFont(-1),
+            cx,
+        ))
+        .child(
+            div()
+                .font_family(mono_font_family())
+                .text_size(px(12.0))
+                .text_color(tokens.text_strong)
+                .child(SharedString::from(format!("{:.0} px", snapshot.font_size))),
+        )
+        .child(setting_btn(
+            "gpui-st-font-inc",
+            "+".to_owned(),
+            false,
+            tokens,
+            GpuiAction::ZoomFont(1),
+            cx,
+        ))
+        .child(setting_btn(
+            "gpui-st-font-rst",
+            "Reset".to_owned(),
+            false,
+            tokens,
+            GpuiAction::ZoomFont(0),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn render_appearance_page(
@@ -349,49 +500,7 @@ fn render_appearance_page(
                 .child(snapshot.renderer.description(french)),
         );
 
-    let font_section = div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .child(section_title(
-            if french {
-                "Taille de police"
-            } else {
-                "Font size"
-            },
-            tokens,
-        ))
-        .child(setting_btn(
-            "gpui-st-font-dec",
-            "−".to_owned(),
-            false,
-            tokens,
-            GpuiAction::ZoomFont(-1),
-            cx,
-        ))
-        .child(
-            div()
-                .font_family(mono_font_family())
-                .text_size(px(12.0))
-                .text_color(tokens.text_strong)
-                .child(SharedString::from(format!("{:.0} px", snapshot.font_size))),
-        )
-        .child(setting_btn(
-            "gpui-st-font-inc",
-            "+".to_owned(),
-            false,
-            tokens,
-            GpuiAction::ZoomFont(1),
-            cx,
-        ))
-        .child(setting_btn(
-            "gpui-st-font-rst",
-            "Reset".to_owned(),
-            false,
-            tokens,
-            GpuiAction::ZoomFont(0),
-            cx,
-        ));
+    let font_section = font_size_control(snapshot, tokens, cx);
 
     div()
         .flex()
@@ -418,16 +527,6 @@ fn render_general_page(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     let french = snapshot.french;
-    let gp = &s.general_prefs;
-
-    let mut p_restore = gp.clone();
-    p_restore.restore_workspaces = !p_restore.restore_workspaces;
-    let mut p_close = gp.clone();
-    p_close.confirm_close_agent = !p_close.confirm_close_agent;
-    let mut p_quit = gp.clone();
-    p_quit.confirm_quit_running = !p_quit.confirm_quit_running;
-    let mut p_del = gp.clone();
-    p_del.confirm_delete_workspace = !p_del.confirm_delete_workspace;
 
     div()
         .flex()
@@ -458,54 +557,7 @@ fn render_general_page(
                     cx,
                 )),
         )
-        .child(toggle_row(
-            "gpui-st-gen-restore",
-            if french {
-                "Restaurer les espaces de travail au démarrage"
-            } else {
-                "Restore workspaces on startup"
-            },
-            gp.restore_workspaces,
-            tokens,
-            GpuiAction::UpdateGeneralPrefs(p_restore),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-gen-close",
-            if french {
-                "Confirmer avant de fermer un agent actif"
-            } else {
-                "Confirm before closing a running agent"
-            },
-            gp.confirm_close_agent,
-            tokens,
-            GpuiAction::UpdateGeneralPrefs(p_close),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-gen-quit",
-            if french {
-                "Confirmer avant de quitter l'application"
-            } else {
-                "Confirm before quitting with active agents"
-            },
-            gp.confirm_quit_running,
-            tokens,
-            GpuiAction::UpdateGeneralPrefs(p_quit),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-gen-del",
-            if french {
-                "Confirmer la suppression d'espace de travail"
-            } else {
-                "Confirm workspace removal"
-            },
-            gp.confirm_delete_workspace,
-            tokens,
-            GpuiAction::UpdateGeneralPrefs(p_del),
-            cx,
-        ))
+        .children(page_toggles(SettingsPageId::General, s, french, tokens, cx))
         .child(
             div()
                 .pt(px(6.0))
@@ -577,19 +629,6 @@ fn render_terminal_page(
     tp_bar.cursor_style = TerminalCursorStyle::Bar;
     let mut tp_under = tp;
     tp_under.cursor_style = TerminalCursorStyle::Underline;
-
-    let mut tp_blink = tp;
-    tp_blink.cursor_blink = !tp_blink.cursor_blink;
-    let mut tp_tile = tp;
-    tp_tile.tile_new_panes = !tp_tile.tile_new_panes;
-    let mut tp_copy = tp;
-    tp_copy.copy_on_select = !tp_copy.copy_on_select;
-    let mut tp_paste = tp;
-    tp_paste.right_click_paste = !tp_paste.right_click_paste;
-    let mut tp_multi = tp;
-    tp_multi.confirm_multiline_paste = !tp_multi.confirm_multiline_paste;
-    let mut tp_focus = tp;
-    tp_focus.focus_follows_mouse = !tp_focus.focus_follows_mouse;
 
     div()
         .flex()
@@ -686,52 +725,11 @@ fn render_terminal_page(
                     cx,
                 )),
         )
-        .child(toggle_row(
-            "gpui-st-tp-blink",
-            "Cursor blink",
-            tp.cursor_blink,
+        .children(page_toggles(
+            SettingsPageId::Terminal,
+            s,
+            french,
             tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_blink),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-tp-tile",
-            "Auto-tile new panes",
-            tp.tile_new_panes,
-            tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_tile),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-tp-copy",
-            "Copy on selection",
-            tp.copy_on_select,
-            tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_copy),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-tp-paste",
-            "Right-click to paste",
-            tp.right_click_paste,
-            tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_paste),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-tp-multi",
-            "Confirm multiline paste",
-            tp.confirm_multiline_paste,
-            tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_multi),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-tp-focus",
-            "Focus follows mouse",
-            tp.focus_follows_mouse,
-            tokens,
-            GpuiAction::UpdateTerminalPrefs(tp_focus),
             cx,
         ))
         .into_any_element()
@@ -744,22 +742,6 @@ fn render_editor_page(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     let ep = s.editor_prefs;
-    let mut e_syn = ep;
-    e_syn.syntax_highlighting = !e_syn.syntax_highlighting;
-    let mut e_ln = ep;
-    e_ln.line_numbers = !e_ln.line_numbers;
-    let mut e_wrap = ep;
-    e_wrap.word_wrap = !e_wrap.word_wrap;
-    let mut e_dwrap = ep;
-    e_dwrap.diff_word_wrap = !e_dwrap.diff_word_wrap;
-    let mut e_prev = ep;
-    e_prev.preview_tabs = !e_prev.preview_tabs;
-    let mut e_dot = ep;
-    e_dot.show_git_ignored = !e_dot.show_git_ignored;
-    let mut e_cmp = ep;
-    e_cmp.compact_folders = !e_cmp.compact_folders;
-    let mut e_save = ep;
-    e_save.auto_save = !e_save.auto_save;
     let mut e_tab2 = ep;
     e_tab2.tab_size = 2;
     let mut e_tab4 = ep;
@@ -777,70 +759,7 @@ fn render_editor_page(
             },
             tokens,
         ))
-        .child(toggle_row(
-            "gpui-st-ed-syn",
-            "Syntax highlighting",
-            ep.syntax_highlighting,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_syn),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-ln",
-            "Line numbers",
-            ep.line_numbers,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_ln),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-wrap",
-            "Word wrap",
-            ep.word_wrap,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_wrap),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-dwrap",
-            "Diff word wrap",
-            ep.diff_word_wrap,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_dwrap),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-prev",
-            "Enable preview tabs",
-            ep.preview_tabs,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_prev),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-dot",
-            "Show dotfiles & git-ignored entries",
-            ep.show_git_ignored,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_dot),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-cmp",
-            "Compact single-child folders",
-            ep.compact_folders,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_cmp),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-st-ed-save",
-            "Auto-save modified files",
-            ep.auto_save,
-            tokens,
-            GpuiAction::UpdateEditorPrefs(e_save),
-            cx,
-        ))
+        .children(page_toggles(SettingsPageId::Editor, s, french, tokens, cx))
         .child(
             div()
                 .flex()
@@ -883,8 +802,6 @@ fn render_browser_page(
     bp_builtin.open_links_in = OpenLinksTarget::Builtin;
     let mut bp_sys = bp;
     bp_sys.open_links_in = OpenLinksTarget::System;
-    let mut bp_sep = bp;
-    bp_sep.separate_agent_session = !bp_sep.separate_agent_session;
 
     div()
         .flex()
@@ -919,14 +836,7 @@ fn render_browser_page(
                     cx,
                 )),
         )
-        .child(toggle_row(
-            "gpui-st-br-sep",
-            "Isolate agent browser profile from user profile",
-            bp.separate_agent_session,
-            tokens,
-            GpuiAction::UpdateBrowserPrefs(bp_sep),
-            cx,
-        ))
+        .children(page_toggles(SettingsPageId::Browser, s, french, tokens, cx))
         .child(setting_btn(
             "gpui-st-br-vault",
             if french {
@@ -2493,12 +2403,6 @@ fn render_orchestration_page(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     let op = &s.orchestration_prefs;
-    let mut o_wake = op.clone();
-    o_wake.team_wake_ups = !o_wake.team_wake_ups;
-    let mut o_unconf = op.clone();
-    o_unconf.team_wake_unconfirmed = !o_unconf.team_wake_unconfirmed;
-    let mut o_conf = op.clone();
-    o_conf.confirm_workers = !o_conf.confirm_workers;
     let mut o_term = op.clone();
     o_term.worker_mode = WorkerMode::Terminal;
     let mut o_chat = op.clone();
@@ -2516,28 +2420,11 @@ fn render_orchestration_page(
             },
             tokens,
         ))
-        .child(toggle_row(
-            "gpui-orch-wake",
-            "Idle team & relay wake-up reminders",
-            op.team_wake_ups,
+        .children(page_toggles(
+            SettingsPageId::Orchestration,
+            s,
+            french,
             tokens,
-            GpuiAction::UpdateOrchestrationPrefs(o_wake),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-orch-unconf",
-            "Send PTY wake-up without idle confirmation",
-            op.team_wake_unconfirmed,
-            tokens,
-            GpuiAction::UpdateOrchestrationPrefs(o_unconf),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-orch-confw",
-            "Require user confirmation before spawning workers",
-            op.confirm_workers,
-            tokens,
-            GpuiAction::UpdateOrchestrationPrefs(o_conf),
             cx,
         ))
         .child(
@@ -2603,16 +2490,6 @@ fn render_alerts_page(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     let np = &s.notification_prefs;
-    let mut n_en = np.clone();
-    n_en.notifications_enabled = !n_en.notifications_enabled;
-    let mut n_desk = np.clone();
-    n_desk.desktop_notifications = !n_desk.desktop_notifications;
-    let mut n_inapp = np.clone();
-    n_inapp.in_app_alerts = !n_inapp.in_app_alerts;
-    let mut n_bell = np.clone();
-    n_bell.notify_terminal_bell = !n_bell.notify_terminal_bell;
-    let mut n_sup = np.clone();
-    n_sup.notify_suppress_when_focused = !n_sup.notify_suppress_when_focused;
 
     let mut s_none = np.clone();
     s_none.alert_sound = AlertSound::None;
@@ -2633,46 +2510,7 @@ fn render_alerts_page(
             },
             tokens,
         ))
-        .child(toggle_row(
-            "gpui-al-en",
-            "Enable notifications",
-            np.notifications_enabled,
-            tokens,
-            GpuiAction::UpdateNotificationPrefs(n_en),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-al-desk",
-            "Desktop OS notifications",
-            np.desktop_notifications,
-            tokens,
-            GpuiAction::UpdateNotificationPrefs(n_desk),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-al-inapp",
-            "In-app toolbar notification center",
-            np.in_app_alerts,
-            tokens,
-            GpuiAction::UpdateNotificationPrefs(n_inapp),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-al-bell",
-            "Alert on terminal BEL (\\x07)",
-            np.notify_terminal_bell,
-            tokens,
-            GpuiAction::UpdateNotificationPrefs(n_bell),
-            cx,
-        ))
-        .child(toggle_row(
-            "gpui-al-sup",
-            "Suppress when target pane is focused",
-            np.notify_suppress_when_focused,
-            tokens,
-            GpuiAction::UpdateNotificationPrefs(n_sup),
-            cx,
-        ))
+        .children(page_toggles(SettingsPageId::Alerts, s, french, tokens, cx))
         .child(
             div()
                 .flex()
@@ -3460,15 +3298,312 @@ fn section_title(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
         .into_any_element()
 }
 
-fn toggle_row(
+struct Toggle {
+    page: SettingsPageId,
     id: &'static str,
-    label: &str,
-    checked: bool,
+    en: &'static str,
+    fr: &'static str,
+    checked: fn(&GpuiSettingsSnapshot) -> bool,
+    change: fn(&GpuiSettingsSnapshot) -> GpuiAction,
+}
+
+macro_rules! toggle {
+    ($page:ident, $id:literal, $en:literal, $fr:literal, $prefs:ident, $field:ident, $action:ident) => {
+        Toggle {
+            page: SettingsPageId::$page,
+            id: $id,
+            en: $en,
+            fr: $fr,
+            checked: |s| s.$prefs.$field,
+            change: |s| {
+                GpuiAction::$action({
+                    #[allow(clippy::clone_on_copy)]
+                    let mut prefs = s.$prefs.clone();
+                    prefs.$field = !prefs.$field;
+                    prefs
+                })
+            },
+        }
+    };
+}
+const TOGGLES: &[Toggle] = &[
+    toggle!(
+        General,
+        "gpui-st-gen-restore",
+        "Restore workspaces on startup",
+        "Restaurer les espaces de travail au démarrage",
+        general_prefs,
+        restore_workspaces,
+        UpdateGeneralPrefs
+    ),
+    toggle!(
+        General,
+        "gpui-st-gen-close",
+        "Confirm before closing a running agent",
+        "Confirmer avant de fermer un agent actif",
+        general_prefs,
+        confirm_close_agent,
+        UpdateGeneralPrefs
+    ),
+    toggle!(
+        General,
+        "gpui-st-gen-quit",
+        "Confirm before quitting with active agents",
+        "Confirmer avant de quitter l'application",
+        general_prefs,
+        confirm_quit_running,
+        UpdateGeneralPrefs
+    ),
+    toggle!(
+        General,
+        "gpui-st-gen-del",
+        "Confirm workspace removal",
+        "Confirmer la suppression d'espace de travail",
+        general_prefs,
+        confirm_delete_workspace,
+        UpdateGeneralPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-blink",
+        "Cursor blink",
+        "Clignotement du curseur",
+        terminal_prefs,
+        cursor_blink,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-tile",
+        "Auto-tile new panes",
+        "Organiser automatiquement les nouveaux panneaux",
+        terminal_prefs,
+        tile_new_panes,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-copy",
+        "Copy on selection",
+        "Copier le texte quand vous le sélectionnez",
+        terminal_prefs,
+        copy_on_select,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-paste",
+        "Right-click to paste",
+        "Coller avec le bouton droit",
+        terminal_prefs,
+        right_click_paste,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-multi",
+        "Confirm multiline paste",
+        "Confirmer le collage multiligne",
+        terminal_prefs,
+        confirm_multiline_paste,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Terminal,
+        "gpui-st-tp-focus",
+        "Focus follows mouse",
+        "Le focus suit la souris",
+        terminal_prefs,
+        focus_follows_mouse,
+        UpdateTerminalPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-syn",
+        "Syntax highlighting",
+        "Coloration syntaxique",
+        editor_prefs,
+        syntax_highlighting,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-ln",
+        "Line numbers",
+        "Numéros de ligne",
+        editor_prefs,
+        line_numbers,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-wrap",
+        "Word wrap",
+        "Retour à la ligne",
+        editor_prefs,
+        word_wrap,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-dwrap",
+        "Diff word wrap",
+        "Retour à la ligne dans les différences",
+        editor_prefs,
+        diff_word_wrap,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-prev",
+        "Enable preview tabs",
+        "Activer les onglets d’aperçu",
+        editor_prefs,
+        preview_tabs,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-dot",
+        "Show dotfiles & git-ignored entries",
+        "Afficher les fichiers cachés et ignorés par Git",
+        editor_prefs,
+        show_git_ignored,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-cmp",
+        "Compact single-child folders",
+        "Dossiers compacts",
+        editor_prefs,
+        compact_folders,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Editor,
+        "gpui-st-ed-save",
+        "Auto-save modified files",
+        "Enregistrement automatique des fichiers modifiés",
+        editor_prefs,
+        auto_save,
+        UpdateEditorPrefs
+    ),
+    toggle!(
+        Browser,
+        "gpui-st-br-sep",
+        "Isolate agent browser profile from user profile",
+        "Isoler le profil de navigation des agents",
+        browser_prefs,
+        separate_agent_session,
+        UpdateBrowserPrefs
+    ),
+    toggle!(
+        Orchestration,
+        "gpui-orch-wake",
+        "Idle team & relay wake-up reminders",
+        "Rappels pour les équipes inactives et les relais",
+        orchestration_prefs,
+        team_wake_ups,
+        UpdateOrchestrationPrefs
+    ),
+    toggle!(
+        Orchestration,
+        "gpui-orch-unconf",
+        "Send PTY wake-up without idle confirmation",
+        "Réveiller le terminal sans confirmation d’inactivité",
+        orchestration_prefs,
+        team_wake_unconfirmed,
+        UpdateOrchestrationPrefs
+    ),
+    toggle!(
+        Orchestration,
+        "gpui-orch-confw",
+        "Require user confirmation before spawning workers",
+        "Confirmer avant de lancer des agents",
+        orchestration_prefs,
+        confirm_workers,
+        UpdateOrchestrationPrefs
+    ),
+    toggle!(
+        Alerts,
+        "gpui-al-en",
+        "Enable notifications",
+        "Activer les notifications",
+        notification_prefs,
+        notifications_enabled,
+        UpdateNotificationPrefs
+    ),
+    toggle!(
+        Alerts,
+        "gpui-al-desk",
+        "Desktop OS notifications",
+        "Notifications du système",
+        notification_prefs,
+        desktop_notifications,
+        UpdateNotificationPrefs
+    ),
+    toggle!(
+        Alerts,
+        "gpui-al-inapp",
+        "In-app toolbar notification center",
+        "Centre de notifications dans la barre d’outils",
+        notification_prefs,
+        in_app_alerts,
+        UpdateNotificationPrefs
+    ),
+    toggle!(
+        Alerts,
+        "gpui-al-bell",
+        "Alert on terminal BEL (\\x07)",
+        "Alerter à la sonnerie du terminal",
+        notification_prefs,
+        notify_terminal_bell,
+        UpdateNotificationPrefs
+    ),
+    toggle!(
+        Alerts,
+        "gpui-al-sup",
+        "Suppress when target pane is focused",
+        "Désactiver si le panneau cible est actif",
+        notification_prefs,
+        notify_suppress_when_focused,
+        UpdateNotificationPrefs
+    ),
+];
+impl Toggle {
+    fn label(&self, french: bool) -> &'static str {
+        if french { self.fr } else { self.en }
+    }
+    fn render(
+        &self,
+        s: &GpuiSettingsSnapshot,
+        french: bool,
+        tokens: &GpuiThemeTokens,
+        cx: &mut Context<TesselGpuiRoot>,
+    ) -> AnyElement {
+        toggle_row_owned(
+            self.id.into(),
+            self.label(french).into(),
+            (self.checked)(s),
+            tokens,
+            (self.change)(s),
+            cx,
+        )
+    }
+}
+fn page_toggles(
+    page: SettingsPageId,
+    s: &GpuiSettingsSnapshot,
+    french: bool,
     tokens: &GpuiThemeTokens,
-    action: GpuiAction,
     cx: &mut Context<TesselGpuiRoot>,
-) -> AnyElement {
-    toggle_row_owned(id.to_owned(), label.to_owned(), checked, tokens, action, cx)
+) -> Vec<AnyElement> {
+    TOGGLES
+        .iter()
+        .filter(|t| t.page == page)
+        .map(|t| t.render(s, french, tokens, cx))
+        .collect()
 }
 
 fn toggle_row_owned(
@@ -3479,8 +3614,10 @@ fn toggle_row_owned(
     action: GpuiAction,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    let selector = id.clone();
     div()
         .id(SharedString::from(id))
+        .debug_selector(move || selector)
         .px(px(10.0))
         .py(px(6.5))
         .rounded(px(tokens.radius_px))

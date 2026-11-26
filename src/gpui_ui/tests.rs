@@ -18,6 +18,50 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn settings_search_edits_matching_rows_across_pages(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::SetLanguage { french: false });
+        root.app
+            .apply_gpui_action(GpuiAction::OpenSettingsPage("general".into()));
+        root.app
+            .apply_gpui_action(GpuiAction::SetSettingsSearch("WRAP word".into()));
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("gpui-st-ed-dwrap").is_some());
+    assert!(visual.debug_bounds("gpui-st-ed-syn").is_none());
+    let point = visual.debug_bounds("gpui-st-ed-wrap").unwrap().center();
+    let before = view
+        .update(cx, |root, _, _| {
+            root.app
+                .gpui_snapshot(960., 640., 4.)
+                .settings
+                .unwrap()
+                .editor_prefs
+                .word_wrap
+        })
+        .unwrap();
+    gpui::VisualTestContext::from_window(view.into(), cx).simulate_click(point, Default::default());
+    view.update(cx, |root, _, cx| {
+        let settings = root.app.gpui_snapshot(960., 640., 4.).settings.unwrap();
+        assert_ne!(before, settings.editor_prefs.word_wrap);
+        assert_eq!(settings.active_page_id, "general");
+        root.dispatch_action(GpuiAction::SetLanguage { french: true }, cx);
+        root.dispatch_action(GpuiAction::SetSettingsSearch("souris FOCUS".into()), cx);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("gpui-st-tp-focus").is_some());
+    assert!(visual.debug_bounds("gpui-st-ed-wrap").is_none());
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn settings_workspace_resizes_below_toolbar_and_returns_to_app(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let view = cx.add_window(|_, cx| {
@@ -1025,7 +1069,7 @@ fn gpui_settings_twenty_two_pages_and_preferences_roundtrip() {
         .settings
         .expect("filtered settings");
     let filtered_count: usize = filtered.groups.iter().map(|(_, p)| p.len()).sum();
-    assert!((1..22).contains(&filtered_count));
+    assert_eq!(filtered_count, all_page_ids.len());
     app.apply_gpui_action(GpuiAction::OpenSettingsPage("git".into()));
     assert!(
         app.gpui_snapshot(960.0, 640.0, 4.0)

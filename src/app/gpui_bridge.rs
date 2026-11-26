@@ -4458,7 +4458,6 @@ impl Tessel {
         } else {
             SettingsLang::En
         };
-        let q = self.gpui_extra.settings_search.trim().to_lowercase();
         let mut groups = Vec::new();
         for group in ALL_SETTINGS_GROUPS {
             let mut pages = Vec::new();
@@ -4469,14 +4468,7 @@ impl Tessel {
                     continue;
                 }
                 let title = page.title(lang);
-                let desc = page.description(lang);
-                if q.is_empty()
-                    || title.to_lowercase().contains(&q)
-                    || desc.to_lowercase().contains(&q)
-                    || page.as_str().to_lowercase().contains(&q)
-                {
-                    pages.push((page.as_str().to_owned(), title.to_owned()));
-                }
+                pages.push((page.as_str().to_owned(), title.to_owned()));
             }
             if !pages.is_empty() {
                 groups.push((group.title(lang).to_owned(), pages));
