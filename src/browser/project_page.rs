@@ -1,6 +1,7 @@
 //! Restricted project websites for the owner's embedded Windows browser.
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     fs::File,
     io::{Read, Seek, SeekFrom},
     os::windows::{ffi::OsStringExt, io::AsRawHandle},
@@ -17,15 +18,18 @@ const SCHEME: &str = "tesselpreview";
 const LIMIT: u64 = 50 * 1024 * 1024;
 const POLICY: &str = "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'";
 
+const MAX_SITES: usize = 50;
+const MAX_DRAFTS: usize = 20;
+
+#[derive(Clone)]
 struct Site {
     authority: String,
     root: PathBuf,
-    entry: PathBuf,
-    draft: Vec<u8>,
+    drafts: VecDeque<(PathBuf, Arc<[u8]>)>,
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Pages(Arc<Mutex<Option<Arc<Site>>>>);
+pub(super) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>);
 
 fn segment_ok(s: &str) -> bool {
     let stem = s
@@ -185,23 +189,36 @@ impl Pages {
         {
             return Err("This project page cannot be previewed.".into());
         }
-        let mut nonce = [0u8; 16];
-        getrandom::fill(&mut nonce).map_err(|_| "Cannot create preview origin")?;
-        let authority = format!("{:032x}.localhost", u128::from_be_bytes(nonce));
-        let mut url = url::Url::parse(&format!("http://{SCHEME}.{authority}/")).unwrap();
+        let mut sites = self.0.lock().map_err(|_| "Project preview unavailable")?;
+        let mut site = if let Some(i) = sites.iter().position(|s| s.root == root) {
+            sites.remove(i).unwrap()
+        } else {
+            let mut nonce = [0u8; 16];
+            getrandom::fill(&mut nonce).map_err(|_| "Cannot create preview origin")?;
+            if sites.len() == MAX_SITES {
+                sites.pop_front();
+            }
+            Arc::new(Site {
+                authority: format!("{:032x}.localhost", u128::from_be_bytes(nonce)),
+                root,
+                drafts: VecDeque::new(),
+            })
+        };
+        let current = Arc::make_mut(&mut site);
+        let mut url = url::Url::parse(&format!("http://{SCHEME}.{}/", current.authority)).unwrap();
         url.path_segments_mut().unwrap().pop_if_empty().extend(
             entry
-                .strip_prefix(&root)
+                .strip_prefix(&current.root)
                 .unwrap()
                 .iter()
                 .map(|s| s.to_str().unwrap()),
         );
-        *self.0.lock().map_err(|_| "Project preview unavailable")? = Some(Arc::new(Site {
-            authority,
-            root,
-            entry,
-            draft: text.as_bytes().to_vec(),
-        }));
+        current.drafts.retain(|(path, _)| path != &entry);
+        if current.drafts.len() == MAX_DRAFTS {
+            current.drafts.pop_front();
+        }
+        current.drafts.push_back((entry, text.as_bytes().into()));
+        sites.push_back(site);
         Ok(url.into())
     }
     fn serve(&self, req: Request<Vec<u8>>) -> Reply {
@@ -209,12 +226,19 @@ impl Pages {
         if !head && req.method() != "GET" {
             return empty(405);
         }
-        let Some(site) = self.0.lock().ok().and_then(|s| s.clone()) else {
+        let Some(authority) = req.uri().authority() else {
             return empty(404);
         };
-        if req.uri().authority().map(|a| a.as_str()) != Some(site.authority.as_str()) {
+        let Some(site) = self.0.lock().ok().and_then(|mut sites| {
+            let i = sites
+                .iter()
+                .position(|site| site.authority == authority.as_str())?;
+            let site = sites.remove(i)?;
+            sites.push_back(site.clone());
+            Some(site)
+        }) else {
             return empty(404);
-        }
+        };
         let mut path = site.root.clone();
         for raw in req.uri().path().split('/').filter(|s| !s.is_empty()) {
             if raw.bytes().enumerate().any(|(i, b)| {
@@ -258,12 +282,12 @@ impl Pages {
             return empty(404);
         }
         let kind = mime(&target);
-        if target == site.entry {
+        if let Some((_, draft)) = site.drafts.iter().find(|(path, _)| *path == target) {
             return response(
                 200,
                 kind,
-                site.draft.len() as u64,
-                if head { vec![] } else { site.draft.clone() },
+                draft.len() as u64,
+                if head { vec![] } else { draft.to_vec() },
             );
         }
         asset_response(file, kind, meta.len(), head, req.headers().get("Range"))
@@ -301,7 +325,7 @@ impl Pages {
 mod tests {
     use super::*;
     #[test]
-    fn project_page_serves_drafts_assets_and_only_the_active_project_origin() {
+    fn project_page_serves_drafts_and_assets_within_its_project_origin() {
         assert!(!segment_ok("CON.txt"));
         assert!(!segment_ok("com¹.log"));
         assert!(segment_ok("company.css"));
@@ -343,8 +367,46 @@ mod tests {
                 .status(),
             405
         );
-        pages.open(root, &file, "replacement").unwrap();
-        assert_eq!(get("index.html").status(), 404);
+        let same = pages.open(root, &file, "replacement").unwrap();
+        assert_eq!(
+            same.replace("http://tesselpreview.", "tesselpreview://"),
+            address
+        );
+        assert_eq!(get("index.html").body().as_ref(), b"replacement");
+    }
+
+    #[test]
+    fn history_retains_recent_sites_and_recently_updated_drafts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pages = Pages::default();
+        let open = |project: usize, name: usize| {
+            let root = tmp.path().join(project.to_string());
+            std::fs::create_dir_all(&root).unwrap();
+            let file = root.join(format!("{name}.html"));
+            std::fs::write(&file, "disk").unwrap();
+            pages
+                .open(&root, &file, &format!("draft {project}-{name}"))
+                .unwrap()
+                .replace("http://tesselpreview.", "tesselpreview://")
+        };
+        let get = |url: &str| pages.serve(Request::get(url).body(Vec::new()).unwrap());
+        let oldest = open(0, 0);
+        let refreshed = open(0, 1);
+        for n in 2..MAX_DRAFTS {
+            open(0, n);
+        }
+        assert_eq!(open(0, 1), refreshed);
+        open(0, MAX_DRAFTS);
+        assert_eq!(get(&oldest).body().as_ref(), b"disk");
+        assert_eq!(get(&refreshed).body().as_ref(), b"draft 0-1");
+        let second = open(1, 1);
+        for n in 2..MAX_SITES {
+            open(n, 1);
+        }
+        assert_eq!(get(&refreshed).body().as_ref(), b"draft 0-1");
+        open(MAX_SITES, 1);
+        assert_eq!(get(&second).status(), 404);
+        assert_eq!(get(&refreshed).body().as_ref(), b"draft 0-1");
     }
 
     #[test]
@@ -438,6 +500,24 @@ mod tests {
         wait_for(
             view,
             "document.querySelector('video').seeking === false && Math.abs(document.querySelector('video').currentTime - 0.4) < 0.05",
+        );
+        let second_path = nested.join("second.html");
+        std::fs::write(&second_path, "<p>second page</p>").unwrap();
+        let second = crate::files::Document::open(&root, &second_path).unwrap();
+        browser.open_project_page(&second).unwrap();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.body?.textContent === 'second page'",
+        );
+        browser.go_back_now();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.querySelector('#fixture')?.textContent === 'unsaved' && document.images[0]?.naturalWidth === 12",
+        );
+        browser.go_forward_now();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.body?.textContent === 'second page'",
         );
     }
 }
