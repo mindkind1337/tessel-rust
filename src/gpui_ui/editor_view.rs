@@ -404,6 +404,26 @@ fn render_editor_toolbar(
                                     .child(label),
                             );
                         }
+                        #[cfg(windows)]
+                        {
+                            let id = doc.instance_id;
+                            el = el.child(
+                                div()
+                                    .id("html-open-browser")
+                                    .cursor_pointer()
+                                    .px(px(7.))
+                                    .py(px(2.5))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(GpuiAction::OpenHtmlInBrowser(id), cx)
+                                    }))
+                                    .child(if french {
+                                        "Ouvrir dans le navigateur"
+                                    } else {
+                                        "Open in browser"
+                                    }),
+                            );
+                        }
                         el
                     },
                 )

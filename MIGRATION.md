@@ -1667,3 +1667,5 @@ GPUI readable preview links now use the pinned local document opener, including 
 The GPUI readable HTML preview mirrors the Vue static preview link menu for local project documents and HTTP(S) links. Folder-served styled pages and their trust controls are still pending.
 
 GPUI HTML tabs expose Source, Preview and Plain text. The plain-text reader retains inline spacing, explicit line breaks and table cell separators and supports native text selection.
+
+Local project HTML has an explicit restricted WebView2 browser-tab preview on Windows. Each new preview replaces the previous origin. The editor still uses the readable preview by default. In-editor website rendering, SSH resource loading, folder trust and trusted scripts remain open.

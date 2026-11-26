@@ -132,6 +132,8 @@ pub mod prompt_before;
 mod raster_preview;
 mod regional_date;
 mod saved_version_diff;
+#[cfg(all(windows, test))]
+mod webview_test_support;
 // Owner-local Linear UI; task-launch integration remains in progress.
 mod external_issue;
 pub mod initial_turn;

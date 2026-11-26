@@ -5,6 +5,7 @@ mod control;
 mod cookie_import;
 mod downloads;
 mod private_fill;
+mod project_page;
 pub use private_fill::Reply as FillReply;
 pub mod smoke;
 pub mod vault_smoke;
@@ -38,6 +39,7 @@ fn next_address_generation() -> u64 {
 }
 
 pub struct Browser {
+    project_pages: project_page::Pages,
     address_generation: u64,
     // Drop child OAuth popups first, then main view, then shared WebContext environment.
     popups: crate::browser_popup::win32::PopupManager,
@@ -74,6 +76,7 @@ impl Default for Browser {
             .and_then(|d| d.download_dir().map(|p| p.join("Tessel Rust")))
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
         Self {
+            project_pages: Default::default(),
             address_generation: next_address_generation(),
             popups: Default::default(),
             view: None,
@@ -514,53 +517,59 @@ impl Browser {
         let planned = self.planned_download.clone();
         let view = WebViewBuilder::new_with_web_context(
             self.context.as_mut().ok_or("Missing browser environment")?,
-        )
-        .with_url("about:blank")
-        .with_visible(false)
-        .with_devtools(false)
-        .with_general_autofill_enabled(false)
-        .with_navigation_handler(move |address| {
-            let permit = allowed(&address);
-            if permit {
-                let _ = navigation.send(Event::Navigation(address));
-            }
-            permit
-        })
-        .with_new_window_req_handler(move |address, features| {
-            let now_ms = crate::side_panels_model::now_unix_ms();
-            let has_size = features.size.is_some();
-            let is_controlled = agent_controlled.load(std::sync::atomic::Ordering::Acquire);
-            let gesture_ok = gesture_for_handler.borrow_mut().consume_if_fresh(now_ms);
-            if crate::browser_popup::should_open_oauth_popup(
-                &address,
-                gesture_ok,
-                has_size,
-                is_controlled,
-                agent,
-            ) {
-                let owner_hwnd =
-                    windows::Win32::Foundation::HWND(parent_hwnd_raw as *mut core::ffi::c_void);
-                let explicit_size = features.size.map(|s| (s.width, s.height));
-                return match popups_mgr.open_oauth_popup(
-                    owner_hwnd,
+        );
+        let view = if agent {
+            view
+        } else {
+            self.project_pages.attach(view)?
+        };
+        let view = view
+            .with_url("about:blank")
+            .with_visible(false)
+            .with_devtools(false)
+            .with_general_autofill_enabled(false)
+            .with_navigation_handler(move |address| {
+                let permit = allowed(&address);
+                if permit {
+                    let _ = navigation.send(Event::Navigation(address));
+                }
+                permit
+            })
+            .with_new_window_req_handler(move |address, features| {
+                let now_ms = crate::side_panels_model::now_unix_ms();
+                let has_size = features.size.is_some();
+                let is_controlled = agent_controlled.load(std::sync::atomic::Ordering::Acquire);
+                let gesture_ok = gesture_for_handler.borrow_mut().consume_if_fresh(now_ms);
+                if crate::browser_popup::should_open_oauth_popup(
                     &address,
-                    explicit_size,
-                    features.opener,
+                    gesture_ok,
+                    has_size,
+                    is_controlled,
+                    agent,
                 ) {
-                    Ok(webview) => wry::NewWindowResponse::Create { webview },
-                    Err(e) => {
-                        let _ = popup.send(Event::Error(e));
-                        wry::NewWindowResponse::Deny
-                    }
-                };
-            }
-            if allowed(&address) {
-                let _ = popup.send(Event::Popup(address));
-            }
-            wry::NewWindowResponse::Deny
-        })
-        .build_as_child(parent)
-        .map_err(|e| e.to_string())?;
+                    let owner_hwnd =
+                        windows::Win32::Foundation::HWND(parent_hwnd_raw as *mut core::ffi::c_void);
+                    let explicit_size = features.size.map(|s| (s.width, s.height));
+                    return match popups_mgr.open_oauth_popup(
+                        owner_hwnd,
+                        &address,
+                        explicit_size,
+                        features.opener,
+                    ) {
+                        Ok(webview) => wry::NewWindowResponse::Create { webview },
+                        Err(e) => {
+                            let _ = popup.send(Event::Error(e));
+                            wry::NewWindowResponse::Deny
+                        }
+                    };
+                }
+                if allowed(&address) {
+                    let _ = popup.send(Event::Popup(address));
+                }
+                wry::NewWindowResponse::Deny
+            })
+            .build_as_child(parent)
+            .map_err(|e| e.to_string())?;
         // Observe WebView2's native `IsUserInitiated` flag synchronously before `wry`'s deferred
         // `dispatch_handler` invokes `with_new_window_req_handler` on the next message-loop tick.
         unsafe {
@@ -664,6 +673,11 @@ impl Browser {
                 Event::Navigation(address) => self.observe_navigation(address),
             }
         }
+    }
+    pub(crate) fn open_project_page(&mut self, doc: &crate::files::Document) -> Result<(), String> {
+        let url = self.project_pages.open(&doc.root, &doc.path, &doc.text)?;
+        self.open_url(&url);
+        Ok(())
     }
     pub fn open_url(&mut self, url: &str) {
         self.address_editing = false;

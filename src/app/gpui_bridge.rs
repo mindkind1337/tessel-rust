@@ -857,6 +857,8 @@ pub(crate) enum GpuiAction {
     // Document / Diff / Rich Preview actions
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
+    #[cfg(windows)]
+    OpenHtmlInBrowser(u64),
     SetHtmlView(u64, HtmlViewMode),
     ToggleActiveDocumentPreview,
     ForceRenderLargeMarkdown,
@@ -5504,6 +5506,25 @@ impl Tessel {
                     match doc.save(self.store.as_ref().map(|s| s.directory())) {
                         Ok(()) => doc.error.clear(),
                         Err(e) => doc.error = e,
+                    }
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::OpenHtmlInBrowser(id) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.diff_title.is_none()
+                    && !doc.media
+                {
+                    match self.browser.open_project_page(doc) {
+                        Ok(()) => {
+                            self.show_agent_browser = false;
+                            self.browser_tab_open = true;
+                            self.view = View::Browser;
+                        }
+                        Err(err) => self.error = err,
                     }
                 }
             }
