@@ -1691,3 +1691,5 @@ Switching Windows HTML editor tabs retains the project preview origin and its re
 The Windows GPUI HTML preview toolbar displays the decoded project-relative file path and the same three 24-pixel icon controls for local and SSH pages. Source and plain-text views retain their browser shortcut.
 
 The owner browser and editor share registered local and SSH drafts. The browser can serve an origin after the owner opens a page for that project and trust mode. Agent profiles retain separate browser state.
+
+Windows agent detection queries the Python user install scheme through python.exe and py.exe in PATH. Discovered directories are appended after configured tools and retained before pip creates them. Terminal launch reads the available snapshot without waiting for either interpreter.

@@ -1584,7 +1584,7 @@ impl Tessel {
     }
     fn detect_agents(&mut self) {
         self.agents.start(|| {
-            let search = crate::agent_paths::SearchPath::current()?;
+            let search = crate::agent_paths::SearchPath::for_detection()?;
             launch::discover(&search)
         });
     }
