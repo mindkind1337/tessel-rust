@@ -226,7 +226,36 @@ mod tests {
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
         assert!(visual.debug_bounds("remote-image-menu").is_some());
-        visual.simulate_click(gpui::point(gpui::px(5.), gpui::px(5.)), Default::default());
+        visual.simulate_keystrokes("up");
+        view.update(cx, |root, window, _| {
+            assert!(root.image_menu_item.is_focused(window))
+        })
+        .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        visual.simulate_keystrokes("escape");
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_none());
+        visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_some());
+        let saved = dir.path().join("original-copy");
+        crate::files::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(saved.clone())));
+        visual.simulate_keystrokes("up");
+        visual.simulate_keystrokes("space");
+        cx.refresh().unwrap();
+        let decoded = image::load_from_memory(&std::fs::read(saved).unwrap()).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (320, 160));
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_none());
+        visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_some());
+        visual.simulate_resize(gpui::size(gpui::px(1100.), gpui::px(850.)));
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
         assert!(visual.debug_bounds("remote-image-menu").is_none());

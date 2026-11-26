@@ -397,7 +397,7 @@ impl RemotePanel {
 
     pub(super) fn download_original(&mut self, path: &str) {
         self.download_original_with(path, |name| {
-            rfd::FileDialog::new().set_file_name(name).save_file()
+            crate::files::choose_download_destination(name.as_ref())
         });
     }
     fn download_original_with(

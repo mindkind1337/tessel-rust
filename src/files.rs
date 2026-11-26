@@ -44,6 +44,23 @@ pub fn show_fitted_image(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_DOWNLOAD_DESTINATION: std::cell::Cell<Option<PathBuf>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn choose_download_destination(name: &std::ffi::OsStr) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        let _ = name;
+        TEST_DOWNLOAD_DESTINATION.with(std::cell::Cell::take)
+    }
+    #[cfg(not(test))]
+    rfd::FileDialog::new()
+        .set_file_name(name.to_string_lossy())
+        .save_file()
+}
+
 pub fn save_download(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
@@ -594,11 +611,7 @@ impl Document {
     }
 
     pub fn choose_image_copy(&mut self, french: bool) {
-        self.save_image_copy(french, |name| {
-            rfd::FileDialog::new()
-                .set_file_name(name.to_string_lossy())
-                .save_file()
-        });
+        self.save_image_copy(french, choose_download_destination);
     }
 
     pub fn original_text(&self) -> Option<&str> {

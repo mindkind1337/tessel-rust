@@ -14,6 +14,7 @@ mod editor_tool_inputs;
 pub mod editor_view;
 mod explorer_input;
 pub mod icons;
+mod image_menu;
 mod issues_menu;
 mod linear_view;
 mod modal_query_input;
@@ -121,6 +122,8 @@ pub(crate) struct TesselGpuiRoot {
     linear_view: linear_view::View,
     new_task_view: new_task_view::View,
     issues_menu: issues_menu::Menu,
+    image_menu_item: FocusHandle,
+    image_menu_viewport: Option<gpui::Size<gpui::Pixels>>,
     _poller_task: Task<()>,
 }
 
@@ -330,6 +333,8 @@ impl TesselGpuiRoot {
             linear_view: Default::default(),
             new_task_view: Default::default(),
             issues_menu: issues_menu::Menu::new(cx),
+            image_menu_item: cx.focus_handle(),
+            image_menu_viewport: None,
             _poller_task: poller_task,
         }
     }
@@ -1543,6 +1548,16 @@ impl Render for TesselGpuiRoot {
         let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
         let is_maximized = window.is_maximized();
 
+        let mut image_menu = image_menu::Menu::current(&snapshot, self.app.gpui_has_open_modal());
+        if self.image_menu_viewport.is_some_and(|old| old != viewport)
+            && let Some(menu) = image_menu.take()
+        {
+            self.app.apply_gpui_action(menu.close);
+            if self.image_menu_item.is_focused(window) {
+                self.focus_handle.focus(window, cx);
+            }
+        }
+        self.image_menu_viewport = image_menu.as_ref().map(|_| viewport);
         let focus_input = self.focus_input;
 
         div()
@@ -1626,6 +1641,15 @@ impl Render for TesselGpuiRoot {
                 ),
                 |el, modal| el.child(modal),
             )
+            .when_some(image_menu, |el, menu| {
+                menu.attach(
+                    el,
+                    &self.image_menu_item,
+                    f32::from(viewport.height),
+                    &tokens,
+                    cx,
+                )
+            })
             .when_some(
                 issues_menu::popup(
                     &self.issues_menu,

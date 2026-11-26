@@ -1653,3 +1653,5 @@ Local and SSH previews in both renderers scale pages from the original PDF dimen
 ### Image previews
 
 Local and SSH previews in both renderers use the dimensions of the decoded image to center it with a 20-pixel gutter. Large images shrink to fit either axis, small images retain their original size, and the right-click download action follows the displayed image bounds.
+
+GPUI uses a shared local and SSH image menu with menu-item focus, Up/Down navigation, Enter/Space activation and dismissal on Escape, a click outside the menu or window resizing. Original-file saving uses the same document-scoped actions for mouse and keyboard.
