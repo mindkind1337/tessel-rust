@@ -12,7 +12,7 @@ pub(crate) struct Commit {
 impl Commit {
     pub fn details(&self, fr: bool) -> String {
         format!(
-            "{} · {} · {}\n{}",
+            "{} Â· {} Â· {}\n{}",
             self.author,
             crate::regional_date::long_local(self.time, fr).unwrap_or_default(),
             &self.id[..7],
@@ -25,6 +25,7 @@ pub(crate) struct Page {
     pub commits: Vec<Commit>,
     pub limit: usize,
     pub more: bool,
+    pub uncommitted: bool,
 }
 
 fn script(root: &str, path: &str, limit: usize) -> Result<String, String> {
@@ -50,13 +51,30 @@ fn script(root: &str, path: &str, limit: usize) -> Result<String, String> {
     let dir = crate::launch::posix_quote(dir);
     let name = crate::launch::posix_quote(name);
     Ok(format!(
-        "dir={dir}\nfile={name}\nCDPATH=\nexport GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1\ncd -P \"$dir\" && [ \"$(pwd -P)\" = \"$dir\" ] && [ -f \"$file\" ] && [ ! -L \"$file\" ] || exit 2\nexec git --no-pager --literal-pathspecs log --follow --no-patch --no-color --no-notes --no-ext-diff --no-textconv --no-show-signature -z -n{} --format=%H%n%aN%n%at%n%B -- \"$file\"\n",
+        r#"dir={dir}
+file={name}
+CDPATH=
+export GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1
+cd -P "$dir" && [ "$(pwd -P)" = "$dir" ] && [ -f "$file" ] && [ ! -L "$file" ] || exit 2
+if state=$(git -c core.fsmonitor=false --literal-pathspecs status --porcelain=v1 --untracked-files=all -- "$file") && [ -n "$state" ]; then
+    echo dirty
+else
+    echo no-marker
+fi
+exec git --no-pager --literal-pathspecs log --follow --no-patch --no-color --no-notes --no-ext-diff --no-textconv --no-show-signature -z -n{} --format=%H%n%aN%n%at%n%B -- "$file"
+"#,
         limit + 1
     ))
 }
 
 fn parse(output: &str, limit: usize) -> Result<Page, String> {
     let invalid = "Incomplete remote Git history.";
+    let (state, output) = output.split_once('\n').ok_or(invalid)?;
+    let uncommitted = match state {
+        "dirty" => true,
+        "no-marker" => false,
+        _ => return Err(invalid.into()),
+    };
     if !output.is_empty() && !output.ends_with('\0') {
         return Err(invalid.into());
     }
@@ -85,6 +103,7 @@ fn parse(output: &str, limit: usize) -> Result<Page, String> {
     commits.truncate(limit);
     Ok(Page {
         commits,
+        uncommitted,
         more,
         limit,
     })
@@ -127,7 +146,7 @@ mod tests {
         }
         assert!(script("/repo", "/repo/test", 501).is_err());
         assert!(parse("truncated", 1).is_err());
-        assert!(parse("bad\nname\n0\nmessage\0", 1).is_err());
+        assert!(parse("dirty\nbad\nname\n0\nmessage\0", 1).is_err());
         let args = transport_args(
             &Host {
                 alias: "fixture".into(),
@@ -198,7 +217,7 @@ mod tests {
         let file = "new's [file] $test";
         git(&["mv", "old", file]);
         git(&["commit", "-qm", "renamed"]);
-        let run = |limit| {
+        let run = |file: &str, limit| {
             let script = script(&root, &format!("{root}/{file}"), limit).unwrap();
             let output = Command::new(&sh)
                 .current_dir(dir.path())
@@ -212,12 +231,21 @@ mod tests {
             );
             parse(&String::from_utf8(output.stdout).unwrap(), limit).unwrap()
         };
-        let page = run(1);
+        let page = run(file, 1);
         assert!(page.more);
         assert_eq!(page.commits[0].message, "renamed");
-        let all = run(50);
+        let all = run(file, 50);
+        assert!(!all.uncommitted);
         assert!(!all.more);
         assert_eq!(all.commits.len(), 2);
         assert_eq!(all.commits[1].message, "original");
+        std::fs::write(dir.path().join("other"), "untracked").unwrap();
+        assert!(!run(file, 50).uncommitted);
+        let other = run("other", 50);
+        assert!(other.uncommitted && other.commits.is_empty());
+        std::fs::write(dir.path().join(file), "local change").unwrap();
+        assert!(run(file, 50).uncommitted);
+        git(&["add", "--", file]);
+        assert!(run(file, 50).uncommitted);
     }
 }

@@ -422,7 +422,14 @@ pub(crate) fn render(
                 .id("ssh-commit-history")
                 .max_h(px(180.))
                 .overflow_y_scroll();
-            if page.commits.is_empty() {
+            if page.uncommitted {
+                list = list.child(if fr {
+                    "Modifications non commitées"
+                } else {
+                    "Uncommitted Changes"
+                });
+            }
+            if !page.uncommitted && page.commits.is_empty() {
                 list = list.child(if fr { "Aucun commit." } else { "No commits." });
             }
             for row in &page.commits {

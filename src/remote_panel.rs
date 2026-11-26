@@ -717,7 +717,14 @@ impl RemotePanel {
                     .request_repaint_after(std::time::Duration::from_millis(80));
             }
             if let Some(page) = &doc.git_history.page {
-                if page.commits.is_empty() {
+                if page.uncommitted {
+                    ui.label(if fr {
+                        "Modifications non commitées"
+                    } else {
+                        "Uncommitted Changes"
+                    });
+                }
+                if !page.uncommitted && page.commits.is_empty() {
                     ui.label(if fr { "Aucun commit." } else { "No commits." });
                 }
                 egui::ScrollArea::vertical()
