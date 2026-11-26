@@ -905,6 +905,91 @@ mod tests {
     }
 
     #[gpui::test]
+    fn source_wrap_is_shared_live_and_persisted_independently_of_diff(test: &mut TestAppContext) {
+        // The default GPUI test text system gives each paragraph exactly one visual line.
+        let platform = gpui_platform::current_platform(true);
+        let cx = &mut TestAppContext::build_with_text_system(
+            test.dispatcher.clone(),
+            None,
+            platform.text_system(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+        let mut docs = Vec::new();
+        let text = "long line ".repeat(70);
+        for name in ["first.txt", "second.txt"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &text).unwrap();
+            docs.push(Document::open(dir.path(), &path).unwrap());
+        }
+        docs.push(Document::from_diff(
+            dir.path(),
+            dir.path().join("first.txt"),
+            "Diff".into(),
+            format!("+{text}"),
+            false,
+        ));
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(state_dir.clone()), false, cx);
+            root.app.install_editor_input_fixture(docs, 0);
+            root
+        });
+        let line_wraps = |cx: &mut TestAppContext| {
+            cx.refresh().unwrap();
+            let bounds = gpui::VisualTestContext::from_window(view.into(), cx)
+                .debug_bounds("native-local-editor")
+                .unwrap();
+            view.update(cx, |root, w, cx| {
+                let doc = root.app.gpui_editor_document().unwrap();
+                let end = doc.text.len();
+                root.editor_input
+                    .get(doc.instance_id())
+                    .unwrap()
+                    .update(cx, |s, cx| {
+                        let first = s.bounds_for_range(0..0, bounds, w, cx).unwrap();
+                        let last = s.bounds_for_range(end..end, bounds, w, cx).unwrap();
+                        last.origin.y > first.origin.y
+                    })
+            })
+            .unwrap()
+        };
+        assert!(line_wraps(cx));
+        cx.simulate_keystrokes(view.into(), "alt-z");
+        assert!(!line_wraps(cx));
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::SelectDocumentTab(1), cx)
+        })
+        .unwrap();
+        assert!(!line_wraps(cx));
+        let persisted = || {
+            let bytes = std::fs::read(state_dir.join("workspace.json")).unwrap();
+            serde_json::from_slice::<crate::workspace::Workspace>(&bytes)
+                .unwrap()
+                .editor_prefs
+        };
+        let mut prefs = persisted();
+        assert!(!prefs.word_wrap);
+        prefs.word_wrap = true;
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::UpdateEditorPrefs(prefs), cx)
+        })
+        .unwrap();
+        assert!(line_wraps(cx));
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::SelectDocumentTab(2), cx)
+        })
+        .unwrap();
+        assert!(!line_wraps(cx));
+        prefs.diff_word_wrap = true;
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::UpdateEditorPrefs(prefs), cx)
+        })
+        .unwrap();
+        assert!(line_wraps(cx));
+        assert_eq!(persisted(), prefs);
+    }
+
+    #[gpui::test]
     fn native_editor_restores_focus_without_append_fallback(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.txt");
@@ -926,13 +1011,21 @@ mod tests {
         .unwrap();
         let wrapped = view
             .update(cx, |root, _, _| {
-                root.app.gpui_editor_document().unwrap().tools.word_wrap
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .active_document
+                    .unwrap()
+                    .word_wrap
             })
             .unwrap();
         cx.simulate_keystrokes(view.into(), "alt-z");
         view.update(cx, |root, _, _| {
             assert_ne!(
-                root.app.gpui_editor_document().unwrap().tools.word_wrap,
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .active_document
+                    .unwrap()
+                    .word_wrap,
                 wrapped
             )
         })
@@ -1326,6 +1419,7 @@ impl Input {
             .pr(px(10.))
             .py(px(8.))
             .overflow_y_scroll()
+            .when(doc.word_wrap, |area| area.flex_col().whitespace_normal())
             .when(!doc.word_wrap, |area| {
                 area.whitespace_nowrap().overflow_x_scroll()
             })

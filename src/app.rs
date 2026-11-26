@@ -2522,7 +2522,6 @@ impl Tessel {
                     match result {
                         Ok(mut d) => {
                             d.unpinned_preview = !pinned;
-                            d.tools.word_wrap = self.state.editor_prefs.word_wrap;
                             let d = *d;
                             if let Some(i) = self
                                 .documents
@@ -6936,7 +6935,8 @@ impl Tessel {
                 .unwrap_or_default();
             let has_changes = changed_flags.iter().any(|&c| c);
             let line_count = 1 + d.text.as_bytes().iter().filter(|&&b| b == b'\n').count();
-            let mut scroll = if d.tools.word_wrap {
+            let word_wrap = self.state.editor_prefs.word_wrap;
+            let mut scroll = if word_wrap {
                 egui::ScrollArea::vertical()
             } else {
                 egui::ScrollArea::both()
@@ -6964,7 +6964,7 @@ impl Tessel {
                     } else {
                         None
                     };
-                    let wrap_width = if d.tools.word_wrap {
+                    let wrap_width = if word_wrap {
                         ui.available_width().max(80.0_f32)
                     } else {
                         f32::INFINITY
@@ -6979,7 +6979,6 @@ impl Tessel {
                         last_edited_at,
                         ..
                     } = d;
-                    let word_wrap = tools.word_wrap;
                     let mut layouter =
                         |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
                             syntax_cache.layout(
@@ -14780,7 +14779,8 @@ fn document_toolbar(
             d.tools.focus_goto = true;
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::Z)) {
-            d.tools.word_wrap = !d.tools.word_wrap;
+            editor_prefs.word_wrap = !editor_prefs.word_wrap;
+            prefs_changed = true;
         }
         let prev_hunk = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F7));
         let next_hunk =
@@ -14825,7 +14825,9 @@ fn document_toolbar(
                 ui.selectable_value(&mut d.preview_mode, true, tr("Readable preview"));
             }
             if source_mode {
-                ui.toggle_value(&mut d.tools.word_wrap, tr("Word wrap"));
+                prefs_changed |= ui
+                    .toggle_value(&mut editor_prefs.word_wrap, tr("Word wrap"))
+                    .changed();
                 if ui
                     .toggle_value(&mut editor_prefs.line_numbers, tr("Line numbers"))
                     .changed()

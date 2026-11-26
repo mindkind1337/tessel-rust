@@ -905,6 +905,7 @@ fn render_code_or_diff_surface(
 
     let mut scroll = div()
         .id("gpui-code-editor-scroll")
+        .when(!doc.word_wrap, |el| el.overflow_x_scroll())
         .flex_1()
         .min_h_0()
         .w_full()
@@ -939,7 +940,14 @@ fn render_code_or_diff_surface(
             None
         };
 
-        let mut line_content = div().flex_1().flex().items_center().whitespace_nowrap();
+        let mut line_content = div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .when(doc.word_wrap, |el| {
+                el.min_w_0().whitespace_normal().flex_wrap()
+            })
+            .when(!doc.word_wrap, |el| el.whitespace_nowrap());
         if doc.is_diff {
             let fg = if raw_line.starts_with('+') && !raw_line.starts_with("+++") {
                 tokens.ok_green
@@ -952,6 +960,7 @@ fn render_code_or_diff_surface(
             };
             line_content = line_content.child(
                 div()
+                    .when(doc.word_wrap, |el| el.w_full().min_w_0())
                     .text_color(fg)
                     .child(SharedString::from(raw_line.clone())),
             );

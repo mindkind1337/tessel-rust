@@ -276,7 +276,7 @@ impl Default for EditorPreferences {
         Self {
             syntax_highlighting: true,
             line_numbers: true,
-            word_wrap: false,
+            word_wrap: true,
             tab_size: 4,
             auto_save: false,
             auto_save_delay_ms: 1000,

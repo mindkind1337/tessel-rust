@@ -105,7 +105,6 @@ pub struct EditorTools {
     pub outline_selected: Option<String>,
     pub outline_reveal_focus: Option<bool>,
     pub outline_folds: std::collections::HashSet<String>,
-    pub word_wrap: bool,
     pub find_open: bool,
     pub replace_open: bool,
     pub goto_open: bool,

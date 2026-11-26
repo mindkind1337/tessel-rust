@@ -3931,7 +3931,11 @@ impl Tessel {
             preview_mode: doc.preview_mode,
             can_toggle_preview,
             media: doc.media,
-            word_wrap: doc.tools.word_wrap,
+            word_wrap: if is_diff {
+                preferences.diff_word_wrap
+            } else {
+                preferences.word_wrap
+            },
             find_open: doc.tools.find_open,
             replace_open: doc.tools.replace_open,
             goto_open: doc.tools.goto_open,
@@ -5800,8 +5804,9 @@ impl Tessel {
                 }
             }
             GpuiAction::ToggleEditorWordWrap => {
-                if let Some(doc) = self.documents.get_mut(self.active_document) {
-                    doc.tools.word_wrap = !doc.tools.word_wrap;
+                if self.gpui_editor_document().is_some() {
+                    self.state.editor_prefs.word_wrap = !self.state.editor_prefs.word_wrap;
+                    self.save();
                 }
             }
             GpuiAction::ToggleEditorFind => {
