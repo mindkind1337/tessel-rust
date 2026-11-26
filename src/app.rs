@@ -6742,7 +6742,11 @@ impl Tessel {
                         );
                         out.state.cursor.set_char_range(Some(range));
                         out.state.store(ui.ctx(), out.response.id);
-                        if !tools.find_open && !tools.goto_open {
+                        if tools
+                            .outline_reveal_focus
+                            .take()
+                            .unwrap_or(!tools.find_open && !tools.goto_open)
+                        {
                             out.response.request_focus();
                         }
                     }

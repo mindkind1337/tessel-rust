@@ -191,6 +191,60 @@ mod tests {
     }
 
     #[gpui::test]
+    fn outline_full_range_returns_keyboard_to_editor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("focus.json");
+        std::fs::write(&path, r#"{"😀":[1],"keep":2}"#).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(view.into(), "ctrl-f");
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(!root.editor_input.focused(window, cx));
+        })
+        .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let position = visual.debug_bounds("outline-name-/17:😀").unwrap().center();
+            visual.simulate_mouse_move(position, None, Default::default());
+            visual.simulate_click(position, Default::default());
+            visual.simulate_event(gpui::MouseDownEvent {
+                position,
+                modifiers: Default::default(),
+                button: gpui::MouseButton::Left,
+                click_count: 2,
+                first_mouse: false,
+            });
+            visual.simulate_event(gpui::MouseUpEvent {
+                position,
+                modifiers: Default::default(),
+                button: gpui::MouseButton::Left,
+                click_count: 2,
+            });
+        }
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(root.editor_input.focused(window, cx))
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "x");
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().text,
+                r#"{x,"keep":2}"#
+            )
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn native_editor_restores_focus_without_append_fallback(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.txt");

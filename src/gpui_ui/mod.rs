@@ -1207,6 +1207,12 @@ impl Render for TesselGpuiRoot {
                 && doc.office_summary.is_none()
                 && doc.image_dims.is_none()
         });
+        if !self.app.gpui_has_open_modal()
+            && let Some(doc) = native_doc
+            && self.app.take_outline_focus(doc.instance_id) == Some(true)
+        {
+            self.focus_input = FocusInputTarget::EditorBody;
+        }
         if (native_doc.is_none()
             || self.app.gpui_has_open_modal()
             || self.effective_focus_target() != FocusInputTarget::EditorBody)

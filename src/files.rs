@@ -31,6 +31,7 @@ fn read(path: &Path) -> Result<Vec<u8>> {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub outline_reveal_focus: Option<bool>,
     pub outline_folds: std::collections::HashSet<String>,
     pub word_wrap: bool,
     pub find_open: bool,

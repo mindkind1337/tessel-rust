@@ -97,6 +97,7 @@ pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: boo
     } else {
         start
     };
+    doc.tools.outline_reveal_focus = Some(select);
     doc.tools.pending_char_range = Some((start, end));
     doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
 }

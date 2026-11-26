@@ -2265,6 +2265,14 @@ impl Tessel {
             .collect()
     }
 
+    pub(crate) fn take_outline_focus(&mut self, id: u64) -> Option<bool> {
+        let doc = self.documents.get_mut(self.active_document)?;
+        if self.view != View::Files || doc.instance_id() != id {
+            return None;
+        }
+        doc.tools.outline_reveal_focus.take()
+    }
+
     pub(crate) fn gpui_take_editor_selection(
         &mut self,
         instance_id: u64,

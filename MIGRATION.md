@@ -1643,3 +1643,5 @@ GPUI and Compatibility expose a collapsed Outline section for the active JSON or
 ### Outline folding and range selection
 
 Both renderers use per-document fold keys. An arrow changes child visibility, a name click reveals the key, and a double-click selects the symbol range. The GPUI action checks the active document and source snapshot. Its controller regression covers two identically populated documents, full-range selection with a non-BMP key, and an obsolete action after editing. Pointer rendering and focus transfer still require native visual/input acceptance.
+
+GPUI Outline focus acceptance uses a temporary project, an actual rendered row and synthesized mouse-down/up events with double-click count followed by typing. The editor receives focus from Find and replaces the complete JSON property with an astral key while preserving its sibling. Compatibility honors the reveal request's focus flag when applying its cursor range. A visual comparison against the Vue layout and a Compatibility pointer acceptance test remain open.

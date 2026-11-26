@@ -707,12 +707,14 @@ fn render_explorer_tab(
                         cx,
                     ));
                 }
+                let row_key = symbol.key.clone();
                 let full_range = symbol.range;
                 let id = *id;
                 let snapshot = tree.clone();
                 row = row.child(
                     div()
                         .id(SharedString::from(format!("outline-name-{}", symbol.key)))
+                        .debug_selector(move || format!("outline-name-{row_key}"))
                         .cursor_pointer()
                         .child(SharedString::from(symbol.name.clone()))
                         .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
