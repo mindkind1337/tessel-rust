@@ -88,6 +88,8 @@ pub mod host_remote_cache;
 pub mod host_terminal_panel;
 mod i18n;
 pub mod icons;
+pub mod json_outline;
+mod json_outline_panel;
 mod launch;
 mod launch_fingerprint;
 pub mod launcher_panel;

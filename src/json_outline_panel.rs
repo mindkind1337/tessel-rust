@@ -1,0 +1,82 @@
+use crate::{files::Document, outline_tree::Symbol};
+use eframe::egui;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub(crate) struct Cache {
+    document: u64,
+    text: Arc<str>,
+    pub(crate) symbols: Arc<Vec<Symbol>>,
+}
+
+impl Cache {
+    pub(crate) fn matches(&self, doc: &Document) -> bool {
+        self.document == doc.instance_id() && *self.text == doc.text
+    }
+    pub(crate) fn current(previous: Option<Self>, doc: &Document) -> Self {
+        previous
+            .filter(|cache| cache.matches(doc))
+            .unwrap_or_else(|| {
+                let mut symbols = crate::json_outline::document_symbols(&doc.text);
+                crate::outline_tree::keyed(&mut symbols, "");
+                Self {
+                    document: doc.instance_id(),
+                    text: Arc::from(doc.text.as_str()),
+                    symbols: Arc::new(symbols),
+                }
+            })
+    }
+}
+pub(crate) fn supported(doc: &Document) -> bool {
+    !doc.media
+        && doc.diff_title.is_none()
+        && doc
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonc"))
+}
+
+pub fn show(ui: &mut egui::Ui, doc: &mut Document) {
+    let id = ui.id().with("json-outline-cache");
+    let cache = ui.data(|data| data.get_temp::<Cache>(id));
+    let cache = Cache::current(cache, doc);
+    ui.data_mut(|data| data.insert_temp(id, cache.clone()));
+    if cache.symbols.is_empty() {
+        ui.label(if crate::i18n::is_french() {
+            "Aucun symbole dans ce document."
+        } else {
+            "No symbols found in this document."
+        });
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(160.0)
+        .show(ui, |ui| {
+            draw(ui, &cache.symbols, doc);
+        });
+}
+
+fn draw(ui: &mut egui::Ui, symbols: &[Symbol], doc: &mut Document) {
+    for symbol in symbols {
+        let response = if symbol.children.is_empty() {
+            ui.selectable_label(false, &symbol.name)
+        } else {
+            egui::CollapsingHeader::new(&symbol.name)
+                .id_salt((doc.instance_id(), &symbol.key))
+                .default_open(true)
+                .show(ui, |ui| draw(ui, &symbol.children, doc))
+                .header_response
+        };
+        if response.clicked() {
+            let range = symbol.selection_range.unwrap_or(symbol.range);
+            let offset = crate::json_outline::char_offset(
+                &doc.text,
+                range.start_line_number,
+                range.start_column,
+            );
+            doc.tools.pending_char_range = Some((offset, offset));
+            doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
+        }
+    }
+}

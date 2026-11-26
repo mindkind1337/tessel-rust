@@ -1635,3 +1635,7 @@ The unfinished Explorer draft is not integrated unchanged: its line-based keys r
 
 `scripts/extract_outline_reference.mjs` evaluates the actual source model against synthetic symbols and records its hash and collation locale. The fixture covers 60 combinations of sorting/filtering/highlighting/folding plus ten text matching cases. No project files or credentials enter these fixtures. This is a shared model, not an activated Outline/Timeline UI; native language-service providers, section controls, navigation and Timeline history remain outstanding.
 Validation: both integration tests pass, covering all 70 source-generated vectors plus line-edit key stability. Final focused build: 37.52 seconds; strict all-target/all-feature Clippy passes with warnings denied (1m13s). Formatting and diff checks pass. README feature claims stay unchanged because the panel is not activated yet.
+
+## JSON and JSONC Outline in Files
+
+GPUI and Compatibility expose a collapsed Outline section for the active JSON or JSONC buffer. A click navigates using the provider's UTF-16 selection range. The parser preserves duplicate keys, array indices and nested ranges. The reference generator runs the installed Monaco JSON language service against eleven synthetic buffers, including comments, trailing commas, partial edits and CRLF with astral characters. The native parser has bounded recursion and symbol counts. Further language providers, complete malformed-input recovery, Follow Cursor, GPUI row folding, section settings and Timeline integration remain open.

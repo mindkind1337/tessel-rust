@@ -4799,6 +4799,29 @@ impl Tessel {
             .flatten()
             .map(|d| d.path.clone());
         let actions_enabled = self.file_actions_ready();
+        egui::TopBottomPanel::bottom("files-outline-section")
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                egui::CollapsingHeader::new(if crate::i18n::is_french() {
+                    "Plan"
+                } else {
+                    "Outline"
+                })
+                .default_open(false)
+                .show(ui, |ui| {
+                    let Some(doc) = self.documents.get_mut(self.active_document).filter(|doc| {
+                        self.view == View::Files && crate::json_outline_panel::supported(doc)
+                    }) else {
+                        ui.label(if crate::i18n::is_french() {
+                            "L’éditeur actif ne fournit pas de plan."
+                        } else {
+                            "The active editor cannot provide outline information."
+                        });
+                        return;
+                    };
+                    crate::json_outline_panel::show(ui, doc);
+                });
+            });
         let tree_action =
             self.explorer_tree
                 .show(ui, root.as_deref(), active.as_deref(), actions_enabled);

@@ -668,6 +668,52 @@ fn render_explorer_tab(
         );
     }
 
+    let mut outline = div().flex().flex_col().child(render_chip(
+        "explorer-outline-toggle",
+        if french { "Plan" } else { "Outline" }.into(),
+        sp.outline_open,
+        tokens,
+        GpuiAction::OutlineToggle,
+        cx,
+    ));
+    if sp.outline_open {
+        let mut body = div()
+            .id("explorer-outline-scroll")
+            .max_h(px(160.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        if let Some((id, tree)) = &sp.outline {
+            let mut pending: Vec<_> = tree.iter().rev().map(|s| (s, 0usize)).collect();
+            while let Some((symbol, depth)) = pending.pop() {
+                let range = symbol.selection_range.unwrap_or(symbol.range);
+                body = body.child(div().pl(px(8.0 + depth as f32 * 12.0)).child(render_chip(
+                    format!("outline-{}", symbol.key),
+                    symbol.name.clone(),
+                    false,
+                    tokens,
+                    GpuiAction::OutlineReveal(*id, tree.clone(), range),
+                    cx,
+                )));
+                pending.extend(symbol.children.iter().rev().map(|c| (c, depth + 1)));
+            }
+            if tree.is_empty() {
+                body = body.child(if french {
+                    "Aucun symbole dans ce document."
+                } else {
+                    "No symbols found in this document."
+                });
+            }
+        } else {
+            body = body.child(if french {
+                "L’éditeur actif ne fournit pas de plan."
+            } else {
+                "The active editor cannot provide outline information."
+            });
+        }
+        outline = outline.child(body);
+    }
+
     div()
         .size_full()
         .p(px(8.0))
@@ -677,6 +723,7 @@ fn render_explorer_tab(
         .child(toolbar)
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
         .child(scroll)
+        .child(outline)
         .into_any_element()
 }
 

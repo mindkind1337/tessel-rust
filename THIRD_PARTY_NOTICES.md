@@ -361,3 +361,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - `src/cookie_import_model.rs` recovers the unfinished native cookie-export model based on Tessel `src/main/cookieImport/cookieFile.js`, `cookies.js` and `src/renderer/src/browser/cookieImportText.js`, under the Orca/Tessel MIT attribution above (Copyright (c) 2026 Lovecast Inc.). Only synthetic cookie fixtures are included; no browser profile or real credentials are bundled.
 
 - `src/outline_tree.rs` and its synthetic reference vectors adapt Tessel `src/renderer/src/explorer/outlineTree.js` and the symbol shape in `editor/outline.js`, following the VS Code outline tree/range behavior cited by those files. The Orca/Tessel and Microsoft MIT notices above apply. The reference generator reads source code only; no user documents are bundled.
+
+The JSON outline provider follows the document symbol behavior of Microsoft's vscode-json-languageservice bundled with Monaco. Its differential fixtures are generated from the installed provider with synthetic documents under the Microsoft MIT notice above.

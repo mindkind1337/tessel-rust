@@ -40,6 +40,8 @@ pub(crate) struct NativeScmScope {
 }
 
 pub(crate) struct GpuiExtraUiState {
+    outline_open: bool,
+    outline_cache: Option<crate::json_outline_panel::Cache>,
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
     pub toolbar_more_open: bool,
@@ -82,6 +84,8 @@ pub(crate) struct GpuiExtraUiState {
 impl Default for GpuiExtraUiState {
     fn default() -> Self {
         Self {
+            outline_open: false,
+            outline_cache: None,
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
             toolbar_more_open: false,
@@ -435,6 +439,8 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_filter: Option<crate::side_panels_model::DashboardState>,
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
+    pub outline_open: bool,
+    pub outline: Option<(u64, std::sync::Arc<Vec<crate::outline_tree::Symbol>>)>,
     pub scm_branch: Option<String>,
     pub scm_ahead: usize,
     pub scm_behind: usize,
@@ -900,6 +906,12 @@ pub(crate) enum GpuiAction {
     ExplorerToggleSearchMode,
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
+    OutlineToggle,
+    OutlineReveal(
+        u64,
+        std::sync::Arc<Vec<crate::outline_tree::Symbol>>,
+        crate::outline_tree::Range,
+    ),
     ExplorerRefresh,
     ExplorerClickRow {
         key: String,
@@ -3965,7 +3977,31 @@ impl Tessel {
             std::sync::Arc::default()
         };
 
+        let outline = if visible == Some(SideTab::Files)
+            && self.gpui_extra.outline_open
+            && self.view == View::Files
+        {
+            self.documents
+                .get(self.active_document)
+                .filter(|doc| crate::json_outline_panel::supported(doc))
+                .map(|doc| {
+                    let cache = crate::json_outline_panel::Cache::current(
+                        self.gpui_extra.outline_cache.take(),
+                        doc,
+                    );
+                    let symbols = cache.symbols.clone();
+                    self.gpui_extra.outline_cache = Some(cache);
+                    (doc.instance_id(), symbols)
+                })
+        } else {
+            None
+        };
+        if outline.is_none() {
+            self.gpui_extra.outline_cache = None;
+        }
         GpuiSidePanelsSnapshot {
+            outline_open: self.gpui_extra.outline_open,
+            outline,
             dashboard_vm,
             dashboard_group: self.side_panels_ui.dashboard_group,
             dashboard_filter: self.side_panels_ui.dashboard_filter,
@@ -5678,6 +5714,27 @@ impl Tessel {
                 self.explorer_tree.set_show_dotfiles(next);
                 self.state.editor_prefs.show_git_ignored = next;
                 self.save();
+            }
+            GpuiAction::OutlineToggle => {
+                self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
+            }
+            GpuiAction::OutlineReveal(id, tree, range) => {
+                if self.view == View::Files
+                    && self.gpui_extra.outline_open
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && self.gpui_extra.outline_cache.as_ref().is_some_and(|c| {
+                        std::sync::Arc::ptr_eq(&tree, &c.symbols) && c.matches(doc)
+                    })
+                {
+                    let offset = crate::json_outline::char_offset(
+                        &doc.text,
+                        range.start_line_number,
+                        range.start_column,
+                    );
+                    doc.tools.pending_char_range = Some((offset, offset));
+                    doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
+                }
             }
             GpuiAction::ExplorerToggleCompact => {
                 let next = !self.explorer_tree.compact_folders();
