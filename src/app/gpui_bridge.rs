@@ -548,6 +548,7 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub builtin_agent_details: Vec<GpuiBuiltinAgentDetail>,
     pub agent_folder_trust: bool,
     pub expanded_agent_id: Option<String>,
+    pub custom_agent_error: String,
     pub custom_agents: Vec<crate::settings_extra_model::CustomAgent>,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
@@ -4643,6 +4644,7 @@ impl Tessel {
             builtin_agent_details,
             agent_folder_trust: self.state.agent_folder_trust,
             expanded_agent_id: self.gpui_extra.expanded_agent_id.clone(),
+            custom_agent_error: self.settings_extra.custom_error.clone(),
             custom_agents: self.state.custom_agents.clone(),
             new_custom_agent_name: self.gpui_extra.new_custom_agent_name.clone(),
             new_custom_agent_cmd: self.gpui_extra.new_custom_agent_cmd.clone(),
@@ -6806,37 +6808,31 @@ impl Tessel {
                 self.gpui_extra.new_custom_agent_cmd = cmd;
             }
             GpuiAction::SubmitNewCustomAgent => {
-                let id = match crate::settings_extra_model::generate_custom_agent_id(
+                let name = self.gpui_extra.new_custom_agent_name.trim();
+                let command = self.gpui_extra.new_custom_agent_cmd.trim();
+                if name.is_empty() || command.is_empty() {
+                    self.settings_extra.custom_error =
+                        "Enter a name and the command that starts the agent.".into();
+                    return;
+                }
+                let result = crate::settings_extra_model::generate_custom_agent_id(
                     &self.state.custom_agents,
-                ) {
-                    Ok(id) => id,
-                    Err(error) => {
-                        self.error = error;
-                        return;
-                    }
-                };
-                let name = self.gpui_extra.new_custom_agent_name.trim().to_owned();
-                let cmd = self.gpui_extra.new_custom_agent_cmd.trim().to_owned();
-                let accent = crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[0].to_owned();
-                if crate::settings_extra_model::validate_custom_agent_fields(
-                    &id, &name, &cmd, &accent,
                 )
-                .is_ok()
-                {
-                    let agent = crate::settings_extra_model::CustomAgent {
-                        id,
-                        name,
-                        command: cmd,
-                        accent,
-                        enabled: true,
-                    };
-                    self.gpui_extra.new_custom_agent_name.clear();
-                    self.gpui_extra.new_custom_agent_cmd.clear();
-                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
-                    self.handle_settings_extra_action(
-                        &ctx,
-                        crate::settings_extra_panel::SettingsExtraAction::UpsertCustomAgent(agent),
-                    );
+                .map(|id| crate::settings_extra_model::CustomAgent {
+                    id,
+                    name: name.into(),
+                    command: command.into(),
+                    accent: crate::settings_extra_model::CUSTOM_AGENT_SWATCHES[0].into(),
+                    enabled: true,
+                })
+                .and_then(|agent| self.save_custom_agent(agent));
+                match result {
+                    Ok(()) => {
+                        self.gpui_extra.new_custom_agent_name.clear();
+                        self.gpui_extra.new_custom_agent_cmd.clear();
+                        self.settings_extra.custom_error.clear();
+                    }
+                    Err(error) => self.settings_extra.custom_error = error,
                 }
             }
             GpuiAction::SetAccountLabelDraft(lbl) => {
@@ -7732,6 +7728,59 @@ mod panel_snapshot_tests {
         }
     }
 
+    #[test]
+    fn custom_agent_rejection_keeps_draft_and_previous_settings_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let persisted = || {
+            let bytes = std::fs::read(dir.path().join("state/workspace.json")).unwrap();
+            serde_json::from_slice::<crate::workspace::Workspace>(&bytes)
+                .unwrap()
+                .custom_agents
+        };
+        let submit = |app: &mut Tessel, name: &str| {
+            app.apply_gpui_action(GpuiAction::SetCustomAgentDraft {
+                name: name.into(),
+                cmd: "fixture".into(),
+            });
+            app.apply_gpui_action(GpuiAction::SubmitNewCustomAgent);
+        };
+        submit(&mut app, "First Agent");
+        let saved = app.state.custom_agents.clone();
+        submit(&mut app, "first AGENT");
+        assert_eq!(app.state.custom_agents, saved);
+        assert_eq!(persisted(), saved);
+        assert_eq!(app.gpui_extra.new_custom_agent_name, "first AGENT");
+        assert_eq!(app.gpui_extra.new_custom_agent_cmd, "fixture");
+        assert_eq!(
+            app.settings_extra.custom_error,
+            "Duplicate custom agent name."
+        );
+        submit(&mut app, "Second Agent");
+        assert!(app.settings_extra.custom_error.is_empty());
+        assert_eq!(persisted().len(), 2);
+        let id = app.state.custom_agents[0].id.clone();
+        let ctx = app.gpui_extra.dummy_egui_ctx.clone();
+        use crate::settings_extra_panel::SettingsExtraAction as Action;
+        app.handle_settings_extra_action(&ctx, Action::ToggleCustomAgent { id, enabled: false });
+        let mut edited = app.state.custom_agents[0].clone();
+        edited.enabled = true;
+        edited.command = "edited".into();
+        app.handle_settings_extra_action(&ctx, Action::UpsertCustomAgent(edited));
+        assert!(!persisted()[0].enabled);
+        assert_eq!(persisted()[0].command, "edited");
+        let path = dir.path().join("state/workspace.json");
+        let backup = dir.path().join("previous.json");
+        std::fs::rename(&path, &backup).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        submit(&mut app, "Third Agent");
+        assert_eq!(app.state.custom_agents.len(), 2);
+        assert_eq!(app.gpui_extra.new_custom_agent_name, "Third Agent");
+        assert!(!app.settings_extra.custom_error.is_empty());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(backup, path).unwrap();
+        assert_eq!(persisted(), app.state.custom_agents);
+    }
     #[test]
     fn custom_agent_settings_refresh_launcher_and_palette_with_detected_names() {
         let dir = tempfile::tempdir().unwrap();

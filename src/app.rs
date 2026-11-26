@@ -9809,6 +9809,36 @@ impl Tessel {
         self.save();
     }
 
+    fn save_custom_agents(
+        &mut self,
+        agents: Vec<crate::settings_extra_model::CustomAgent>,
+    ) -> Result<(), String> {
+        self.capture_runtime_state();
+        let store = self.store.as_ref().ok_or("Settings store unavailable")?;
+        let mut next = self.state.clone();
+        next.custom_agents = agents;
+        store.save(&next)?;
+        self.state.custom_agents = next.custom_agents;
+        Ok(())
+    }
+
+    fn save_custom_agent(
+        &mut self,
+        mut agent: crate::settings_extra_model::CustomAgent,
+    ) -> Result<(), String> {
+        let id = agent.id.clone();
+        let mut next = self.state.custom_agents.clone();
+        if let Some(existing) = next.iter_mut().find(|existing| existing.id == id) {
+            agent.enabled = existing.enabled;
+            *existing = agent;
+        } else {
+            next.push(agent);
+        }
+        self.save_custom_agents(next)?;
+        self.refresh_custom_agents(Some(&id));
+        Ok(())
+    }
+
     fn handle_settings_extra_action(
         &mut self,
         ctx: &egui::Context,
@@ -10402,32 +10432,29 @@ impl Tessel {
                     let _ = self.automations_store.save(store.directory());
                 }
             }
-            Act::UpsertCustomAgent(agent) => {
-                let id = agent.id.clone();
-                if let Some(existing) = self
-                    .state
-                    .custom_agents
-                    .iter_mut()
-                    .find(|c| c.id == agent.id)
-                {
-                    *existing = agent;
-                } else if self.state.custom_agents.len()
-                    < crate::settings_extra_model::MAX_CUSTOM_AGENTS
-                {
-                    self.state.custom_agents.push(agent);
+            Act::UpsertCustomAgent(agent) => match self.save_custom_agent(agent) {
+                Ok(()) => {
+                    self.settings_extra.custom_agent_form_open = false;
+                    self.settings_extra.editing_custom_id = None;
+                    self.settings_extra.custom_error.clear();
                 }
-                self.refresh_custom_agents(Some(&id));
-                self.save();
-            }
+                Err(error) => self.settings_extra.custom_error = error,
+            },
             Act::DeleteCustomAgent(id) => {
-                self.state.custom_agents.retain(|c| c.id != id);
-                self.refresh_custom_agents(Some(&id));
-                self.save();
+                let mut next = self.state.custom_agents.clone();
+                next.retain(|agent| agent.id != id);
+                match self.save_custom_agents(next) {
+                    Ok(()) => self.refresh_custom_agents(Some(&id)),
+                    Err(error) => self.error = error,
+                }
             }
             Act::ToggleCustomAgent { id, enabled } => {
-                if let Some(c) = self.state.custom_agents.iter_mut().find(|c| c.id == id) {
-                    c.enabled = enabled;
-                    self.save();
+                let mut next = self.state.custom_agents.clone();
+                if let Some(agent) = next.iter_mut().find(|agent| agent.id == id) {
+                    agent.enabled = enabled;
+                    if let Err(error) = self.save_custom_agents(next) {
+                        self.error = error;
+                    }
                 }
             }
         }

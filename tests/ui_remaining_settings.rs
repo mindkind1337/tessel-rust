@@ -8,6 +8,9 @@ mod agent_env;
 #[path = "../src/automations.rs"]
 mod automations;
 #[allow(dead_code)]
+#[path = "../src/i18n.rs"]
+mod i18n;
+#[allow(dead_code)]
 #[path = "../src/settings_extra_model.rs"]
 mod settings_extra_model;
 #[allow(dead_code)]

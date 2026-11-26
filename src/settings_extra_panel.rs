@@ -2357,7 +2357,10 @@ impl SettingsExtraState {
                     }
                 });
                 if !self.custom_error.is_empty() {
-                    ui.colored_label(ui.visuals().error_fg_color, &self.custom_error);
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        crate::i18n::tr(&self.custom_error),
+                    );
                 }
                 ui.horizontal(|ui| {
                     if ui
@@ -2390,9 +2393,6 @@ impl SettingsExtraState {
                                     accent: self.custom_accent.clone(),
                                     enabled: true,
                                 };
-                                self.custom_agent_form_open = false;
-                                self.editing_custom_id = None;
-                                self.custom_error.clear();
                                 action = Some(SettingsExtraAction::UpsertCustomAgent(candidate));
                             }
                             Err(e) => self.custom_error = e,

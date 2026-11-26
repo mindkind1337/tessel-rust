@@ -1,4 +1,7 @@
 {
+  "Duplicate custom agent name.": "Un agent portant ce nom existe déjà.",
+  "Enter a name and the command that starts the agent.": "Entrez un nom et la commande qui démarre l’agent.",
+  "Too many custom agents (maximum 30).": "Le maximum de 30 agents personnalisés est atteint.",
   "Quit without waiting for floating terminal shutdown.": "Quitter sans attendre la fin de l'arrêt du terminal flottant.",
   "Could not stop the floating terminal.": "Impossible d'arrêter le terminal flottant.",
   "Could not stop the terminal process group.": "Impossible d'arrêter le groupe de processus du terminal.",

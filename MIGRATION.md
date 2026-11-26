@@ -1695,3 +1695,5 @@ The owner browser and editor share registered local and SSH drafts. The browser 
 Windows agent detection queries the Python user install scheme through python.exe and py.exe in PATH. Discovered directories are appended after configured tools and retained before pip creates them. Terminal launch reads the available snapshot without waiting for either interpreter.
 
 Custom agents participate in the CLI availability scan. Detection checks the first command word, batches Windows lookups in groups of up to 64, and repeats a scan if the user edits the custom list while discovery is running. The project launcher, compatibility launcher and command palette consume the same results.
+
+Custom-agent additions, edits, removals and visibility changes persist before the in-memory list changes. Both settings renderers keep a rejected agent draft available for correction. Editing an existing agent preserves its visibility setting.

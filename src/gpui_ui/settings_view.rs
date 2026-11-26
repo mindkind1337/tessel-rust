@@ -1420,6 +1420,14 @@ fn render_agents_page(
                 )),
         );
 
+    if !s.custom_agent_error.is_empty() {
+        col = col.child(
+            div()
+                .text_color(tokens.warn)
+                .child(crate::i18n::tr(&s.custom_agent_error).to_owned()),
+        );
+    }
+
     for ca in &s.custom_agents {
         let toggle_id = ca.id.clone();
         let next_en = !ca.enabled;
