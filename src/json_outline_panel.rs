@@ -8,6 +8,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct Cache {
     document: u64,
+    html: bool,
     sort: Sort,
     followed: Option<crate::files::OutlineCursor>,
     text: Arc<str>,
@@ -16,7 +17,7 @@ pub(crate) struct Cache {
 
 impl Cache {
     pub(crate) fn matches(&self, doc: &Document) -> bool {
-        self.document == doc.instance_id() && *self.text == doc.text
+        self.document == doc.instance_id() && self.html == is_html(doc) && *self.text == doc.text
     }
     pub(crate) fn follow(&mut self, doc: &mut Document, enabled: bool) -> bool {
         let cursor = doc.tools.outline_cursor.filter(|_| enabled);
@@ -65,10 +66,15 @@ impl Cache {
         let mut cache = previous
             .filter(|cache| cache.matches(doc))
             .unwrap_or_else(|| {
-                let mut symbols = crate::json_outline::document_symbols(&doc.text);
+                let mut symbols = if is_html(doc) {
+                    crate::html_outline::document_symbols(&doc.text)
+                } else {
+                    crate::json_outline::document_symbols(&doc.text)
+                };
                 crate::outline_tree::keyed(&mut symbols, "");
                 Self {
                     document: doc.instance_id(),
+                    html: is_html(doc),
                     sort: Sort::Position,
                     followed: None,
                     text: Arc::from(doc.text.as_str()),
@@ -85,14 +91,21 @@ impl Cache {
         cache
     }
 }
+fn is_html(doc: &Document) -> bool {
+    doc.path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
+}
 pub(crate) fn supported(doc: &Document) -> bool {
     !doc.media
         && doc.diff_title.is_none()
-        && doc
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonc"))
+        && (is_html(doc)
+            || doc
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonc")))
 }
 
 pub(crate) const SORT_OPTIONS: [(Sort, &str, &str); 3] = [
@@ -433,6 +446,10 @@ pub fn toggle_fold(doc: &mut Document, key: &str) {
 }
 
 pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: bool) {
+    if is_html(doc) {
+        doc.preview_mode = false;
+        doc.tools.html_plain_text = None;
+    }
     let start =
         crate::json_outline::char_offset(&doc.text, range.start_line_number, range.start_column);
     let end = if select {
@@ -450,6 +467,25 @@ mod tests {
     use super::*;
     use crate::files::OutlineCursor;
 
+    #[test]
+    fn html_outline_reveals_the_selected_element_in_the_unsaved_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("page.HTM");
+        std::fs::write(&path, "<main/>").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "<main>😀<p id=one>body</p></main>".into();
+        assert!(supported(&doc));
+        let cache = Cache::current(None, &doc, Sort::Position);
+        let target = &cache.symbols[0].children[0];
+        assert_eq!(target.name, "p#one");
+        reveal(&mut doc, target.range, true);
+        assert!(!doc.preview_mode);
+        let (a, b) = doc.tools.pending_char_range.unwrap();
+        assert_eq!(
+            doc.text.chars().skip(a).take(b - a).collect::<String>(),
+            "<p id=one>body</p>"
+        );
+    }
     #[test]
     fn outline_follow_maps_both_editor_offsets_and_respects_manual_folds() {
         let dir = tempfile::tempdir().unwrap();

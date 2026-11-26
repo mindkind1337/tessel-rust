@@ -87,6 +87,7 @@ pub mod host_lease_store;
 pub mod host_opening_adapter;
 pub mod host_remote_cache;
 pub mod host_terminal_panel;
+pub mod html_outline;
 mod i18n;
 pub mod icons;
 pub mod json_outline;

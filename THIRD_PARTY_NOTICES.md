@@ -362,4 +362,6 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 
 - `src/outline_tree.rs` and its synthetic reference vectors adapt Tessel `src/renderer/src/explorer/outlineTree.js` and the symbol shape in `editor/outline.js`, following the VS Code outline tree/range behavior cited by those files. The Orca/Tessel and Microsoft MIT notices above apply. The reference generator reads source code only; no user documents are bundled.
 
+The HTML outline provider follows Microsoft’s vscode-html-languageservice parser and document-symbol naming. Its synthetic reference vectors use Monaco’s bundled provider under the Microsoft MIT notice above.
+
 The JSON outline provider follows the document symbol behavior of Microsoft's vscode-json-languageservice bundled with Monaco. Its differential fixtures are generated from the installed provider with synthetic documents under the Microsoft MIT notice above.

@@ -724,6 +724,39 @@ mod tests {
     }
 
     #[gpui::test]
+    fn html_outline_click_leaves_preview_and_reveals_the_source(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.html");
+        std::fs::write(&path, "<main>😀<p id=one>hello</p></main>").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        assert!(doc.preview_mode);
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let pos = visual
+            .debug_bounds("outline-name-/7:main/7:p#one")
+            .unwrap()
+            .center();
+        visual.simulate_click(pos, Default::default());
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            let doc = root.app.gpui_editor_document().unwrap();
+            assert!(!doc.preview_mode);
+            assert_eq!(
+                doc.tools.outline_selected.as_deref(),
+                Some("/7:main/7:p#one")
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn outline_full_range_returns_keyboard_to_editor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.json");
