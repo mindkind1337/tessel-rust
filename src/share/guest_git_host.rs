@@ -354,9 +354,11 @@ fn project_prefix(git: &mut dyn GitRun, prefix: &[String]) -> Result<String> {
     }
     let p = std::str::from_utf8(&out.bytes)
         .map_err(|_| "Unsupported Git project path")?
-        .trim()
-        .replace('\\', "/");
-    Ok(p)
+        .trim_end_matches(['\n', '\r']);
+    if !p.is_empty() && !p.ends_with('/') {
+        return Err("Invalid Git project prefix.".into());
+    }
+    Ok(p.to_owned())
 }
 
 /// A commit is refused while anything staged is outside the project, or is private: the
@@ -395,6 +397,80 @@ fn staged_within_project(
 
 fn bounded_err(root: &Path, message: &str) -> String {
     guest_text::task_title(message, &root.to_string_lossy(), 300)
+}
+
+/// Keep the prefix of the rename chain allowed by the share. Git's name-status
+/// paths are repository-relative, including when the share starts in a subfolder.
+/// The rename commit itself may describe the previous location in its subject.
+fn visible_history_records<'a>(
+    bytes: &'a [u8],
+    project: &str,
+    current: &str,
+    root: &Path,
+    hide_ignored: bool,
+    sticky: &impl Fn(&[String]) -> Result<Vec<bool>>,
+) -> Result<Vec<&'a str>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "Unsupported history encoding.")?;
+    let mut fields = text.split_terminator('\0');
+    let initial = format!("{project}{current}");
+    let mut expected = initial.as_str();
+    let mut records = Vec::new();
+    let mut old_names = Vec::new();
+    let root = root
+        .canonicalize()
+        .map_err(|_| "Shared root unavailable.")?;
+    while let Some(marker) = fields.next() {
+        let invalid = "Incomplete Git history paths.";
+        if !marker.is_empty() {
+            return Err(invalid.into());
+        }
+        let metadata = fields.next().ok_or(invalid)?;
+        let status = fields.next().ok_or(invalid)?.trim_start_matches('\n');
+        let source = fields.next().ok_or(invalid)?;
+        if status.starts_with(['R', 'C']) {
+            if fields.next() != Some(expected) {
+                break;
+            }
+            let Some(old) = source.strip_prefix(project) else {
+                break;
+            };
+            let path = Path::new(old);
+            if !safe_relative(old) || private_path(path) || (hide_ignored && secret_name_path(path))
+            {
+                break;
+            }
+            // A historical directory may have disappeared. Refuse aliases at
+            // the first surviving ancestor, including dangling symlinks.
+            let mut ancestor = root.join(path);
+            loop {
+                match std::fs::symlink_metadata(&ancestor) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && ancestor != root => {
+                        ancestor.pop();
+                    }
+                    _ => break,
+                }
+            }
+            if ancestor.canonicalize().ok().as_ref() != Some(&ancestor) {
+                break;
+            }
+            old_names.push((records.len(), old.to_owned()));
+            expected = source;
+        } else if source != expected || !matches!(status, "A" | "M" | "D" | "T") {
+            break;
+        }
+        records.push(metadata);
+    }
+    if !old_names.is_empty() {
+        let (indices, paths): (Vec<_>, Vec<_>) = old_names.into_iter().unzip();
+        let hidden = sticky(&paths)?;
+        if hidden.len() != indices.len() {
+            return Err("Incomplete history scope.".into());
+        }
+        if let Some(i) = hidden.iter().position(|v| *v) {
+            records.truncate(indices[i]);
+        }
+    }
+    Ok(records)
 }
 
 /// The guest git surface. `root` is the shared project folder; `git_right` gates the
@@ -618,21 +694,23 @@ fn dispatch_with_roots(
                 Ok(rel)
             };
             let rel = visible_file()?;
-            // Stay at the authorized name even if Git is configured to follow
-            // renames. Earlier names require separate visibility decisions.
+            let project = project_prefix(git, &prefix).map_err(|e| bounded_err(root, &e))?;
             let count = format!("-n{}", limit + 1);
             let log = run(
                 git,
                 &[
                     "log",
-                    "--no-follow",
-                    "--no-patch",
+                    "--follow",
+                    "--name-status",
+                    "--no-relative",
+                    "--no-ext-diff",
+                    "--no-textconv",
                     "--no-notes",
                     "--no-show-signature",
                     "--no-color",
                     "-z",
                     &count,
-                    "--format=%H%n%an%n%at%n%B",
+                    "--format=%x00%H%n%an%n%at%n%B",
                     "--",
                     &rel,
                 ],
@@ -666,10 +744,11 @@ fn dispatch_with_roots(
                     .replace_all(&guest_text::guest_text(text, &roots, max), "…")
                     .into_owned()
             };
-            let text = String::from_utf8_lossy(&log.bytes);
-            let mut records = text.split_terminator('\0');
+            let records =
+                visible_history_records(&log.bytes, &project, &rel, root, hide_ignored, &sticky)?;
+            let has_more = records.len() > limit as usize;
             let mut items = Vec::new();
-            for record in records.by_ref().take(limit as usize) {
+            for record in records.into_iter().take(limit as usize) {
                 let mut fields = record.splitn(4, '\n');
                 let id = fields.next().unwrap_or_default();
                 if !matches!(id.len(), 40 | 64) || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -685,7 +764,7 @@ fn dispatch_with_roots(
                 items.push(json!({"id":id,"author":clean(author,200),"time":time,"message":clean(message.trim(),4096)}));
             }
             Ok(
-                json!({"items":items,"hasMore":records.next().is_some(),"uncommitted":!status.bytes.is_empty(),"rel":req["path"]}),
+                json!({"items":items,"hasMore":has_more,"uncommitted":!status.bytes.is_empty(),"rel":req["path"]}),
             )
         }
         "scm.diff" => {

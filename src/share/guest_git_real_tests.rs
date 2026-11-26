@@ -370,7 +370,8 @@ fn real_guest_file_history_is_scoped_paged_and_redacted() {
     let renamed = repo
         .request("scm.fileHistory", json!({"path":"renamed.txt"}))
         .unwrap();
-    assert_eq!(renamed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(renamed["items"].as_array().unwrap().len(), 3);
+    assert_eq!(renamed["items"][2]["message"], "baseline");
     assert_eq!(renamed["items"][0]["message"], "renamed");
     for path in [".env", ".git/config", "../outside", ""] {
         assert!(
@@ -378,4 +379,40 @@ fn real_guest_file_history_is_scoped_paged_and_redacted() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn real_guest_file_history_stops_before_private_and_outside_renames() {
+    let mut repo = Repo::new();
+    repo.write("unshared.txt", "outside origin");
+    repo.write(" project/.env", "private origin");
+    repo.baseline();
+    repo.command(&["mv", "unshared.txt", " project/from-outside"]);
+    repo.command(&["mv", " project/.env", " project/from-private"]);
+    repo.command(&["commit", "-qm", "hidden origin details"]);
+    repo.write(" project/from-outside", "visible edit");
+    repo.write(" project/from-private", "visible edit too");
+    repo.command(&["commit", "-qam", "public change"]);
+    repo.git.root = repo.git.root.join(" project");
+    for path in ["from-outside", "from-private"] {
+        let page = repo
+            .request("scm.fileHistory", json!({"path":path,"limit":1}))
+            .unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(page["items"][0]["message"], "public change");
+        assert_eq!(page["hasMore"], false);
+    }
+}
+
+#[test]
+fn guest_history_sticky_rename_boundary_discards_the_rename_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = b"\0latest\0\nM\0folder/new.txt\0\0boundary\0\nR100\0folder/old.txt\0folder/new.txt\0\0older\0\nA\0folder/old.txt\0";
+    let retained =
+        visible_history_records(bytes, "folder/", "new.txt", dir.path(), true, &|names| {
+            assert_eq!(names, ["old.txt"]);
+            Ok(vec![true])
+        })
+        .unwrap();
+    assert_eq!(retained, ["latest"]);
 }
