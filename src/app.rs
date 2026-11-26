@@ -4799,6 +4799,7 @@ impl Tessel {
             .flatten()
             .map(|d| d.path.clone());
         let actions_enabled = self.file_actions_ready();
+        let old_sort = self.state.editor_prefs.outline_sort;
         egui::TopBottomPanel::bottom("files-outline-section")
             .resizable(false)
             .show_inside(ui, |ui| {
@@ -4809,6 +4810,21 @@ impl Tessel {
                 })
                 .default_open(false)
                 .show(ui, |ui| {
+                    ui.menu_button("⋯", |ui| {
+                        for (mode, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
+                            let label = if crate::i18n::is_french() { fr } else { en };
+                            if ui
+                                .selectable_value(
+                                    &mut self.state.editor_prefs.outline_sort,
+                                    mode,
+                                    label,
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                            }
+                        }
+                    });
                     let Some(doc) = self.documents.get_mut(self.active_document).filter(|doc| {
                         self.view == View::Files && crate::json_outline_panel::supported(doc)
                     }) else {
@@ -4819,9 +4835,12 @@ impl Tessel {
                         });
                         return;
                     };
-                    crate::json_outline_panel::show(ui, doc);
+                    crate::json_outline_panel::show(ui, doc, self.state.editor_prefs.outline_sort);
                 });
             });
+        if old_sort != self.state.editor_prefs.outline_sort {
+            self.save();
+        }
         let tree_action =
             self.explorer_tree
                 .show(ui, root.as_deref(), active.as_deref(), actions_enabled);

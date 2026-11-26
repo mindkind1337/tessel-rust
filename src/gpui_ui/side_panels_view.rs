@@ -693,6 +693,53 @@ fn render_explorer_tab(
             cx,
         ));
     }
+    if sp.outline_open {
+        let mut options = div().relative().child(render_chip(
+            "outline-options",
+            "⋯".into(),
+            sp.outline_options_open,
+            tokens,
+            GpuiAction::OutlineOptions(!sp.outline_options_open),
+            cx,
+        ));
+        if sp.outline_options_open {
+            let mut menu = div()
+                .id("outline-action-menu")
+                .flex()
+                .flex_col()
+                .p(px(4.))
+                .w(px(180.))
+                .bg(tokens.surface)
+                .border_1()
+                .border_color(tokens.border)
+                .rounded(px(4.))
+                .shadow_lg()
+                .occlude()
+                .on_mouse_down_out(cx.listener(|root, _: &gpui::MouseDownEvent, _, cx| {
+                    root.dispatch_action(GpuiAction::OutlineOptions(false), cx);
+                }));
+            for (sort, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
+                menu = menu.child(render_chip(
+                    en,
+                    if french { fr } else { en }.into(),
+                    sp.outline_sort == sort,
+                    tokens,
+                    GpuiAction::OutlineSort(sort),
+                    cx,
+                ));
+            }
+            options = options.child(
+                gpui::deferred(
+                    gpui::anchored()
+                        .offset(point(px(0.), px(20.)))
+                        .snap_to_window_with_margin(px(4.))
+                        .child(menu),
+                )
+                .priority(2),
+            );
+        }
+        heading = heading.child(options);
+    }
     let mut outline = div().flex().flex_col().child(heading);
     if sp.outline_open {
         let mut body = div()

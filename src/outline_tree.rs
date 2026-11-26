@@ -29,7 +29,7 @@ pub struct Symbol {
     pub children: Vec<Symbol>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Sort {
     #[default]

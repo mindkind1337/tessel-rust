@@ -191,6 +191,42 @@ mod tests {
     }
 
     #[gpui::test]
+    fn outline_options_sort_visible_rows(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sort.json");
+        std::fs::write(&path, r#"{"z":3,"a":true,"b":"s"}"#).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        let a = "outline-name-/16:a";
+        let b = "outline-name-/14:b";
+        let z = "outline-name-/15:z";
+        for (choice, order) in [
+            ("Sort By: Name", [a, b, z]),
+            ("Sort By: Category", [b, z, a]),
+            ("Sort By: Position", [z, a, b]),
+        ] {
+            for selector in ["outline-options", choice] {
+                cx.refresh().unwrap();
+                let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+                let point = visual.debug_bounds(selector).unwrap().center();
+                visual.simulate_click(point, Default::default());
+            }
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let [first, second, third] =
+                order.map(|row| visual.debug_bounds(row).unwrap().center().y);
+            assert!(first < second && second < third, "{choice}");
+            assert!(visual.debug_bounds(choice).is_none());
+        }
+    }
+
+    #[gpui::test]
     fn outline_full_range_returns_keyboard_to_editor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.json");

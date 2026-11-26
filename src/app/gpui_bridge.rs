@@ -48,6 +48,7 @@ pub(crate) enum OutlineRowAction {
 
 pub(crate) struct GpuiExtraUiState {
     outline_open: bool,
+    outline_options_open: bool,
     outline_cache: Option<crate::json_outline_panel::Cache>,
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
@@ -92,6 +93,7 @@ impl Default for GpuiExtraUiState {
     fn default() -> Self {
         Self {
             outline_open: false,
+            outline_options_open: false,
             outline_cache: None,
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
@@ -447,6 +449,8 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
     pub outline_open: bool,
+    pub outline_options_open: bool,
+    pub outline_sort: crate::outline_tree::Sort,
     pub outline_folds: std::collections::HashSet<String>,
     pub outline: Option<(u64, std::sync::Arc<Vec<crate::outline_tree::Symbol>>)>,
     pub scm_branch: Option<String>,
@@ -915,6 +919,8 @@ pub(crate) enum GpuiAction {
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
     OutlineToggle,
+    OutlineOptions(bool),
+    OutlineSort(crate::outline_tree::Sort),
     OutlineRow(
         u64,
         std::sync::Arc<Vec<crate::outline_tree::Symbol>>,
@@ -4004,6 +4010,7 @@ impl Tessel {
                     let cache = crate::json_outline_panel::Cache::current(
                         self.gpui_extra.outline_cache.take(),
                         doc,
+                        self.state.editor_prefs.outline_sort,
                     );
                     let symbols = cache.symbols.clone();
                     self.gpui_extra.outline_cache = Some(cache);
@@ -4022,6 +4029,8 @@ impl Tessel {
                 .map(|d| d.tools.outline_folds.clone())
                 .unwrap_or_default(),
             outline_open: self.gpui_extra.outline_open,
+            outline_options_open: self.gpui_extra.outline_options_open,
+            outline_sort: self.state.editor_prefs.outline_sort,
             outline,
             dashboard_vm,
             dashboard_group: self.side_panels_ui.dashboard_group,
@@ -5738,6 +5747,18 @@ impl Tessel {
             }
             GpuiAction::OutlineToggle => {
                 self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
+                self.gpui_extra.outline_options_open = false;
+            }
+            GpuiAction::OutlineOptions(open) => {
+                self.gpui_extra.outline_options_open = open;
+            }
+            GpuiAction::OutlineSort(sort) => {
+                self.gpui_extra.outline_options_open = false;
+                if self.state.editor_prefs.outline_sort != sort {
+                    self.state.editor_prefs.outline_sort = sort;
+                    self.gpui_extra.outline_cache = None;
+                    self.save();
+                }
             }
             GpuiAction::OutlineRow(id, tree, action) => {
                 if self.view == View::Files
@@ -8125,6 +8146,22 @@ mod panel_snapshot_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn outline_sort_survives_workspace_reopen_and_defaults_for_old_preferences() {
+        use crate::outline_tree::Sort;
+        let old: crate::workspace::EditorPreferences =
+            serde_json::from_str(r#"{"compact_folders":true}"#).unwrap();
+        assert_eq!(old.outline_sort, Sort::Position);
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Tessel::new_for_gpui_in_dir(Some(dir.path().to_owned()), false, || {});
+        {
+            let mut app = open();
+            app.apply_gpui_action(GpuiAction::OutlineSort(Sort::Kind));
+            assert!(app.error.is_empty(), "{}", app.error);
+        }
+        assert_eq!(open().state.editor_prefs.outline_sort, Sort::Kind);
     }
 
     #[test]

@@ -262,6 +262,7 @@ pub struct EditorPreferences {
     #[serde(default = "default_true")]
     pub show_git_ignored: bool,
     pub compact_folders: bool,
+    pub outline_sort: crate::outline_tree::Sort,
     pub diff_word_wrap: bool,
 }
 
@@ -277,6 +278,7 @@ impl Default for EditorPreferences {
             preview_tabs: true,
             show_git_ignored: true,
             compact_folders: false,
+            outline_sort: Default::default(),
             diff_word_wrap: false,
         }
     }
