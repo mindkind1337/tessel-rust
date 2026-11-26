@@ -124,13 +124,13 @@ fn custom_agent_color_arrows_wrap_and_move_focus(cx: &mut gpui::TestAppContext) 
     let first = visual.debug_bounds("agent-color-0").unwrap().center();
     visual.simulate_click(first, Default::default());
     view.update(cx, |root, w, _| {
-        assert!(root.agent_swatches[0].is_focused(w))
+        assert!(root.settings_controls.swatches[0].is_focused(w))
     })
     .unwrap();
     for (key, index) in [("left", 7), ("down", 0), ("right", 1), ("up", 0)] {
         gpui::VisualTestContext::from_window(view.into(), cx).simulate_keystrokes(key);
         view.update(cx, |root, w, cx| {
-            assert!(root.agent_swatches[index].is_focused(w));
+            assert!(root.settings_controls.swatches[index].is_focused(w));
             assert_eq!(
                 root.app
                     .gpui_snapshot(960., 640., 4.)

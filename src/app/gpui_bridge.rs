@@ -1072,6 +1072,10 @@ pub(crate) enum GpuiAction {
     UpdateGeneralPrefs(crate::workspace::GeneralPreferences),
     UpdateTerminalPrefs(crate::workspace::TerminalPreferences),
     UpdateEditorPrefs(crate::workspace::EditorPreferences),
+    SetAutoSaveDelay {
+        base: u32,
+        delay: u32,
+    },
     UpdateBrowserPrefs(crate::workspace::BrowserPreferences),
     UpdateGitPrefs(crate::workspace::GitPreferences),
     UpdateStatsPrefs(crate::workspace::StatsPreferences),
@@ -6675,6 +6679,17 @@ impl Tessel {
                 self.state.terminal_prefs = p;
                 self.save();
             }
+            GpuiAction::SetAutoSaveDelay { base, delay } => {
+                let prefs = &mut self.state.editor_prefs;
+                if prefs.auto_save
+                    && prefs.auto_save_delay_ms == base
+                    && delay != base
+                    && (250..=10000).contains(&delay)
+                {
+                    prefs.auto_save_delay_ms = delay;
+                    self.save();
+                }
+            }
             GpuiAction::UpdateEditorPrefs(p) => {
                 self.explorer_tree.set_show_dotfiles(p.show_git_ignored);
                 self.explorer_tree.set_compact_folders(p.compact_folders);
@@ -7615,6 +7630,48 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn auto_save_delay_respects_last_edit_and_reports_completion_and_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        std::fs::write(&path, "initial").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let doc = crate::files::Document::open(dir.path(), &path).unwrap();
+        let instance_id = doc.instance_id();
+        app.documents.push(doc);
+        app.active_document = 0;
+        app.view = View::Files;
+        app.state.editor_prefs.auto_save = true;
+        app.state.editor_prefs.auto_save_delay_ms = 750;
+        let edit = |app: &mut Tessel, base: &str, text: &str| {
+            app.apply_gpui_action(GpuiAction::ApplyNativeDocumentEdit {
+                instance_id,
+                base: base.into(),
+                text: text.into(),
+            });
+            app.documents[0].last_edited_at.unwrap()
+        };
+        let elapsed = std::time::Duration::from_millis;
+        edit(&mut app, "initial", "one");
+        let last = edit(&mut app, "one", "two");
+        assert!(!app.auto_save_documents(last + elapsed(749)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "initial");
+        assert!(app.auto_save_documents(last + elapsed(750)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        assert!(!app.documents[0].dirty());
+        let last = edit(&mut app, "two", "three");
+        std::fs::write(&path, "external").unwrap();
+        assert!(app.auto_save_documents(last + elapsed(750)));
+        assert!(app.documents[0].error.contains("changed on disk"));
+        assert!(app.documents[0].dirty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external");
+        assert!(!app.auto_save_documents(last + elapsed(1500)));
+        std::fs::write(&path, "two").unwrap();
+        let last = edit(&mut app, "three", "four");
+        assert!(app.auto_save_documents(last + elapsed(750)));
+        assert!(app.documents[0].error.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "four");
+    }
     #[test]
     fn preview_link_reuses_and_pins_open_target_preserving_source() {
         let dir = tempfile::tempdir().unwrap();

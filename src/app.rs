@@ -1519,6 +1519,41 @@ impl Tessel {
         self.state.sync_terminal_layouts(self.grid_room);
         self.state.normalize_pane_numbers();
     }
+    fn auto_save_documents(&mut self, now: std::time::Instant) -> bool {
+        let mut changed = false;
+        if self.state.editor_prefs.auto_save
+            && !self.file_action_pending
+            && !self.transcript_trash_busy
+        {
+            let delay = Duration::from_millis(u64::from(
+                self.state
+                    .editor_prefs
+                    .auto_save_delay_ms
+                    .clamp(250, 10_000),
+            ));
+
+            for doc in &mut self.documents {
+                if !doc.media
+                    && doc.diff_title.is_none()
+                    && !doc.deleted_on_disk
+                    && doc.dirty()
+                    && let Some(edited) = doc.last_edited_at
+                    && now.saturating_duration_since(edited) >= delay
+                {
+                    changed = true;
+                    match doc.save(self.store.as_ref().map(|s| s.directory())) {
+                        Ok(()) => doc.error.clear(),
+                        Err(err) => {
+                            doc.last_edited_at = None;
+                            doc.error = err;
+                        }
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     fn save(&mut self) {
         self.capture_runtime_state();
         if let Some(s) = &self.store
@@ -2612,31 +2647,7 @@ impl Tessel {
                 },
             }
         }
-        if self.state.editor_prefs.auto_save
-            && !self.file_action_pending
-            && !self.transcript_trash_busy
-        {
-            let delay = Duration::from_millis(u64::from(
-                self.state
-                    .editor_prefs
-                    .auto_save_delay_ms
-                    .clamp(250, 10_000),
-            ));
-            let now = std::time::Instant::now();
-            for doc in &mut self.documents {
-                if !doc.media
-                    && doc.diff_title.is_none()
-                    && !doc.deleted_on_disk
-                    && doc.dirty()
-                    && let Some(edited) = doc.last_edited_at
-                    && now.saturating_duration_since(edited) >= delay
-                    && let Err(err) = doc.save(self.store.as_ref().map(|s| s.directory()))
-                {
-                    doc.last_edited_at = None;
-                    doc.error = err;
-                }
-            }
-        }
+        native_changed |= self.auto_save_documents(std::time::Instant::now());
         if let Some((sid, ref text, press_enter)) = self.pending_quick_command {
             let text_owned = text.clone();
             if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == sid) {

@@ -28,11 +28,11 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 
-pub(crate) fn render_settings_modal(
+pub(super) fn render_settings_modal(
     viewport_width: f32,
     snapshot: &GpuiWorkspaceSnapshot,
     modal_query: &super::modal_query_input::Input,
-    swatches: &[gpui::FocusHandle; 8],
+    controls: &super::auto_save_input::Controls,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -47,7 +47,7 @@ pub(crate) fn render_settings_modal(
         SettingsLang::En
     };
     let results = searching.then(|| {
-        let rows: Vec<_> = TOGGLES
+        let mut rows: Vec<_> = TOGGLES
             .iter()
             .map(|t| SettingsSearchRow {
                 page: t.page,
@@ -60,6 +60,9 @@ pub(crate) fn render_settings_modal(
                 },
             })
             .collect();
+        if s.editor_prefs.auto_save {
+            rows.push(super::auto_save_input::search_row(french));
+        }
         search_settings(&s.search_query, &rows, lang)
     });
 
@@ -229,11 +232,14 @@ pub(crate) fn render_settings_modal(
                     snapshot,
                     s,
                     focus_input,
-                    swatches,
+                    controls,
                     tokens,
                     cx,
                 ));
                 count += TOGGLES.iter().filter(|t| t.page == page).count().max(1);
+                if page == SettingsPageId::Editor && s.editor_prefs.auto_save {
+                    count += 1;
+                }
             } else if page == SettingsPageId::Terminal
                 && !TOGGLES
                     .iter()
@@ -246,6 +252,15 @@ pub(crate) fn render_settings_modal(
                     t.page == page && results.matched_row_ids.iter().any(|id| id == t.id)
                 }) {
                     body = body.child(toggle.render(s, french, tokens, cx));
+                    count += 1;
+                }
+                if page == SettingsPageId::Editor
+                    && results
+                        .matched_row_ids
+                        .iter()
+                        .any(|id| id == super::auto_save_input::ID)
+                {
+                    body = body.child(controls.render(french, tokens, cx));
                     count += 1;
                 }
             }
@@ -278,7 +293,7 @@ pub(crate) fn render_settings_modal(
             snapshot,
             s,
             focus_input,
-            swatches,
+            controls,
             tokens,
             cx,
         )
@@ -338,7 +353,7 @@ fn render_settings_page_body(
     snapshot: &GpuiWorkspaceSnapshot,
     s: &GpuiSettingsSnapshot,
     focus_input: FocusInputTarget,
-    swatches: &[gpui::FocusHandle; 8],
+    controls: &super::auto_save_input::Controls,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
@@ -347,11 +362,11 @@ fn render_settings_page_body(
         "appearance" => render_appearance_page(snapshot, tokens, cx),
         "general" => render_general_page(snapshot, s, tokens, cx),
         "terminal" => render_terminal_page(s, french, tokens, cx),
-        "editor" => render_editor_page(s, french, tokens, cx),
+        "editor" => render_editor_page(s, controls, french, tokens, cx),
         "browser" => render_browser_page(s, french, tokens, cx),
         "passwords" => render_passwords_page(s, french, tokens, cx),
         "git" => render_git_page(s, french, tokens, cx),
-        "agents" => render_agents_page(s, focus_input, swatches, french, tokens, cx),
+        "agents" => render_agents_page(s, focus_input, &controls.swatches, french, tokens, cx),
         "accounts" => render_accounts_page(s, focus_input, french, tokens, cx),
         "skills" => render_skills_page(s, focus_input, french, tokens, cx),
         "mcp" => render_mcp_page(s, french, tokens, cx),
@@ -740,6 +755,7 @@ fn render_terminal_page(
 
 fn render_editor_page(
     s: &GpuiSettingsSnapshot,
+    controls: &super::auto_save_input::Controls,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -763,6 +779,9 @@ fn render_editor_page(
             tokens,
         ))
         .children(page_toggles(SettingsPageId::Editor, s, french, tokens, cx))
+        .when(ep.auto_save, |el| {
+            el.child(controls.render(french, tokens, cx))
+        })
         .child(
             div()
                 .flex()
@@ -1176,7 +1195,7 @@ fn agent_colors(
                 .cursor_pointer()
                 .on_click(cx.listener(move |root, _, w, cx| {
                     root.focus_input = FocusInputTarget::None;
-                    root.agent_swatches[index].focus(w, cx);
+                    root.settings_controls.swatches[index].focus(w, cx);
                     root.dispatch_action(GpuiAction::SetCustomAgentAccent(index), cx);
                 }))
                 .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, w, cx| {
@@ -1189,7 +1208,7 @@ fn agent_colors(
                     };
                     cx.stop_propagation();
                     root.focus_input = FocusInputTarget::None;
-                    root.agent_swatches[next].focus(w, cx);
+                    root.settings_controls.swatches[next].focus(w, cx);
                     root.dispatch_action(GpuiAction::SetCustomAgentAccent(next), cx);
                 })),
         );

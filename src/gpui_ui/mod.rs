@@ -3,6 +3,7 @@
 //! Provides a 1:1 CSS Flexbox + DirectWrite subpixel typography + `resvg` vector icon frontend
 //! while keeping the `eframe`/`egui` Compatibility renderer intact with automatic runtime fallback.
 
+mod auto_save_input;
 mod browser_input;
 mod chat_inputs;
 pub(crate) mod chat_view;
@@ -122,7 +123,7 @@ pub(crate) struct TesselGpuiRoot {
     linear_view: linear_view::View,
     new_task_view: new_task_view::View,
     issues_menu: issues_menu::Menu,
-    agent_swatches: [gpui::FocusHandle; 8],
+    settings_controls: auto_save_input::Controls,
     image_menu_item: FocusHandle,
     image_menu_viewport: Option<gpui::Size<gpui::Pixels>>,
     _poller_task: Task<()>,
@@ -334,7 +335,7 @@ impl TesselGpuiRoot {
             linear_view: Default::default(),
             new_task_view: Default::default(),
             issues_menu: issues_menu::Menu::new(cx),
-            agent_swatches: std::array::from_fn(|_| cx.focus_handle()),
+            settings_controls: auto_save_input::Controls::new(cx),
             image_menu_item: cx.focus_handle(),
             image_menu_viewport: None,
             _poller_task: poller_task,
@@ -1172,6 +1173,16 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        self.settings_controls.sync(
+            snapshot
+                .settings
+                .as_ref()
+                .filter(|s| s.editor_prefs.auto_save)
+                .map(|s| s.editor_prefs.auto_save_delay_ms),
+            window,
+            cx,
+        );
+
         if (self.focus_input == FocusInputTarget::OutlineQuery
             && snapshot.side_panels.outline_query.is_none())
             || (self.focus_input == FocusInputTarget::OutlineTree
@@ -1722,7 +1733,7 @@ impl Render for TesselGpuiRoot {
                     viewport_w,
                     &snapshot,
                     &self.modal_query_input,
-                    &self.agent_swatches,
+                    &self.settings_controls,
                     focus_input,
                     &tokens,
                     cx,
