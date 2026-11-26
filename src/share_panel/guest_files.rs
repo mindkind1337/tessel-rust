@@ -1,6 +1,60 @@
 use super::*;
 use crate::guest_file_editor::Key as FileKey;
+#[derive(Clone, Debug)]
+pub(crate) struct GuestFilesView {
+    pub directory: String,
+    pub entries: Vec<crate::guest_file_listing::Entry>,
+    pub document: Option<crate::guest_file_editor::Document>,
+    pub notices: Vec<String>,
+    pub busy: bool,
+    pub history: Option<std::sync::Arc<super::guest_history::Page>>,
+    pub more: bool,
+}
+
 impl SharePanel {
+    pub(super) fn guest_files_view(&self, french: bool) -> Option<GuestFilesView> {
+        let scope = self.guest_files_scope?;
+        if self.guest_sub_view != GuestSubView::Files {
+            return None;
+        }
+        let doc = self
+            .guest_file_editor
+            .document
+            .as_ref()
+            .filter(|d| d.key.scope == scope)
+            .cloned();
+        let mut notices = Vec::new();
+        if let Some(n) = &self.guest_file_listing.notice {
+            notices.push(n.text(french));
+        }
+        if let Some(n) = &self.guest_file_editor.notice {
+            notices.push(n.text(french));
+        }
+        if let Some(error) = &self.guest_history.error {
+            notices.push(if error.is_empty() {
+                if french {
+                    "Historique indisponible."
+                } else {
+                    "History unavailable."
+                }
+                .into()
+            } else {
+                error.clone()
+            });
+        }
+        Some(GuestFilesView {
+            directory: self.guest_file_listing.path.clone(),
+            entries: self.guest_file_listing.entries.clone(),
+            document: doc,
+            notices,
+            busy: self.guest_file_listing.busy()
+                || self.guest_file_editor.busy()
+                || self.guest_history.busy(),
+            history: self.guest_history.page.clone(),
+            more: self.guest_history.page.as_ref().is_some_and(|p| p.has_more)
+                && self.guest_history.next_limit(false) < 200,
+        })
+    }
     pub fn guest_file_document(&self) -> Option<crate::guest_file_editor::Document> {
         self.guest_file_editor.document.clone()
     }
@@ -28,7 +82,7 @@ impl SharePanel {
         self.guest_file_editor
             .save(key, Instant::now(), |payload| session.request(payload))
     }
-    fn list_guest_files(&mut self, path: String) -> bool {
+    pub(super) fn list_guest_files(&mut self, path: String) -> bool {
         self.poll_guest_scope();
         let Some(scope) = self.guest_files_scope else {
             return false;

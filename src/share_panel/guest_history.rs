@@ -6,21 +6,21 @@ use serde_json::{Value, json};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-#[derive(Deserialize)]
-struct Commit {
-    id: String,
-    time: i64,
-    author: String,
-    message: String,
+#[derive(Debug, Deserialize)]
+pub(crate) struct Commit {
+    pub(crate) id: String,
+    pub(crate) time: i64,
+    pub(crate) author: String,
+    pub(crate) message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Page {
+pub(crate) struct Page {
     rel: String,
-    items: Vec<Commit>,
-    uncommitted: bool,
-    has_more: bool,
+    pub(crate) items: Vec<Commit>,
+    pub(crate) uncommitted: bool,
+    pub(crate) has_more: bool,
 }
 
 struct Pending {
@@ -32,10 +32,10 @@ struct Pending {
 #[derive(Default)]
 pub(super) struct Timeline {
     key: Option<Key>,
-    page: Option<Page>,
+    pub(super) page: Option<std::sync::Arc<Page>>,
     pending: Option<Pending>,
     limit: usize,
-    error: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 impl Timeline {
@@ -51,11 +51,18 @@ impl Timeline {
         true
     }
 
+    pub(super) fn next_limit(&self, more: bool) -> usize {
+        if more {
+            (self.limit + 50).min(200)
+        } else {
+            self.limit.max(50)
+        }
+    }
     pub(super) fn busy(&self) -> bool {
         self.pending.is_some()
     }
 
-    fn request(&mut self, session: &GuestSession, limit: usize) {
+    pub(super) fn request(&mut self, session: &GuestSession, limit: usize) {
         let Some(key) = &self.key else { return };
         if self.busy() || key.scope.session != session.generation() {
             return;
@@ -108,7 +115,7 @@ impl Timeline {
                 row.message = guest_text::guest_text(&row.message, &[], 4096);
             }
             self.limit = limit;
-            self.page = Some(page);
+            self.page = Some(std::sync::Arc::new(page));
         } else {
             self.page = None;
             self.error.get_or_insert_with(String::new);

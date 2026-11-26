@@ -7,8 +7,15 @@ use crate::share_panel::{DialogTab, ShareGpuiAction};
 use gpui::TestAppContext;
 use std::time::{Duration, Instant};
 
-#[gpui::test]
-fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut TestAppContext) {
+fn joined_guest(
+    cx: &mut TestAppContext,
+) -> (
+    tempfile::TempDir,
+    Host,
+    Vec<SharedTask>,
+    gpui::WindowHandle<TesselGpuiRoot>,
+    crate::guest_task_board::Scope,
+) {
     cx.update(|cx| {
         use gpui_ce_elements::editable_text::actions::{DEFAULT_INPUT_CONTEXT, default_bindings};
         cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
@@ -38,7 +45,7 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
         "127.0.0.1".parse().unwrap(),
     )
     .unwrap();
-    let mut cards: Vec<_> = (1..=2)
+    let cards: Vec<_> = (1..=2)
         .map(|id| SharedTask {
             project_id: id,
             id: id.to_string(),
@@ -100,6 +107,12 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
         assert!(started.elapsed() < Duration::from_secs(5));
         std::thread::sleep(Duration::from_millis(10));
     };
+    (dir, host, cards, view, first)
+}
+
+#[gpui::test]
+fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut TestAppContext) {
+    let (_dir, host, mut cards, view, first) = joined_guest(cx);
     view.update(cx, |root, _, cx| {
         assert!(
             root.app.gpui_modal_query().is_some(),
@@ -292,6 +305,96 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
             "Créer 😀 suite"
         );
         root.dispatch(GpuiAction::Share(ShareGpuiAction::DisconnectGuest), cx);
+    })
+    .unwrap();
+}
+
+#[gpui::test]
+fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, scope) = joined_guest(cx);
+    let project = dir.path().join("project-1");
+    std::fs::write(project.join("notes.txt"), "guest preview").unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "notes.txt"],
+        vec!["commit", "-qm", "GPUI history fixture"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(&project)
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    for selector in [
+        "guest-tab-files",
+        "guest-entry-0",
+        "guest-history-refresh",
+        "guest-history-commit",
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(18);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds(selector) {
+                if selector != "guest-history-commit" {
+                    visual.simulate_click(bounds.center(), Default::default());
+                }
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    }
+    view.update(cx, |root, _, cx| {
+        let files = root
+            .app
+            .gpui_snapshot(1100., 850., 4.)
+            .modals
+            .share
+            .guest_files
+            .unwrap();
+        assert_eq!(files.document.unwrap().text.as_str(), "guest preview");
+        assert_eq!(
+            files.history.unwrap().items[0].message,
+            "GPUI history fixture"
+        );
+        assert!(root.app.gpui_modal_query().is_none());
+        root.dispatch(
+            GpuiAction::Share(ShareGpuiAction::GuestProject {
+                session: scope.session,
+                project: 2,
+            }),
+            cx,
+        );
+        let other = root
+            .app
+            .gpui_snapshot(1100., 850., 4.)
+            .modals
+            .share
+            .guest_files
+            .unwrap();
+        assert!(other.document.is_none() && other.history.is_none());
     })
     .unwrap();
 }

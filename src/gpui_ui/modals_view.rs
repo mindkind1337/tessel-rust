@@ -968,6 +968,166 @@ fn render_share_modal(
                         cx,
                     ));
                 }
+                for (files, id, label) in [
+                    (true, "files", if french { "Fichiers" } else { "Files" }),
+                    (false, "tasks", if french { "Tâches" } else { "Tasks" }),
+                ] {
+                    projects = projects.child(modal_btn(
+                        format!("guest-tab-{id}"),
+                        label.into(),
+                        files == sh.guest_files.is_some(),
+                        tokens,
+                        GpuiAction::Share(ShareGpuiAction::GuestFilesTab(scope, files)),
+                        cx,
+                    ));
+                }
+                if let Some(files) = &sh.guest_files {
+                    content = content.child(projects);
+                    if !files.busy {
+                        let dir = &files.directory;
+                        if !dir.is_empty() {
+                            content = content.child(modal_btn(
+                                "guest-parent",
+                                if french {
+                                    "Dossier parent"
+                                } else {
+                                    "Parent folder"
+                                }
+                                .into(),
+                                false,
+                                tokens,
+                                GpuiAction::Share(ShareGpuiAction::GuestDirectory(
+                                    scope,
+                                    dir.rsplit_once('/').map_or("", |(p, _)| p).into(),
+                                )),
+                                cx,
+                            ));
+                        }
+                        content = content.child(modal_btn(
+                            "guest-refresh-dir",
+                            if french { "Actualiser" } else { "Refresh" }.into(),
+                            false,
+                            tokens,
+                            GpuiAction::Share(ShareGpuiAction::GuestDirectory(scope, dir.clone())),
+                            cx,
+                        ));
+                    } else {
+                        content = content.child(if french {
+                            "Chargement…"
+                        } else {
+                            "Loading…"
+                        });
+                    }
+                    for (index, entry) in files.entries.iter().enumerate() {
+                        let action = if entry.directory {
+                            ShareGpuiAction::GuestDirectory(scope, entry.path.clone())
+                        } else {
+                            ShareGpuiAction::GuestOpenFile(crate::guest_file_editor::Key {
+                                scope,
+                                path: entry.path.clone(),
+                            })
+                        };
+                        content = content.child(modal_btn(
+                            format!("guest-entry-{index}"),
+                            format!("{} {}", if entry.directory { "▸" } else { "·" }, entry.name),
+                            false,
+                            tokens,
+                            GpuiAction::Share(action),
+                            cx,
+                        ));
+                    }
+                    if let Some(doc) = &files.document {
+                        let (preview, partial) = doc.preview();
+                        content = content
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(doc.key.path.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id("guest-file-preview")
+                                    .max_h(px(160.))
+                                    .overflow_y_scroll()
+                                    .child(preview.to_owned()),
+                            );
+                        if partial {
+                            content = content.child(if french {
+                                "Aperçu partiel (64 Kio)."
+                            } else {
+                                "Partial preview (64 KiB)."
+                            });
+                        }
+                        if !files.busy {
+                            content = content.child(modal_btn(
+                                "guest-history-refresh",
+                                if french { "Chronologie" } else { "Timeline" }.into(),
+                                false,
+                                tokens,
+                                GpuiAction::Share(ShareGpuiAction::GuestHistory(
+                                    doc.key.clone(),
+                                    false,
+                                )),
+                                cx,
+                            ));
+                        }
+                        if let Some(page) = &files.history {
+                            if page.uncommitted {
+                                content = content.child(if french {
+                                    "Modifications non commitées"
+                                } else {
+                                    "Uncommitted Changes"
+                                });
+                            }
+                            if !page.uncommitted && page.items.is_empty() {
+                                content = content.child(if french {
+                                    "Aucun historique."
+                                } else {
+                                    "No history."
+                                });
+                            }
+                            for row in &page.items {
+                                let date = crate::regional_date::long_local(row.time, french)
+                                    .unwrap_or_default();
+                                content = content
+                                    .child(
+                                        div()
+                                            .debug_selector(|| "guest-history-commit".into())
+                                            .child(format!(
+                                                "{} · {} · {}",
+                                                &row.id[..7],
+                                                row.author,
+                                                date
+                                            )),
+                                    )
+                                    .child(div().child(row.message.clone()));
+                            }
+                            if files.more && !files.busy {
+                                content = content.child(modal_btn(
+                                    "guest-history-more",
+                                    if french {
+                                        "Charger la suite"
+                                    } else {
+                                        "Load More"
+                                    }
+                                    .into(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::Share(ShareGpuiAction::GuestHistory(
+                                        doc.key.clone(),
+                                        true,
+                                    )),
+                                    cx,
+                                ));
+                            }
+                        }
+                    }
+                    for notice in &files.notices {
+                        content =
+                            content.child(div().text_color(tokens.warn).child(notice.clone()));
+                    }
+                    return el.child(content);
+                }
                 content = content.child(projects).child(
                     div()
                         .text_size(px(13.))
@@ -3166,7 +3326,8 @@ fn modal_btn(
 ) -> AnyElement {
     let sid: SharedString = id.into();
     div()
-        .id(sid)
+        .id(sid.clone())
+        .debug_selector(move || sid.to_string())
         .px(px(8.0))
         .py(px(4.5))
         .rounded(px(tokens.radius_px - 1.0))

@@ -394,6 +394,9 @@ impl SharePanel {
     }
 
     pub fn guest_task_input(&self) -> Option<(crate::guest_task_board::Scope, &str)> {
+        if self.guest_sub_view == GuestSubView::Files {
+            return None;
+        }
         self.guest_task_board.input()
     }
     pub fn guest_requests_busy(&self) -> bool {
@@ -456,6 +459,12 @@ impl SharePanel {
             .map(|doc| &doc.key);
         changed |= self.guest_history.bind(key);
         changed |= self.guest_history.poll(Instant::now());
+        if self.guest_sub_view == GuestSubView::Files
+            && self.guest_files_scope.is_some()
+            && self.guest_file_listing.take_initial()
+        {
+            changed |= self.list_guest_files(String::new());
+        }
         changed |= self.guest_file_listing.poll(Instant::now());
         changed |= self.guest_git.poll(Instant::now());
         if self.guest_task_board.take_reconcile()
@@ -3315,6 +3324,7 @@ pub(crate) struct ShareGpuiSnapshot {
     pub guest_active: bool,
     pub guest_board: crate::guest_task_board::Snapshot,
     pub guest_projects: Vec<(u64, String)>,
+    pub guest_files: Option<guest_files::GuestFilesView>,
     pub follow_host: bool,
     pub require_knock: bool,
     pub invites: Vec<ShareGpuiInviteRow>,
@@ -3343,6 +3353,10 @@ pub(crate) enum ShareGpuiAction {
     DisconnectGuest,
     ToggleFollowHost,
     GuestDraftTouch(crate::guest_task_board::Scope),
+    GuestFilesTab(crate::guest_task_board::Scope, bool),
+    GuestDirectory(crate::guest_task_board::Scope, String),
+    GuestOpenFile(crate::guest_file_editor::Key),
+    GuestHistory(crate::guest_file_editor::Key, bool),
     GuestProject {
         session: u64,
         project: u64,
@@ -3493,6 +3507,7 @@ impl SharePanel {
             guest_status,
             guest_active,
             guest_board: self.guest_task_snapshot(),
+            guest_files: self.guest_files_view(french),
             guest_projects: guest_snap
                 .as_ref()
                 .filter(|g| matches!(g.phase, GuestPhase::Joined { .. }))
@@ -3576,6 +3591,43 @@ impl SharePanel {
             }
             ShareGpuiAction::GuestProject { session, project } => {
                 self.select_guest_project(session, project)
+            }
+            ShareGpuiAction::GuestFilesTab(scope, files) => {
+                self.poll_guest_scope();
+                if self.guest_files_scope == Some(scope) {
+                    self.guest_sub_view = if files {
+                        GuestSubView::Files
+                    } else {
+                        GuestSubView::Tasks
+                    };
+                    if files {
+                        self.list_guest_files(self.guest_file_listing.path.clone());
+                    }
+                }
+            }
+            ShareGpuiAction::GuestDirectory(scope, path) => {
+                self.poll_guest_scope();
+                if self.guest_files_scope == Some(scope) {
+                    self.list_guest_files(path);
+                }
+            }
+            ShareGpuiAction::GuestOpenFile(key) => {
+                self.open_guest_file(key);
+            }
+            ShareGpuiAction::GuestHistory(key, more) => {
+                self.poll_guest_scope();
+                if self.guest_files_scope == Some(key.scope)
+                    && self
+                        .guest_file_editor
+                        .document
+                        .as_ref()
+                        .is_some_and(|doc| doc.key == key)
+                    && let Some(session) = &self.guest_session
+                {
+                    self.guest_history.bind(Some(&key));
+                    self.guest_history
+                        .request(session, self.guest_history.next_limit(more));
+                }
             }
             ShareGpuiAction::GuestTask { scope, action } => {
                 self.request_guest_task(scope, action);
