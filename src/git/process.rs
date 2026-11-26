@@ -15,6 +15,32 @@ use crate::process_job;
 pub fn run_bytes(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Capture> {
     run_bytes_with_timeout(root, args, input, Duration::from_secs(20))
 }
+/// Only the aggregate counts are needed, even when a commit changes thousands of paths.
+pub fn commit_shortstat(root: &Path, id: &str) -> Option<String> {
+    if !matches!(id.len(), 40 | 64) || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let result = run_captured(
+        root,
+        &[
+            "show",
+            "--format=",
+            "--no-show-signature",
+            "--shortstat",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            id,
+            "--",
+        ],
+        None,
+        Duration::from_secs(20),
+        false,
+        true,
+    )
+    .ok()?;
+    (result.status.success() && !result.output.truncated).then(|| result.output.text())
+}
 pub(crate) fn run_bytes_with_timeout(
     root: &Path,
     args: &[&str],

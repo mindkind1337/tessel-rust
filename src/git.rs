@@ -432,7 +432,7 @@ use process::OUTPUT_LIMIT;
 #[cfg(test)]
 use process::drain;
 pub use process::{
-    Capture, GuestRepository, run_bytes, run_guest_bytes, run_guest_check_ignore,
+    Capture, GuestRepository, commit_shortstat, run_bytes, run_guest_bytes, run_guest_check_ignore,
     run_guest_repository,
 };
 pub(crate) use process::{GitProcessCleanup, run_bytes_with_timeout};

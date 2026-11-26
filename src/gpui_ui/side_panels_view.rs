@@ -2744,14 +2744,40 @@ fn render_timeline(
                 div()
                     .id(SharedString::from(key))
                     .debug_selector(move || format!("timeline-entry-{index}"))
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| TimelineTooltip {
-                            details: hover_history.details(
+                    .hoverable_tooltip(move |_, cx| {
+                        cx.new(|cx| {
+                            let details = hover_history.details(
                                 hover_key.as_deref(),
                                 fr,
                                 chrono::Utc::now().timestamp(),
-                            ),
-                            tokens: theme,
+                            );
+                            if let Some(rx) = details.as_ref().and_then(|d| d.stats.clone())
+                                && rx.borrow().is_none()
+                            {
+                                cx.spawn(async move |this, cx| {
+                                    loop {
+                                        cx.background_executor()
+                                            .timer(std::time::Duration::from_millis(80))
+                                            .await;
+                                        let pending =
+                                            rx.has_changed().is_ok() && rx.borrow().is_none();
+                                        let alive = this.update(cx, |_, cx| {
+                                            if !pending {
+                                                cx.notify();
+                                            }
+                                        });
+                                        if !pending || alive.is_err() {
+                                            break;
+                                        }
+                                    }
+                                })
+                                .detach();
+                            }
+                            TimelineTooltip {
+                                details,
+                                fr,
+                                tokens: theme,
+                            }
                         })
                         .into()
                     })
@@ -2807,11 +2833,12 @@ fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {
 }
 
 struct TimelineTooltip {
+    fr: bool,
     details: Option<crate::file_timeline::Details>,
     tokens: GpuiThemeTokens,
 }
 impl gpui::Render for TimelineTooltip {
-    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut panel = div()
             .debug_selector(|| "timeline-hover".into())
             .flex()
@@ -2846,8 +2873,41 @@ impl gpui::Render for TimelineTooltip {
             }
             panel = panel
                 .child(head.child(d.heading.clone()))
-                .child(d.text.clone())
-                .children(d.hash.clone());
+                .child(d.text.clone());
+            if let Some(stats) = d.stats.as_ref().and_then(|rx| *rx.borrow()) {
+                let (files, added, removed) = stats.labels(self.fr);
+                panel = panel.child(
+                    div()
+                        .debug_selector(|| "timeline-hover-stats".into())
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(files)
+                        .children(added.map(|s| div().text_color(self.tokens.ok_green).child(s)))
+                        .children(removed.map(|s| div().text_color(self.tokens.danger).child(s))),
+                );
+            }
+            if let Some(hash) = &d.hash {
+                let copy = hash.clone();
+                let action = div()
+                    .id("timeline-copy-hash")
+                    .debug_selector(|| "timeline-copy-hash".into())
+                    .cursor_pointer()
+                    .text_color(self.tokens.accent)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()));
+                    }))
+                    .child(crate::file_timeline::copy_hash_label(self.fr));
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(hash.clone())
+                        .child(action),
+                );
+            }
         }
         panel
     }

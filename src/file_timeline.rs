@@ -9,6 +9,7 @@ use std::{
 #[derive(Clone, Debug)]
 pub struct Commit {
     pub id: String,
+    stats: std::sync::OnceLock<StatsReceiver>,
     pub author: String,
     pub email: String,
     pub time: i64,
@@ -83,6 +84,7 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
         }
         let mut commit = Commit {
             id: id.to_owned(),
+            stats: Default::default(),
             author: meta.next().unwrap_or_default().into(),
             email: meta.next().unwrap_or_default().into(),
             time: meta.next().and_then(|s| s.parse().ok()).unwrap_or_default(),
@@ -520,7 +522,81 @@ impl Avatar {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    files: u64,
+    insertions: u64,
+    deletions: u64,
+}
+pub type StatsReceiver = tokio::sync::watch::Receiver<Option<Stats>>;
+
+impl Stats {
+    fn read(root: &Path, id: &str) -> Option<Self> {
+        let summary = git::commit_shortstat(root, id)?;
+        let mut stats = Self::default();
+        for part in summary.trim().split(',').filter(|s| !s.is_empty()) {
+            let (count, kind) = part.trim().split_once(' ')?;
+            let count = count.parse().ok()?;
+            match kind {
+                "file changed" | "files changed" => stats.files = count,
+                "insertion(+)" | "insertions(+)" => stats.insertions = count,
+                "deletion(-)" | "deletions(-)" => stats.deletions = count,
+                _ => return None,
+            }
+        }
+        Some(stats)
+    }
+    pub fn labels(self, fr: bool) -> (String, Option<String>, Option<String>) {
+        let file_word = match (fr, self.files == 1) {
+            (true, true) => "fichier modifié",
+            (true, false) => "fichiers modifiés",
+            (false, true) => "file changed",
+            (false, false) => "files changed",
+        };
+        let lines = |n, word, sign| {
+            (n != 0).then(|| format!("{n} {word}{}({sign})", if n == 1 { "" } else { "s" }))
+        };
+        (
+            format!("{} {file_word}", self.files),
+            lines(self.insertions, "insertion", '+'),
+            lines(
+                self.deletions,
+                if fr { "suppression" } else { "deletion" },
+                '-',
+            ),
+        )
+    }
+}
+impl Commit {
+    fn request_stats(&self, root: &Path) -> StatsReceiver {
+        self.stats
+            .get_or_init(|| {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                let root = root.to_owned();
+                let id = self.id.clone();
+                let _ = thread::Builder::new()
+                    .name("timeline-commit-stats".into())
+                    .spawn(move || {
+                        if let Some(stats) = Stats::read(&root, &id) {
+                            tx.send_replace(Some(stats));
+                        }
+                    });
+                rx
+            })
+            .clone()
+    }
+}
+
+pub fn copy_hash_label(fr: bool) -> &'static str {
+    if fr {
+        "Copier le hash du commit"
+    } else {
+        "Copy Commit Hash"
+    }
+}
+
 pub struct Details {
+    pub stats: Option<StatsReceiver>,
     pub heading: String,
     pub text: String,
     pub hash: Option<String>,
@@ -533,6 +609,7 @@ impl History {
         if let Some(id) = key.and_then(|s| s.strip_prefix("local:")) {
             let save = self.saves.iter().find(|e| e.id == id)?;
             return Some(Details {
+                stats: None,
                 heading: date(save.timestamp),
                 text: if fr {
                     "Fichier enregistré"
@@ -552,6 +629,7 @@ impl History {
                 format!("{} <{}>", commit.author, commit.email)
             };
             return Some(Details {
+                stats: Some(commit.request_stats(&self.root)),
                 heading: format!(
                     "{author} · {} ({})",
                     time_words(commit.time, now, fr, true),
@@ -567,6 +645,7 @@ impl History {
             });
         }
         self.dirty.then(|| Details {
+            stats: None,
             heading: format!(
                 "{} · {}",
                 if fr { "Vous" } else { "You" },
@@ -741,8 +820,34 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                 ui.strong(details.heading);
                             });
                             ui.label(details.text);
+                            if let Some(rx) = details.stats {
+                                if let Some(stats) = *rx.borrow() {
+                                    let (files, added, removed) = stats.labels(fr);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(files);
+                                        if let Some(s) = added {
+                                            ui.colored_label(
+                                                crate::theme_palettes::WARP_OK_GREEN,
+                                                s,
+                                            );
+                                        }
+                                        if let Some(s) = removed {
+                                            ui.colored_label(ui.visuals().error_fg_color, s);
+                                        }
+                                    });
+                                } else if rx.has_changed().is_ok() {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(100),
+                                    );
+                                }
+                            }
                             if let Some(hash) = details.hash {
-                                ui.monospace(hash);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.monospace(&hash);
+                                    if ui.small_button(copy_hash_label(fr)).clicked() {
+                                        ui.ctx().copy_text(hash);
+                                    }
+                                });
                             }
                         }
                     });
@@ -809,6 +914,7 @@ mod tests {
             assert_eq!(relative_time(0, delta, true), fr);
         }
         let commit = |time: i64| Commit {
+            stats: Default::default(),
             id: time.to_string(),
             author: String::new(),
             email: String::new(),
@@ -905,6 +1011,62 @@ mod tests {
                 .contains("rename from docs/[old].txt")
         );
         assert!(h.diff(None).unwrap().contains("+working"));
+    }
+
+    #[tokio::test]
+    async fn file_timeline_hover_stats_count_the_entire_commit_and_cache_the_result() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        git_fixture(root, &["init", "-q"]);
+        let file = root.join("viewed.txt");
+        std::fs::write(&file, "old line\n").unwrap();
+        git_fixture(root, &["add", "."]);
+        git_fixture(root, &["commit", "-qm", "base"]);
+        std::fs::write(&file, "new line\n").unwrap();
+        std::fs::write(root.join("other.txt"), "extra\nlines\n").unwrap();
+        std::fs::write(root.join("binary.dat"), b"\0data").unwrap();
+        git_fixture(root, &["add", "."]);
+        git_fixture(root, &["commit", "-qm", "multiple paths"]);
+        let history = read(&file, 20).unwrap();
+        let commit = &history.commits[0];
+        assert!(commit.stats.get().is_none());
+        let key = Some(commit.id.as_str());
+        let mut rx = history.details(key, false, 0).unwrap().stats.unwrap();
+        let second = history.details(key, true, 0).unwrap().stats.unwrap();
+        assert!(rx.same_channel(&second));
+        let stats = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            rx.wait_for(Option::is_some),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            stats,
+            Stats {
+                files: 3,
+                insertions: 3,
+                deletions: 1
+            }
+        );
+        assert_eq!(
+            stats.labels(true),
+            (
+                "3 fichiers modifiés".into(),
+                Some("3 insertions(+)".into()),
+                Some("1 suppression(-)".into())
+            )
+        );
+        assert_eq!(
+            Stats {
+                files: 1,
+                ..Default::default()
+            }
+            .labels(false),
+            ("1 file changed".into(), None, None)
+        );
+        assert!(history.commits[1].stats.get().is_none());
     }
 
     #[test]
