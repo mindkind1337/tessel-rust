@@ -924,6 +924,19 @@ mod tests {
             input.update(cx, |state, cx| state.move_to(1, cx));
         })
         .unwrap();
+        let wrapped = view
+            .update(cx, |root, _, _| {
+                root.app.gpui_editor_document().unwrap().tools.word_wrap
+            })
+            .unwrap();
+        cx.simulate_keystrokes(view.into(), "alt-z");
+        view.update(cx, |root, _, _| {
+            assert_ne!(
+                root.app.gpui_editor_document().unwrap().tools.word_wrap,
+                wrapped
+            )
+        })
+        .unwrap();
         cx.simulate_keystrokes(view.into(), "x");
         view.update(cx, |root, _, _| {
             assert_eq!(root.app.gpui_editor_document().unwrap().text, "axbc")

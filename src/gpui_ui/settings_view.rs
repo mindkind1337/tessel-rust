@@ -54,7 +54,10 @@ pub(crate) fn render_settings_modal(
                 group_anchor: None,
                 group_title: String::new(),
                 row_id: t.id.into(),
-                text: t.label(french).into(),
+                text: match t.hint(french) {
+                    Some(hint) => format!("{} {hint}", t.label(french)),
+                    None => t.label(french).into(),
+                },
             })
             .collect();
         search_settings(&s.search_query, &rows, lang)
@@ -1213,6 +1216,7 @@ fn render_agents_page(
     col = col.child(toggle_row_owned(
         "gpui-st-agent-folder-trust".to_owned(),
         crate::agents_panel::agent_folder_trust_label(french).to_owned(),
+        None,
         s.agent_folder_trust,
         tokens,
         GpuiAction::ToggleAgentFolderTrust,
@@ -1256,6 +1260,7 @@ fn render_agents_page(
                     .child(div().flex_1().child(toggle_row_owned(
                         format!("gpui-st-agent-{}", detail.id),
                         label,
+                        None,
                         detail.enabled,
                         tokens,
                         GpuiAction::ToggleBuiltinAgentEnabled(aid),
@@ -3303,17 +3308,19 @@ struct Toggle {
     id: &'static str,
     en: &'static str,
     fr: &'static str,
+    hints: Option<(&'static str, &'static str)>,
     checked: fn(&GpuiSettingsSnapshot) -> bool,
     change: fn(&GpuiSettingsSnapshot) -> GpuiAction,
 }
 
 macro_rules! toggle {
-    ($page:ident, $id:literal, $en:literal, $fr:literal, $prefs:ident, $field:ident, $action:ident) => {
+    ($page:ident, $id:literal, $en:literal, $fr:literal, $prefs:ident, $field:ident, $action:ident $(, $hint_en:literal, $hint_fr:literal)?) => {
         Toggle {
             page: SettingsPageId::$page,
             id: $id,
             en: $en,
             fr: $fr,
+            hints: toggle!(@hints $($hint_en, $hint_fr)?),
             checked: |s| s.$prefs.$field,
             change: |s| {
                 GpuiAction::$action({
@@ -3325,6 +3332,8 @@ macro_rules! toggle {
             },
         }
     };
+    (@hints) => { None };
+    (@hints $en:literal, $fr:literal) => {Some(($en,$fr))};
 }
 const TOGGLES: &[Toggle] = &[
     toggle!(
@@ -3334,7 +3343,9 @@ const TOGGLES: &[Toggle] = &[
         "Restaurer les espaces de travail au démarrage",
         general_prefs,
         restore_workspaces,
-        UpdateGeneralPrefs
+        UpdateGeneralPrefs,
+        "Off starts with a single terminal",
+        "Désactivé : démarre avec un seul terminal"
     ),
     toggle!(
         General,
@@ -3343,7 +3354,9 @@ const TOGGLES: &[Toggle] = &[
         "Confirmer avant de fermer un agent actif",
         general_prefs,
         confirm_close_agent,
-        UpdateGeneralPrefs
+        UpdateGeneralPrefs,
+        "Ask before stopping a running agent or command when closing a terminal.",
+        "Demander avant d'arrêter un agent ou une commande en cours à la fermeture d'un terminal."
     ),
     toggle!(
         General,
@@ -3352,7 +3365,9 @@ const TOGGLES: &[Toggle] = &[
         "Confirmer avant de quitter l'application",
         general_prefs,
         confirm_quit_running,
-        UpdateGeneralPrefs
+        UpdateGeneralPrefs,
+        "Closing the window quits Tessel and stops every agent and terminal.",
+        "Fermer la fenêtre quitte Tessel et arrête tous les agents et terminaux."
     ),
     toggle!(
         General,
@@ -3397,7 +3412,9 @@ const TOGGLES: &[Toggle] = &[
         "Coller avec le bouton droit",
         terminal_prefs,
         right_click_paste,
-        UpdateTerminalPrefs
+        UpdateTerminalPrefs,
+        "Pastes the selection, or the clipboard. Shift+right-click opens the menu",
+        "Colle la sélection, ou le presse-papiers. Maj+clic droit ouvre le menu"
     ),
     toggle!(
         Terminal,
@@ -3406,7 +3423,9 @@ const TOGGLES: &[Toggle] = &[
         "Confirmer le collage multiligne",
         terminal_prefs,
         confirm_multiline_paste,
-        UpdateTerminalPrefs
+        UpdateTerminalPrefs,
+        "So an accidental paste can't run commands",
+        "Pour qu'un collage accidentel ne puisse pas exécuter de commandes"
     ),
     toggle!(
         Terminal,
@@ -3415,7 +3434,9 @@ const TOGGLES: &[Toggle] = &[
         "Le focus suit la souris",
         terminal_prefs,
         focus_follows_mouse,
-        UpdateTerminalPrefs
+        UpdateTerminalPrefs,
+        "Hovering a terminal pane activates it without needing to click.",
+        "Survoler un panneau de terminal l'active sans avoir à cliquer."
     ),
     toggle!(
         Editor,
@@ -3442,7 +3463,9 @@ const TOGGLES: &[Toggle] = &[
         "Retour à la ligne",
         editor_prefs,
         word_wrap,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "Long lines wrap to the pane's width (Alt+Z in the editor)",
+        "Les longues lignes reviennent à la ligne à la largeur du panneau (Alt+Z dans l'éditeur)"
     ),
     toggle!(
         Editor,
@@ -3451,7 +3474,9 @@ const TOGGLES: &[Toggle] = &[
         "Retour à la ligne dans les différences",
         editor_prefs,
         diff_word_wrap,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "Long lines wrap instead of scrolling sideways.",
+        "Les longues lignes reviennent à la ligne au lieu de défiler sur le côté."
     ),
     toggle!(
         Editor,
@@ -3460,7 +3485,9 @@ const TOGGLES: &[Toggle] = &[
         "Activer les onglets d’aperçu",
         editor_prefs,
         preview_tabs,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "A file opened with one click replaces the previous one until you edit it or double-click its tab",
+        "Un fichier ouvert d'un clic remplace le précédent jusqu'à ce que vous le modifiiez ou double-cliquiez sur son onglet"
     ),
     toggle!(
         Editor,
@@ -3469,7 +3496,9 @@ const TOGGLES: &[Toggle] = &[
         "Afficher les fichiers cachés et ignorés par Git",
         editor_prefs,
         show_git_ignored,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "Files matched by .gitignore.",
+        "Fichiers correspondant à .gitignore."
     ),
     toggle!(
         Editor,
@@ -3478,7 +3507,9 @@ const TOGGLES: &[Toggle] = &[
         "Dossiers compacts",
         editor_prefs,
         compact_folders,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "In Files, a folder holding a single folder shares its row with it, like a/b/c.",
+        "Dans Fichiers, un dossier qui ne contient qu’un dossier partage sa ligne avec lui, comme a/b/c."
     ),
     toggle!(
         Editor,
@@ -3487,7 +3518,9 @@ const TOGGLES: &[Toggle] = &[
         "Enregistrement automatique des fichiers modifiés",
         editor_prefs,
         auto_save,
-        UpdateEditorPrefs
+        UpdateEditorPrefs,
+        "A moment after you stop typing (never over a file that changed on disk)",
+        "Un moment après que vous arrêtez de taper (jamais par-dessus un fichier modifié sur le disque)"
     ),
     toggle!(
         Browser,
@@ -3532,7 +3565,9 @@ const TOGGLES: &[Toggle] = &[
         "Activer les notifications",
         notification_prefs,
         notifications_enabled,
-        UpdateNotificationPrefs
+        UpdateNotificationPrefs,
+        "Native system notifications for background events.",
+        "Notifications système natives pour les événements en arrière-plan."
     ),
     toggle!(
         Alerts,
@@ -3541,7 +3576,9 @@ const TOGGLES: &[Toggle] = &[
         "Notifications du système",
         notification_prefs,
         desktop_notifications,
-        UpdateNotificationPrefs
+        UpdateNotificationPrefs,
+        "When an agent finishes while the app is in the background",
+        "Quand un agent termine pendant que l'application est en arrière-plan"
     ),
     toggle!(
         Alerts,
@@ -3550,7 +3587,9 @@ const TOGGLES: &[Toggle] = &[
         "Centre de notifications dans la barre d’outils",
         notification_prefs,
         in_app_alerts,
-        UpdateNotificationPrefs
+        UpdateNotificationPrefs,
+        "When an agent finishes in a pane you aren't looking at",
+        "Quand un agent termine dans un panneau que vous ne regardez pas"
     ),
     toggle!(
         Alerts,
@@ -3559,7 +3598,9 @@ const TOGGLES: &[Toggle] = &[
         "Alerter à la sonnerie du terminal",
         notification_prefs,
         notify_terminal_bell,
-        UpdateNotificationPrefs
+        UpdateNotificationPrefs,
+        "A background terminal emits a bell character.",
+        "Un terminal en arrière-plan émet un caractère de sonnerie."
     ),
     toggle!(
         Alerts,
@@ -3568,10 +3609,15 @@ const TOGGLES: &[Toggle] = &[
         "Désactiver si le panneau cible est actif",
         notification_prefs,
         notify_suppress_when_focused,
-        UpdateNotificationPrefs
+        UpdateNotificationPrefs,
+        "Skip notifications when the triggering worktree is already visible.",
+        "Ignorer les notifications quand le worktree déclencheur est déjà visible."
     ),
 ];
 impl Toggle {
+    fn hint(&self, french: bool) -> Option<&'static str> {
+        self.hints.map(|(en, fr)| if french { fr } else { en })
+    }
     fn label(&self, french: bool) -> &'static str {
         if french { self.fr } else { self.en }
     }
@@ -3585,6 +3631,7 @@ impl Toggle {
         toggle_row_owned(
             self.id.into(),
             self.label(french).into(),
+            self.hint(french),
             (self.checked)(s),
             tokens,
             (self.change)(s),
@@ -3609,56 +3656,88 @@ fn page_toggles(
 fn toggle_row_owned(
     id: String,
     label: String,
+    hint: Option<&'static str>,
     checked: bool,
     tokens: &GpuiThemeTokens,
     action: GpuiAction,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    let key_action = action.clone();
     let selector = id.clone();
     div()
         .id(SharedString::from(id))
         .debug_selector(move || selector)
-        .px(px(10.0))
-        .py(px(6.5))
-        .rounded(px(tokens.radius_px))
-        .bg(tokens.surface)
-        .border_1()
-        .border_color(if checked {
-            tokens.accent
-        } else {
-            tokens.border
-        })
+        .role(gpui::Role::Switch)
+        .aria_label(label.clone())
+        .aria_toggled(checked.into())
+        .when_some(hint, |row, hint| row.aria_description(hint))
+        .tab_index(0)
+        .focus_visible(|row| row.border_color(tokens.accent))
+        .min_h(px(42.))
+        .py(px(6.))
+        .border_b_1()
+        .border_color(tokens.border)
         .flex()
+        .gap(px(16.))
         .items_center()
         .justify_between()
-        .hover(|st| st.bg(tokens.surface_2))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.dispatch_action(action.clone(), cx);
+        .cursor_pointer()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|root, _, _, _| root.focus_input = FocusInputTarget::None),
+        )
+        .on_click(cx.listener(move |root, _, _, cx| root.dispatch_action(action.clone(), cx)))
+        .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, _, cx| {
+            if event.keystroke.key == "space" {
+                cx.stop_propagation();
+                if !event.is_held {
+                    root.dispatch_action(key_action.clone(), cx);
+                }
+            }
         }))
         .child(
             div()
-                .text_size(px(11.5))
-                .text_color(tokens.text_strong)
-                .child(SharedString::from(label)),
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .text_size(px(12.5))
+                .text_color(tokens.text)
+                .child(label)
+                .when_some(hint, |column, hint| {
+                    column.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(tokens.text_dim)
+                            .child(hint),
+                    )
+                }),
         )
         .child(
             div()
-                .px(px(6.0))
-                .py(px(1.5))
-                .rounded(px(8.0))
+                .relative()
+                .w(px(34.))
+                .h(px(20.))
+                .rounded(px(10.))
+                .flex_none()
                 .bg(if checked {
                     tokens.accent
                 } else {
-                    tokens.surface_2
+                    tokens.surface_3
                 })
-                .text_size(px(10.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(if checked {
-                    tokens.accent_fg
-                } else {
-                    tokens.text_dim
+                .when(!checked, |track| {
+                    track.border_1().border_color(tokens.border_strong)
                 })
-                .child(if checked { "ON" } else { "OFF" }),
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(3.))
+                        .left(px(if checked { 17. } else { 3. }))
+                        .size(px(14.))
+                        .rounded_full()
+                        .bg(gpui::rgb(if checked { 0xffffff } else { 0xaeb4bf })),
+                ),
         )
         .into_any_element()
 }

@@ -627,6 +627,19 @@ impl TesselGpuiRoot {
                     .focused(window, cx)
                     .then_some(FocusInputTarget::EditorBody)
             });
+        if alt
+            && !ctrl
+            && !shift
+            && key == "z"
+            && native_target == Some(FocusInputTarget::EditorBody)
+            && self.app.gpui_editor_document().is_some()
+        {
+            cx.stop_propagation();
+            if !event.is_held {
+                self.dispatch(GpuiAction::ToggleEditorWordWrap, cx);
+            }
+            return;
+        }
         if key == "tab"
             && !ctrl
             && !alt

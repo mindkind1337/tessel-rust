@@ -46,12 +46,19 @@ fn settings_search_edits_matching_rows_across_pages(cx: &mut gpui::TestAppContex
         })
         .unwrap();
     gpui::VisualTestContext::from_window(view.into(), cx).simulate_click(point, Default::default());
-    view.update(cx, |root, _, cx| {
+    view.update(cx, |root, _, _| {
         let settings = root.app.gpui_snapshot(960., 640., 4.).settings.unwrap();
         assert_ne!(before, settings.editor_prefs.word_wrap);
         assert_eq!(settings.active_page_id, "general");
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "space");
+    view.update(cx, |root, _, cx| {
+        let settings = root.app.gpui_snapshot(960., 640., 4.).settings.unwrap();
+        assert_eq!(before, settings.editor_prefs.word_wrap);
         root.dispatch_action(GpuiAction::SetLanguage { french: true }, cx);
-        root.dispatch_action(GpuiAction::SetSettingsSearch("souris FOCUS".into()), cx);
+        root.dispatch_action(GpuiAction::SetSettingsSearch("cliquer SURVOLER".into()), cx);
     })
     .unwrap();
     cx.refresh().unwrap();
