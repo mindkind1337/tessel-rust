@@ -69,7 +69,10 @@ jobs:
           key: windows-rust-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: windows-rust-v2-
       - run: cargo fmt --check
-      - run: cargo test --locked -j 2 -- --test-threads=2
+      - name: Test Live Share with exclusive use of process-wide host quotas
+        run: cargo test --locked -j 2 share:: -- --test-threads=1
+      - name: Test remaining targets
+        run: cargo test --locked -j 2 -- --skip share:: --test-threads=2
       - run: cargo clippy --locked -j 2 --all-targets --all-features -- -D warnings
       - run: cargo build --locked -j 2
       - run: .\target\debug\tessel-rust.exe --self-test-pdf
