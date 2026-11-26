@@ -17,6 +17,11 @@ pub(crate) enum Command {
     ConfirmDelete,
     CancelDialog,
     Edit(String),
+    HtmlPlain {
+        host: String,
+        path: String,
+        enabled: bool,
+    },
     Save,
     Compare(String, String),
     GitHistory(String, bool),
@@ -46,6 +51,7 @@ pub(crate) struct Snapshot {
     pub rename: Option<(String, String)>,
     pub delete: Option<String>,
     pub document: Option<(String, Option<String>, usize)>,
+    pub html_plain: Option<std::sync::Arc<str>>,
     pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub pdf: Option<crate::pdf::PdfSummary>,
@@ -58,12 +64,18 @@ pub(crate) struct Snapshot {
     pub comparison: Option<std::sync::Arc<Vec<String>>>,
 }
 
+pub(crate) fn is_html(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
+}
+
 impl RemotePanel {
     pub(crate) fn input_snapshot(&self) -> Snapshot {
         Snapshot {
             connected: self.host.as_ref().map(|host| host.alias.clone()),
             path: self.path.clone(),
             busy: self.busy(),
+            html_plain: self.document.as_ref().and_then(|d| d.html_plain.clone()),
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             new_name: self.new_name.clone(),
             rename: self.rename.clone(),
@@ -82,21 +94,26 @@ impl RemotePanel {
     }
     #[cfg(feature = "visual-test")]
     pub(crate) fn text_fixture() -> Self {
+        Self::text_fixture_with("notes.txt", "Synthetic remote text\nSecond line\n")
+    }
+    #[cfg(feature = "visual-test")]
+    pub(crate) fn text_fixture_with(name: &str, text: &str) -> Self {
         let mut panel = Self::fixture();
         panel.entries.push(Entry {
-            name: "notes.txt".into(),
-            path: "/demo/notes.txt".into(),
+            name: name.into(),
+            path: format!("/demo/{name}"),
             directory: false,
-            size: 32,
+            size: text.len() as u64,
         });
         panel.document = Some(RemoteDocument {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            html_plain: None,
             image_menu: None,
-            path: "/demo/notes.txt".into(),
-            original: b"Synthetic remote text\nSecond line\n".to_vec(),
-            text: Some("Synthetic remote text\nSecond line\n".into()),
+            path: format!("/demo/{name}"),
+            original: text.as_bytes().to_vec(),
+            text: Some(text.into()),
             preview: None,
             preview_error: String::new(),
         });
@@ -128,6 +145,7 @@ impl RemotePanel {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            html_plain: None,
             image_menu: None,
             path: "/demo/original.pdf".into(),
             preview: prepare_preview("original.pdf", &original).unwrap().ok(),
@@ -197,6 +215,7 @@ impl RemotePanel {
             can_parent: !self.path.is_empty() && self.path != self.root,
             busy: self.busy(),
             live: self.tree_live,
+            html_plain: self.document.as_ref().and_then(|d| d.html_plain.clone()),
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             error: self.error.clone(),
             entries: self
@@ -275,10 +294,24 @@ impl RemotePanel {
                     pdf.step_zoom(delta);
                 }
             }
+            Command::HtmlPlain {
+                host,
+                path,
+                enabled,
+            } => {
+                if !self.busy()
+                    && self.host.as_ref().is_some_and(|h| h.alias == host)
+                    && let Some(doc) = self.document.as_mut().filter(|d| d.path == path)
+                    && is_html(&path)
+                {
+                    doc.set_plain(enabled);
+                }
+            }
             Command::Edit(text) => {
                 if text.len() <= 2 * 1024 * 1024
                     && let Some(doc) = &mut self.document
                     && doc.text.is_some()
+                    && doc.html_plain.is_none()
                 {
                     doc.text = Some(text);
                 }
@@ -301,7 +334,7 @@ impl RemotePanel {
                 if let Some(doc) = &mut self.document
                     && doc.text.is_some()
                 {
-                    doc.text = String::from_utf8(doc.original.clone()).ok();
+                    doc.discard_text();
                 }
             }
             Command::ImageMenu(path, position) => {
@@ -504,6 +537,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_plain: None,
                 image_menu: None,
                 path: "/fixture/colors.png".into(),
                 preview: prepare_preview("colors.png", &original)

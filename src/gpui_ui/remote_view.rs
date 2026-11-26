@@ -88,6 +88,7 @@ fn field(
 pub(crate) fn render(
     snapshot: &GpuiWorkspaceSnapshot,
     inputs: &super::remote_inputs::Inputs,
+    editor_input: &super::editor_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
     cx: &Context<TesselGpuiRoot>,
@@ -563,6 +564,28 @@ pub(crate) fn render(
                     cx,
                 )),
         );
+        if text.is_some()
+            && crate::remote_panel::control::is_html(path)
+            && let Some(host) = &remote.connected
+        {
+            let enabled = remote.html_plain.is_none();
+            body = body.child(button(
+                "remote-html-plain-toggle",
+                if enabled {
+                    if fr { "Texte brut" } else { "Plain text" }
+                } else {
+                    "Source"
+                },
+                Command::HtmlPlain {
+                    host: host.clone(),
+                    path: path.clone(),
+                    enabled,
+                },
+                !remote.busy,
+                tokens,
+                cx,
+            ));
+        }
         #[cfg(windows)]
         if text.is_some()
             && path.rsplit_once('.').is_some_and(|(_, ext)| {
@@ -591,7 +614,11 @@ pub(crate) fn render(
                     }),
             );
         }
-        if let Some(text) = text {
+        if remote.html_plain.is_some() {
+            if let Some(state) = editor_input.plain() {
+                body = body.child(super::editor_view::plain_text(state, tokens));
+            }
+        } else if let Some(text) = text {
             body = body.child(
                 div()
                     .id("remote-text-scroll")

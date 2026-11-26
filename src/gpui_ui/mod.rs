@@ -394,6 +394,26 @@ impl TesselGpuiRoot {
         ) {
             self.remote_inputs.discard_text();
         }
+        let preview_source = match &action {
+            GpuiAction::Remote(crate::remote_panel::control::Command::HtmlPlain {
+                host,
+                path,
+                enabled: true,
+            }) => Some((host, path)),
+            #[cfg(windows)]
+            GpuiAction::OpenRemoteHtmlInBrowser { host, path } => Some((host, path)),
+            _ => None,
+        };
+        if let Some((host, path)) = preview_source
+            && let Some(snapshot) = self.app.gpui_remote_input_snapshot()
+            && let Some(text) = self
+                .remote_inputs
+                .pending_html_source(&snapshot, host, path, cx)
+        {
+            self.app.apply_gpui_action(GpuiAction::Remote(
+                crate::remote_panel::control::Command::Edit(text),
+            ));
+        }
         let remote_edit = matches!(
             &action,
             GpuiAction::Remote(
@@ -1246,17 +1266,19 @@ impl Render for TesselGpuiRoot {
         {
             window.focus(&self.focus_handle, cx);
         }
-        self.editor_input.sync_plain(
-            snapshot
-                .active_document
-                .as_ref()
-                .filter(|_| {
-                    snapshot.center_mode == GpuiCenterMode::DocumentEditor
-                        && !self.app.gpui_has_open_modal()
-                })
-                .and_then(|doc| doc.html_plain_text.as_ref()),
-            cx,
-        );
+        let plain = if self.app.gpui_has_open_modal() {
+            None
+        } else {
+            match snapshot.center_mode {
+                GpuiCenterMode::DocumentEditor => snapshot
+                    .active_document
+                    .as_ref()
+                    .and_then(|doc| doc.html_plain_text.as_ref()),
+                GpuiCenterMode::RemoteSftp => snapshot.remote.html_plain.as_ref(),
+                _ => None,
+            }
+        };
+        self.editor_input.sync_plain(plain, cx);
         if !self.app.gpui_has_open_modal() {
             self.editor_input
                 .sync(native_doc, &self.app.gpui_document_ids(), window, cx);

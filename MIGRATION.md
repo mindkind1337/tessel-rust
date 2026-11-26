@@ -1673,3 +1673,5 @@ Local project HTML has an explicit restricted WebView2 browser-tab preview on Wi
 Local browser-preview assets support single byte ranges and HEAD metadata. WebView2 reads bounded ranges directly from the open project file, including offsets above the per-response cap.
 
 The Windows editor HTML preview reloads the same origin with the current unsaved HTML and fresh project assets. The source file stays untouched.
+
+SSH Files can switch between editable HTML source and selectable plain text of the current draft. Discarding edits updates both views. Styled rendering inside the SSH pane remains pending.

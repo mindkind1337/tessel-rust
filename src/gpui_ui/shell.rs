@@ -154,10 +154,15 @@ fn render_center_column(
                         cx,
                     )
                     .into_any_element(),
-                    GpuiCenterMode::RemoteSftp => {
-                        render_remote_sftp_stage(snapshot, remote_inputs, focus_input, tokens, cx)
-                            .into_any_element()
-                    }
+                    GpuiCenterMode::RemoteSftp => super::remote_view::render(
+                        snapshot,
+                        remote_inputs,
+                        editor_input,
+                        focus_input,
+                        tokens,
+                        cx,
+                    )
+                    .into_any_element(),
                 })
                 .when(snapshot.floating.open, |el| {
                     el.child(terminal_view::render_floating_terminal_drawer(
@@ -1076,16 +1081,6 @@ fn render_split_divider(
         SplitDir::Col => el.cursor_row_resize(),
     };
     el
-}
-
-fn render_remote_sftp_stage(
-    snapshot: &GpuiWorkspaceSnapshot,
-    remote_inputs: &super::remote_inputs::Inputs,
-    focus_input: FocusInputTarget,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    super::remote_view::render(snapshot, remote_inputs, focus_input, tokens, cx)
 }
 
 #[allow(clippy::too_many_arguments)]

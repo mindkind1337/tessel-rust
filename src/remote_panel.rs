@@ -90,6 +90,7 @@ struct GitHistory {
     page: Option<std::sync::Arc<remote::file_history::Page>>,
 }
 struct RemoteDocument {
+    html_plain: Option<std::sync::Arc<str>>,
     image_menu: Option<(f32, f32)>,
     path: String,
     original: Vec<u8>,
@@ -101,6 +102,17 @@ struct RemoteDocument {
     preview_error: String,
 }
 impl RemoteDocument {
+    fn set_plain(&mut self, enabled: bool) {
+        self.html_plain = self
+            .text
+            .as_deref()
+            .filter(|_| enabled)
+            .map(|text| crate::preview::html_plain_text(text).into());
+    }
+    fn discard_text(&mut self) {
+        self.text = String::from_utf8(self.original.clone()).ok();
+        self.set_plain(self.html_plain.is_some());
+    }
     fn dirty(&self) -> bool {
         self.text
             .as_ref()
@@ -177,6 +189,7 @@ impl RemotePanel {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_plain: None,
                 image_menu: None,
                 path: "/demo/preview.png".into(),
                 preview: prepare_preview("preview.png", &original).unwrap().ok(),
@@ -422,6 +435,7 @@ impl RemotePanel {
                         versions,
                         comparison: Default::default(),
                         git_history: Default::default(),
+                        html_plain: None,
                         image_menu: None,
                         text,
                         preview,
@@ -883,7 +897,7 @@ impl RemotePanel {
                     )
                     .clicked()
                 {
-                    doc.text = String::from_utf8(doc.original.clone()).ok();
+                    doc.discard_text();
                 }
                 if ui
                     .add_enabled(!busy, egui::Button::new(tr("Download original…")))
@@ -1038,6 +1052,7 @@ mod tests {
                 versions,
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_plain: None,
                 image_menu: None,
                 original: b"opened earlier".to_vec(),
                 text: Some("unsaved editor draft".into()),
@@ -1246,6 +1261,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_plain: None,
                 image_menu: None,
                 path: "/fixture/file.txt".into(),
                 original: b"original".to_vec(),

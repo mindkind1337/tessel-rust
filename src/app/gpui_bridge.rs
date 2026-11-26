@@ -2168,6 +2168,12 @@ impl Tessel {
     }
 
     #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_remote_html_fixture(&mut self) {
+        self.view = View::Remote;
+        self.remote =
+            crate::remote_panel::RemotePanel::text_fixture_with("index.HTM", "<p>Original</p>");
+    }
+    #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn install_editor_input_fixture(
         &mut self,
         documents: Vec<crate::files::Document>,

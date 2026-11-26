@@ -32,7 +32,7 @@ fn value(
             let (path, text) = snapshot.rename.as_ref()?;
             (path.clone(), text.as_str())
         }
-        FocusInputTarget::RemoteText => {
+        FocusInputTarget::RemoteText if snapshot.html_plain.is_none() => {
             let (path, text, _) = snapshot.document.as_ref()?;
             (path.clone(), text.as_deref()?)
         }
@@ -42,6 +42,26 @@ fn value(
 }
 
 impl Inputs {
+    pub fn pending_html_source(
+        &self,
+        snapshot: &Snapshot,
+        host: &str,
+        path: &str,
+        cx: &App,
+    ) -> Option<String> {
+        let (scope, base) = value(snapshot, FocusInputTarget::RemoteText)?;
+        if snapshot.busy || scope.0 != host || scope.2 != path {
+            return None;
+        }
+        let (_, binding) = self.fields.iter().find(|(target, b)| {
+            *target == FocusInputTarget::RemoteText
+                && b.scope == scope
+                && !b.reset
+                && b.synced == base
+        })?;
+        let draft = binding.state.read(cx).as_str();
+        (draft != base).then(|| draft.to_owned())
+    }
     pub fn discard_text(&mut self) {
         for (target, binding) in &mut self.fields {
             if *target == FocusInputTarget::RemoteText {
@@ -195,6 +215,79 @@ impl Inputs {
 mod tests {
     use super::*;
     use gpui::{EntityInputHandler, TestAppContext};
+
+    #[gpui::test]
+    fn remote_html_plain_reads_latest_source_and_preserves_the_remote_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+            root.app.install_remote_html_fixture();
+            root
+        });
+        cx.refresh().unwrap();
+        let toggle = |enabled| {
+            GpuiAction::Remote(Command::HtmlPlain {
+                host: "fixture-host".into(),
+                path: "/demo/index.HTM".into(),
+                enabled,
+            })
+        };
+        let draft = "<p>Draft<br>line</p><script>hidden()</script>";
+        view.update(cx, |root, window, cx| {
+            let source = root
+                .remote_inputs
+                .get(FocusInputTarget::RemoteText)
+                .unwrap()
+                .clone();
+            source.update(cx, |s, cx| {
+                s.replace_text_in_range(
+                    Some(0..s.as_str().encode_utf16().count()),
+                    draft,
+                    window,
+                    cx,
+                )
+            });
+            root.dispatch(toggle(true), cx);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            assert_eq!(
+                root.editor_input.plain().unwrap().read(cx).as_str(),
+                "Draft\nline"
+            );
+            let snapshot = root.app.gpui_remote_input_snapshot().unwrap();
+            assert!(snapshot.dirty);
+            assert_eq!(snapshot.document.unwrap().1.as_deref(), Some(draft));
+            assert!(
+                root.remote_inputs
+                    .get(FocusInputTarget::RemoteText)
+                    .is_none()
+            );
+            root.dispatch(GpuiAction::Remote(Command::Edit("stale".into())), cx);
+            root.dispatch(toggle(false), cx);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            assert_eq!(
+                root.remote_inputs
+                    .get(FocusInputTarget::RemoteText)
+                    .unwrap()
+                    .read(cx)
+                    .as_str(),
+                draft
+            );
+            root.dispatch(toggle(true), cx);
+            root.dispatch(GpuiAction::Remote(Command::Discard), cx);
+            let s = root.app.gpui_remote_input_snapshot().unwrap();
+            assert_eq!(s.html_plain.as_deref(), Some("Original"));
+            assert!(!s.dirty);
+        })
+        .unwrap();
+    }
 
     #[gpui::test]
     fn remote_image_right_click_opens_download_menu(cx: &mut TestAppContext) {

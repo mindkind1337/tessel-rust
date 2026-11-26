@@ -204,6 +204,24 @@ pub fn layout_mermaid_sequence(
 // Document & Diff Stage
 // ---------------------------------------------------------------------------
 
+pub(super) fn plain_text(
+    state: &gpui::Entity<gpui_ce_elements::editable_text::EditableTextState>,
+    tokens: &GpuiThemeTokens,
+) -> impl IntoElement + use<> {
+    gpui_ce_elements::editable_text::text_area("html-plain")
+        .state(state.downgrade())
+        .accepts_input(false)
+        .debug_selector(|| "html-plain".into())
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .overflow_y_scroll()
+        .p(px(20.))
+        .font_family(mono_font_family())
+        .line_height(px(21.))
+        .text_color(tokens.text)
+}
+
 pub(crate) fn render_document_editor_stage(
     snapshot: &GpuiWorkspaceSnapshot,
     editor_input: &super::editor_input::Input,
@@ -219,19 +237,7 @@ pub(crate) fn render_document_editor_stage(
     let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
     let content = if let Some(state) = editor_input.plain() {
-        gpui_ce_elements::editable_text::text_area("html-plain")
-            .state(state.downgrade())
-            .accepts_input(false)
-            .debug_selector(|| "html-plain".into())
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .p(px(20.))
-            .font_family(mono_font_family())
-            .line_height(px(21.))
-            .text_color(tokens.text)
-            .into_any_element()
+        plain_text(state, tokens).into_any_element()
     } else if let Some(source) = &doc.playback {
         render_playback(source, french, cx).into_any_element()
     } else if let Some(pdf) = &doc.pdf_summary {
