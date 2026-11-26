@@ -197,6 +197,31 @@ mod tests {
     use gpui::{EntityInputHandler, TestAppContext};
 
     #[gpui::test]
+    fn remote_image_right_click_opens_download_menu(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+            root.app.install_remote_image_fixture();
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let rect = visual
+            .debug_bounds("remote-preview-pixels")
+            .expect("SSH image");
+        let pos = rect.origin + gpui::point(gpui::px(7.), gpui::px(7.));
+        visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_some());
+        visual.simulate_click(gpui::point(gpui::px(5.), gpui::px(5.)), Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-image-menu").is_none());
+    }
+
+    #[gpui::test]
     fn remote_native_input_updates_current_document_and_drops_old_bindings(
         cx: &mut TestAppContext,
     ) {

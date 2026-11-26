@@ -557,7 +557,7 @@ pub(crate) fn render(
                     } else {
                         "Download original…"
                     },
-                    Command::Download,
+                    Command::Download(path.clone()),
                     !remote.busy,
                     tokens,
                     cx,
@@ -644,19 +644,85 @@ pub(crate) fn render(
             }
             if let Some(image) = &remote.pixels {
                 let size = image.size(0);
-                body = body.child(
-                    div()
-                        .id("remote-media-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .overflow_scroll()
-                        .child(
-                            img(image.clone())
-                                .w(px(size.width.0 as f32))
-                                .h(px(size.height.0 as f32)),
-                        ),
-                );
+                let image_view = img(image.clone())
+                    .w(px(size.width.0 as f32))
+                    .h(px(size.height.0 as f32));
+                let path_for_menu = path.clone();
+                let mut view = div()
+                    .id("remote-media-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_scroll()
+                    .child(
+                        div()
+                            .id("remote-preview-pixels")
+                            .debug_selector(|| "remote-preview-pixels".into())
+                            .w(px(size.width.0 as f32))
+                            .h(px(size.height.0 as f32))
+                            .when(remote.pdf.is_none() && !remote.busy, |el| {
+                                el.on_mouse_down(
+                                    gpui::MouseButton::Right,
+                                    cx.listener(
+                                        move |root, event: &gpui::MouseDownEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            root.dispatch(
+                                                GpuiAction::Remote(Command::ImageMenu(
+                                                    path_for_menu.clone(),
+                                                    Some((
+                                                        f32::from(event.position.x),
+                                                        f32::from(event.position.y),
+                                                    )),
+                                                )),
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                )
+                            })
+                            .child(image_view),
+                    );
+                if let Some((x, y)) = remote.image_menu {
+                    let target = path.clone();
+                    let menu = div()
+                        .id("remote-image-menu")
+                        .debug_selector(|| "remote-image-menu".into())
+                        .occlude()
+                        .bg(tokens.surface)
+                        .rounded(px(4.))
+                        .p(px(4.))
+                        .shadow_lg()
+                        .on_mouse_down_out(cx.listener(
+                            move |root, _: &gpui::MouseDownEvent, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::Remote(Command::ImageMenu(target.clone(), None)),
+                                    cx,
+                                )
+                            },
+                        ))
+                        .child(button(
+                            "remote-image-download",
+                            if fr {
+                                "Télécharger l’original…"
+                            } else {
+                                "Download original…"
+                            },
+                            Command::Download(path.clone()),
+                            !remote.busy,
+                            tokens,
+                            cx,
+                        ));
+                    view = view.child(
+                        gpui::deferred(
+                            gpui::anchored()
+                                .position(gpui::point(px(x), px(y)))
+                                .snap_to_window_with_margin(px(4.))
+                                .child(menu),
+                        )
+                        .priority(2),
+                    );
+                }
+                body = body.child(view);
             }
         } else {
             body = body.child(SharedString::from(format!(

@@ -92,6 +92,7 @@ struct GitHistory {
     page: Option<std::sync::Arc<remote::file_history::Page>>,
 }
 struct RemoteDocument {
+    image_menu: Option<(f32, f32)>,
     path: String,
     original: Vec<u8>,
     versions: Versions,
@@ -173,6 +174,7 @@ impl RemotePanel {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                image_menu: None,
                 path: "/demo/preview.png".into(),
                 preview: prepare_preview("preview.png", &original).unwrap().ok(),
                 original,
@@ -414,6 +416,7 @@ impl RemotePanel {
                         versions,
                         comparison: Default::default(),
                         git_history: Default::default(),
+                        image_menu: None,
                         text: if preview.is_some() { None } else { text },
                         preview,
                         preview_error,
@@ -600,6 +603,7 @@ impl RemotePanel {
         }
         let mut action = None;
         let mut compare = None;
+        let mut download = None;
         let mut git_request = None;
         let mut git_diff = None;
         ui.add_enabled_ui(
@@ -875,32 +879,11 @@ impl RemotePanel {
                 {
                     doc.text = String::from_utf8(doc.original.clone()).ok();
                 }
-                if ui.button(tr("Download original…")).clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .set_file_name(
-                            doc.path
-                                .rsplit('/')
-                                .next()
-                                .unwrap_or("download.bin")
-                                .replace(['\\', ':'], "_"),
-                        )
-                        .save_file()
+                if ui
+                    .add_enabled(!busy, egui::Button::new(tr("Download original…")))
+                    .clicked()
                 {
-                    let result = (|| -> Result<(), String> {
-                        let mut file = tempfile::NamedTempFile::new_in(
-                            path.parent().ok_or("Missing download folder")?,
-                        )
-                        .map_err(|e| e.to_string())?;
-                        file.write_all(&doc.original).map_err(|e| e.to_string())?;
-                        file.as_file().sync_all().map_err(|e| e.to_string())?;
-                        file.persist_noclobber(path).map_err(
-                            |_| "Destination exists or cannot be saved; existing files were kept",
-                        )?;
-                        Ok(())
-                    })();
-                    if let Err(e) = result {
-                        self.error = e;
-                    }
+                    download = Some(doc.path.clone());
                 }
             });
             if !doc.preview_error.is_empty() {
@@ -928,8 +911,21 @@ impl RemotePanel {
                                 ui.add(
                                     egui::Image::new(texture)
                                         .max_width(ui.available_width())
-                                        .maintain_aspect_ratio(true),
-                                );
+                                        .maintain_aspect_ratio(true)
+                                        .sense(egui::Sense::click()),
+                                )
+                                .context_menu(|ui| {
+                                    if ui
+                                        .add_enabled(
+                                            !busy,
+                                            egui::Button::new(tr("Download original…")),
+                                        )
+                                        .clicked()
+                                    {
+                                        download = Some(doc.path.clone());
+                                        ui.close();
+                                    }
+                                });
                             });
                     }
                 }
@@ -954,6 +950,9 @@ impl RemotePanel {
                 ));
             }
         }
+        if let Some(path) = download {
+            self.download_original(&path);
+        }
         if let Some((path, id)) = git_diff {
             self.compare_git(&path, id.as_deref());
         }
@@ -972,6 +971,54 @@ impl RemotePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "visual-test")]
+    #[test]
+    fn remote_image_right_click_opens_compatibility_popup() {
+        let ctx = egui::Context::default();
+        let mut panel = RemotePanel::fixture();
+        let mut frame = |events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 1000.),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| panel.show(ui, &[]));
+                },
+            )
+        };
+        frame(vec![]);
+        let out = frame(vec![]);
+        let meshes = ctx.tessellate(out.shapes, out.pixels_per_point);
+        let position = meshes
+            .iter()
+            .find_map(|clipped| match &clipped.primitive {
+                egui::epaint::Primitive::Mesh(mesh)
+                    if mesh.texture_id != egui::TextureId::default() =>
+                {
+                    Some(mesh.calc_bounds().intersect(clipped.clip_rect).center())
+                }
+                _ => None,
+            })
+            .expect("image pixels");
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        assert!(egui::Popup::is_any_open(&ctx));
+    }
     #[test]
     fn remote_version_compare_reads_current_host_and_preserves_draft() {
         let temp = tempfile::tempdir().unwrap();
@@ -996,6 +1043,7 @@ mod tests {
                 versions,
                 comparison: Default::default(),
                 git_history: Default::default(),
+                image_menu: None,
                 original: b"opened earlier".to_vec(),
                 text: Some("unsaved editor draft".into()),
                 preview: None,
@@ -1130,6 +1178,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                image_menu: None,
                 path: "/fixture/file.txt".into(),
                 original: b"original".to_vec(),
                 text: Some("edited".into()),

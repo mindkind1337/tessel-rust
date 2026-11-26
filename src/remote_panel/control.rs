@@ -23,7 +23,8 @@ pub(crate) enum Command {
     GitDiff(String, Option<String>),
     CloseComparison,
     Discard,
-    Download,
+    ImageMenu(String, Option<(f32, f32)>),
+    Download(String),
     PdfPage(isize),
     PdfZoom(f32),
     OfficeSection(usize),
@@ -45,6 +46,7 @@ pub(crate) struct Snapshot {
     pub rename: Option<(String, String)>,
     pub delete: Option<String>,
     pub document: Option<(String, Option<String>, usize)>,
+    pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub pdf: Option<crate::pdf::PdfSummaryTuple>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
@@ -90,6 +92,7 @@ impl RemotePanel {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            image_menu: None,
             path: "/demo/notes.txt".into(),
             original: b"Synthetic remote text\nSecond line\n".to_vec(),
             text: Some("Synthetic remote text\nSecond line\n".into()),
@@ -124,6 +127,7 @@ impl RemotePanel {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            image_menu: None,
             path: "/demo/original.pdf".into(),
             preview: prepare_preview("original.pdf", &original).unwrap().ok(),
             original,
@@ -158,6 +162,7 @@ impl RemotePanel {
         Snapshot {
             office,
             pdf,
+            image_menu: self.document.as_ref().and_then(|doc| doc.image_menu),
             pixels,
             git_history: self
                 .document
@@ -206,6 +211,9 @@ impl RemotePanel {
     }
 
     pub(crate) fn command(&mut self, command: Command, hosts: &[Host]) {
+        if let Some(doc) = &mut self.document {
+            doc.image_menu = None;
+        }
         if matches!(command, Command::CancelDialog) {
             self.rename = None;
             self.delete = None;
@@ -283,7 +291,17 @@ impl RemotePanel {
                     doc.text = String::from_utf8(doc.original.clone()).ok();
                 }
             }
-            Command::Download => self.download_original(),
+            Command::ImageMenu(path, position) => {
+                if let Some(doc) = &mut self.document
+                    && doc.path == path
+                    && doc.preview.as_ref().is_some_and(|p| {
+                        p.pdf.is_none() && p.office.is_none() && p.gpui_image.is_some()
+                    })
+                {
+                    doc.image_menu = position;
+                }
+            }
+            Command::Download(path) => self.download_original(&path),
             Command::Name(name) if name.len() <= 255 => self.new_name = name,
             Command::RenameDraft(name) => {
                 if let Some((_, draft)) = &mut self.rename
@@ -369,8 +387,17 @@ impl RemotePanel {
         }
     }
 
-    fn download_original(&mut self) {
-        let Some(doc) = &self.document else {
+    pub(super) fn download_original(&mut self, path: &str) {
+        self.download_original_with(path, |name| {
+            rfd::FileDialog::new().set_file_name(name).save_file()
+        });
+    }
+    fn download_original_with(
+        &mut self,
+        path: &str,
+        choose: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+    ) {
+        let Some(doc) = self.document.as_ref().filter(|d| d.path == path) else {
             return;
         };
         let name = doc
@@ -379,9 +406,7 @@ impl RemotePanel {
             .next()
             .unwrap_or("download.bin")
             .replace(['\\', ':'], "_");
-        let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() else {
-            return;
-        };
+        let Some(path) = choose(&name) else { return };
         let result = (|| -> Result<(), String> {
             let mut file =
                 tempfile::NamedTempFile::new_in(path.parent().ok_or("Missing download folder")?)
@@ -476,6 +501,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                image_menu: None,
                 path: "/fixture/colors.png".into(),
                 preview: prepare_preview("colors.png", &original)
                     .unwrap()
@@ -487,6 +513,17 @@ mod tests {
             }),
             ..Default::default()
         };
+        let destination = tempfile::tempdir().unwrap();
+        let output = destination.path().join("renamed.png");
+        panel.download_original_with("/old/image.png", |_| panic!("stale image"));
+        panel.download_original_with("/fixture/colors.png", |name| {
+            assert_eq!(name, "colors.png");
+            Some(output.clone())
+        });
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        std::fs::write(&output, b"existing").unwrap();
+        panel.download_original_with("/fixture/colors.png", |_| Some(output.clone()));
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing");
         let first = panel.snapshot(&[]).pixels.unwrap();
         assert_eq!(
             first.as_bytes(0).unwrap(),

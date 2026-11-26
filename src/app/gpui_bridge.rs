@@ -2087,6 +2087,11 @@ impl Tessel {
     }
 
     #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn install_remote_image_fixture(&mut self) {
+        self.view = View::Remote;
+        self.remote = crate::remote_panel::RemotePanel::fixture();
+    }
+    #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn install_remote_input_fixture(&mut self) {
         self.view = View::Remote;
         self.remote = crate::remote_panel::RemotePanel::text_fixture();
