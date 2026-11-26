@@ -92,7 +92,6 @@ fn legacy_kimi(path: &str) -> bool {
             && parts[count - 4].eq_ignore_ascii_case("local-packages"))
 }
 
-#[cfg(test)]
 pub fn posix_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }

@@ -19,6 +19,7 @@ pub(crate) enum Command {
     Edit(String),
     Save,
     Compare(String, String),
+    GitHistory(String, bool),
     CloseComparison,
     Discard,
     Download,
@@ -48,6 +49,8 @@ pub(crate) struct Snapshot {
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
     pub versions: Vec<(String, i64)>,
+    pub git_history: Option<std::sync::Arc<remote::file_history::Page>>,
+    pub history_loading: bool,
     pub comparison: Option<std::sync::Arc<Vec<String>>>,
 }
 
@@ -85,6 +88,7 @@ impl RemotePanel {
         panel.document = Some(RemoteDocument {
             versions: Vec::new(),
             comparison: Default::default(),
+            git_history: Default::default(),
             path: "/demo/notes.txt".into(),
             original: b"Synthetic remote text\nSecond line\n".to_vec(),
             text: Some("Synthetic remote text\nSecond line\n".into()),
@@ -118,6 +122,7 @@ impl RemotePanel {
         panel.document = Some(RemoteDocument {
             versions: Vec::new(),
             comparison: Default::default(),
+            git_history: Default::default(),
             path: "/demo/original.pdf".into(),
             preview: prepare_preview("original.pdf", &original).unwrap().ok(),
             original,
@@ -153,6 +158,14 @@ impl RemotePanel {
             office,
             pdf,
             pixels,
+            git_history: self
+                .document
+                .as_ref()
+                .and_then(|d| d.git_history.page.clone()),
+            history_loading: self
+                .document
+                .as_ref()
+                .is_some_and(|d| d.git_history.pending.is_some()),
             comparison: self
                 .document
                 .as_ref()
@@ -202,6 +215,7 @@ impl RemotePanel {
         }
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         match command {
+            Command::GitHistory(path, more) => self.load_git_history(&path, more),
             Command::Compare(path, id) => self.compare_version(&path, &id),
             Command::CloseComparison => {
                 if let Some(doc) = &mut self.document {
@@ -459,6 +473,7 @@ mod tests {
             document: Some(RemoteDocument {
                 versions: Vec::new(),
                 comparison: Default::default(),
+                git_history: Default::default(),
                 path: "/fixture/colors.png".into(),
                 preview: prepare_preview("colors.png", &original)
                     .unwrap()

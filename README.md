@@ -116,6 +116,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Remote files
 
+- Open **Git History** on an SSH file to read its commits from the server, including earlier names detected by Git. Refresh or load older commits in either renderer. This uses the configured OpenSSH host and requires Git and a POSIX shell on the server.
+
 - A successful SFTP text save keeps a private local version in the desktop profile, up to 50 distinct saves per SSH alias and case-sensitive path for files up to 256 KiB. In either native view, select a save date to compare that version with a fresh read from the server while keeping your editor draft.
 
 - The GPUI remote-file panel uses the shared SFTP operations for host selection, directory navigation, file/folder creation, confirmed deletion, rename, original downloads and basic UTF-8 editing. Unsaved changes and active operations guard navigation. Remote image and PDF previews use the original bytes, with PDF page and zoom controls.

@@ -86,11 +86,17 @@ struct Comparison {
     lines: Option<std::sync::Arc<Vec<String>>>,
 }
 
+#[derive(Default)]
+struct GitHistory {
+    pending: Option<Receiver<Result<remote::file_history::Page, String>>>,
+    page: Option<std::sync::Arc<remote::file_history::Page>>,
+}
 struct RemoteDocument {
     path: String,
     original: Vec<u8>,
     versions: Versions,
     comparison: Comparison,
+    git_history: GitHistory,
     text: Option<String>,
     preview: Option<Box<crate::files::Document>>,
     preview_error: String,
@@ -166,6 +172,7 @@ impl RemotePanel {
             document: Some(RemoteDocument {
                 versions: Vec::new(),
                 comparison: Default::default(),
+                git_history: Default::default(),
                 path: "/demo/preview.png".into(),
                 preview: prepare_preview("preview.png", &original).unwrap().ok(),
                 original,
@@ -259,7 +266,49 @@ impl RemotePanel {
             let _ = tx.send(result.map(|diff| diff.lines().map(str::to_owned).collect()));
         });
     }
+    fn load_git_history(&mut self, path: &str, more: bool) {
+        if self.busy() {
+            return;
+        }
+        let (Some(doc), Some(host)) = (&mut self.document, self.host.clone()) else {
+            return;
+        };
+        if doc.path != path || doc.git_history.pending.is_some() {
+            return;
+        }
+        let limit = match &doc.git_history.page {
+            Some(p) if more && p.more => (p.limit + 50).min(500),
+            _ if more => return,
+            Some(p) => p.limit,
+            None => 50,
+        };
+        let (tx, rx) = mpsc::channel();
+        doc.git_history.pending = Some(rx);
+        let root = self.root.clone();
+        let path = path.to_owned();
+        self.error.clear();
+        std::thread::spawn(move || {
+            let _ = tx.send(remote::file_history::load(host, &root, &path, limit));
+        });
+    }
     pub fn poll(&mut self) {
+        if let Some(doc) = &mut self.document
+            && let Some(rx) = &doc.git_history.pending
+        {
+            match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {}
+                reply => {
+                    doc.git_history.pending = None;
+                    match reply.unwrap_or_else(|_| Err("Remote history request stopped.".into())) {
+                        Ok(page) => doc.git_history.page = Some(std::sync::Arc::new(page)),
+                        Err(e) => {
+                            doc.git_history.page = None;
+                            self.error = e;
+                        }
+                    }
+                }
+            }
+        }
         if let Some(doc) = &mut self.document
             && let Some(rx) = &doc.comparison.pending
         {
@@ -324,6 +373,7 @@ impl RemotePanel {
                         original: bytes,
                         versions,
                         comparison: Default::default(),
+                        git_history: Default::default(),
                         text: if preview.is_some() { None } else { text },
                         preview,
                         preview_error,
@@ -340,10 +390,12 @@ impl RemotePanel {
                         if doc.path == old {
                             doc.path = new;
                             doc.versions.clear();
+                            doc.git_history = Default::default();
                             doc.comparison = Default::default();
                         } else if let Some(suffix) = doc.path.strip_prefix(&(old + "/")) {
                             doc.path = format!("{new}/{suffix}");
                             doc.versions.clear();
+                            doc.git_history = Default::default();
                             doc.comparison = Default::default();
                         }
                     }
@@ -374,7 +426,7 @@ impl RemotePanel {
             || self
                 .document
                 .as_ref()
-                .is_some_and(|d| d.comparison.pending.is_some())
+                .is_some_and(|d| d.comparison.pending.is_some() || d.git_history.pending.is_some())
     }
 
     pub(crate) fn poll_native_tree(
@@ -508,6 +560,7 @@ impl RemotePanel {
         }
         let mut action = None;
         let mut compare = None;
+        let mut git_request = None;
         ui.add_enabled_ui(
             !busy && !dirty && self.rename.is_none() && self.delete.is_none(),
             |ui| {
@@ -647,6 +700,46 @@ impl RemotePanel {
         if let Some(doc) = &mut self.document {
             ui.separator();
             ui.strong(&doc.path);
+            let fr = crate::i18n::is_french();
+            let ready = !busy && doc.git_history.pending.is_none();
+            if ui
+                .add_enabled(
+                    ready,
+                    egui::Button::new(crate::file_timeline::Source::Git.label(fr)),
+                )
+                .clicked()
+            {
+                git_request = Some((doc.path.clone(), false));
+            }
+            if doc.git_history.pending.is_some() {
+                ui.spinner();
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(80));
+            }
+            if let Some(page) = &doc.git_history.page {
+                if page.commits.is_empty() {
+                    ui.label(if fr { "Aucun commit." } else { "No commits." });
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("ssh-commits")
+                    .max_height(180.)
+                    .show(ui, |ui| {
+                        for row in &page.commits {
+                            ui.label(row.message.lines().next().unwrap_or(""))
+                                .on_hover_text(row.details(fr));
+                        }
+                    });
+                if page.more
+                    && ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(if fr { "Charger la suite" } else { "Load More" }),
+                        )
+                        .clicked()
+                {
+                    git_request = Some((doc.path.clone(), true));
+                }
+            }
             if !doc.versions.is_empty() {
                 ui.collapsing(
                     crate::file_timeline::Source::Local.label(crate::i18n::is_french()),
@@ -796,6 +889,9 @@ impl RemotePanel {
                 ));
             }
         }
+        if let Some((path, more)) = git_request {
+            self.load_git_history(&path, more);
+        }
         if let Some((path, id)) = compare {
             self.compare_version(&path, &id);
         }
@@ -831,6 +927,7 @@ mod tests {
                 path: path.into(),
                 versions,
                 comparison: Default::default(),
+                git_history: Default::default(),
                 original: b"opened earlier".to_vec(),
                 text: Some("unsaved editor draft".into()),
                 preview: None,
@@ -964,6 +1061,7 @@ mod tests {
             document: Some(RemoteDocument {
                 versions: Vec::new(),
                 comparison: Default::default(),
+                git_history: Default::default(),
                 path: "/fixture/file.txt".into(),
                 original: b"original".to_vec(),
                 text: Some("edited".into()),

@@ -112,13 +112,18 @@ fn within(root: &str, path: &str) -> bool {
             && (root == "/" || path.as_bytes().get(root.len()) == Some(&b'/')))
 }
 fn ssh_args(host: &Host) -> Result<Vec<String>, String> {
+    transport_args(host, true)
+}
+fn transport_args(host: &Host, sftp: bool) -> Result<Vec<String>, String> {
     crate::workspace::validate_host(&host.alias)?;
     if !clean(&host.folder) {
         return Err("Invalid remote folder".into());
     }
-    Ok([
-        "-T",
-        "-s",
+    let mut args = vec!["-T"];
+    if sftp {
+        args.push("-s");
+    }
+    args.extend([
         "-o",
         "BatchMode=yes",
         "-o",
@@ -135,12 +140,12 @@ fn ssh_args(host: &Host) -> Result<Vec<String>, String> {
         "ControlPath=none",
         "--",
         &host.alias,
-        "sftp",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect())
+        if sftp { "sftp" } else { "sh -s" },
+    ]);
+    Ok(args.into_iter().map(str::to_owned).collect())
 }
+#[path = "remote/file_history.rs"]
+pub(crate) mod file_history;
 pub fn execute(host: Host, action: Action) -> Result<Reply, String> {
     let args = ssh_args(&host)?;
     let runtime = tokio::runtime::Builder::new_current_thread()

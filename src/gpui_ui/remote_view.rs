@@ -406,6 +406,40 @@ pub(crate) fn render(
             );
     }
     if let Some((path, text, size)) = &remote.document {
+        body = body.child(button(
+            "remote-git-history",
+            crate::file_timeline::Source::Git.label(fr),
+            Command::GitHistory(path.clone(), false),
+            !remote.busy && !remote.history_loading,
+            tokens,
+            cx,
+        ));
+        if remote.history_loading {
+            body = body.child(if fr { "Chargement…" } else { "Loading…" });
+        }
+        if let Some(page) = &remote.git_history {
+            let mut list = div()
+                .id("ssh-commit-history")
+                .max_h(px(180.))
+                .overflow_y_scroll();
+            if page.commits.is_empty() {
+                list = list.child(if fr { "Aucun commit." } else { "No commits." });
+            }
+            for row in &page.commits {
+                list = list.child(div().child(row.details(fr)));
+            }
+            body = body.child(list);
+            if page.more {
+                body = body.child(button(
+                    "ssh-history-more",
+                    if fr { "Charger la suite" } else { "Load More" },
+                    Command::GitHistory(path.clone(), true),
+                    !remote.busy && !remote.history_loading,
+                    tokens,
+                    cx,
+                ));
+            }
+        }
         if !remote.versions.is_empty() {
             let mut list = div()
                 .id("remote-local-versions")
