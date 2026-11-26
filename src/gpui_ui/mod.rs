@@ -1243,6 +1243,17 @@ impl Render for TesselGpuiRoot {
         {
             window.focus(&self.focus_handle, cx);
         }
+        self.editor_input.sync_plain(
+            snapshot
+                .active_document
+                .as_ref()
+                .filter(|_| {
+                    snapshot.center_mode == GpuiCenterMode::DocumentEditor
+                        && !self.app.gpui_has_open_modal()
+                })
+                .and_then(|doc| doc.html_plain_text.as_ref()),
+            cx,
+        );
         if !self.app.gpui_has_open_modal() {
             self.editor_input
                 .sync(native_doc, &self.app.gpui_document_ids(), window, cx);

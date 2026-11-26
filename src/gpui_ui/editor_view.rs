@@ -218,7 +218,21 @@ pub(crate) fn render_document_editor_stage(
     let header = render_editor_toolbar(doc, french, tokens, cx).into_any_element();
     let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
-    let content = if let Some(source) = &doc.playback {
+    let content = if let Some(state) = editor_input.plain() {
+        gpui_ce_elements::editable_text::text_area("html-plain")
+            .state(state.downgrade())
+            .accepts_input(false)
+            .debug_selector(|| "html-plain".into())
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scroll()
+            .p(px(20.))
+            .font_family(mono_font_family())
+            .line_height(px(21.))
+            .text_color(tokens.text)
+            .into_any_element()
+    } else if let Some(source) = &doc.playback {
         render_playback(source, french, cx).into_any_element()
     } else if let Some(pdf) = &doc.pdf_summary {
         render_pdf_stage(pdf, PdfTarget::Local(doc.instance_id), french, tokens, cx)
@@ -345,39 +359,90 @@ fn render_editor_toolbar(
                 .flex()
                 .items_center()
                 .gap(px(5.0))
-                .when(doc.can_toggle_preview, |el| {
-                    el.child(
-                        div()
-                            .id("editor-toggle-preview")
-                            .px(px(8.0))
-                            .py(px(2.5))
-                            .rounded(px(4.0))
-                            .bg(if doc.preview_mode {
-                                tokens.accent_soft_bg
-                            } else {
-                                tokens.surface_2
-                            })
-                            .border_1()
-                            .border_color(if doc.preview_mode {
-                                tokens.accent
-                            } else {
-                                tokens.border
-                            })
-                            .text_size(px(11.0))
-                            .text_color(tokens.text_strong)
-                            .cursor_pointer()
-                            .on_click(cx.listener(|root, _, _, cx| {
-                                root.dispatch(GpuiAction::ToggleActiveDocumentPreview, cx);
-                            }))
-                            .child(if doc.preview_mode {
-                                "Source"
-                            } else if french {
-                                "Aperçu"
-                            } else {
-                                "Preview"
-                            }),
-                    )
-                })
+                .when(
+                    doc.can_toggle_preview && matches!(doc.extension.as_str(), "htm" | "html"),
+                    |mut el| {
+                        use crate::app::gpui_bridge::HtmlViewMode::*;
+                        let active = if doc.html_plain_text.is_some() {
+                            Plain
+                        } else if doc.preview_mode {
+                            Preview
+                        } else {
+                            Source
+                        };
+                        for (mode, label, button) in [
+                            (Source, "Source", "html-source-mode"),
+                            (
+                                Preview,
+                                if french { "Aperçu" } else { "Preview" },
+                                "html-preview-mode",
+                            ),
+                            (
+                                Plain,
+                                if french { "Texte brut" } else { "Plain text" },
+                                "html-plain-mode",
+                            ),
+                        ] {
+                            let id = doc.instance_id;
+                            el = el.child(
+                                div()
+                                    .id(button)
+                                    .debug_selector(move || button.into())
+                                    .cursor_pointer()
+                                    .rounded(px(4.))
+                                    .px(px(7.))
+                                    .py(px(2.5))
+                                    .text_size(px(11.))
+                                    .bg(if active == mode {
+                                        tokens.accent_soft_bg
+                                    } else {
+                                        tokens.surface_2
+                                    })
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(GpuiAction::SetHtmlView(id, mode), cx)
+                                    }))
+                                    .child(label),
+                            );
+                        }
+                        el
+                    },
+                )
+                .when(
+                    doc.can_toggle_preview && !matches!(doc.extension.as_str(), "htm" | "html"),
+                    |el| {
+                        el.child(
+                            div()
+                                .id("editor-toggle-preview")
+                                .px(px(8.0))
+                                .py(px(2.5))
+                                .rounded(px(4.0))
+                                .bg(if doc.preview_mode {
+                                    tokens.accent_soft_bg
+                                } else {
+                                    tokens.surface_2
+                                })
+                                .border_1()
+                                .border_color(if doc.preview_mode {
+                                    tokens.accent
+                                } else {
+                                    tokens.border
+                                })
+                                .text_size(px(11.0))
+                                .text_color(tokens.text_strong)
+                                .cursor_pointer()
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.dispatch(GpuiAction::ToggleActiveDocumentPreview, cx);
+                                }))
+                                .child(if doc.preview_mode {
+                                    "Source"
+                                } else if french {
+                                    "Aperçu"
+                                } else {
+                                    "Preview"
+                                }),
+                        )
+                    },
+                )
                 .when(!doc.media, |el| {
                     el.child(
                         div()

@@ -18,6 +18,51 @@ use serde_json::json;
 
 #[cfg(feature = "visual-test")]
 #[gpui::test]
+fn html_plain_mode_displays_selectable_body_and_switches_back_to_source(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let path = project.join("index.HTML");
+    std::fs::write(
+        &path,
+        "<h1>Title</h1><p>First &amp; second</p><p>Last<br>line</p><script>hidden()</script>",
+    )
+    .unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        root
+    });
+    for selector in ["html-plain-mode", "html-source-mode", "html-preview-mode"] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let pos = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(pos, Default::default());
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            let doc = root
+                .app
+                .gpui_snapshot(960., 640., 4.)
+                .active_document
+                .unwrap();
+            assert_eq!(doc.preview_mode, selector != "html-source-mode");
+            assert_eq!(
+                root.editor_input.plain().map(|s| s.read(cx).as_str()),
+                (selector == "html-plain-mode").then_some("Title\nFirst & second\nLast\nline")
+            );
+            assert!(doc.text.contains("<script>hidden()</script>"));
+        })
+        .unwrap();
+    }
+}
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
 fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

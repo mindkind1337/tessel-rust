@@ -167,6 +167,63 @@ impl Preview {
         clicked
     }
 }
+/// Extract body text using the same line and table boundaries as HtmlView.vue.
+pub fn html_plain_text(source: &str) -> String {
+    let doc = scraper::Html::parse_document(source);
+    let Some(body) = doc
+        .root_element()
+        .child_elements()
+        .find(|e| e.value().name() == "body")
+    else {
+        return String::new();
+    };
+    let mut text = String::new();
+    let mut node = *body;
+    loop {
+        let tag = node.value().as_element().map(|e| e.name());
+        let skip = matches!(
+            tag,
+            Some("script" | "style" | "iframe" | "template" | "noscript" | "noembed" | "noframes")
+        );
+        if !skip {
+            if let Some(value) = node.value().as_text() {
+                text.push_str(value);
+            } else if tag == Some("br") {
+                text.push('\n');
+            }
+            if let Some(child) = node.first_child() {
+                node = child;
+                continue;
+            }
+        }
+        // Walk back out of each completed element, without recursing on document depth.
+        loop {
+            if node.id() == body.id() {
+                static SPACES: std::sync::LazyLock<regex::Regex> =
+                    std::sync::LazyLock::new(|| regex::Regex::new(r"[ \t]+\n").unwrap());
+                static BREAKS: std::sync::LazyLock<regex::Regex> =
+                    std::sync::LazyLock::new(|| regex::Regex::new(r"\n{3,}").unwrap());
+                return BREAKS
+                    .replace_all(&SPACES.replace_all(&text, "\n"), "\n\n")
+                    .trim()
+                    .to_owned();
+            }
+            match node.value().as_element().map(|e| e.name()) {
+                Some(
+                    "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "tr" | "section"
+                    | "article" | "pre",
+                ) => text.push('\n'),
+                Some("td" | "th") => text.push('\t'),
+                _ => {}
+            }
+            if let Some(next) = node.next_sibling() {
+                node = next;
+                break;
+            }
+            node = node.parent().expect("all body descendants have parents");
+        }
+    }
+}
 pub enum Link {
     File(PathBuf),
     Web(String),
@@ -193,6 +250,14 @@ pub fn resolve(root: &Path, source: &Path, href: &str) -> Result<Link, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn html_plain_text_preserves_inline_spacing_table_columns_and_breaks() {
+        let html = "<title>Hidden</title><p>A<b>B</b>  C &amp; D<br>Line</p><table><tr><th>One</th><th>Two</th></tr><tr><td>3</td><td>4</td></tr></table><script>hidden()</script><style>body{}</style><pre>  End</pre>";
+        assert_eq!(
+            html_plain_text(html),
+            "AB  C & D\nLine\nOne\tTwo\n3\t4\n  End"
+        );
+    }
     #[test]
     fn readable_content_never_includes_scripts_or_loads_resources() {
         let preview = Preview::parse(

@@ -1665,3 +1665,5 @@ Windows acceptance uses a hidden native parent and synthetic WAV and WebM files.
 GPUI readable preview links now use the pinned local document opener, including existing-tab reuse, asynchronous loading and the editor tab limit. Full styled HTML rendering remains open.
 
 The GPUI readable HTML preview mirrors the Vue static preview link menu for local project documents and HTTP(S) links. Folder-served styled pages and their trust controls are still pending.
+
+GPUI HTML tabs expose Source, Preview and Plain text. The plain-text reader retains inline spacing, explicit line breaks and table cell separators and supports native text selection.

@@ -410,6 +410,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub force_large_markdown_render: bool,
     pub sheet: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
     pub json_preview: Option<crate::rich_previews::JsonDocumentPreview>,
+    pub html_plain_text: Option<std::sync::Arc<str>>,
     pub readable_blocks: Vec<crate::preview::ReadableBlock>,
     pub pdf_summary: Option<crate::pdf::PdfSummary>,
     pub office_summary: Option<std::sync::Arc<crate::office::OfficeSummary>>,
@@ -719,6 +720,13 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub status_bar: GpuiStatusBarSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HtmlViewMode {
+    Source,
+    Preview,
+    Plain,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) enum GpuiAction {
@@ -849,6 +857,7 @@ pub(crate) enum GpuiAction {
     // Document / Diff / Rich Preview actions
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
+    SetHtmlView(u64, HtmlViewMode),
     ToggleActiveDocumentPreview,
     ForceRenderLargeMarkdown,
     ToggleEditorWordWrap,
@@ -3685,7 +3694,10 @@ impl Tessel {
             None
         };
 
-        let readable_blocks = if doc.preview_mode && matches!(extension.as_str(), "html" | "htm") {
+        let readable_blocks = if doc.tools.html_plain_text.is_none()
+            && doc.preview_mode
+            && matches!(extension.as_str(), "html" | "htm")
+        {
             if doc.preview.is_none() {
                 doc.preview = Some(crate::preview::Preview::parse(&doc.text, false));
             }
@@ -3743,6 +3755,7 @@ impl Tessel {
             force_large_markdown_render: doc.force_large_markdown_render,
             sheet,
             json_preview,
+            html_plain_text: doc.tools.html_plain_text.clone(),
             readable_blocks,
             pdf_summary,
             office_summary,
@@ -5494,8 +5507,28 @@ impl Tessel {
                     }
                 }
             }
+            GpuiAction::SetHtmlView(id, mode) => {
+                if self.view == View::Files
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && !doc.media
+                    && doc.diff_title.is_none()
+                    && doc
+                        .path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| {
+                            ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+                        })
+                {
+                    doc.preview_mode = mode != HtmlViewMode::Source;
+                    doc.tools.html_plain_text = (mode == HtmlViewMode::Plain)
+                        .then(|| crate::preview::html_plain_text(&doc.text).into());
+                }
+            }
             GpuiAction::ToggleActiveDocumentPreview => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
+                    doc.tools.html_plain_text = None;
                     doc.preview_mode = !doc.preview_mode;
                 }
             }

@@ -94,6 +94,7 @@ pub enum OutlineCursor {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub html_plain_text: Option<std::sync::Arc<str>>,
     pub html_link_menu: Option<((f32, f32), String, bool)>,
     pub image_menu: Option<(f32, f32)>,
     pub image_download_notice: String,

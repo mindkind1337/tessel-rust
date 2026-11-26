@@ -1097,11 +1097,36 @@ mod tests {
 pub(crate) struct Input {
     pub tools: super::editor_tool_inputs::Inputs,
     bindings: HashMap<u64, Binding>,
+    plain: Option<(std::sync::Arc<str>, Entity<EditableTextState>)>,
     pub syntax: editor_syntax::Cache,
     styled: Option<editor_syntax::StyledSource>,
 }
 
 impl Input {
+    pub fn sync_plain(
+        &mut self,
+        text: Option<&std::sync::Arc<str>>,
+        cx: &mut Context<TesselGpuiRoot>,
+    ) {
+        if let Some(text) = text {
+            if !self
+                .plain
+                .as_ref()
+                .is_some_and(|(previous, _)| std::sync::Arc::ptr_eq(previous, text))
+            {
+                let state =
+                    cx.new(|cx| EditableTextState::new(StringStorage::from(text.as_ref()), cx));
+                self.plain = Some((text.clone(), state));
+            }
+        } else {
+            self.plain = None;
+        }
+    }
+
+    pub fn plain(&self) -> Option<&Entity<EditableTextState>> {
+        self.plain.as_ref().map(|(_, state)| state)
+    }
+
     pub fn focused(&self, window: &Window, cx: &App) -> bool {
         self.bindings
             .values()
