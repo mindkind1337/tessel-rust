@@ -50,7 +50,9 @@ pub(crate) fn render_side_panel_tab_body(
     let french = snapshot.french;
     match snapshot.side_panel.tab {
         SideTab::Dashboard => render_dashboard_tab(sp, panel_query_inputs, french, tokens, cx),
-        SideTab::Files => render_explorer_tab(sp, explorer_input, french, tokens, cx),
+        SideTab::Files => {
+            render_explorer_tab(sp, explorer_input, panel_query_inputs, french, tokens, cx)
+        }
         SideTab::Changes => render_scm_changes_tab(sp, scm_input, french, tokens, cx),
         SideTab::Tasks => render_tasks_board_tab(
             sp,
@@ -349,6 +351,7 @@ fn render_dashboard_tab(
 fn render_explorer_tab(
     sp: &GpuiSidePanelsSnapshot,
     explorer_input: &super::explorer_input::Input,
+    panel_query_inputs: &super::panel_query_inputs::Inputs,
     french: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
@@ -731,6 +734,19 @@ fn render_explorer_tab(
                 GpuiAction::OutlineFollow(!sp.outline_follow_cursor),
                 cx,
             ));
+            menu = menu.child(render_chip(
+                "outline-filter-mode",
+                if french {
+                    "Filtrer à la frappe"
+                } else {
+                    "Filter on Type"
+                }
+                .into(),
+                sp.outline_filter_on_type,
+                tokens,
+                GpuiAction::OutlineFilterMode(!sp.outline_filter_on_type),
+                cx,
+            ));
             for (sort, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
                 menu = menu.child(render_chip(
                     en,
@@ -764,9 +780,88 @@ fn render_explorer_tab(
             .flex()
             .flex_col();
         if let Some((id, tree)) = &sp.outline {
-            let mut pending: Vec<_> = tree.iter().rev().map(|s| (s, 0usize)).collect();
-            let mut index = 0;
-            while let Some((symbol, depth)) = pending.pop() {
+            let owner = *id;
+            let focus = explorer_input
+                .outline_focus
+                .get_or_init(|| cx.focus_handle())
+                .clone();
+            body = body.track_focus(&focus).on_key_down(cx.listener(
+                move |root, event: &gpui::KeyDownEvent, _, cx| {
+                    let k = &event.keystroke;
+                    if k.modifiers.control
+                        || k.modifiers.platform
+                        || k.modifiers.alt
+                        || root.app.outline_document_id() != Some(owner)
+                    {
+                        return;
+                    }
+                    use eframe::egui::Key;
+                    let key = match k.key.as_str() {
+                        "down" => Some(Key::ArrowDown),
+                        "up" => Some(Key::ArrowUp),
+                        "left" => Some(Key::ArrowLeft),
+                        "right" => Some(Key::ArrowRight),
+                        "home" => Some(Key::Home),
+                        "end" => Some(Key::End),
+                        "enter" => Some(Key::Enter),
+                        _ => None,
+                    };
+                    if let Some(key) = key {
+                        root.dispatch_action(GpuiAction::OutlineNavigate(owner, key), cx);
+                    } else if k.key == "escape" {
+                        root.dispatch_action(GpuiAction::OutlineCloseQuery(owner), cx);
+                    } else if let Some(seed) = k
+                        .key_char
+                        .as_deref()
+                        .or(Some(k.key.as_str()))
+                        .filter(|s| s.chars().count() == 1 && !s.trim().is_empty())
+                    {
+                        root.focus_input = FocusInputTarget::OutlineQuery;
+                        root.dispatch_action(
+                            GpuiAction::OutlineStartQuery(owner, seed.to_owned()),
+                            cx,
+                        );
+                    } else {
+                        return;
+                    }
+                    cx.stop_propagation();
+                },
+            ));
+            let query = sp.outline_query.as_deref().unwrap_or_default().trim();
+            let rows = crate::outline_tree::visible_rows(
+                tree,
+                &sp.outline_folds,
+                query,
+                !sp.outline_filter_on_type,
+            );
+            if sp.outline_query.is_some() {
+                outline = outline.child(panel_query_inputs.render_with_hint(
+                    FocusInputTarget::OutlineQuery,
+                    french,
+                    sp.outline_filter_on_type.then_some(if french {
+                        "Taper pour filtrer"
+                    } else {
+                        "Type to filter"
+                    }),
+                    tokens,
+                    cx,
+                ));
+                if !query.is_empty() && !rows.iter().any(|entry| !entry.row.matches.is_empty()) {
+                    outline = outline.child(
+                        div()
+                            .id("outline-no-results")
+                            .debug_selector(|| "outline-no-results".into())
+                            .child(if french {
+                                "Aucun résultat trouvé."
+                            } else {
+                                "No results found."
+                            }),
+                    );
+                }
+            }
+            for (index, entry) in rows.into_iter().enumerate() {
+                let symbol = entry.symbol;
+                let depth = entry.row.depth;
                 let selected = sp.outline_selected.as_ref() == Some(&symbol.key);
                 if selected
                     && sp.outline_scroll_generation != 0
@@ -777,10 +872,9 @@ fn render_explorer_tab(
                 {
                     reveal_index = Some(index);
                 }
-                index += 1;
                 let range = symbol.selection_range.unwrap_or(symbol.range);
                 use crate::app::gpui_bridge::OutlineRowAction;
-                let open = !sp.outline_folds.contains(&symbol.key);
+                let open = entry.row.open;
                 let mut row = div()
                     .when(selected, |row| row.bg(tokens.accent_soft))
                     .pl(px(8.0 + depth as f32 * 12.0))
@@ -805,29 +899,48 @@ fn render_explorer_tab(
                 let full_range = symbol.range;
                 let id = *id;
                 let snapshot = tree.clone();
+                let row_focus = focus.clone();
+                let hits = crate::outline_tree::highlight_ranges(&symbol.name, &entry.row.matches);
+                let label = gpui::StyledText::new(SharedString::from(symbol.name.clone()))
+                    .with_highlights(hits.into_iter().map(|span| {
+                        (
+                            span,
+                            gpui::HighlightStyle {
+                                color: Some(gpui::rgb_to_hsla(tokens.accent)),
+                                ..Default::default()
+                            },
+                        )
+                    }));
                 row = row.child(
                     div()
                         .id(SharedString::from(format!("outline-name-{}", symbol.key)))
                         .debug_selector(move || format!("outline-name-{row_key}"))
                         .cursor_pointer()
-                        .child(SharedString::from(symbol.name.clone()))
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                            let select = event.click_count() == 2;
-                            let target = if select { full_range } else { range };
-                            this.dispatch_action(
-                                GpuiAction::OutlineRow(
-                                    id,
-                                    snapshot.clone(),
-                                    OutlineRowAction::Reveal(selection_key.clone(), target, select),
-                                ),
-                                cx,
-                            );
-                        })),
+                        .child(label)
+                        .on_click(cx.listener(
+                            move |this, event: &gpui::ClickEvent, window, cx| {
+                                let select = event.click_count() == 2;
+                                if !select {
+                                    this.focus_input = FocusInputTarget::OutlineTree;
+                                    window.focus(&row_focus, cx);
+                                }
+                                let target = if select { full_range } else { range };
+                                this.dispatch_action(
+                                    GpuiAction::OutlineRow(
+                                        id,
+                                        snapshot.clone(),
+                                        OutlineRowAction::Reveal(
+                                            selection_key.clone(),
+                                            target,
+                                            select,
+                                        ),
+                                    ),
+                                    cx,
+                                );
+                            },
+                        )),
                 );
                 body = body.child(row);
-                if open {
-                    pending.extend(symbol.children.iter().rev().map(|c| (c, depth + 1)));
-                }
             }
             if tree.is_empty() {
                 body = body.child(if french {

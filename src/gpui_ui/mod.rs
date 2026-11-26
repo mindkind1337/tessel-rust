@@ -184,6 +184,16 @@ impl TesselGpuiRoot {
                 panel_query_inputs::ConsumeEnter,
                 Some("TesselPanelQuery"),
             ),
+            gpui::KeyBinding::new(
+                "down",
+                panel_query_inputs::OutlineFirst,
+                Some("TesselOutlineQuery"),
+            ),
+            gpui::KeyBinding::new(
+                "backspace",
+                panel_query_inputs::Clear,
+                Some("TesselEmptyOutlineQuery"),
+            ),
             gpui::KeyBinding::new("enter", task_rename_input::Save, Some("TesselTaskRename")),
             gpui::KeyBinding::new(
                 "escape",
@@ -666,6 +676,7 @@ impl TesselGpuiRoot {
                         | FocusInputTarget::SettingsSearch
                         | FocusInputTarget::ScmCommitMessage
                         | FocusInputTarget::ExplorerFilter
+                        | FocusInputTarget::OutlineQuery
                         | FocusInputTarget::DashboardQuery
                         | FocusInputTarget::TaskHistoryQuery
                         | FocusInputTarget::SessionsQuery
@@ -1117,6 +1128,13 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        if (self.focus_input == FocusInputTarget::OutlineQuery
+            && snapshot.side_panels.outline_query.is_none())
+            || (self.focus_input == FocusInputTarget::OutlineTree
+                && snapshot.side_panels.outline.is_none())
+        {
+            self.focus_input = FocusInputTarget::None;
+        }
         if let FocusInputTarget::ChatQuestion { pane_id, q_idx } = self.focus_input
             && self.app.gpui_chat_question_state(pane_id, q_idx).is_none()
         {

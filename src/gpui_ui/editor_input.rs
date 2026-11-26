@@ -276,6 +276,107 @@ mod tests {
     }
 
     #[gpui::test]
+    fn outline_type_filter_preserves_folds_text_and_focus(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("filter.json");
+        let text = r#"{"parent":{"target":1},"other":2}"#;
+        std::fs::write(&path, text).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        let parent = "outline-name-/1:parent";
+        let child = "outline-name-/1:parent/15:target";
+        let other = "outline-name-/15:other";
+        let click = |cx: &mut TestAppContext, selector| {
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let pos = visual
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector}"))
+                .center();
+            visual.simulate_click(pos, Default::default());
+        };
+        click(cx, "explorer-outline-fold-all");
+        click(cx, parent);
+        for key in ["t", "g", "t"] {
+            cx.simulate_keystrokes(view.into(), key);
+            cx.refresh().unwrap();
+        }
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_panel_query_input().map(|(_, q)| q),
+                Some("tgt")
+            );
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, text);
+        })
+        .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert!(visual.debug_bounds(parent).is_some());
+            assert!(visual.debug_bounds(child).is_some());
+            assert!(visual.debug_bounds(other).is_none());
+        }
+        cx.simulate_keystrokes(view.into(), "down");
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(view.into(), "down");
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app
+                    .gpui_editor_document()
+                    .unwrap()
+                    .tools
+                    .outline_selected
+                    .as_deref(),
+                Some("/1:parent/15:target")
+            );
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "escape");
+        cx.refresh().unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert!(visual.debug_bounds(other).is_some());
+            assert!(visual.debug_bounds(child).is_none());
+        }
+        cx.simulate_keystrokes(view.into(), "z");
+        cx.refresh().unwrap();
+        assert!(
+            gpui::VisualTestContext::from_window(view.into(), cx)
+                .debug_bounds("outline-no-results")
+                .is_some()
+        );
+        cx.simulate_keystrokes(view.into(), "escape");
+        cx.refresh().unwrap();
+        view.update(cx, |root, w, _| {
+            assert!(root.app.gpui_panel_query_input().is_none());
+            assert!(
+                root.explorer_input
+                    .outline_focus
+                    .get()
+                    .unwrap()
+                    .is_focused(w)
+            );
+        })
+        .unwrap();
+        click(cx, "outline-options");
+        click(cx, "outline-filter-mode");
+        click(cx, parent);
+        cx.simulate_keystrokes(view.into(), "o");
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds(parent).is_some());
+        assert!(visual.debug_bounds(other).is_some());
+        assert!(visual.debug_bounds(child).is_none());
+        assert!(visual.debug_bounds("outline-no-results").is_none());
+    }
+
+    #[gpui::test]
     fn outline_options_sort_visible_rows(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sort.json");

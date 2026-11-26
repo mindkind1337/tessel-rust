@@ -258,9 +258,6 @@ fn tree_keys(
     searching: bool,
 ) -> bool {
     use egui::Key;
-    let Some(last) = rows.len().checked_sub(1) else {
-        return false;
-    };
     let key = ui.input_mut(|i| {
         [
             Key::ArrowDown,
@@ -274,7 +271,19 @@ fn tree_keys(
         .into_iter()
         .find(|key| i.consume_key(egui::Modifiers::NONE, *key))
     });
-    let Some(key) = key else { return false };
+    key.is_some_and(|key| navigate(doc, rows, searching, key))
+}
+
+pub(crate) fn navigate(
+    doc: &mut Document,
+    rows: &[crate::outline_tree::VisibleRow<'_>],
+    searching: bool,
+    key: egui::Key,
+) -> bool {
+    use egui::Key;
+    let Some(last) = rows.len().checked_sub(1) else {
+        return false;
+    };
     let current = rows
         .iter()
         .position(|entry| Some(&entry.row.key) == doc.tools.outline_selected.as_ref());

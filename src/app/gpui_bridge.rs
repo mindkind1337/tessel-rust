@@ -49,6 +49,7 @@ pub(crate) enum OutlineRowAction {
 pub(crate) struct GpuiExtraUiState {
     outline_open: bool,
     outline_options_open: bool,
+    outline_query: Option<(u64, String)>,
     outline_cache: Option<crate::json_outline_panel::Cache>,
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
@@ -94,6 +95,7 @@ impl Default for GpuiExtraUiState {
         Self {
             outline_open: false,
             outline_options_open: false,
+            outline_query: None,
             outline_cache: None,
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
@@ -159,6 +161,8 @@ pub(crate) enum GpuiFocusTarget {
     FinderQuery,
     HelpQuery,
     ExplorerFilter,
+    OutlineTree,
+    OutlineQuery,
     ScmCommitMessage,
     TaskNewTitle,
     TaskRenameTitle,
@@ -450,6 +454,8 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
     pub outline_open: bool,
     pub outline_options_open: bool,
+    pub outline_query: Option<String>,
+    pub outline_filter_on_type: bool,
     pub outline_follow_cursor: bool,
     pub outline_selected: Option<String>,
     pub outline_scroll_generation: u64,
@@ -923,6 +929,10 @@ pub(crate) enum GpuiAction {
     ExplorerToggleCompact,
     OutlineToggle,
     OutlineOptions(bool),
+    OutlineFilterMode(bool),
+    OutlineStartQuery(u64, String),
+    OutlineCloseQuery(u64),
+    OutlineNavigate(u64, eframe::egui::Key),
     OutlineSort(crate::outline_tree::Sort),
     OutlineFollow(bool),
     OutlineRow(
@@ -1793,6 +1803,15 @@ impl Tessel {
             return None;
         }
         let target = match self.state.panels.right_tab {
+            SideTab::Files
+                if self
+                    .gpui_extra
+                    .outline_query
+                    .as_ref()
+                    .is_some_and(|(id, _)| self.outline_document_id() == Some(*id)) =>
+            {
+                GpuiFocusTarget::OutlineQuery
+            }
             SideTab::Tasks if self.gpui_scm_owner().is_some() => GpuiFocusTarget::TaskNewTitle,
             SideTab::Dashboard => GpuiFocusTarget::DashboardQuery,
             SideTab::TaskHistory => GpuiFocusTarget::TaskHistoryQuery,
@@ -1805,6 +1824,7 @@ impl Tessel {
     pub(crate) fn gpui_panel_query_input(&self) -> Option<(NativePanelQueryScope, &str)> {
         let target = self.gpui_panel_query_context()?.0;
         let text = match target {
+            GpuiFocusTarget::OutlineQuery => &self.gpui_extra.outline_query.as_ref()?.1,
             GpuiFocusTarget::TaskNewTitle => &self.gpui_extra.new_task_title,
             GpuiFocusTarget::DashboardQuery => &self.side_panels_ui.dashboard_query,
             GpuiFocusTarget::TaskHistoryQuery => &self.side_panels_ui.history_query,
@@ -1819,6 +1839,21 @@ impl Tessel {
             },
             text,
         ))
+    }
+
+    pub(crate) fn outline_document_id(&self) -> Option<u64> {
+        if self.gpui_has_open_modal()
+            || self.view != View::Files
+            || !self.gpui_extra.outline_open
+            || !self.state.panels.right_open
+            || self.state.panels.right_tab != SideTab::Files
+        {
+            return None;
+        }
+        self.documents
+            .get(self.active_document)
+            .filter(|doc| crate::json_outline_panel::supported(doc))
+            .map(|doc| doc.instance_id())
     }
 
     fn gpui_explorer_owner(&self) -> Option<crate::git_result::Owner> {
@@ -2440,7 +2475,9 @@ impl Tessel {
             GpuiFocusTarget::BrowserUrl => false,
             GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
             GpuiFocusTarget::HelpQuery => false,
-            GpuiFocusTarget::ExplorerFilter => false,
+            GpuiFocusTarget::ExplorerFilter
+            | GpuiFocusTarget::OutlineTree
+            | GpuiFocusTarget::OutlineQuery => false,
             GpuiFocusTarget::ScmCommitMessage => false,
             GpuiFocusTarget::TaskNewTitle
             | GpuiFocusTarget::TaskRenameTitle
@@ -4021,6 +4058,26 @@ impl Tessel {
             std::sync::Arc::default()
         };
 
+        if self
+            .gpui_extra
+            .outline_query
+            .as_ref()
+            .is_some_and(|(id, _)| {
+                self.documents
+                    .get(self.active_document)
+                    .is_none_or(|d| d.instance_id() != *id)
+                    || self.view != View::Files
+                    || visible != Some(SideTab::Files)
+                    || !self.gpui_extra.outline_open
+            })
+        {
+            self.gpui_extra.outline_query = None;
+        }
+        let query = self
+            .gpui_extra
+            .outline_query
+            .as_ref()
+            .map(|(_, q)| q.clone());
         let outline = if visible == Some(SideTab::Files)
             && self.gpui_extra.outline_open
             && self.view == View::Files
@@ -4034,7 +4091,9 @@ impl Tessel {
                         doc,
                         self.state.editor_prefs.outline_sort,
                     );
-                    if cache.follow(doc, self.state.editor_prefs.outline_follow_cursor) {
+                    if query.as_deref().is_none_or(|q| q.trim().is_empty())
+                        && cache.follow(doc, self.state.editor_prefs.outline_follow_cursor)
+                    {
                         doc.tools.outline_scroll_generation =
                             doc.tools.outline_scroll_generation.wrapping_add(1);
                     }
@@ -4056,6 +4115,8 @@ impl Tessel {
                 .unwrap_or_default(),
             outline_open: self.gpui_extra.outline_open,
             outline_options_open: self.gpui_extra.outline_options_open,
+            outline_query: query,
+            outline_filter_on_type: self.state.editor_prefs.outline_filter_on_type,
             outline_sort: self.state.editor_prefs.outline_sort,
             outline_follow_cursor: self.state.editor_prefs.outline_follow_cursor,
             outline_scroll_generation: self
@@ -5730,6 +5791,11 @@ impl Tessel {
                     && self.gpui_panel_query_input() == Some((scope, base.as_str()))
                 {
                     match scope.target {
+                        GpuiFocusTarget::OutlineQuery => {
+                            if let Some((_, query)) = &mut self.gpui_extra.outline_query {
+                                *query = text;
+                            }
+                        }
                         GpuiFocusTarget::TaskNewTitle => self.gpui_extra.new_task_title = text,
                         GpuiFocusTarget::DashboardQuery => {
                             self.side_panels_ui.dashboard_query = text
@@ -5783,6 +5849,55 @@ impl Tessel {
             GpuiAction::OutlineToggle => {
                 self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
                 self.gpui_extra.outline_options_open = false;
+            }
+            GpuiAction::OutlineStartQuery(id, seed) => {
+                if self.outline_document_id() == Some(id) {
+                    match &mut self.gpui_extra.outline_query {
+                        Some((owner, q)) if *owner == id => q.push_str(&seed),
+                        query => *query = Some((id, seed)),
+                    }
+                }
+            }
+            GpuiAction::OutlineCloseQuery(id) => {
+                if self
+                    .gpui_extra
+                    .outline_query
+                    .as_ref()
+                    .is_some_and(|(owner, _)| *owner == id)
+                {
+                    self.gpui_extra.outline_query = None;
+                }
+            }
+            GpuiAction::OutlineFilterMode(on) => {
+                self.state.editor_prefs.outline_filter_on_type = on;
+                self.gpui_extra.outline_options_open = false;
+                self.save();
+            }
+            GpuiAction::OutlineNavigate(id, key) => {
+                if self.outline_document_id() == Some(id)
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && let Some(cache) = self
+                        .gpui_extra
+                        .outline_cache
+                        .as_ref()
+                        .filter(|c| c.matches(doc))
+                {
+                    let query = self
+                        .gpui_extra
+                        .outline_query
+                        .as_ref()
+                        .map_or("", |(_, q)| q.trim());
+                    let rows = crate::outline_tree::visible_rows(
+                        &cache.symbols,
+                        &doc.tools.outline_folds,
+                        query,
+                        !self.state.editor_prefs.outline_filter_on_type,
+                    );
+                    if crate::json_outline_panel::navigate(doc, &rows, !query.is_empty(), key) {
+                        doc.tools.outline_scroll_generation =
+                            doc.tools.outline_scroll_generation.wrapping_add(1);
+                    }
+                }
             }
             GpuiAction::OutlineOptions(open) => {
                 self.gpui_extra.outline_options_open = open;

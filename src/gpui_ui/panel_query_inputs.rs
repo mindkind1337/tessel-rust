@@ -18,7 +18,7 @@ pub(crate) struct Inputs {
     bindings: HashMap<FocusInputTarget, Binding>,
     active: Option<NativePanelQueryScope>,
 }
-gpui::actions!(tessel_panel_query, [Clear, ConsumeEnter]);
+gpui::actions!(tessel_panel_query, [Clear, ConsumeEnter, OutlineFirst]);
 impl Inputs {
     pub fn state(&self) -> Option<&Entity<EditableTextState>> {
         let scope = self.active?;
@@ -40,17 +40,23 @@ impl Inputs {
         cx: &mut Context<TesselGpuiRoot>,
     ) {
         self.active = Some(scope);
-        let retained = self
-            .bindings
-            .get(&scope.target)
-            .filter(|b| b.state.read(cx).as_str() == text || (b.too_long && b.synced == text));
+        let retained = self.bindings.get(&scope.target).filter(|b| {
+            (scope.target != FocusInputTarget::OutlineQuery || scope == b.scope)
+                && (b.state.read(cx).as_str() == text || (b.too_long && b.synced == text))
+        });
         if retained.is_some_and(|b| b.scope == scope) {
             return;
         }
         let too_long = retained.is_some_and(|b| b.too_long);
-        let state = retained
-            .map(|b| b.state.clone())
-            .unwrap_or_else(|| cx.new(|cx| EditableTextState::new(StringStorage::from(text), cx)));
+        let state = retained.map(|b| b.state.clone()).unwrap_or_else(|| {
+            cx.new(|cx| {
+                let mut s = EditableTextState::new(StringStorage::from(text), cx);
+                if scope.target == FocusInputTarget::OutlineQuery {
+                    s.move_to(text.len(), cx);
+                }
+                s
+            })
+        });
         let changed = cx.subscribe(&state, move |root, state, _: &TextChanged, cx| {
             if root
                 .panel_query_inputs
@@ -80,6 +86,17 @@ impl Inputs {
         tokens: &super::theme::GpuiThemeTokens,
         cx: &mut Context<TesselGpuiRoot>,
     ) -> gpui::AnyElement {
+        self.render_with_hint(target, french, None, tokens, cx)
+    }
+
+    pub fn render_with_hint(
+        &self,
+        target: FocusInputTarget,
+        french: bool,
+        hint: Option<&'static str>,
+        tokens: &super::theme::GpuiThemeTokens,
+        cx: &mut Context<TesselGpuiRoot>,
+    ) -> gpui::AnyElement {
         use gpui::{
             InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
             div, prelude::FluentBuilder, px,
@@ -95,8 +112,11 @@ impl Inputs {
         let clicked = expected.clone();
         let button = expected.clone();
         let enter = expected.clone();
+        let first = expected.clone();
         let add = expected.clone();
         let placeholder = match (target, french) {
+            (FocusInputTarget::OutlineQuery, true) => "Taper pour rechercher",
+            (FocusInputTarget::OutlineQuery, false) => "Type to search",
             (FocusInputTarget::TaskNewTitle, true) => "Ajouter une tâche…",
             (FocusInputTarget::TaskNewTitle, false) => "Add a task…",
             (FocusInputTarget::DashboardQuery, true) => "Rechercher un agent, une tâche, un projet",
@@ -110,11 +130,34 @@ impl Inputs {
         };
         let field = gpui_ce_elements::editable_text::text_input("native-panel-query")
             .state(b.state.downgrade())
-            .key_context("EditableText TesselPanelQuery")
-            .placeholder(placeholder)
+            .key_context(if target != FocusInputTarget::OutlineQuery {
+                "EditableText TesselPanelQuery"
+            } else if b.state.read(cx).as_str().is_empty() {
+                "EditableText TesselPanelQuery TesselOutlineQuery TesselEmptyOutlineQuery"
+            } else {
+                "EditableText TesselPanelQuery TesselOutlineQuery"
+            })
+            .placeholder(hint.unwrap_or(placeholder))
             .on_action(
                 cx.listener(move |root, _: &Clear, w, cx| clear(root, &expected, w, cx, true)),
             )
+            .on_action(cx.listener(move |root, _: &OutlineFirst, w, cx| {
+                if matches(root, &first)
+                    && let Some(id) = root.app.outline_document_id()
+                    && first
+                        .1
+                        .update(cx, |s, cx| s.marked_text_range(w, cx).is_none())
+                {
+                    root.dispatch_action(
+                        GpuiAction::OutlineNavigate(id, eframe::egui::Key::Home),
+                        cx,
+                    );
+                    root.focus_input = FocusInputTarget::OutlineTree;
+                    if let Some(focus) = root.explorer_input.outline_focus.get() {
+                        w.focus(focus, cx);
+                    }
+                }
+            }))
             .on_action(cx.listener(move |root, _: &ConsumeEnter, w, cx| {
                 if target == FocusInputTarget::TaskNewTitle {
                     submit(root, &enter, w, cx);
@@ -163,8 +206,9 @@ impl Inputs {
                         )
                     })
                     .when(
-                        target != FocusInputTarget::TaskNewTitle
-                            && !b.state.read(cx).as_str().is_empty(),
+                        target == FocusInputTarget::OutlineQuery
+                            || (target != FocusInputTarget::TaskNewTitle
+                                && !b.state.read(cx).as_str().is_empty()),
                         |el| {
                             el.child(
                                 div()
@@ -254,6 +298,16 @@ fn clear(
             .1
             .update(cx, |s, cx| s.marked_text_range(w, cx).is_some())
     {
+        return;
+    }
+    if token.0.target == FocusInputTarget::OutlineQuery
+        && let Some(id) = root.app.outline_document_id()
+    {
+        root.dispatch_action(GpuiAction::OutlineCloseQuery(id), cx);
+        root.focus_input = FocusInputTarget::OutlineTree;
+        if let Some(focus) = root.explorer_input.outline_focus.get() {
+            w.focus(focus, cx);
+        }
         return;
     }
     if escape

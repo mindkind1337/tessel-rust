@@ -14,6 +14,7 @@ struct Binding {
 #[derive(Default)]
 pub(crate) struct Input {
     binding: Option<Binding>,
+    pub outline_focus: std::cell::OnceCell<gpui::FocusHandle>,
     pub outline_scroll: gpui::ScrollHandle,
     pub last_outline_scroll: std::cell::Cell<Option<(u64, u64)>>,
 }
