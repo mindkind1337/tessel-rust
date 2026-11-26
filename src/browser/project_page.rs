@@ -30,7 +30,7 @@ struct Site {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>);
+pub(crate) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>);
 
 fn segment_ok(s: &str) -> bool {
     let stem = s
@@ -192,7 +192,7 @@ impl Pages {
         }
         self.register(root, entry, text, None)
     }
-    pub(super) fn open_remote(
+    pub(crate) fn open_remote(
         &self,
         host: crate::workspace::Host,
         root: &str,

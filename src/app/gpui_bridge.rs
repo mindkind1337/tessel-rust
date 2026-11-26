@@ -2038,6 +2038,16 @@ impl Tessel {
         rect: eframe::egui::Rect,
         scale: f32,
     ) {
+        if self.view == View::Remote
+            && self.gpui_media_unobscured()
+            && let Some((host, root, path, text)) = self.remote.active_html_page(id)
+        {
+            self.editor_page
+                .sync_source(window, id, rect, scale, true, |pages| {
+                    pages.open_remote(host, root, path, text)
+                });
+            return;
+        }
         if self.view == View::Files
             && self.gpui_media_unobscured()
             && let Some(doc) = self.documents.get(self.active_document)

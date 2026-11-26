@@ -204,6 +204,41 @@ pub fn layout_mermaid_sequence(
 // Document & Diff Stage
 // ---------------------------------------------------------------------------
 
+#[cfg(windows)]
+pub(super) fn html_viewport(
+    id: u64,
+    readable: gpui::AnyElement,
+    cx: &Context<TesselGpuiRoot>,
+) -> gpui::AnyElement {
+    let owner = cx.weak_entity();
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .child(readable)
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, (), window, cx| {
+                    let bounds = bounds.intersect(&window.content_mask().bounds);
+                    let rect = eframe::egui::Rect::from_min_size(
+                        eframe::egui::pos2(bounds.origin.x.into(), bounds.origin.y.into()),
+                        eframe::egui::vec2(bounds.size.width.into(), bounds.size.height.into()),
+                    );
+                    let _ = owner.update(cx, |root, _| {
+                        root.app
+                            .sync_html_page(window, id, rect, window.scale_factor())
+                    });
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .into_any_element()
+}
+
 pub(super) fn plain_text(
     state: &gpui::Entity<gpui_ce_elements::editable_text::EditableTextState>,
     tokens: &GpuiThemeTokens,
@@ -258,40 +293,7 @@ pub(crate) fn render_document_editor_stage(
             let readable = render_readable_html_stage(doc, tokens, cx).into_any_element();
             #[cfg(windows)]
             {
-                let owner = cx.weak_entity();
-                let id = doc.instance_id;
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(readable)
-                    .child(
-                        canvas(
-                            |_, _, _| (),
-                            move |bounds, (), window, cx| {
-                                let bounds = bounds.intersect(&window.content_mask().bounds);
-                                let rect = eframe::egui::Rect::from_min_size(
-                                    eframe::egui::pos2(
-                                        bounds.origin.x.into(),
-                                        bounds.origin.y.into(),
-                                    ),
-                                    eframe::egui::vec2(
-                                        bounds.size.width.into(),
-                                        bounds.size.height.into(),
-                                    ),
-                                );
-                                let _ = owner.update(cx, |root, _| {
-                                    root.app
-                                        .sync_html_page(window, id, rect, window.scale_factor())
-                                });
-                            },
-                        )
-                        .absolute()
-                        .inset_0(),
-                    )
-                    .into_any_element()
+                html_viewport(doc.instance_id, readable, cx)
             }
             #[cfg(not(windows))]
             readable.into_any_element()

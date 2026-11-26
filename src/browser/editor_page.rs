@@ -84,7 +84,19 @@ impl EditorPage {
         bounds: eframe::egui::Rect,
         scale: f32,
     ) {
-        let id = doc.instance_id();
+        self.sync_source(parent, doc.instance_id(), bounds, scale, false, |pages| {
+            pages.open(&doc.root, &doc.path, &doc.text)
+        });
+    }
+    pub(crate) fn sync_source(
+        &mut self,
+        parent: &impl HasWindowHandle,
+        id: u64,
+        bounds: eframe::egui::Rect,
+        scale: f32,
+        remote: bool,
+        register: impl FnOnce(&Pages) -> Result<String, String>,
+    ) {
         self.retain(Some(id), !bounds.is_positive());
         if !bounds.is_positive() {
             return;
@@ -104,7 +116,7 @@ impl EditorPage {
         };
         if self.document != Some(id) {
             self.document = Some(id);
-            self.view = self.create(parent, doc, rect);
+            self.view = self.create(parent, rect, remote, register);
             self.rect = self.view.as_ref().map(|_| rect);
         }
         if let Some(view) = &self.view {
@@ -119,12 +131,13 @@ impl EditorPage {
     fn create(
         &mut self,
         parent: &impl HasWindowHandle,
-        doc: &Document,
         rect: wry::Rect,
+        remote: bool,
+        register: impl FnOnce(&Pages) -> Result<String, String>,
     ) -> Option<WebView> {
         parent.window_handle().ok()?;
         let pages = self.pages.clone();
-        let address = pages.open(&doc.root, &doc.path, &doc.text).ok()?;
+        let address = register(&pages).ok()?;
         if self.context.is_none() {
             let profile = tempfile::tempdir().ok()?;
             self.context = Some(wry::WebContext::new(Some(profile.path().to_owned())));
@@ -134,54 +147,75 @@ impl EditorPage {
         let allowed = address.clone();
         let pending = self.pending.clone();
         let builder = WebViewBuilder::new_with_web_context(self.context.as_mut()?);
-        pages
+        let builder = pages
             .attach(builder)
             .ok()?
             .with_incognito(true)
             .with_focused(false)
             .with_clipboard(false)
             .with_devtools(false)
-            .with_initialization_script(LINKS)
-            .with_navigation_handler(move |u| u.split('#').next() == Some(allowed.as_str()))
+            .with_navigation_handler({
+                let origin = base.origin();
+                move |u| {
+                    if remote {
+                        Url::parse(&u).is_ok_and(|url| {
+                            url.origin() == origin
+                                && url.username().is_empty()
+                                && url.password().is_none()
+                        })
+                    } else {
+                        u.split('#').next() == Some(&allowed)
+                    }
+                }
+            })
             .with_download_started_handler(|_, _| false)
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-            .with_drag_drop_handler(|_| true)
-            .with_ipc_handler(move |msg| {
-                if msg.body().len() > 16384
-                    || msg.uri().authority().map(|a| a.as_str()) != base.host_str()
-                {
-                    return;
-                }
-                let Ok((kind, raw, x, y)) =
-                    serde_json::from_str::<(String, String, f32, f32)>(msg.body())
-                else {
-                    return;
-                };
-                let Ok(target) = Url::parse(&raw) else { return };
-                if !matches!(target.scheme(), "http" | "https")
-                    || !target.username().is_empty()
-                    || target.password().is_some()
-                {
-                    return;
-                }
-                let href = if target.origin() == base.origin() {
-                    let Some(rel) = base.make_relative(&target) else {
+            .with_drag_drop_handler(|_| true);
+        // The remote page browses within its isolated project origin using native links.
+        // Only the local document uses the editor's application link menu.
+        let builder = if remote {
+            builder
+        } else {
+            builder
+                .with_initialization_script(LINKS)
+                .with_ipc_handler(move |msg| {
+                    if msg.body().len() > 16384
+                        || msg.uri().authority().map(|a| a.as_str()) != base.host_str()
+                    {
+                        return;
+                    }
+                    let Ok((kind, raw, x, y)) =
+                        serde_json::from_str::<(String, String, f32, f32)>(msg.body())
+                    else {
                         return;
                     };
-                    rel
-                } else {
-                    raw
-                };
-                let pos = match kind.as_str() {
-                    "click" => None,
-                    "contextmenu" => Some((x, y)),
-                    _ => return,
-                };
-                *pending.borrow_mut() = Some(LinkGesture {
-                    href,
-                    position: pos,
-                });
-            })
+                    let Ok(target) = Url::parse(&raw) else { return };
+                    if !matches!(target.scheme(), "http" | "https")
+                        || !target.username().is_empty()
+                        || target.password().is_some()
+                    {
+                        return;
+                    }
+                    let href = if target.origin() == base.origin() {
+                        let Some(rel) = base.make_relative(&target) else {
+                            return;
+                        };
+                        rel
+                    } else {
+                        raw
+                    };
+                    let pos = match kind.as_str() {
+                        "click" => None,
+                        "contextmenu" => Some((x, y)),
+                        _ => return,
+                    };
+                    *pending.borrow_mut() = Some(LinkGesture {
+                        href,
+                        position: pos,
+                    });
+                })
+        };
+        builder
             .with_bounds(rect)
             .with_url(address)
             .build_as_child(parent)
@@ -193,6 +227,40 @@ impl EditorPage {
 mod tests {
     use super::*;
     use crate::webview_test_support::{hidden_parent, pump, wait_for};
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_ssh_editor_renders_draft_and_keeps_navigation_in_the_project() {
+        let host = crate::workspace::Host {
+            alias: "fixture".into(),
+            folder: "/site".into(),
+            ..Default::default()
+        };
+        let parent = hidden_parent();
+        let mut editor = EditorPage::default();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(300., 200.),
+        );
+        editor.sync_source(&parent,1,bounds,1.,true,|pages|pages.open_remote(host.clone(),"/site","/site/index.html",r#"<style>p{color:rgb(11,22,33)}</style><p>Draft</p><a href="next.html">Next</a><script>document.title='executed'</script>"#));
+        let view = editor.view.as_ref().unwrap();
+        wait_for(
+            view,
+            "document.querySelector('p')?.textContent === 'Draft' && getComputedStyle(document.querySelector('p')).color === 'rgb(11, 22, 33)' && document.title !== 'executed'",
+        );
+        editor
+            .pages
+            .open_remote(host, "/site", "/site/next.html", "<h2>Next</h2>")
+            .unwrap();
+        view.evaluate_script("document.querySelector('a').click()")
+            .unwrap();
+        wait_for(view, "document.querySelector('h2')?.textContent === 'Next'");
+        view.go_back().unwrap();
+        wait_for(
+            view,
+            "location.pathname === '/index.html' && document.querySelector('p')?.textContent === 'Draft'",
+        );
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn native_editor_page_reload_keeps_unsaved_html_and_reads_changed_css() {

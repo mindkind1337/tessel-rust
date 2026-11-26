@@ -32,7 +32,9 @@ fn value(
             let (path, text) = snapshot.rename.as_ref()?;
             (path.clone(), text.as_str())
         }
-        FocusInputTarget::RemoteText if snapshot.html_plain.is_none() => {
+        FocusInputTarget::RemoteText
+            if snapshot.html_plain.is_none() && snapshot.html_page.is_none() =>
+        {
             let (path, text, _) = snapshot.document.as_ref()?;
             (path.clone(), text.as_deref()?)
         }
@@ -216,6 +218,84 @@ mod tests {
     use super::*;
     use gpui::{EntityInputHandler, TestAppContext};
 
+    #[cfg(windows)]
+    #[gpui::test]
+    fn remote_html_preview_retains_source_and_replaces_its_view_on_reload(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+            root.app.install_remote_html_fixture();
+            root
+        });
+        cx.refresh().unwrap();
+        let draft = "<h1>Preview me</h1>";
+        let show = || {
+            GpuiAction::Remote(Command::HtmlPage {
+                host: "fixture-host".into(),
+                path: "/demo/index.HTM".into(),
+            })
+        };
+        view.update(cx, |root, window, cx| {
+            let source = root
+                .remote_inputs
+                .get(FocusInputTarget::RemoteText)
+                .unwrap()
+                .clone();
+            source.update(cx, |s, cx| {
+                s.replace_text_in_range(
+                    Some(0..s.as_str().encode_utf16().count()),
+                    draft,
+                    window,
+                    cx,
+                )
+            });
+            root.dispatch(show(), cx);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            let snap = root.app.gpui_remote_input_snapshot().unwrap();
+            let (old, text) = snap.html_page.unwrap();
+            assert_eq!(text.as_ref(), "Preview me");
+            assert!(snap.dirty);
+            assert!(
+                root.remote_inputs
+                    .get(FocusInputTarget::RemoteText)
+                    .is_none()
+            );
+            root.dispatch(show(), cx);
+            assert_ne!(
+                root.app
+                    .gpui_remote_input_snapshot()
+                    .unwrap()
+                    .html_page
+                    .unwrap()
+                    .0,
+                old
+            );
+            root.dispatch(
+                GpuiAction::Remote(Command::HtmlPlain {
+                    host: "fixture-host".into(),
+                    path: "/demo/index.HTM".into(),
+                    enabled: false,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            assert_eq!(
+                root.remote_inputs
+                    .get(FocusInputTarget::RemoteText)
+                    .unwrap()
+                    .read(cx)
+                    .as_str(),
+                draft
+            )
+        })
+        .unwrap();
+    }
     #[gpui::test]
     fn remote_html_plain_reads_latest_source_and_preserves_the_remote_draft(
         cx: &mut TestAppContext,

@@ -569,7 +569,8 @@ pub(crate) fn render(
             && let Some(host) = &remote.connected
         {
             let enabled = remote.html_plain.is_none();
-            body = body.child(button(
+            let toolbar = div().flex().flex_wrap().gap(px(5.));
+            let toolbar = toolbar.child(button(
                 "remote-html-plain-toggle",
                 if enabled {
                     if fr { "Texte brut" } else { "Plain text" }
@@ -585,36 +586,77 @@ pub(crate) fn render(
                 tokens,
                 cx,
             ));
-        }
-        #[cfg(windows)]
-        if text.is_some()
-            && path.rsplit_once('.').is_some_and(|(_, ext)| {
-                ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
-            })
-            && let Some(host) = remote.connected.clone()
-        {
-            let path = path.clone();
-            body = body.child(
-                div()
-                    .id("remote-html-browser")
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |root, _, _, cx| {
-                        root.dispatch(
-                            GpuiAction::OpenRemoteHtmlInBrowser {
-                                host: host.clone(),
-                                path: path.clone(),
-                            },
-                            cx,
-                        )
-                    }))
-                    .child(if fr {
-                        "Ouvrir dans le navigateur"
+            #[cfg(windows)]
+            let toolbar = {
+                let viewing = remote.html_page.is_some();
+                let mut toolbar = toolbar.child(button(
+                    "remote-html-preview",
+                    if viewing {
+                        if fr {
+                            "Actualiser l’aperçu"
+                        } else {
+                            "Reload preview"
+                        }
+                    } else if fr {
+                        "Aperçu"
                     } else {
-                        "Open in browser"
-                    }),
-            );
+                        "Preview"
+                    },
+                    Command::HtmlPage {
+                        host: host.clone(),
+                        path: path.clone(),
+                    },
+                    !remote.busy,
+                    tokens,
+                    cx,
+                ));
+                if viewing {
+                    toolbar = toolbar.child(button(
+                        "remote-html-source",
+                        "Source",
+                        Command::HtmlPlain {
+                            host: host.clone(),
+                            path: path.clone(),
+                            enabled: false,
+                        },
+                        !remote.busy,
+                        tokens,
+                        cx,
+                    ));
+                }
+                let path = path.clone();
+                let host = host.clone();
+                toolbar.child(
+                    div()
+                        .id("remote-html-browser")
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            root.dispatch(
+                                GpuiAction::OpenRemoteHtmlInBrowser {
+                                    host: host.clone(),
+                                    path: path.clone(),
+                                },
+                                cx,
+                            )
+                        }))
+                        .child(if fr {
+                            "Ouvrir dans le navigateur"
+                        } else {
+                            "Open in browser"
+                        }),
+                )
+            };
+            body = body.child(toolbar);
         }
-        if remote.html_plain.is_some() {
+        if let Some((_id, fallback)) = &remote.html_page {
+            let text = div()
+                .p(px(12.))
+                .child(SharedString::from(fallback.clone()))
+                .into_any_element();
+            #[cfg(windows)]
+            let text = super::editor_view::html_viewport(*_id, text, cx);
+            body = body.child(text);
+        } else if remote.html_plain.is_some() {
             if let Some(state) = editor_input.plain() {
                 body = body.child(super::editor_view::plain_text(state, tokens));
             }

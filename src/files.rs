@@ -357,7 +357,7 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
-    fn next_instance_id() -> u64 {
+    pub(crate) fn next_instance_id() -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         NEXT.try_update(
             std::sync::atomic::Ordering::Relaxed,

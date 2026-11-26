@@ -17,6 +17,11 @@ pub(crate) enum Command {
     ConfirmDelete,
     CancelDialog,
     Edit(String),
+    #[cfg(windows)]
+    HtmlPage {
+        host: String,
+        path: String,
+    },
     HtmlPlain {
         host: String,
         path: String,
@@ -51,6 +56,7 @@ pub(crate) struct Snapshot {
     pub rename: Option<(String, String)>,
     pub delete: Option<String>,
     pub document: Option<(String, Option<String>, usize)>,
+    pub html_page: Option<(u64, std::sync::Arc<str>)>,
     pub html_plain: Option<std::sync::Arc<str>>,
     pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
@@ -75,6 +81,7 @@ impl RemotePanel {
             connected: self.host.as_ref().map(|host| host.alias.clone()),
             path: self.path.clone(),
             busy: self.busy(),
+            html_page: self.document.as_ref().and_then(|d| d.html_page.clone()),
             html_plain: self.document.as_ref().and_then(|d| d.html_plain.clone()),
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             new_name: self.new_name.clone(),
@@ -109,6 +116,7 @@ impl RemotePanel {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            html_page: None,
             html_plain: None,
             image_menu: None,
             path: format!("/demo/{name}"),
@@ -145,6 +153,7 @@ impl RemotePanel {
             versions: Vec::new(),
             comparison: Default::default(),
             git_history: Default::default(),
+            html_page: None,
             html_plain: None,
             image_menu: None,
             path: "/demo/original.pdf".into(),
@@ -215,6 +224,7 @@ impl RemotePanel {
             can_parent: !self.path.is_empty() && self.path != self.root,
             busy: self.busy(),
             live: self.tree_live,
+            html_page: self.document.as_ref().and_then(|d| d.html_page.clone()),
             html_plain: self.document.as_ref().and_then(|d| d.html_plain.clone()),
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             error: self.error.clone(),
@@ -294,6 +304,18 @@ impl RemotePanel {
                     pdf.step_zoom(delta);
                 }
             }
+            #[cfg(windows)]
+            Command::HtmlPage { host, path } => {
+                if !self.busy()
+                    && self.host.as_ref().is_some_and(|h| h.alias == host)
+                    && let Some(doc) = self
+                        .document
+                        .as_mut()
+                        .filter(|d| d.path == path && is_html(&path))
+                {
+                    doc.show_html_page();
+                }
+            }
             Command::HtmlPlain {
                 host,
                 path,
@@ -312,6 +334,7 @@ impl RemotePanel {
                     && let Some(doc) = &mut self.document
                     && doc.text.is_some()
                     && doc.html_plain.is_none()
+                    && doc.html_page.is_none()
                 {
                     doc.text = Some(text);
                 }
@@ -537,6 +560,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_page: None,
                 html_plain: None,
                 image_menu: None,
                 path: "/fixture/colors.png".into(),

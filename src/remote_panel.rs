@@ -90,6 +90,7 @@ struct GitHistory {
     page: Option<std::sync::Arc<remote::file_history::Page>>,
 }
 struct RemoteDocument {
+    html_page: Option<(u64, std::sync::Arc<str>)>,
     html_plain: Option<std::sync::Arc<str>>,
     image_menu: Option<(f32, f32)>,
     path: String,
@@ -102,7 +103,17 @@ struct RemoteDocument {
     preview_error: String,
 }
 impl RemoteDocument {
+    fn show_html_page(&mut self) {
+        self.html_plain = None;
+        self.html_page = self.text.as_ref().map(|s| {
+            (
+                crate::files::Document::next_instance_id(),
+                crate::preview::html_plain_text(s).into(),
+            )
+        });
+    }
     fn set_plain(&mut self, enabled: bool) {
+        self.html_page = None;
         self.html_plain = self
             .text
             .as_deref()
@@ -111,7 +122,11 @@ impl RemoteDocument {
     }
     fn discard_text(&mut self) {
         self.text = String::from_utf8(self.original.clone()).ok();
-        self.set_plain(self.html_plain.is_some());
+        if self.html_page.is_some() {
+            self.show_html_page();
+        } else {
+            self.set_plain(self.html_plain.is_some());
+        }
     }
     fn dirty(&self) -> bool {
         self.text
@@ -151,6 +166,19 @@ impl RemotePanel {
     }
 
     #[cfg(windows)]
+    pub(crate) fn active_html_page(&self, id: u64) -> Option<(Host, &str, &str, &str)> {
+        let doc = self.document.as_ref()?;
+        if doc.html_page.as_ref()?.0 != id {
+            return None;
+        }
+        Some((
+            self.host.clone()?,
+            &self.root,
+            &doc.path,
+            doc.text.as_deref()?,
+        ))
+    }
+    #[cfg(windows)]
     pub(crate) fn html_preview(&self, path: &str) -> Option<(Host, &str, &str)> {
         let doc = self.document.as_ref().filter(|doc| doc.path == path)?;
         Some((self.host.clone()?, self.root.as_str(), doc.text.as_deref()?))
@@ -189,6 +217,7 @@ impl RemotePanel {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_page: None,
                 html_plain: None,
                 image_menu: None,
                 path: "/demo/preview.png".into(),
@@ -429,18 +458,23 @@ impl RemotePanel {
                     } else {
                         None
                     };
-                    self.document = Some(RemoteDocument {
+                    let mut doc = RemoteDocument {
                         path,
                         original: bytes,
                         versions,
                         comparison: Default::default(),
                         git_history: Default::default(),
+                        html_page: None,
                         html_plain: None,
                         image_menu: None,
                         text,
                         preview,
                         preview_error,
-                    });
+                    };
+                    if cfg!(windows) && doc.text.is_some() && control::is_html(&doc.path) {
+                        doc.show_html_page();
+                    }
+                    self.document = Some(doc);
                 }
                 Ok(Reply::Deleted { path, parent }) => {
                     if self.document.as_ref().is_some_and(|doc| doc.path == path) {
@@ -1052,6 +1086,7 @@ mod tests {
                 versions,
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_page: None,
                 html_plain: None,
                 image_menu: None,
                 original: b"opened earlier".to_vec(),
@@ -1261,6 +1296,7 @@ mod tests {
                 versions: Vec::new(),
                 comparison: Default::default(),
                 git_history: Default::default(),
+                html_page: None,
                 html_plain: None,
                 image_menu: None,
                 path: "/fixture/file.txt".into(),

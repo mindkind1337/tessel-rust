@@ -401,7 +401,8 @@ impl TesselGpuiRoot {
                 enabled: true,
             }) => Some((host, path)),
             #[cfg(windows)]
-            GpuiAction::OpenRemoteHtmlInBrowser { host, path } => Some((host, path)),
+            GpuiAction::Remote(crate::remote_panel::control::Command::HtmlPage { host, path })
+            | GpuiAction::OpenRemoteHtmlInBrowser { host, path } => Some((host, path)),
             _ => None,
         };
         if let Some((host, path)) = preview_source
@@ -1556,7 +1557,14 @@ impl Render for TesselGpuiRoot {
                     && matches!(d.extension.as_str(), "html" | "htm")
             });
             self.app.editor_page.retain(
-                page.map(|d| d.instance_id),
+                page.map(|d| d.instance_id).or_else(|| {
+                    snapshot
+                        .remote
+                        .html_page
+                        .as_ref()
+                        .filter(|_| snapshot.center_mode == GpuiCenterMode::RemoteSftp)
+                        .map(|(id, _)| *id)
+                }),
                 !self.app.gpui_media_unobscured()
                     || page.is_some_and(|d| d.html_link_menu.is_some()),
             );

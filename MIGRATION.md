@@ -1668,10 +1668,10 @@ The GPUI readable HTML preview mirrors the Vue static preview link menu for loca
 
 GPUI HTML tabs expose Source, Preview and Plain text. The plain-text reader retains inline spacing, explicit line breaks and table cell separators and supports native text selection.
 
-Local project HTML has an explicit restricted WebView2 browser-tab preview on Windows. Each recently used project retains its own origin and up to twenty HTML drafts. The fifty most recently used project origins remain available to browser history. The Windows editor renders local HTML in an isolated WebView2 child and falls back to the readable view when unavailable. The Windows SSH Files pane now opens remote HTML drafts in the embedded browser with scoped SFTP resource loading. Styled previews inside the SSH editor, folder trust and trusted scripts remain open.
+Local project HTML has an explicit restricted WebView2 browser-tab preview on Windows. Each recently used project retains its own origin and up to twenty HTML drafts. The fifty most recently used project origins remain available to browser history. The Windows editor renders local HTML in an isolated WebView2 child and falls back to the readable view when unavailable. The Windows SSH Files pane now opens remote HTML drafts in the embedded browser with scoped SFTP resource loading. The SSH editor also renders restricted HTML in its own viewport on Windows. Folder trust, trusted scripts and the confirmation prompt for external navigation remain open.
 
 Local browser-preview assets support single byte ranges and HEAD metadata. WebView2 reads bounded ranges directly from the open project file, including offsets above the per-response cap.
 
 The Windows editor HTML preview reloads the same origin with the current unsaved HTML and fresh project assets. The source file stays untouched.
 
-SSH Files can switch between editable HTML source and selectable plain text of the current draft. Discarding edits updates both views. Styled rendering inside the SSH pane remains pending.
+SSH Files can switch between editable HTML source and selectable plain text of the current draft. Discarding edits updates both views. Preview, Source and Plain text preserve the current remote draft.
