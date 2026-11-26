@@ -3741,10 +3741,7 @@ fn matches_token_model_core(tok: &str) -> bool {
     if let Some(rest) = lower.strip_prefix("llama-") {
         return rest.as_bytes().first().is_some_and(u8::is_ascii_digit);
     }
-    if b.len() >= 6 && lower.starts_with("llama") && b[5].is_ascii_digit() {
-        return true;
-    }
-    false
+    lower.starts_with("llama") && b.get(5).is_some_and(u8::is_ascii_digit)
 }
 
 fn match_model_core_at(line: &str, core_pos: usize) -> Option<usize> {
