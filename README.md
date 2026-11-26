@@ -6,6 +6,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Switching HTML editor tabs keeps recent drafts available to links in the same project preview.
+
 - HTML previews share four background workers for SSH project assets across browser tabs. Local previews have their own queue.
 
 - Git worktree bases accept local or remote branch names and full SHA-1/SHA-256 commit identities. Tags and abbreviated revision expressions are rejected; a hex-named branch cannot substitute a different commit for a requested full identity.

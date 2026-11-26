@@ -215,12 +215,6 @@ fn asset_response(
 }
 
 impl Pages {
-    pub(crate) fn editor(scripts: bool) -> Self {
-        Self {
-            sites: Default::default(),
-            scripts,
-        }
-    }
     pub(super) fn for_open(&self, scripts: bool) -> Self {
         Self {
             sites: self.sites.clone(),
@@ -490,11 +484,23 @@ impl Pages {
         &self,
         builder: wry::WebViewBuilder<'a>,
     ) -> Result<wry::WebViewBuilder<'a>, String> {
-        self.attach_with(builder, crate::remote::execute)
+        self.attach_with(builder, None, crate::remote::execute)
+    }
+    pub(super) fn attach_editor<'a>(
+        &self,
+        builder: wry::WebViewBuilder<'a>,
+        address: &url::Url,
+    ) -> Result<wry::WebViewBuilder<'a>, String> {
+        let authority = address
+            .host_str()
+            .and_then(|host| host.strip_prefix("tesselpreview."))
+            .ok_or("Invalid project preview address")?;
+        self.attach_with(builder, Some(authority.to_owned()), crate::remote::execute)
     }
     fn attach_with<'a>(
         &self,
         builder: wry::WebViewBuilder<'a>,
+        editor_authority: Option<String>,
         read_remote: fn(
             crate::workspace::Host,
             crate::remote::Action,
@@ -505,6 +511,12 @@ impl Pages {
         let pages = self.clone();
         Ok(
             builder.with_asynchronous_custom_protocol(SCHEME.into(), move |_, req, responder| {
+                if editor_authority.as_ref().is_some_and(|allowed| {
+                    req.uri().authority().map(|value| value.as_str()) != Some(allowed.as_str())
+                }) {
+                    responder.respond(empty(404));
+                    return;
+                }
                 let send = if req.uri().host().is_some_and(|h| h.starts_with("ssh-")) {
                     let Ok(send) = REMOTE.get_or_init(|| asset_workers(4)) else {
                         responder.respond(empty(503));
@@ -784,7 +796,7 @@ mod tests {
         let mut context = wry::WebContext::new(Some(dir.path().into()));
         let builder = wry::WebViewBuilder::new_with_web_context(&mut context);
         let view = pages
-            .attach_with(builder, |host, action| {
+            .attach_with(builder, None, |host, action| {
                 assert_eq!(host.alias, "sample");
                 let crate::remote::Action::PreviewAsset {
                     expected_root,

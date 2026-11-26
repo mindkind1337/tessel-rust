@@ -1685,3 +1685,5 @@ The Windows local editor HTML preview updates after a 350 ms pause in draft chan
 SSH Files can switch between editable HTML source and selectable plain text of the current draft. Discarding edits updates both views. Preview, Source and Plain text preserve the current remote draft.
 
 SSH browser previews schedule up to four asset reads at a time across tabs. A fifth read waits for capacity. Local preview requests use an independent worker.
+
+Switching Windows HTML editor tabs retains the project preview origin and its recent drafts. Each editor WebView serves requests for its own origin. Revoking folder trust also downgrades cached editor origins.

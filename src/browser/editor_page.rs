@@ -61,13 +61,16 @@ impl EditorPage {
         if self.scripts != scripts {
             self.retain(None, false);
             self.scripts = scripts;
+            self.pages = self.pages.for_open(scripts);
         }
+    }
+    pub(crate) fn revoke_scripts(&self, folder: &super::html_trust::Folder) {
+        self.pages.restrict(folder);
     }
     pub(crate) fn retain(&mut self, id: Option<u64>, obscured: bool) {
         if self.document != id {
             self.reconsider = None;
             self.view.take();
-            self.pages = Pages::editor(self.scripts);
             self.document = None;
             self.observed = String::new();
             self.refresh_due = None;
@@ -243,7 +246,7 @@ impl EditorPage {
         let pending = self.pending.clone();
         let builder = WebViewBuilder::new_with_web_context(self.context.as_mut()?);
         let builder = pages
-            .attach(builder)
+            .attach_editor(builder, &base)
             .ok()?
             .with_incognito(true)
             .with_focused(false)
@@ -373,6 +376,42 @@ mod tests {
             previous = address;
         }
     }
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn linked_document_keeps_its_draft_after_switching_editor_tabs() {
+        let folder = tempfile::tempdir().unwrap();
+        let index = folder.path().join("index.html");
+        let linked = folder.path().join("linked.html");
+        std::fs::write(&index, "<a href='linked.html'>Open</a>").unwrap();
+        std::fs::write(&linked, "<h1>Disk</h1>").unwrap();
+        let index = Document::open(folder.path(), &index).unwrap();
+        let mut linked = Document::open(folder.path(), &linked).unwrap();
+        linked.text = "<h1>Unsaved</h1>".into();
+        let parent = hidden_parent();
+        let mut editor = EditorPage::default();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(320., 200.),
+        );
+        editor.set_scripts(true);
+        editor.sync(&parent, &linked, bounds, 1.);
+        wait_for(
+            editor.view.as_ref().unwrap(),
+            "document.querySelector('h1')?.textContent === 'Unsaved'",
+        );
+        let first_url = editor.view.as_ref().unwrap().url().unwrap();
+        editor.sync(&parent, &index, bounds, 1.);
+        let view = editor.view.as_ref().unwrap();
+        wait_for(view, "!!document.querySelector('a')");
+        view.evaluate_script("document.querySelector('a').click()")
+            .unwrap();
+        wait_for(
+            view,
+            "document.querySelector('h1')?.textContent === 'Unsaved'",
+        );
+        assert_eq!(view.url().unwrap(), first_url);
+    }
+
     #[test]
     fn held_destinations_are_external_web_links_without_credentials() {
         let incoming = RefCell::default();

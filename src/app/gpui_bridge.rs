@@ -6031,6 +6031,7 @@ impl Tessel {
                 {
                     if !trusted {
                         self.browser.revoke_preview_scripts(&folder);
+                        self.editor_page.revoke_scripts(&folder);
                     }
                     if let Err(error) = self.html_trust.decide(folder, trusted) {
                         self.error = error;
