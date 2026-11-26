@@ -7,7 +7,7 @@ use oxc_ast::{
     ast::{BindingPattern, ClassType, FunctionType, MethodDefinitionKind, PropertyKey},
 };
 use oxc_ast_visit::Visit;
-use oxc_parser::Parser;
+use oxc_parser::{Parser, ParserReturn, config::TokensParserConfig};
 use oxc_span::{GetSpan, SourceType, Span};
 
 struct Positions<'s> {
@@ -42,7 +42,7 @@ impl<'s> Positions<'s> {
         }
     }
     fn position(&self, byte: u32) -> (usize, usize) {
-        let byte = byte as usize;
+        let byte = (byte as usize).min(self.text.len());
         let i = self.checkpoints.partition_point(|p| p.0 <= byte) - 1;
         let (start, line, column) = self.checkpoints[i];
         (line, column + self.text[start..byte].encode_utf16().count())
@@ -61,6 +61,7 @@ impl<'s> Positions<'s> {
 
 struct Outline<'a> {
     positions: Positions<'a>,
+    parsed_source: &'a str,
     ancestors: Vec<(AstKind<'a>, bool)>,
     open: Vec<Symbol>,
     roots: Vec<Symbol>,
@@ -72,7 +73,7 @@ impl Outline<'_> {
     }
     fn entry(&self, node: AstKind<'_>) -> Option<(String, u8, Span)> {
         use AstKind::*;
-        let source = self.positions.text;
+        let source = self.parsed_source;
         let parent = self.ancestors.last().map(|&(p, _)| p);
         let mut span = node.span();
         let default = matches!(parent, Some(ExportDefaultDeclaration(_)));
@@ -199,7 +200,10 @@ impl<'a> Visit<'a> for Outline<'a> {
         self.leave_node(node);
     }
     fn enter_node(&mut self, node: AstKind<'a>) {
-        let entry = if self.count < 50_000 && self.open.len() < 128 {
+        let entry = if self.count < 50_000
+            && self.open.len() < 128
+            && (node.span().start as usize) < self.positions.text.len()
+        {
             self.entry(node)
         } else {
             None
@@ -250,8 +254,66 @@ pub fn document_symbols(source: &str, typescript: bool) -> Vec<Symbol> {
         SourceType::mjs()
     };
     let parsed = Parser::new(&allocator, source, language).parse();
+    if !parsed.fatal_error {
+        return symbols_from_program(&parsed, source, source);
+    }
+    // Oxc discards its tree on a fatal error. When the missing token is at EOF,
+    // complete a private copy and project every range back onto the draft.
+    let Some(mut token) = eof_completion(&parsed, source.len()) else {
+        return Vec::new();
+    };
+    let mut draft = source.to_owned();
+    draft.push('\n'); // a trailing line comment must end before the completion
+    for _ in 0..12 {
+        draft.push_str(token);
+        let arena = Allocator::default();
+        let result = Parser::new(&arena, &draft, language)
+            .with_config(TokensParserConfig)
+            .parse();
+        if !result.fatal_error {
+            let end = result
+                .tokens
+                .iter()
+                .rev()
+                .find(|t| t.end() as usize <= source.len() && t.end() > t.start())
+                .map_or(0, |t| t.end() as usize);
+            return symbols_from_program(&result, &draft, &source[..end]);
+        }
+        let Some(next) = eof_completion(&result, draft.len()) else {
+            break;
+        };
+        token = next;
+    }
+    Vec::new()
+}
+
+// These diagnostics come from the pinned Oxc parser. Only insert punctuation
+// (or an anonymous expression operand) at the reported end of input.
+fn eof_completion(parsed: &ParserReturn<'_>, length: usize) -> Option<&'static str> {
+    let error = parsed.diagnostics.iter().rev().find(|e| {
+        e.labels.iter().any(|l| {
+            (l.is_empty() || e.message == "Expected function body")
+                && l.span().end as usize == length
+        })
+    })?;
+    match error.message.as_ref() {
+        "Expected `}` but found `EOF`" | "Expected `,` or `}` but found `EOF`" => Some("}"),
+        "Expected `)` but found `EOF`" | "Expected `,` or `)` but found `EOF`" => Some(")"),
+        "Expected `]` but found `EOF`" | "Expected `,` or `]` but found `EOF`" => Some("]"),
+        "Expected function body" | "Expected `{` but found `EOF`" => Some("{}"),
+        "Unexpected token" => Some("0"),
+        _ => None,
+    }
+}
+
+fn symbols_from_program(
+    parsed: &ParserReturn<'_>,
+    parsed_source: &str,
+    source: &str,
+) -> Vec<Symbol> {
     let mut outline = Outline {
         positions: Positions::new(source),
+        parsed_source,
         ancestors: Vec::new(),
         open: Vec::new(),
         roots: Vec::new(),

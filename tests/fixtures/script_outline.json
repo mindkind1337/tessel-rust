@@ -1432,5 +1432,977 @@
         "children": []
       }
     ]
+  },
+  {
+    "extension": "js",
+    "text": "function edit() {\n const inside = 1;",
+    "expected": [
+      {
+        "name": "edit",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 19
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 19
+        },
+        "children": [
+          {
+            "name": "inside",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 2,
+              "startColumn": 8,
+              "endLineNumber": 2,
+              "endColumn": 18
+            },
+            "selectionRange": {
+              "startLineNumber": 2,
+              "startColumn": 8,
+              "endLineNumber": 2,
+              "endColumn": 18
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "class InProgress { value = 1;",
+    "expected": [
+      {
+        "name": "InProgress",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "children": [
+          {
+            "name": "value",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 30
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 30
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const obj = {name: 'ok',",
+    "expected": [
+      {
+        "name": "obj",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "children": [
+          {
+            "name": "name",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 14,
+              "endLineNumber": 1,
+              "endColumn": 24
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 14,
+              "endLineNumber": 1,
+              "endColumn": 24
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const completed = 1; const pending =",
+    "expected": [
+      {
+        "name": "completed",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "children": []
+      },
+      {
+        "name": "pending",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 28,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 28,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "function f(){class C{m(){ const n=1;  ",
+    "expected": [
+      {
+        "name": "f",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "children": [
+          {
+            "name": "C",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 14,
+              "endLineNumber": 1,
+              "endColumn": 37
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 14,
+              "endLineNumber": 1,
+              "endColumn": 37
+            },
+            "children": [
+              {
+                "name": "m",
+                "kind": 5,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 22,
+                  "endLineNumber": 1,
+                  "endColumn": 37
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 22,
+                  "endLineNumber": 1,
+                  "endColumn": 37
+                },
+                "children": [
+                  {
+                    "name": "n",
+                    "kind": 12,
+                    "range": {
+                      "startLineNumber": 1,
+                      "startColumn": 33,
+                      "endLineNumber": 1,
+                      "endColumn": 36
+                    },
+                    "selectionRange": {
+                      "startLineNumber": 1,
+                      "startColumn": 33,
+                      "endLineNumber": 1,
+                      "endColumn": 36
+                    },
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function edit(){ const a=1; // trailing } 😀",
+    "expected": [
+      {
+        "name": "edit",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 28
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 28
+        },
+        "children": [
+          {
+            "name": "a",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 24,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "export function draft(){\r\n  /* 😀 */ const café = [1, 2,  ",
+    "expected": [
+      {
+        "name": "draft",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 31
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 31
+        },
+        "children": [
+          {
+            "name": "café",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 2,
+              "startColumn": 18,
+              "endLineNumber": 2,
+              "endColumn": 31
+            },
+            "selectionRange": {
+              "startLineNumber": 2,
+              "startColumn": 18,
+              "endLineNumber": 2,
+              "endColumn": 31
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const rg = /[{}]/; function f(){ const v = '}' ; /* } */",
+    "expected": [
+      {
+        "name": "f",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 49
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 49
+        },
+        "children": [
+          {
+            "name": "v",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 40,
+              "endLineNumber": 1,
+              "endColumn": 47
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 40,
+              "endLineNumber": 1,
+              "endColumn": 47
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "rg",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const tpl = `a${foo()}!`; class C{",
+    "expected": [
+      {
+        "name": "C",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 27,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 27,
+          "endLineNumber": 1,
+          "endColumn": 35
+        },
+        "children": []
+      },
+      {
+        "name": "tpl",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "function run(a: number",
+    "expected": [
+      {
+        "name": "run",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 23
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function run(a",
+    "expected": [
+      {
+        "name": "run",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 15
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 15
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "class Box { method(",
+    "expected": [
+      {
+        "name": "Box",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "children": [
+          {
+            "name": "method",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const nested = {value: [",
+    "expected": [
+      {
+        "name": "nested",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "children": [
+          {
+            "name": "value",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 17,
+              "endLineNumber": 1,
+              "endColumn": 25
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 17,
+              "endLineNumber": 1,
+              "endColumn": 25
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "function nested(){ const unfinished = // comment",
+    "expected": [
+      {
+        "name": "nested",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 38
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 38
+        },
+        "children": [
+          {
+            "name": "unfinished",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 26,
+              "endLineNumber": 1,
+              "endColumn": 38
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 26,
+              "endLineNumber": 1,
+              "endColumn": 38
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function empty(){  // draft",
+    "expected": [
+      {
+        "name": "empty",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "export const fetchItems = async (id) => { await read(id);",
+    "expected": [
+      {
+        "name": "fetchItems",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 58
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 58
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "interface Shape { label: string; area(): number;",
+    "expected": [
+      {
+        "name": "Shape",
+        "kind": 10,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 49
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 49
+        },
+        "children": [
+          {
+            "name": "area",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 49
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 34,
+              "endLineNumber": 1,
+              "endColumn": 49
+            },
+            "children": []
+          },
+          {
+            "name": "label",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 19,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 19,
+              "endLineNumber": 1,
+              "endColumn": 33
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "enum Status { Idle, Done,",
+    "expected": [
+      {
+        "name": "Status",
+        "kind": 9,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "children": [
+          {
+            "name": "Done",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 25
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 25
+            },
+            "children": []
+          },
+          {
+            "name": "Idle",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 19
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 19
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "namespace Tasks { export function run() { const job = {",
+    "expected": [
+      {
+        "name": "Tasks",
+        "kind": 1,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "children": [
+          {
+            "name": "run",
+            "kind": 11,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 19,
+              "endLineNumber": 1,
+              "endColumn": 56
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 19,
+              "endLineNumber": 1,
+              "endColumn": 56
+            },
+            "children": [
+              {
+                "name": "job",
+                "kind": 12,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 49,
+                  "endLineNumber": 1,
+                  "endColumn": 56
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 49,
+                  "endLineNumber": 1,
+                  "endColumn": 56
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "const before = 1; const values = [1, 2, //😀",
+    "expected": [
+      {
+        "name": "before",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 17
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 17
+        },
+        "children": []
+      },
+      {
+        "name": "values",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 40
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 25,
+          "endLineNumber": 1,
+          "endColumn": 40
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const draft = { property: ",
+    "expected": [
+      {
+        "name": "draft",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 26
+        },
+        "children": [
+          {
+            "name": "property",
+            "kind": 6,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 17,
+              "endLineNumber": 1,
+              "endColumn": 26
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 17,
+              "endLineNumber": 1,
+              "endColumn": 26
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "js",
+    "text": "function outer(){ const quoted = 'https://foo/{';\n  // 😀",
+    "expected": [
+      {
+        "name": "outer",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 50
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 50
+        },
+        "children": [
+          {
+            "name": "quoted",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 49
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 49
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extension": "ts",
+    "text": "const complete = 3; function later()",
+    "expected": [
+      {
+        "name": "complete",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 19
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 7,
+          "endLineNumber": 1,
+          "endColumn": 19
+        },
+        "children": []
+      },
+      {
+        "name": "later",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 21,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 21,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "children": []
+      }
+    ]
   }
 ]

@@ -1638,7 +1638,7 @@ Validation: both integration tests pass, covering all 70 source-generated vector
 
 ## Files Outline language providers
 
-JavaScript and TypeScript outlines use the Oxc Rust parser in a disposable worker. The child receives the draft over standard input. Both renderers cache results for the document and its current text. The reference fixtures use the TypeScript worker bundled with Monaco, including UTF-16 ranges, import aliases, accessors and function overloads. Complete navigation-tree parity, including recovery on unfinished declarations, remains open.
+JavaScript and TypeScript outlines use the Oxc Rust parser in a disposable worker. The child receives the draft over standard input. Both renderers cache results for the document and its current text. The reference fixtures use the TypeScript worker bundled with Monaco, including UTF-16 ranges, import aliases, accessors and function overloads. On a fatal end-of-input diagnostic, the worker can complete missing delimiters, function bodies or expression operands in a private parse buffer. It tries up to twelve insertions and clips symbol ranges to the final original token, including when a trailing comment contains braces. General syntax-error recovery and complete navigation-tree parity remain open.
 
 The native CSS outline groups rules inside media queries and nested selectors. Grouped selectors have individual source positions. Synthetic stylesheets are compared with the installed Monaco CSS, SCSS and Less providers for symbol names, kinds, nesting and source ranges. The native outline recognizes SCSS variables, mixins and functions, and Less variables and mixins.
 

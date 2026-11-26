@@ -32,10 +32,12 @@ fn isolated_worker_reads_the_draft_and_emits_original_source_ranges() {
     };
     let cases: Vec<Case> =
         serde_json::from_str(include_str!("fixtures/script_outline.json")).unwrap();
-    for c in cases
-        .iter()
-        .filter(|c| c.text.contains("Café") || c.text.contains("class Box"))
-    {
+    for c in cases.iter().filter(|c| {
+        c.text.contains("Café")
+            || c.text.contains("class Box")
+            || c.text.starts_with("function edit()")
+            || c.text.starts_with("const completed =")
+    }) {
         let mut child = Command::new(env!("CARGO_BIN_EXE_tessel-rust"))
             .args(["--script-outline-worker", &c.extension])
             .stdin(Stdio::piped())

@@ -28,6 +28,31 @@ const inputs = [
   ["ts", "declare module \"alpha\" { export function run(): void; }"],
   ["ts", "const var1=1;\rconst var2=2;\r\n/*😀*/ const var3=3;"],
   ["ts","const {a:b=2,c,nested:{x},...rest}=obj; const [first=1,,...tail]=arr; class B{constructor(public readonly x:number,private y=1){const inside=1;}}"],
+  ["js", "function edit() {\n const inside = 1;"],
+  ["ts", "class InProgress { value = 1;"],
+  ["js", "const obj = {name: 'ok',"],
+  ["ts", "const completed = 1; const pending ="],
+  ["ts", "function f(){class C{m(){ const n=1;  "],
+  ["js", "function edit(){ const a=1; // trailing } 😀"],
+  ["ts", "export function draft(){\r\n  /* 😀 */ const café = [1, 2,  "],
+  ["js", "const rg = /[{}]/; function f(){ const v = '}' ; /* } */"],
+  ["js", "const tpl = `a${foo()}!`; class C{"],
+  ["ts", "function run(a: number"],
+  ["js", "function run(a"],
+  ["ts", "class Box { method("],
+  ["ts", "const nested = {value: ["],
+  ["ts", "function nested(){ const unfinished = // comment"],
+
+  ["js", "function empty(){  // draft"],
+  ["js", "export const fetchItems = async (id) => { await read(id);"],
+  ["ts", "interface Shape { label: string; area(): number;"],
+  ["ts", "enum Status { Idle, Done,"],
+  ["ts", "namespace Tasks { export function run() { const job = {"],
+  ["js", "const before = 1; const values = [1, 2, //😀"],
+  ["ts", "const draft = { property: "],
+  ["js", "function outer(){ const quoted = 'https://foo/{';\n  // 😀"],
+  ["ts", "const complete = 3; function later()"],
+
 ];
 const output = [];
 for (const [extension, text] of inputs) {
