@@ -634,6 +634,11 @@ impl EditableTextState {
         }
     }
 
+    /// Active selection endpoint as a UTF-8 byte offset.
+    pub fn caret_byte_offset(&self) -> usize {
+        self.selection_movement.result.caret.index
+    }
+
     /// Moves the caret to `caret_pos`, a UTF-8 byte offset. Clears the selection.
     ///
     /// A position past the end of the text moves the caret to the end. The view

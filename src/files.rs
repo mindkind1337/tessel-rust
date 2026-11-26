@@ -29,8 +29,17 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutlineCursor {
+    Bytes(usize),
+    Chars(usize),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub outline_cursor: Option<OutlineCursor>,
+    pub outline_scroll_generation: u64,
+    pub outline_selected: Option<String>,
     pub outline_reveal_focus: Option<bool>,
     pub outline_folds: std::collections::HashSet<String>,
     pub word_wrap: bool,

@@ -43,7 +43,7 @@ pub(crate) struct NativeScmScope {
 pub(crate) enum OutlineRowAction {
     Fold(String),
     SetAllFolds { expand: bool },
-    Reveal(crate::outline_tree::Range, bool),
+    Reveal(String, crate::outline_tree::Range, bool),
 }
 
 pub(crate) struct GpuiExtraUiState {
@@ -450,6 +450,9 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
     pub outline_open: bool,
     pub outline_options_open: bool,
+    pub outline_follow_cursor: bool,
+    pub outline_selected: Option<String>,
+    pub outline_scroll_generation: u64,
     pub outline_sort: crate::outline_tree::Sort,
     pub outline_folds: std::collections::HashSet<String>,
     pub outline: Option<(u64, std::sync::Arc<Vec<crate::outline_tree::Symbol>>)>,
@@ -921,6 +924,7 @@ pub(crate) enum GpuiAction {
     OutlineToggle,
     OutlineOptions(bool),
     OutlineSort(crate::outline_tree::Sort),
+    OutlineFollow(bool),
     OutlineRow(
         u64,
         std::sync::Arc<Vec<crate::outline_tree::Symbol>>,
@@ -2270,6 +2274,24 @@ impl Tessel {
             .iter()
             .map(crate::files::Document::instance_id)
             .collect()
+    }
+
+    pub(crate) fn record_outline_cursor(&mut self, id: u64, offset: usize) -> bool {
+        let Some(doc) = self.documents.get_mut(self.active_document) else {
+            return false;
+        };
+        if self.view != View::Files
+            || doc.instance_id() != id
+            || !crate::json_outline_panel::supported(doc)
+        {
+            return false;
+        }
+        let cursor = Some(crate::files::OutlineCursor::Bytes(offset));
+        if doc.tools.outline_cursor == cursor {
+            return false;
+        }
+        doc.tools.outline_cursor = cursor;
+        self.gpui_extra.outline_open && self.state.editor_prefs.outline_follow_cursor
     }
 
     pub(crate) fn take_outline_focus(&mut self, id: u64) -> Option<bool> {
@@ -4004,14 +4026,18 @@ impl Tessel {
             && self.view == View::Files
         {
             self.documents
-                .get(self.active_document)
+                .get_mut(self.active_document)
                 .filter(|doc| crate::json_outline_panel::supported(doc))
                 .map(|doc| {
-                    let cache = crate::json_outline_panel::Cache::current(
+                    let mut cache = crate::json_outline_panel::Cache::current(
                         self.gpui_extra.outline_cache.take(),
                         doc,
                         self.state.editor_prefs.outline_sort,
                     );
+                    if cache.follow(doc, self.state.editor_prefs.outline_follow_cursor) {
+                        doc.tools.outline_scroll_generation =
+                            doc.tools.outline_scroll_generation.wrapping_add(1);
+                    }
                     let symbols = cache.symbols.clone();
                     self.gpui_extra.outline_cache = Some(cache);
                     (doc.instance_id(), symbols)
@@ -4031,6 +4057,15 @@ impl Tessel {
             outline_open: self.gpui_extra.outline_open,
             outline_options_open: self.gpui_extra.outline_options_open,
             outline_sort: self.state.editor_prefs.outline_sort,
+            outline_follow_cursor: self.state.editor_prefs.outline_follow_cursor,
+            outline_scroll_generation: self
+                .documents
+                .get(self.active_document)
+                .map_or(0, |d| d.tools.outline_scroll_generation),
+            outline_selected: self
+                .documents
+                .get(self.active_document)
+                .and_then(|doc| doc.tools.outline_selected.clone()),
             outline,
             dashboard_vm,
             dashboard_group: self.side_panels_ui.dashboard_group,
@@ -5752,6 +5787,11 @@ impl Tessel {
             GpuiAction::OutlineOptions(open) => {
                 self.gpui_extra.outline_options_open = open;
             }
+            GpuiAction::OutlineFollow(on) => {
+                self.state.editor_prefs.outline_follow_cursor = on;
+                self.gpui_extra.outline_options_open = false;
+                self.save();
+            }
             GpuiAction::OutlineSort(sort) => {
                 self.gpui_extra.outline_options_open = false;
                 if self.state.editor_prefs.outline_sort != sort {
@@ -5776,7 +5816,8 @@ impl Tessel {
                         OutlineRowAction::Fold(key) => {
                             crate::json_outline_panel::toggle_fold(doc, &key)
                         }
-                        OutlineRowAction::Reveal(range, select) => {
+                        OutlineRowAction::Reveal(key, range, select) => {
+                            doc.tools.outline_selected = Some(key);
                             crate::json_outline_panel::reveal(doc, range, select)
                         }
                     }
@@ -8154,14 +8195,18 @@ mod panel_snapshot_tests {
         let old: crate::workspace::EditorPreferences =
             serde_json::from_str(r#"{"compact_folders":true}"#).unwrap();
         assert_eq!(old.outline_sort, Sort::Position);
+        assert!(old.outline_follow_cursor);
         let dir = tempfile::tempdir().unwrap();
         let open = || Tessel::new_for_gpui_in_dir(Some(dir.path().to_owned()), false, || {});
         {
             let mut app = open();
             app.apply_gpui_action(GpuiAction::OutlineSort(Sort::Kind));
+            app.apply_gpui_action(GpuiAction::OutlineFollow(false));
             assert!(app.error.is_empty(), "{}", app.error);
         }
-        assert_eq!(open().state.editor_prefs.outline_sort, Sort::Kind);
+        let prefs = open().state.editor_prefs;
+        assert_eq!(prefs.outline_sort, Sort::Kind);
+        assert!(!prefs.outline_follow_cursor);
     }
 
     #[test]
@@ -8198,7 +8243,11 @@ mod panel_snapshot_tests {
                 .outline_folds
                 .contains(&key)
         );
-        app.apply_gpui_action(action(OutlineRowAction::Reveal(tree[0].range, true)));
+        app.apply_gpui_action(action(OutlineRowAction::Reveal(
+            key.clone(),
+            tree[0].range,
+            true,
+        )));
         assert_eq!(
             app.documents[0].tools.pending_char_range,
             Some((1, text.chars().count() - 1))
@@ -8209,7 +8258,11 @@ mod panel_snapshot_tests {
                 .outline_folds
                 .is_empty()
         );
-        app.apply_gpui_action(action(OutlineRowAction::Reveal(tree[0].range, true)));
+        app.apply_gpui_action(action(OutlineRowAction::Reveal(
+            key.clone(),
+            tree[0].range,
+            true,
+        )));
         assert_eq!(app.documents[1].tools.pending_char_range, None);
         app.active_document = 0;
         app.documents[0].text.insert(0, ' ');

@@ -4799,7 +4799,7 @@ impl Tessel {
             .flatten()
             .map(|d| d.path.clone());
         let actions_enabled = self.file_actions_ready();
-        let old_sort = self.state.editor_prefs.outline_sort;
+        let old_prefs = self.state.editor_prefs;
         egui::TopBottomPanel::bottom("files-outline-section")
             .resizable(false)
             .show_inside(ui, |ui| {
@@ -4811,6 +4811,17 @@ impl Tessel {
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.menu_button("⋯", |ui| {
+                        let label = if crate::i18n::is_french() {
+                            "Suivre le curseur"
+                        } else {
+                            "Follow Cursor"
+                        };
+                        if ui
+                            .checkbox(&mut self.state.editor_prefs.outline_follow_cursor, label)
+                            .clicked()
+                        {
+                            ui.close();
+                        }
                         for (mode, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
                             let label = if crate::i18n::is_french() { fr } else { en };
                             if ui
@@ -4835,10 +4846,15 @@ impl Tessel {
                         });
                         return;
                     };
-                    crate::json_outline_panel::show(ui, doc, self.state.editor_prefs.outline_sort);
+                    crate::json_outline_panel::show(
+                        ui,
+                        doc,
+                        self.state.editor_prefs.outline_sort,
+                        self.state.editor_prefs.outline_follow_cursor,
+                    );
                 });
             });
-        if old_sort != self.state.editor_prefs.outline_sort {
+        if old_prefs != self.state.editor_prefs {
             self.save();
         }
         let tree_action =
@@ -6753,6 +6769,17 @@ impl Tessel {
                             spec.ui.border,
                             spec.ui.accent,
                         );
+                    }
+                    if let Some(offset) = tools
+                        .pending_char_range
+                        .map(|(_, end)| end)
+                        .or_else(|| out.cursor_range.map(|r| r.primary.index))
+                    {
+                        let next = Some(crate::files::OutlineCursor::Chars(offset));
+                        if tools.outline_cursor != next {
+                            tools.outline_cursor = next;
+                            ui.ctx().request_repaint();
+                        }
                     }
                     if let Some((sc, ec)) = tools.pending_char_range.take() {
                         let range = egui::text::CCursorRange::two(

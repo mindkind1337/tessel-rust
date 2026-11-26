@@ -1638,7 +1638,7 @@ Validation: both integration tests pass, covering all 70 source-generated vector
 
 ## JSON and JSONC Outline in Files
 
-GPUI and Compatibility expose a collapsed Outline section for the active JSON or JSONC buffer. A click navigates using the provider's UTF-16 selection range. The parser preserves duplicate keys, array indices and nested ranges. The reference generator runs the installed Monaco JSON language service against eleven synthetic buffers, including comments, trailing commas, partial edits and CRLF with astral characters. The native parser has bounded recursion and symbol counts. Further language providers, complete malformed-input recovery, Follow Cursor, Filter on Type and Timeline integration remain open.
+GPUI and Compatibility expose a collapsed Outline section for the active JSON or JSONC buffer. A click navigates using the provider's UTF-16 selection range. The parser preserves duplicate keys, array indices and nested ranges. The reference generator runs the installed Monaco JSON language service against eleven synthetic buffers, including comments, trailing commas, partial edits and CRLF with astral characters. The native parser has bounded recursion and symbol counts. Further language providers, complete malformed-input recovery, Filter on Type and Timeline integration remain open.
 
 ### Outline folding and range selection
 

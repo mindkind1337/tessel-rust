@@ -14,6 +14,8 @@ struct Binding {
 #[derive(Default)]
 pub(crate) struct Input {
     binding: Option<Binding>,
+    pub outline_scroll: gpui::ScrollHandle,
+    pub last_outline_scroll: std::cell::Cell<Option<(u64, u64)>>,
 }
 gpui::actions!(tessel_explorer_filter, [Clear, ConsumeEnter]);
 impl Input {

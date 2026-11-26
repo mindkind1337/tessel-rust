@@ -33,6 +33,8 @@ the additive API/cache and undo-boundary changes if still needed, update this ch
 the style and native-input regression tests. Remove the patch when an upstream
 API supplies the same behavior.
 
+The Outline panel uses the read-only `EditableTextState::caret_byte_offset()` accessor to follow the active end of a selection. Keep it or use an equivalent upstream accessor on upgrade.
+
 The editable-text state and history also expose `push_undo_stop()`. It separates the next recorded edit from the preceding group without adding empty entries, so explicit editor replacement commands do not merge with surrounding typing or adjacent replacements. Preserve this API and its native replacement regression tests when upgrading.
 Undo and redo also end the current edit group, so typing after history navigation cannot merge into an earlier command. Native GPUI regressions cover adjacent replacements, subsequent typing and a new edit after undo.
 

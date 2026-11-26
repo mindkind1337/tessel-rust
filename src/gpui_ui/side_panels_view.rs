@@ -718,6 +718,19 @@ fn render_explorer_tab(
                 .on_mouse_down_out(cx.listener(|root, _: &gpui::MouseDownEvent, _, cx| {
                     root.dispatch_action(GpuiAction::OutlineOptions(false), cx);
                 }));
+            menu = menu.child(render_chip(
+                "outline-follow",
+                if french {
+                    "Suivre le curseur"
+                } else {
+                    "Follow Cursor"
+                }
+                .into(),
+                sp.outline_follow_cursor,
+                tokens,
+                GpuiAction::OutlineFollow(!sp.outline_follow_cursor),
+                cx,
+            ));
             for (sort, en, fr) in crate::json_outline_panel::SORT_OPTIONS {
                 menu = menu.child(render_chip(
                     en,
@@ -742,19 +755,34 @@ fn render_explorer_tab(
     }
     let mut outline = div().flex().flex_col().child(heading);
     if sp.outline_open {
+        let mut reveal_index = None;
         let mut body = div()
             .id("explorer-outline-scroll")
+            .track_scroll(&explorer_input.outline_scroll)
             .max_h(px(160.0))
             .overflow_y_scroll()
             .flex()
             .flex_col();
         if let Some((id, tree)) = &sp.outline {
             let mut pending: Vec<_> = tree.iter().rev().map(|s| (s, 0usize)).collect();
+            let mut index = 0;
             while let Some((symbol, depth)) = pending.pop() {
+                let selected = sp.outline_selected.as_ref() == Some(&symbol.key);
+                if selected
+                    && sp.outline_scroll_generation != 0
+                    && explorer_input
+                        .last_outline_scroll
+                        .replace(Some((*id, sp.outline_scroll_generation)))
+                        != Some((*id, sp.outline_scroll_generation))
+                {
+                    reveal_index = Some(index);
+                }
+                index += 1;
                 let range = symbol.selection_range.unwrap_or(symbol.range);
                 use crate::app::gpui_bridge::OutlineRowAction;
                 let open = !sp.outline_folds.contains(&symbol.key);
                 let mut row = div()
+                    .when(selected, |row| row.bg(tokens.accent_soft))
                     .pl(px(8.0 + depth as f32 * 12.0))
                     .flex()
                     .items_center();
@@ -773,6 +801,7 @@ fn render_explorer_tab(
                     ));
                 }
                 let row_key = symbol.key.clone();
+                let selection_key = row_key.clone();
                 let full_range = symbol.range;
                 let id = *id;
                 let snapshot = tree.clone();
@@ -789,7 +818,7 @@ fn render_explorer_tab(
                                 GpuiAction::OutlineRow(
                                     id,
                                     snapshot.clone(),
-                                    OutlineRowAction::Reveal(target, select),
+                                    OutlineRowAction::Reveal(selection_key.clone(), target, select),
                                 ),
                                 cx,
                             );
@@ -814,7 +843,32 @@ fn render_explorer_tab(
                 "The active editor cannot provide outline information."
             });
         }
-        outline = outline.child(body);
+        outline = outline.relative().child(body);
+        if let Some(index) = reveal_index {
+            let scroll = explorer_input.outline_scroll.clone();
+            // Children have their new bounds after prepaint, including newly unfolded rows.
+            outline = outline.child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, (), window, _| {
+                        let Some(row) = scroll.bounds_for_item(index) else {
+                            return;
+                        };
+                        let viewport = scroll.bounds();
+                        let offset = scroll.offset();
+                        if row.top() + offset.y < viewport.top()
+                            || row.bottom() + offset.y > viewport.bottom()
+                        {
+                            scroll
+                                .set_offset(point(offset.x, viewport.center().y - row.center().y));
+                            window.refresh();
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
+        }
     }
 
     div()

@@ -9,6 +9,7 @@ struct Binding {
     state: Entity<EditableTextState>,
     synced: String,
     _changed: Subscription,
+    _caret: Subscription,
     indentation: editor_indent::Options,
 }
 
@@ -186,6 +187,90 @@ mod tests {
                 root.app.gpui_editor_document().unwrap().text,
                 "é😀\r\nz\r\n"
             )
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn outline_follows_the_native_caret_across_folded_ancestors(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("caret.json");
+        let siblings = |start| {
+            (start..start + 20)
+                .map(|i| format!(r#""row{i}":0"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let text = format!(
+            "{{{},\r\n\"😀\":{{\"value\":42}},{}}}",
+            siblings(0),
+            siblings(20)
+        );
+        std::fs::write(&path, &text).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        cx.refresh().unwrap();
+        for selector in [
+            "explorer-outline-fold-all",
+            "outline-options",
+            "outline-follow",
+        ] {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let pos = visual.debug_bounds(selector).unwrap().center();
+            visual.simulate_click(pos, Default::default());
+            cx.refresh().unwrap();
+        }
+        view.update(cx, |root, _, cx| {
+            root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                state.move_to(text.find("42").unwrap(), cx);
+            });
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        let child = "outline-name-/1:😀/15:value";
+        assert!(
+            gpui::VisualTestContext::from_window(view.into(), cx)
+                .debug_bounds(child)
+                .is_none()
+        );
+        for selector in ["outline-options", "outline-follow"] {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let pos = visual.debug_bounds(selector).unwrap().center();
+            visual.simulate_click(pos, Default::default());
+            cx.refresh().unwrap();
+        }
+        assert!(
+            gpui::VisualTestContext::from_window(view.into(), cx)
+                .debug_bounds(child)
+                .is_some()
+        );
+        view.update(cx, |root, _, _| {
+            let scroll = &root.explorer_input.outline_scroll;
+            let row = scroll.bounds_for_item(21).unwrap();
+            let viewport = scroll.bounds();
+            assert!(viewport.size.height > gpui::px(0.));
+            assert!(
+                (row.center().y + scroll.offset().y - viewport.center().y).abs() <= gpui::px(1.),
+                "row={row:?} viewport={viewport:?} offset={:?}",
+                scroll.offset()
+            );
+
+            assert_eq!(
+                root.app
+                    .gpui_editor_document()
+                    .unwrap()
+                    .tools
+                    .outline_selected
+                    .as_deref(),
+                Some("/1:😀/15:value")
+            );
         })
         .unwrap();
     }
@@ -856,12 +941,26 @@ impl Input {
                 binding.synced.clone_from(&doc.text);
             }
         });
+        let caret = cx.observe(&state, move |root, state, cx| {
+            if root
+                .editor_input
+                .bindings
+                .get(&id)
+                .is_some_and(|b| b.state == state)
+                && root
+                    .app
+                    .record_outline_cursor(id, state.read(cx).caret_byte_offset())
+            {
+                cx.notify();
+            }
+        });
         self.bindings.insert(
             id,
             Binding {
                 state,
                 synced: doc.text.clone(),
                 _changed: changed,
+                _caret: caret,
                 indentation: editor_indent::Options::detect(&doc.text),
             },
         );
