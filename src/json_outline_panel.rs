@@ -70,7 +70,9 @@ impl Cache {
             .unwrap_or_else(|| {
                 let mut symbols = match provider(doc) {
                     Some(Provider::Html) => crate::html_outline::document_symbols(&doc.text),
-                    Some(Provider::Css) => crate::css_outline::document_symbols(&doc.text),
+                    Some(Provider::Stylesheet(language)) => {
+                        crate::css_outline::document_symbols(&doc.text, language)
+                    }
                     Some(Provider::Json) => crate::json_outline::document_symbols(&doc.text),
                     None => Vec::new(),
                 };
@@ -98,7 +100,7 @@ impl Cache {
 enum Provider {
     Json,
     Html,
-    Css,
+    Stylesheet(crate::css_outline::Language),
 }
 fn provider(doc: &Document) -> Option<Provider> {
     let ext = doc.path.extension()?.to_str()?;
@@ -107,7 +109,11 @@ fn provider(doc: &Document) -> Option<Provider> {
     } else if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("jsonc") {
         Some(Provider::Json)
     } else if ext.eq_ignore_ascii_case("css") {
-        Some(Provider::Css)
+        Some(Provider::Stylesheet(crate::css_outline::Language::Css))
+    } else if ext.eq_ignore_ascii_case("scss") {
+        Some(Provider::Stylesheet(crate::css_outline::Language::Scss))
+    } else if ext.eq_ignore_ascii_case("less") {
+        Some(Provider::Stylesheet(crate::css_outline::Language::Less))
     } else {
         None
     }

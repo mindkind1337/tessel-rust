@@ -758,11 +758,49 @@ mod tests {
 
     #[gpui::test]
     fn css_outline_selects_the_rule_in_the_live_editor_buffer(cx: &mut TestAppContext) {
+        stylesheet_selection(
+            cx,
+            "style.CSS",
+            "/*😀*/ @media print {h1, .title {color:red}}",
+            "outline-name-/1:@media print/4:.title",
+            "/*😀*/ @media print {h1, x}",
+        );
+    }
+
+    #[gpui::test]
+    fn scss_outline_selects_the_variable_in_the_live_editor_buffer(cx: &mut TestAppContext) {
+        stylesheet_selection(
+            cx,
+            "style.scss",
+            "@mixin paint { $accent: red; }",
+            "outline-name-/5:paint/12:$accent",
+            "@mixin paint { x; }",
+        );
+    }
+
+    #[gpui::test]
+    fn less_outline_selects_the_variable_in_the_live_editor_buffer(cx: &mut TestAppContext) {
+        stylesheet_selection(
+            cx,
+            "style.less",
+            ".paint() { @accent: red; }",
+            "outline-name-/5:.paint/12:@accent",
+            ".paint() { x; }",
+        );
+    }
+
+    fn stylesheet_selection(
+        cx: &mut TestAppContext,
+        filename: &str,
+        draft: &str,
+        symbol: &'static str,
+        expected: &str,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("style.CSS");
+        let path = dir.path().join(filename);
         std::fs::write(&path, "body {}").unwrap();
         let mut doc = Document::open(dir.path(), &path).unwrap();
-        doc.text = "/*😀*/ @media print {h1, .title {color:red}}".into();
+        doc.text = draft.into();
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
             root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
@@ -772,10 +810,7 @@ mod tests {
         });
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
-        let position = visual
-            .debug_bounds("outline-name-/1:@media print/4:.title")
-            .unwrap()
-            .center();
+        let position = visual.debug_bounds(symbol).unwrap().center();
         visual.simulate_click(position, Default::default());
         visual.simulate_event(gpui::MouseDownEvent {
             position,
@@ -793,10 +828,7 @@ mod tests {
         cx.refresh().unwrap();
         cx.simulate_keystrokes(view.into(), "x");
         view.update(cx, |root, _, _| {
-            assert_eq!(
-                root.app.gpui_editor_document().unwrap().text,
-                "/*😀*/ @media print {h1, x}"
-            );
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, expected);
         })
         .unwrap();
     }

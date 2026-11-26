@@ -1,0 +1,1395 @@
+[
+  {
+    "language": "scss",
+    "text": "@at-root { .a{} }",
+    "expected": [
+      {
+        "name": "@at-root",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 9
+        },
+        "children": [
+          {
+            "name": ".a",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 16
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 14
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@at-root .x {}",
+    "expected": [
+      {
+        "name": "@at-root .x",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 15
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 12
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@at-root (without:media) {.a{}}",
+    "expected": [
+      {
+        "name": "@at-root (without:media)",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 32
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 25
+        },
+        "children": [
+          {
+            "name": ".a",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 27,
+              "endLineNumber": 1,
+              "endColumn": 31
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 27,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "a { font: 1em {weight:bold;} a:hover {color:red} }",
+    "expected": [
+      {
+        "name": "a",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 51
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 2
+        },
+        "children": [
+          {
+            "name": "a:hover",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 49
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 30,
+              "endLineNumber": 1,
+              "endColumn": 37
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "$brand: red; .foo { $a: 2; color:$brand; }",
+    "expected": [
+      {
+        "name": "$brand",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 12
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": []
+      },
+      {
+        "name": ".foo",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 43
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": [
+          {
+            "name": "$a",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 26
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 21,
+              "endLineNumber": 1,
+              "endColumn": 23
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@mixin padding($size:1) { $half: 2; .x {} } @function twice($x){ @return 2*$x; }",
+    "expected": [
+      {
+        "name": "padding",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 8,
+          "endLineNumber": 1,
+          "endColumn": 15
+        },
+        "children": [
+          {
+            "name": "$half",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 27,
+              "endLineNumber": 1,
+              "endColumn": 35
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 27,
+              "endLineNumber": 1,
+              "endColumn": 32
+            },
+            "children": []
+          },
+          {
+            "name": ".x",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 37,
+              "endLineNumber": 1,
+              "endColumn": 39
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "twice",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 45,
+          "endLineNumber": 1,
+          "endColumn": 81
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 55,
+          "endLineNumber": 1,
+          "endColumn": 60
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@include padding(2); @use \"theme\"; @if $dark { .dark {} } @else { .light {} }",
+    "expected": [
+      {
+        "name": ".dark",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 56
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 48,
+          "endLineNumber": 1,
+          "endColumn": 53
+        },
+        "children": []
+      },
+      {
+        "name": ".light",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 67,
+          "endLineNumber": 1,
+          "endColumn": 76
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 67,
+          "endLineNumber": 1,
+          "endColumn": 73
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@for $i from 1 through 3 {.item-#{$i} {}}",
+    "expected": [
+      {
+        "name": ".item-#{$i}",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 27,
+          "endLineNumber": 1,
+          "endColumn": 41
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 27,
+          "endLineNumber": 1,
+          "endColumn": 38
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "// 😀 test\r\n$x: 1 !default;",
+    "expected": [
+      {
+        "name": "$x",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 15
+        },
+        "selectionRange": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 3
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "%base { font: {size: 1em;} }",
+    "expected": [
+      {
+        "name": "%base",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 29
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 6
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@each $x in $y { .#{$x} {} }",
+    "expected": [
+      {
+        "name": ".#{$x}",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 18,
+          "endLineNumber": 1,
+          "endColumn": 27
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 18,
+          "endLineNumber": 1,
+          "endColumn": 24
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "a{ @include hover {&:hover {}} }",
+    "expected": [
+      {
+        "name": "a",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 33
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 2
+        },
+        "children": [
+          {
+            "name": "&:hover",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 30
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@mixin café { $t: \"http://a\"; .inner{} }",
+    "expected": [
+      {
+        "name": "café",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 41
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 8,
+          "endLineNumber": 1,
+          "endColumn": 12
+        },
+        "children": [
+          {
+            "name": "$t",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 17
+            },
+            "children": []
+          },
+          {
+            "name": ".inner",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 31,
+              "endLineNumber": 1,
+              "endColumn": 39
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 31,
+              "endLineNumber": 1,
+              "endColumn": 37
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "$palette: (one: #fff, two: #000); .avatar {background:url(https://example.invalid/a.png)}",
+    "expected": [
+      {
+        "name": "$palette",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 33
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 9
+        },
+        "children": []
+      },
+      {
+        "name": ".avatar",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 35,
+          "endLineNumber": 1,
+          "endColumn": 90
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 35,
+          "endLineNumber": 1,
+          "endColumn": 42
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@while $n > 0 {.loop {}}",
+    "expected": [
+      {
+        "name": ".loop",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 16,
+          "endLineNumber": 1,
+          "endColumn": 24
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 16,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": ".x { background:url(//example.invalid/x); } // tail",
+    "expected": [
+      {
+        "name": ".x",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 3
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@media print {.page { $mark: red; }}",
+    "expected": [
+      {
+        "name": "@media print",
+        "kind": 1,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 8,
+          "endLineNumber": 1,
+          "endColumn": 13
+        },
+        "children": [
+          {
+            "name": ".page",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 36
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 15,
+              "endLineNumber": 1,
+              "endColumn": 20
+            },
+            "children": [
+              {
+                "name": "$mark",
+                "kind": 12,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 23,
+                  "endLineNumber": 1,
+                  "endColumn": 33
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 23,
+                  "endLineNumber": 1,
+                  "endColumn": 28
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "scss",
+    "text": "@function partial($x) { $y: $x",
+    "expected": [
+      {
+        "name": "partial",
+        "kind": 11,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 31
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 11,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": [
+          {
+            "name": "$y",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 31
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 25,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".m (@a) { @x: @a; }",
+    "expected": [
+      {
+        "name": ".m",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 3
+        },
+        "children": [
+          {
+            "name": "@x",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 11,
+              "endLineNumber": 1,
+              "endColumn": 17
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 11,
+              "endLineNumber": 1,
+              "endColumn": 13
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "#bundle > .rounded(3); .after {}",
+    "expected": [
+      {
+        "name": ".after",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 24,
+          "endLineNumber": 1,
+          "endColumn": 33
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 24,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "@brand: red; .foo{ @size:2; color:@brand; }",
+    "expected": [
+      {
+        "name": "@brand",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 12
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": []
+      },
+      {
+        "name": ".foo",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "children": [
+          {
+            "name": "@size",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 27
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 25
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".rounded(@r:2) when (@r > 0) { border-radius:@r; .leaf {} } .box { .rounded(3); }",
+    "expected": [
+      {
+        "name": ".rounded",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 60
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 9
+        },
+        "children": [
+          {
+            "name": ".leaf",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 50,
+              "endLineNumber": 1,
+              "endColumn": 58
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 50,
+              "endLineNumber": 1,
+              "endColumn": 55
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": ".box",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 61,
+          "endLineNumber": 1,
+          "endColumn": 82
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 61,
+          "endLineNumber": 1,
+          "endColumn": 65
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "#theme(@x) {.a{}} .base {a:b} .base();",
+    "expected": [
+      {
+        "name": "#theme",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": [
+          {
+            "name": ".a",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 17
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 13,
+              "endLineNumber": 1,
+              "endColumn": 15
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": ".base",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 19,
+          "endLineNumber": 1,
+          "endColumn": 30
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 19,
+          "endLineNumber": 1,
+          "endColumn": 24
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".normal, .other {} @media screen { .m(){} }",
+    "expected": [
+      {
+        "name": ".normal",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 19
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 8
+        },
+        "children": []
+      },
+      {
+        "name": ".other",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 10,
+          "endLineNumber": 1,
+          "endColumn": 19
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 10,
+          "endLineNumber": 1,
+          "endColumn": 16
+        },
+        "children": []
+      },
+      {
+        "name": "@media screen",
+        "kind": 1,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 20,
+          "endLineNumber": 1,
+          "endColumn": 44
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 27,
+          "endLineNumber": 1,
+          "endColumn": 33
+        },
+        "children": [
+          {
+            "name": ".m",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 36,
+              "endLineNumber": 1,
+              "endColumn": 42
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 36,
+              "endLineNumber": 1,
+              "endColumn": 38
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "@detached: { .x{} };",
+    "expected": [
+      {
+        "name": "@detached",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 20
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 10
+        },
+        "children": []
+      },
+      {
+        "name": ".x",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 18
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 14,
+          "endLineNumber": 1,
+          "endColumn": 16
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "// hi\n.foo-@{name} { color: red; }",
+    "expected": [
+      {
+        "name": ".foo-@{name}",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 29
+        },
+        "selectionRange": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 13
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".base when (@ok) { .inner {} }",
+    "expected": [
+      {
+        "name": ".base when (@ok)",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 31
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 17
+        },
+        "children": [
+          {
+            "name": ".inner",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 29
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 20,
+              "endLineNumber": 1,
+              "endColumn": 26
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "@theme: \"url://keep\"; // 😀\r\n.outer{ &.active {} }",
+    "expected": [
+      {
+        "name": "@theme",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 21
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": []
+      },
+      {
+        "name": ".outer",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 22
+        },
+        "selectionRange": {
+          "startLineNumber": 2,
+          "startColumn": 1,
+          "endLineNumber": 2,
+          "endColumn": 7
+        },
+        "children": [
+          {
+            "name": "&.active",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 2,
+              "startColumn": 9,
+              "endLineNumber": 2,
+              "endColumn": 20
+            },
+            "selectionRange": {
+              "startLineNumber": 2,
+              "startColumn": 9,
+              "endLineNumber": 2,
+              "endColumn": 17
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".foo { background:url(//example.invalid/x); @small:2 }",
+    "expected": [
+      {
+        "name": ".foo",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 55
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 5
+        },
+        "children": [
+          {
+            "name": "@small",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 45,
+              "endLineNumber": 1,
+              "endColumn": 53
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 45,
+              "endLineNumber": 1,
+              "endColumn": 51
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".mix(@a) { .nested(@b) { @c: @b; } }",
+    "expected": [
+      {
+        "name": ".mix",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 37
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 5
+        },
+        "children": [
+          {
+            "name": ".nested",
+            "kind": 5,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 35
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 12,
+              "endLineNumber": 1,
+              "endColumn": 19
+            },
+            "children": [
+              {
+                "name": "@c",
+                "kind": 12,
+                "range": {
+                  "startLineNumber": 1,
+                  "startColumn": 26,
+                  "endLineNumber": 1,
+                  "endColumn": 32
+                },
+                "selectionRange": {
+                  "startLineNumber": 1,
+                  "startColumn": 26,
+                  "endLineNumber": 1,
+                  "endColumn": 28
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "@media: blue; @media print {.x {color:@media}}",
+    "expected": [
+      {
+        "name": "@media",
+        "kind": 12,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 13
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 7
+        },
+        "children": []
+      },
+      {
+        "name": "@media print",
+        "kind": 1,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 15,
+          "endLineNumber": 1,
+          "endColumn": 47
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 22,
+          "endLineNumber": 1,
+          "endColumn": 27
+        },
+        "children": [
+          {
+            "name": ".x",
+            "kind": 4,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 29,
+              "endLineNumber": 1,
+              "endColumn": 46
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 29,
+              "endLineNumber": 1,
+              "endColumn": 31
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": "@import \"theme.less\"; .paint(); .last {}",
+    "expected": [
+      {
+        "name": ".last",
+        "kind": 4,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 33,
+          "endLineNumber": 1,
+          "endColumn": 41
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 33,
+          "endLineNumber": 1,
+          "endColumn": 38
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "language": "less",
+    "text": ".partial(@x) { @y: @x",
+    "expected": [
+      {
+        "name": ".partial",
+        "kind": 5,
+        "range": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 22
+        },
+        "selectionRange": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 1,
+          "endColumn": 9
+        },
+        "children": [
+          {
+            "name": "@y",
+            "kind": 12,
+            "range": {
+              "startLineNumber": 1,
+              "startColumn": 16,
+              "endLineNumber": 1,
+              "endColumn": 22
+            },
+            "selectionRange": {
+              "startLineNumber": 1,
+              "startColumn": 16,
+              "endLineNumber": 1,
+              "endColumn": 18
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+]
