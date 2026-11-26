@@ -218,8 +218,16 @@ pub(crate) fn render_document_editor_stage(
     let header = render_editor_toolbar(doc, french, tokens, cx).into_any_element();
     let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
-    let content = if doc.pdf_summary.is_some() {
-        render_pdf_stage(doc, french, tokens, cx).into_any_element()
+    let content = if let Some(pdf) = &doc.pdf_summary {
+        render_pdf_stage(
+            pdf,
+            doc.media_pixels.as_ref(),
+            PdfTarget::Local(doc.instance_id),
+            french,
+            tokens,
+            cx,
+        )
+        .into_any_element()
     } else if doc.office_summary.is_some() {
         render_office_stage(doc, french, tokens, cx).into_any_element()
     } else if let Some(dims) = doc.image_dims {
@@ -1164,133 +1172,171 @@ fn flatten_json_preview(
     }
 }
 
-fn render_pdf_stage(
-    doc: &GpuiActiveDocumentSummary,
-    french: bool,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    let (page, pages, scale, busy, dims, err) = doc.pdf_summary.clone().unwrap_or_default();
-    let page_txt = format!(
-        "Page {} / {}",
-        page + 1,
-        if pages == 0 {
-            "…".into()
-        } else {
-            pages.to_string()
-        }
-    );
-    let dims_txt = dims
-        .map(|[w, h]| format!("{w} × {h} px · {:.0}%", scale * 100.0))
-        .unwrap_or_else(|| {
-            if busy {
-                "Rasterizing page in isolated worker…".into()
-            } else {
-                err
-            }
-        });
-
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .px(px(12.0))
-                .py(px(6.0))
-                .bg(tokens.chrome)
-                .border_b_1()
-                .border_color(tokens.border)
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .text_size(px(11.5))
-                .child(
-                    div()
-                        .id("pdf-prev")
-                        .px(px(8.0))
-                        .py(px(2.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::StepPdfPage(-1), cx);
-                        }))
-                        .child(if french { "Précédent" } else { "Previous" }),
-                )
-                .child(
-                    div()
-                        .text_color(tokens.text_strong)
-                        .child(SharedString::from(page_txt)),
-                )
-                .child(
-                    div()
-                        .id("pdf-next")
-                        .px(px(8.0))
-                        .py(px(2.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::StepPdfPage(1), cx);
-                        }))
-                        .child(if french { "Suivant" } else { "Next" }),
-                )
-                .child(
-                    div()
-                        .id("pdf-zoom-out")
-                        .px(px(8.0))
-                        .py(px(2.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::StepPdfZoom(-0.25), cx);
-                        }))
-                        .child("−"),
-                )
-                .child(SharedString::from(format!("{:.0}%", scale * 100.0)))
-                .child(
-                    div()
-                        .id("pdf-zoom-in")
-                        .px(px(8.0))
-                        .py(px(2.5))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::StepPdfZoom(0.25), cx);
-                        }))
-                        .child("+"),
-                ),
-        )
-        .child(render_media_pixels(doc, dims_txt, tokens))
+#[derive(Clone)]
+pub(super) enum PdfTarget {
+    Local(u64),
+    Remote(String),
 }
 
-fn render_media_pixels(
-    doc: &GpuiActiveDocumentSummary,
-    fallback: String,
+pub(super) fn render_pdf_stage(
+    summary: &crate::pdf::PdfSummary,
+    image: Option<&std::sync::Arc<gpui::RenderImage>>,
+    target: PdfTarget,
+    french: bool,
     tokens: &GpuiThemeTokens,
+    cx: &Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
-    div()
+    use crate::remote_panel::control::Command;
+    let crate::pdf::PdfSummary {
+        page,
+        pages,
+        scale,
+        busy,
+        error,
+        layout,
+    } = summary;
+    let button = |id: &'static str, label: &'static str, enabled: bool, action: GpuiAction| {
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .px(px(8.))
+            .py(px(2.5))
+            .rounded(px(4.))
+            .bg(tokens.surface_2)
+            .opacity(if enabled { 1. } else { 0.45 })
+            .when(enabled, |el| {
+                el.cursor_pointer()
+                    .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
+            })
+            .child(label)
+    };
+    let turn = |delta| match target {
+        PdfTarget::Local(_) => GpuiAction::StepPdfPage(delta),
+        PdfTarget::Remote(_) => GpuiAction::Remote(Command::PdfPage(delta)),
+    };
+    let zoom = |delta| match target {
+        PdfTarget::Local(_) => GpuiAction::StepPdfZoom(delta),
+        PdfTarget::Remote(_) => GpuiAction::Remote(Command::PdfZoom(delta)),
+    };
+    let fit = match &target {
+        PdfTarget::Local(id) => GpuiAction::PdfFit(*id),
+        PdfTarget::Remote(path) => GpuiAction::Remote(Command::PdfFit(path.clone())),
+    };
+    let toolbar = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(6.))
+        .bg(tokens.chrome)
+        .border_b_1()
+        .border_color(tokens.border)
+        .child(button(
+            "pdf-prev",
+            if french { "Précédent" } else { "Previous" },
+            !busy && *page > 0,
+            turn(-1),
+        ))
+        .child(SharedString::from(format!(
+            "Page {} / {}",
+            page + 1,
+            if *pages > 0 {
+                pages.to_string()
+            } else {
+                "…".into()
+            }
+        )))
+        .child(button(
+            "pdf-next",
+            if french { "Suivant" } else { "Next" },
+            !busy && page + 1 < *pages,
+            turn(1),
+        ))
+        .child(button(
+            "pdf-zoom-out",
+            "−",
+            !busy && *scale > 0.25,
+            zoom(-0.25),
+        ))
+        .child(SharedString::from(format!("{:.0} %", scale * 100.)))
+        .child(button("pdf-zoom-in", "+", !busy && *scale < 4., zoom(0.25)))
+        .child(button(
+            "pdf-fit",
+            if french {
+                "Ajuster à la largeur"
+            } else {
+                "Fit width"
+            },
+            !layout.fit,
+            fit,
+        ));
+    let owner = cx.weak_entity();
+    let previous_width = layout.viewport;
+    let probe = canvas(
+        |_, _, _| (),
+        move |bounds, (), _, cx| {
+            let width = f32::from(bounds.size.width).round();
+            if width > 0. && width != previous_width {
+                let target = target.clone();
+                let owner = owner.clone();
+                cx.defer(move |cx| {
+                    let _ = owner.update(cx, |root, cx| {
+                        let changed = match &target {
+                            PdfTarget::Local(id) => root.app.set_local_pdf_viewport(*id, width),
+                            PdfTarget::Remote(path) => {
+                                root.app.set_remote_pdf_viewport(path, width)
+                            }
+                        };
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .w_full()
+    .h(px(1.));
+    let mut stage = div()
         .id("native-media-pixels")
+        .debug_selector(|| "pdf-page-viewport".into())
         .flex_1()
         .min_h_0()
         .w_full()
         .overflow_scroll()
-        .p(px(16.))
-        .child(if let Some(image) = &doc.media_pixels {
-            let size = image.size(0);
+        .p(px(24.));
+    if let Some(image) = image
+        && let Some([width, height]) = layout.size
+    {
+        stage = stage.child(
             img(image.clone())
-                .w(px(size.width.0 as f32))
-                .h(px(size.height.0 as f32))
-                .into_any_element()
+                .flex_none()
+                .mx_auto()
+                .id("pdf-page-image")
+                .debug_selector(|| "pdf-page-image".into())
+                .w(px(width))
+                .h(px(height)),
+        );
+    } else if !error.is_empty() {
+        stage = stage.child(SharedString::from(error.clone()));
+    } else if *busy {
+        stage = stage.child(if french {
+            "Chargement de la page…"
         } else {
-            div()
-                .text_color(tokens.text)
-                .child(SharedString::from(fallback))
-                .into_any_element()
-        })
+            "Rendering page…"
+        });
+    }
+    div()
+        .relative()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(toolbar)
+        .child(stage)
+        .child(probe)
 }
 
 fn render_office_stage(

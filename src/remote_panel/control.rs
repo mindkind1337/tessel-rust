@@ -27,6 +27,7 @@ pub(crate) enum Command {
     Download(String),
     PdfPage(isize),
     PdfZoom(f32),
+    PdfFit(String),
     OfficeSection(usize),
 }
 
@@ -48,7 +49,7 @@ pub(crate) struct Snapshot {
     pub document: Option<(String, Option<String>, usize)>,
     pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
-    pub pdf: Option<crate::pdf::PdfSummaryTuple>,
+    pub pdf: Option<crate::pdf::PdfSummary>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
     pub versions: Vec<(String, i64)>,
@@ -210,6 +211,20 @@ impl RemotePanel {
         }
     }
 
+    fn document_pdf(&mut self, path: &str) -> Option<&mut crate::pdf::PdfView> {
+        self.document
+            .as_mut()
+            .filter(|doc| doc.path == path)?
+            .preview
+            .as_mut()?
+            .pdf
+            .as_mut()
+    }
+    pub(crate) fn set_pdf_viewport(&mut self, path: &str, width: f32) -> bool {
+        self.document_pdf(path)
+            .is_some_and(|pdf| pdf.set_viewport(width))
+    }
+
     pub(crate) fn command(&mut self, command: Command, hosts: &[Host]) {
         if let Some(doc) = &mut self.document {
             doc.image_menu = None;
@@ -250,6 +265,11 @@ impl RemotePanel {
                     .and_then(|doc| doc.pdf.as_mut())
                 {
                     pdf.step_page(delta);
+                }
+            }
+            Command::PdfFit(path) => {
+                if let Some(pdf) = self.document_pdf(&path) {
+                    pdf.fit_width();
                 }
             }
             Command::PdfZoom(delta) => {

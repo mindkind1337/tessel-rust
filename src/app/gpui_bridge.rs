@@ -411,7 +411,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub sheet: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
     pub json_preview: Option<crate::rich_previews::JsonDocumentPreview>,
     pub readable_blocks: Vec<crate::preview::ReadableBlock>,
-    pub pdf_summary: Option<crate::pdf::PdfSummaryTuple>,
+    pub pdf_summary: Option<crate::pdf::PdfSummary>,
     pub office_summary: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub image_menu: Option<(f32, f32)>,
     pub image_download_notice: String,
@@ -884,6 +884,7 @@ pub(crate) enum GpuiAction {
     StepPdfPage(isize),
     ImageMenu(u64, Option<(f32, f32)>),
     DownloadImage(u64),
+    PdfFit(u64),
     StepPdfZoom(f32),
     SelectOfficeSection(usize),
     FollowDocumentLink(String),
@@ -2310,6 +2311,20 @@ impl Tessel {
             EditorToolField::Goto if doc.tools.goto_open => Some(&doc.tools.goto_line),
             _ => None,
         }
+    }
+
+    pub(crate) fn set_local_pdf_viewport(&mut self, id: u64, width: f32) -> bool {
+        self.view == View::Files
+            && self
+                .documents
+                .get_mut(self.active_document)
+                .filter(|doc| doc.instance_id() == id)
+                .and_then(|doc| doc.pdf.as_mut())
+                .is_some_and(|pdf| pdf.set_viewport(width))
+    }
+
+    pub(crate) fn set_remote_pdf_viewport(&mut self, path: &str, width: f32) -> bool {
+        self.view == View::Remote && self.remote.set_pdf_viewport(path, width)
     }
 
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
@@ -5684,6 +5699,16 @@ impl Tessel {
                     && doc.tools.image_menu.is_some()
                 {
                     doc.choose_image_copy(self.state.language == crate::i18n::Language::French);
+                }
+            }
+            GpuiAction::PdfFit(id) => {
+                if let Some(pdf) = self
+                    .documents
+                    .get_mut(self.active_document)
+                    .filter(|doc| doc.instance_id() == id)
+                    .and_then(|doc| doc.pdf.as_mut())
+                {
+                    pdf.fit_width();
                 }
             }
             GpuiAction::StepPdfZoom(delta) => {
