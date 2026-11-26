@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub(crate) struct Cache {
     document: u64,
     provider: Option<Provider>,
+    pending: Option<Arc<crate::script_outline_worker::Pending>>,
+    failed: bool,
     sort: Sort,
     followed: Option<crate::files::OutlineCursor>,
     text: Arc<str>,
@@ -16,6 +18,19 @@ pub(crate) struct Cache {
 }
 
 impl Cache {
+    pub(crate) fn loading(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub(crate) fn placeholder(&self, french: bool) -> &'static str {
+        match (self.loading(), self.failed, french) {
+            (true, _, true) => "Chargement du plan…",
+            (true, _, false) => "Loading outline…",
+            (_, true, true) => "Impossible de charger le plan.",
+            (_, true, false) => "Could not load outline.",
+            (_, _, true) => "Aucun symbole dans ce document.",
+            (_, _, false) => "No symbols found in this document.",
+        }
+    }
     pub(crate) fn matches(&self, doc: &Document) -> bool {
         self.document == doc.instance_id()
             && self.provider == provider(doc)
@@ -68,7 +83,17 @@ impl Cache {
         let mut cache = previous
             .filter(|cache| cache.matches(doc))
             .unwrap_or_else(|| {
-                let mut symbols = match provider(doc) {
+                let provider = provider(doc);
+                let text: Arc<str> = Arc::from(doc.text.as_str());
+                let mut pending = None;
+                let mut symbols = match provider {
+                    Some(Provider::Script { typescript }) => {
+                        pending = Some(crate::script_outline_worker::Pending::start(
+                            text.clone(),
+                            typescript,
+                        ));
+                        Vec::new()
+                    }
                     Some(Provider::Html) => crate::html_outline::document_symbols(&doc.text),
                     Some(Provider::Stylesheet(language)) => {
                         crate::css_outline::document_symbols(&doc.text, language)
@@ -79,13 +104,30 @@ impl Cache {
                 crate::outline_tree::keyed(&mut symbols, "");
                 Self {
                     document: doc.instance_id(),
-                    provider: provider(doc),
+                    provider,
+                    pending,
+                    failed: false,
                     sort: Sort::Position,
                     followed: None,
-                    text: Arc::from(doc.text.as_str()),
+                    text,
                     symbols: Arc::new(symbols),
                 }
             });
+        if let Some(result) = cache.pending.as_ref().and_then(|job| job.result()) {
+            match result {
+                Ok(symbols) => {
+                    cache.symbols = symbols.clone();
+                    cache.followed = None;
+                }
+                Err(()) => cache.failed = true,
+            }
+            cache.pending = None;
+            crate::outline_tree::sort_symbols(
+                Arc::make_mut(&mut cache.symbols).as_mut_slice(),
+                sort,
+            );
+            cache.sort = sort;
+        }
         if cache.sort != sort {
             crate::outline_tree::sort_symbols(
                 Arc::make_mut(&mut cache.symbols).as_mut_slice(),
@@ -98,6 +140,7 @@ impl Cache {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Provider {
+    Script { typescript: bool },
     Json,
     Html,
     Stylesheet(crate::css_outline::Language),
@@ -115,6 +158,8 @@ fn provider(doc: &Document) -> Option<Provider> {
     };
     use crate::css_outline::Language;
     match ext {
+        "js" | "mjs" | "cjs" => Some(Provider::Script { typescript: false }),
+        "ts" | "mts" | "cts" => Some(Provider::Script { typescript: true }),
         "html" | "htm" | "jsp" | "jspf" => Some(Provider::Html),
         "json" | "jsonc" | "jsonl" => Some(Provider::Json),
         "css" => Some(Provider::Stylesheet(Language::Css)),
@@ -163,12 +208,12 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, sort: Sort, follow: bool, fil
         set_all_folds(doc, &cache.symbols, expand);
     }
     if cache.symbols.is_empty() {
+        if cache.loading() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(40));
+        }
+        ui.label(cache.placeholder(crate::i18n::is_french()));
         ui.data_mut(|d| d.insert_temp(id, cache));
-        ui.label(if crate::i18n::is_french() {
-            "Aucun symbole dans ce document."
-        } else {
-            "No symbols found in this document."
-        });
         return;
     }
     let tree_id = ui.id().with(("outline-tree", doc.instance_id()));
@@ -496,6 +541,28 @@ pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: boo
 mod tests {
     use super::*;
     use crate::files::OutlineCursor;
+
+    #[test]
+    fn script_outline_drops_the_previous_draft_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("draft.MTS");
+        std::fs::write(&path, "export const saved=1;").unwrap();
+        let mut doc = Document::open(directory.path(), &path).unwrap();
+        let first = Cache::current(None, &doc, Sort::Position);
+        assert!(first.loading());
+        let old_job = Arc::downgrade(first.pending.as_ref().unwrap());
+        let same = Cache::current(Some(first), &doc, Sort::Name);
+        assert!(Arc::ptr_eq(
+            &old_job.upgrade().unwrap(),
+            same.pending.as_ref().unwrap()
+        ));
+        doc.text = "export const draft=2;".into();
+        let replacement = Cache::current(Some(same), &doc, Sort::Name);
+        assert!(old_job.upgrade().is_none());
+        assert!(replacement.loading());
+        assert_eq!(&*replacement.text, doc.text.as_str());
+        assert!(replacement.symbols.is_empty());
+    }
 
     #[test]
     fn outline_routes_editor_filename_aliases_and_dotfiles() {

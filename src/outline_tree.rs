@@ -54,7 +54,7 @@ pub fn keyed(symbols: &mut [Symbol], parent: &str) {
     }
 }
 
-fn compare_names(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_names(a: &str, b: &str) -> std::cmp::Ordering {
     static COLLATOR: std::sync::OnceLock<icu_collator::CollatorBorrowed<'static>> =
         std::sync::OnceLock::new();
     COLLATOR

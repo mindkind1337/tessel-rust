@@ -67,6 +67,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 imgalifier-avif = "0.1.0"
 resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 similar = { version = "2.7.0", default-features = false, features = ["text"] }
+oxc_allocator = "=0.160.0"
+oxc_span = "=0.160.0"
+oxc_ast = "=0.160.0"
+oxc_ast_visit = "=0.160.0"
+oxc_parser = { version = "=0.160.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 wry = "=0.57.1"

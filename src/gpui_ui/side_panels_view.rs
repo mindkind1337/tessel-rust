@@ -943,11 +943,7 @@ fn render_explorer_tab(
                 body = body.child(row);
             }
             if tree.is_empty() {
-                body = body.child(if french {
-                    "Aucun symbole dans ce document."
-                } else {
-                    "No symbols found in this document."
-                });
+                body = body.child(sp.outline_placeholder);
             }
         } else {
             body = body.child(if french {

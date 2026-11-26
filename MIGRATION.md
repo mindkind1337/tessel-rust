@@ -1636,7 +1636,9 @@ The unfinished Explorer draft is not integrated unchanged: its line-based keys r
 `scripts/extract_outline_reference.mjs` evaluates the actual source model against synthetic symbols and records its hash and collation locale. The fixture covers 60 combinations of sorting/filtering/highlighting/folding plus ten text matching cases. No project files or credentials enter these fixtures. This is a shared model, not an activated Outline/Timeline UI; native language-service providers, section controls, navigation and Timeline history remain outstanding.
 Validation: both integration tests pass, covering all 70 source-generated vectors plus line-edit key stability. Final focused build: 37.52 seconds; strict all-target/all-feature Clippy passes with warnings denied (1m13s). Formatting and diff checks pass. README feature claims stay unchanged because the panel is not activated yet.
 
-## JSON, JSONC, HTML, CSS, SCSS and Less Outline in Files
+## Files Outline language providers
+
+JavaScript and TypeScript outlines use the Oxc Rust parser in a disposable worker. The child receives the draft over standard input. Both renderers cache results for the document and its current text. The reference fixtures use the TypeScript worker bundled with Monaco, including UTF-16 ranges, import aliases, accessors and function overloads. Complete navigation-tree parity, including recovery on unfinished declarations, remains open.
 
 The native CSS outline groups rules inside media queries and nested selectors. Grouped selectors have individual source positions. Synthetic stylesheets are compared with the installed Monaco CSS, SCSS and Less providers for symbol names, kinds, nesting and source ranges. The native outline recognizes SCSS variables, mixins and functions, and Less variables and mixins.
 

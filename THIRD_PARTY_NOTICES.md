@@ -367,3 +367,5 @@ The CSS outline follows the document symbol rules of Microsoft’s vscode-css-la
 The HTML outline provider follows Microsoft’s vscode-html-languageservice parser and document-symbol naming. Its synthetic reference vectors use Monaco’s bundled provider under the Microsoft MIT notice above.
 
 The JSON outline provider follows the document symbol behavior of Microsoft's vscode-json-languageservice bundled with Monaco. Its differential fixtures are generated from the installed provider with synthetic documents under the Microsoft MIT notice above.
+
+The JavaScript and TypeScript outline parses source with the MIT-licensed Oxc Rust parser (https://github.com/oxc-project/oxc). Its synthetic differential fixtures use the TypeScript language service (Apache-2.0) bundled with Monaco and Monaco's MIT-licensed document-symbol adapter.

@@ -467,6 +467,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub outline_scroll_generation: u64,
     pub outline_sort: crate::outline_tree::Sort,
     pub outline_folds: std::collections::HashSet<String>,
+    pub outline_placeholder: &'static str,
     pub outline: Option<(u64, std::sync::Arc<Vec<crate::outline_tree::Symbol>>)>,
     pub scm_branch: Option<String>,
     pub scm_ahead: usize,
@@ -1653,6 +1654,11 @@ impl Tessel {
                 .iter()
                 .any(|session| session.profile_migration.is_some() || session.restarting.is_some())
             || self.transcript_trash_busy
+            || self
+                .gpui_extra
+                .outline_cache
+                .as_ref()
+                .is_some_and(|c| c.loading())
             || self.gpui_extra.session_discovery.busy()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -4313,6 +4319,11 @@ impl Tessel {
         }
         GpuiSidePanelsSnapshot {
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
+            outline_placeholder: self
+                .gpui_extra
+                .outline_cache
+                .as_ref()
+                .map_or("", |c| c.placeholder(french)),
             outline_folds: outline
                 .as_ref()
                 .and_then(|_| self.documents.get(self.active_document))

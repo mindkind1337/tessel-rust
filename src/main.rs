@@ -134,6 +134,8 @@ pub mod prompt_before;
 mod raster_preview;
 mod regional_date;
 mod saved_version_diff;
+mod script_outline;
+mod script_outline_worker;
 #[cfg(all(windows, test))]
 mod webview_test_support;
 // Owner-local Linear UI; task-launch integration remains in progress.
@@ -253,6 +255,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().nth(1).as_deref() == Some("--account-callback") {
         let raw = std::env::args().nth(2).unwrap_or_default();
         return account::receive_callback(&raw).map_err(Into::into);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--script-outline-worker") {
+        std::process::exit(if script_outline_worker::worker().is_ok() {
+            0
+        } else {
+            1
+        });
     }
     if std::env::args().nth(1).as_deref() == Some("--office-worker") {
         std::process::exit(if office::worker().is_ok() { 0 } else { 1 });
