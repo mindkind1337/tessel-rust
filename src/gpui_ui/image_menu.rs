@@ -1,4 +1,4 @@
-//! The original-image download menu shared by the local and SSH previews.
+//! Single-action context menus for document previews.
 use super::{TesselGpuiRoot, theme::GpuiThemeTokens};
 use crate::{
     app::gpui_bridge::{GpuiAction, GpuiCenterMode, GpuiWorkspaceSnapshot},
@@ -11,11 +11,13 @@ use gpui::{
 
 pub(super) struct Menu {
     position: (f32, f32),
-    local: bool,
+    menu_id: &'static str,
+    item_id: &'static str,
+    label: &'static str,
     enabled: bool,
-    french: bool,
+
     pub(super) close: GpuiAction,
-    download: GpuiAction,
+    activate: GpuiAction,
 }
 
 impl Menu {
@@ -26,6 +28,23 @@ impl Menu {
         let (position, close, download, enabled, local) = match s.center_mode {
             GpuiCenterMode::DocumentEditor => {
                 let doc = s.active_document.as_ref()?;
+                if let Some((position, web)) = doc.html_link_menu {
+                    let label = match (web, s.french) {
+                        (true, true) => "Ouvrir dans le navigateur",
+                        (true, false) => "Open in browser",
+                        (false, true) => "Ouvrir dans un nouvel onglet",
+                        (false, false) => "Open in new tab",
+                    };
+                    return Some(Self {
+                        position,
+                        enabled: true,
+                        label,
+                        menu_id: "html-link-menu",
+                        item_id: "html-link-open",
+                        close: GpuiAction::CloseHtmlLinkMenu,
+                        activate: GpuiAction::OpenHtmlLinkMenuTarget(doc.instance_id),
+                    });
+                }
                 (
                     doc.image_menu?,
                     GpuiAction::ImageMenu(doc.instance_id, None),
@@ -48,11 +67,24 @@ impl Menu {
         };
         Some(Self {
             position,
-            local,
+            menu_id: if local {
+                "local-image-menu"
+            } else {
+                "remote-image-menu"
+            },
+            item_id: if local {
+                "local-image-download"
+            } else {
+                "remote-image-download"
+            },
             enabled,
-            french: s.french,
+            label: if s.french {
+                "Télécharger…"
+            } else {
+                "Download…"
+            },
             close,
-            download,
+            activate: download,
         })
     }
 
@@ -64,18 +96,9 @@ impl Menu {
         tokens: &GpuiThemeTokens,
         cx: &Context<TesselGpuiRoot>,
     ) -> Stateful<Div> {
-        let (menu_id, item_id) = if self.local {
-            ("local-image-menu", "local-image-download")
-        } else {
-            ("remote-image-menu", "remote-image-download")
-        };
-        let label = if self.french {
-            "Télécharger…"
-        } else {
-            "Download…"
-        };
+        let (menu_id, item_id, label) = (self.menu_id, self.item_id, self.label);
         let close = self.close.clone();
-        let download = self.download.clone();
+        let activate = self.activate.clone();
         let choice = div()
             .id(item_id)
             .role(Role::MenuItem)
@@ -94,7 +117,7 @@ impl Menu {
                     .hover(|s| s.bg(tokens.surface_3))
                     .focus_visible(|s| s.bg(tokens.surface_3))
                     .on_click(
-                        cx.listener(move |root, _, _, cx| root.dispatch(download.clone(), cx)),
+                        cx.listener(move |root, _, _, cx| root.dispatch(activate.clone(), cx)),
                     )
             })
             .child(label);
@@ -145,7 +168,7 @@ impl Menu {
                         && root.image_menu_item.is_focused(window) =>
                 {
                     root.focus_handle.focus(window, cx);
-                    root.dispatch(self.download.clone(), cx);
+                    root.dispatch(self.activate.clone(), cx);
                 }
                 _ => return,
             }

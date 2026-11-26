@@ -18,6 +18,63 @@ use serde_json::json;
 
 #[cfg(feature = "visual-test")]
 #[gpui::test]
+fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let index = project.join("index.html");
+    std::fs::write(&index, r#"<p><a href="report.txt">Report</a></p><p><a href="https://example.invalid/">Site</a></p>"#).unwrap();
+    let target = project.join("report.txt");
+    std::fs::write(&target, "Fixture").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(target));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(index));
+        root
+    });
+    for (selector, web) in [("html-link-1", true), ("html-link-0", false)] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let pos = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("html-link-menu").is_some());
+        view.update(cx, |root, _, _| {
+            let doc = root
+                .app
+                .gpui_snapshot(960., 640., 4.)
+                .active_document
+                .unwrap();
+            assert!(doc.title.ends_with("index.html"));
+            assert_eq!(doc.html_link_menu.unwrap().1, web);
+        })
+        .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        visual.simulate_keystrokes(if web { "escape" } else { "down enter" });
+    }
+    cx.refresh().unwrap();
+    view.update(cx, |root, _, _| {
+        assert!(
+            root.app
+                .gpui_snapshot(960., 640., 4.)
+                .active_document
+                .unwrap()
+                .title
+                .ends_with("report.txt")
+        );
+        assert_eq!(root.app.gpui_document_ids().len(), 2);
+    })
+    .unwrap();
+}
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
 fn local_image_menu_opens_on_the_displayed_pixels(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

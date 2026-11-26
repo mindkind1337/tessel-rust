@@ -413,6 +413,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub readable_blocks: Vec<crate::preview::ReadableBlock>,
     pub pdf_summary: Option<crate::pdf::PdfSummary>,
     pub office_summary: Option<std::sync::Arc<crate::office::OfficeSummary>>,
+    pub html_link_menu: Option<((f32, f32), bool)>,
     pub image_menu: Option<(f32, f32)>,
     pub image_download_notice: String,
     pub image_dims: Option<[usize; 2]>,
@@ -887,6 +888,9 @@ pub(crate) enum GpuiAction {
     PdfFit(u64),
     StepPdfZoom(f32),
     SelectOfficeSection(usize),
+    HtmlLinkMenu(u64, String, (f32, f32)),
+    CloseHtmlLinkMenu,
+    OpenHtmlLinkMenuTarget(u64),
     FollowDocumentLink(String),
     // Embedded Browser Tab actions
     BrowserSetAddress(String),
@@ -3742,6 +3746,11 @@ impl Tessel {
             readable_blocks,
             pdf_summary,
             office_summary,
+            html_link_menu: doc
+                .tools
+                .html_link_menu
+                .as_ref()
+                .map(|(pos, _, web)| (*pos, *web)),
             image_menu: doc.tools.image_menu,
             image_download_notice: doc.tools.image_download_notice.clone(),
             image_dims,
@@ -4904,6 +4913,11 @@ impl Tessel {
         let overlay = self.overlay;
         let explorer = self.gpui_explorer_owner();
         let panel_query = self.gpui_panel_query_context();
+        if !matches!(action, GpuiAction::OpenHtmlLinkMenuTarget(_))
+            && let Some(doc) = self.documents.get_mut(self.active_document)
+        {
+            doc.tools.html_link_menu = None;
+        }
         self.apply_gpui_action_inner(action);
         self.reconcile_native_task_board();
         if panel_query != self.gpui_panel_query_context() {
@@ -5726,6 +5740,30 @@ impl Tessel {
                     .and_then(|d| d.office.as_mut())
                 {
                     office.select_section(idx);
+                }
+            }
+            GpuiAction::HtmlLinkMenu(id, href, pos) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.preview_mode
+                    && let Ok(target) = crate::preview::resolve(&doc.root, &doc.path, &href)
+                {
+                    doc.tools.html_link_menu =
+                        Some((pos, href, matches!(target, crate::preview::Link::Web(_))));
+                }
+            }
+            GpuiAction::CloseHtmlLinkMenu => {}
+            GpuiAction::OpenHtmlLinkMenuTarget(id) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.preview_mode
+                    && let Some((_, href, _)) = doc.tools.html_link_menu.take()
+                {
+                    self.apply_gpui_action_inner(GpuiAction::FollowDocumentLink(href));
                 }
             }
             GpuiAction::FollowDocumentLink(href) => {

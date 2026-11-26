@@ -1030,11 +1030,30 @@ fn render_readable_html_stage(
         let mut row = div().flex().flex_wrap().gap(px(4.0));
         for (txt, href) in spans {
             if let Some(link) = href.clone() {
+                let context_link = link.clone();
+                let document_id = doc.instance_id;
                 let link_id = html_link_idx;
                 html_link_idx += 1;
                 row = row.child(
                     div()
                         .id(("html-link", link_id))
+                        .debug_selector(move || format!("html-link-{link_id}"))
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |root, event: &gpui::MouseDownEvent, window, cx| {
+                                window.prevent_default();
+                                root.focus_handle.focus(window, cx);
+                                cx.stop_propagation();
+                                root.dispatch(
+                                    GpuiAction::HtmlLinkMenu(
+                                        document_id,
+                                        context_link.clone(),
+                                        (event.position.x.into(), event.position.y.into()),
+                                    ),
+                                    cx,
+                                );
+                            }),
+                        )
                         .text_size(px(if *heading { 16.0 } else { 13.0 }))
                         .text_color(tokens.accent)
                         .underline()

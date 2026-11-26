@@ -1663,3 +1663,5 @@ Both renderers use a private WebView2 child for the audio and video extensions i
 Windows acceptance uses a hidden native parent and synthetic WAV and WebM files. It checks decoder metadata, playback, pause, seeking and reopening after an overlay. SSH routing is tested with synthetic SFTP replies.
 
 GPUI readable preview links now use the pinned local document opener, including existing-tab reuse, asynchronous loading and the editor tab limit. Full styled HTML rendering remains open.
+
+The GPUI readable HTML preview mirrors the Vue static preview link menu for local project documents and HTTP(S) links. Folder-served styled pages and their trust controls are still pending.
