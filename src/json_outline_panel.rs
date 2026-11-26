@@ -59,24 +59,44 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) {
 
 fn draw(ui: &mut egui::Ui, symbols: &[Symbol], doc: &mut Document) {
     for symbol in symbols {
-        let response = if symbol.children.is_empty() {
-            ui.selectable_label(false, &symbol.name)
-        } else {
-            egui::CollapsingHeader::new(&symbol.name)
-                .id_salt((doc.instance_id(), &symbol.key))
-                .default_open(true)
-                .show(ui, |ui| draw(ui, &symbol.children, doc))
-                .header_response
-        };
-        if response.clicked() {
-            let range = symbol.selection_range.unwrap_or(symbol.range);
-            let offset = crate::json_outline::char_offset(
-                &doc.text,
-                range.start_line_number,
-                range.start_column,
-            );
-            doc.tools.pending_char_range = Some((offset, offset));
-            doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
+        let open = !doc.tools.outline_folds.contains(&symbol.key);
+        let response = ui
+            .horizontal(|ui| {
+                if !symbol.children.is_empty()
+                    && ui.small_button(if open { "▾" } else { "▸" }).clicked()
+                {
+                    toggle_fold(doc, &symbol.key);
+                }
+                ui.selectable_label(false, &symbol.name)
+            })
+            .inner;
+        if response.double_clicked() {
+            reveal(doc, symbol.range, true);
+        } else if response.clicked() {
+            reveal(doc, symbol.selection_range.unwrap_or(symbol.range), false);
+        }
+        if open && !symbol.children.is_empty() {
+            ui.indent((doc.instance_id(), &symbol.key), |ui| {
+                draw(ui, &symbol.children, doc)
+            });
         }
     }
+}
+
+pub fn toggle_fold(doc: &mut Document, key: &str) {
+    if !doc.tools.outline_folds.remove(key) {
+        doc.tools.outline_folds.insert(key.to_owned());
+    }
+}
+
+pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: bool) {
+    let start =
+        crate::json_outline::char_offset(&doc.text, range.start_line_number, range.start_column);
+    let end = if select {
+        crate::json_outline::char_offset(&doc.text, range.end_line_number, range.end_column)
+    } else {
+        start
+    };
+    doc.tools.pending_char_range = Some((start, end));
+    doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
 }

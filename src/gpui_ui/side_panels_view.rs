@@ -687,15 +687,51 @@ fn render_explorer_tab(
             let mut pending: Vec<_> = tree.iter().rev().map(|s| (s, 0usize)).collect();
             while let Some((symbol, depth)) = pending.pop() {
                 let range = symbol.selection_range.unwrap_or(symbol.range);
-                body = body.child(div().pl(px(8.0 + depth as f32 * 12.0)).child(render_chip(
-                    format!("outline-{}", symbol.key),
-                    symbol.name.clone(),
-                    false,
-                    tokens,
-                    GpuiAction::OutlineReveal(*id, tree.clone(), range),
-                    cx,
-                )));
-                pending.extend(symbol.children.iter().rev().map(|c| (c, depth + 1)));
+                use crate::app::gpui_bridge::OutlineRowAction;
+                let open = !sp.outline_folds.contains(&symbol.key);
+                let mut row = div()
+                    .pl(px(8.0 + depth as f32 * 12.0))
+                    .flex()
+                    .items_center();
+                if !symbol.children.is_empty() {
+                    row = row.child(render_chip(
+                        format!("outline-fold-{}", symbol.key),
+                        if open { "▾" } else { "▸" }.into(),
+                        false,
+                        tokens,
+                        GpuiAction::OutlineRow(
+                            *id,
+                            tree.clone(),
+                            OutlineRowAction::Fold(symbol.key.clone()),
+                        ),
+                        cx,
+                    ));
+                }
+                let full_range = symbol.range;
+                let id = *id;
+                let snapshot = tree.clone();
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("outline-name-{}", symbol.key)))
+                        .cursor_pointer()
+                        .child(SharedString::from(symbol.name.clone()))
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                            let select = event.click_count() == 2;
+                            let target = if select { full_range } else { range };
+                            this.dispatch_action(
+                                GpuiAction::OutlineRow(
+                                    id,
+                                    snapshot.clone(),
+                                    OutlineRowAction::Reveal(target, select),
+                                ),
+                                cx,
+                            );
+                        })),
+                );
+                body = body.child(row);
+                if open {
+                    pending.extend(symbol.children.iter().rev().map(|c| (c, depth + 1)));
+                }
             }
             if tree.is_empty() {
                 body = body.child(if french {

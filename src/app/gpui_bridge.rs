@@ -39,6 +39,12 @@ pub(crate) struct NativeScmScope {
     pub id: u64,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum OutlineRowAction {
+    Fold(String),
+    Reveal(crate::outline_tree::Range, bool),
+}
+
 pub(crate) struct GpuiExtraUiState {
     outline_open: bool,
     outline_cache: Option<crate::json_outline_panel::Cache>,
@@ -440,6 +446,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
     pub outline_open: bool,
+    pub outline_folds: std::collections::HashSet<String>,
     pub outline: Option<(u64, std::sync::Arc<Vec<crate::outline_tree::Symbol>>)>,
     pub scm_branch: Option<String>,
     pub scm_ahead: usize,
@@ -907,10 +914,10 @@ pub(crate) enum GpuiAction {
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
     OutlineToggle,
-    OutlineReveal(
+    OutlineRow(
         u64,
         std::sync::Arc<Vec<crate::outline_tree::Symbol>>,
-        crate::outline_tree::Range,
+        OutlineRowAction,
     ),
     ExplorerRefresh,
     ExplorerClickRow {
@@ -4000,6 +4007,11 @@ impl Tessel {
             self.gpui_extra.outline_cache = None;
         }
         GpuiSidePanelsSnapshot {
+            outline_folds: outline
+                .as_ref()
+                .and_then(|_| self.documents.get(self.active_document))
+                .map(|d| d.tools.outline_folds.clone())
+                .unwrap_or_default(),
             outline_open: self.gpui_extra.outline_open,
             outline,
             dashboard_vm,
@@ -5718,7 +5730,7 @@ impl Tessel {
             GpuiAction::OutlineToggle => {
                 self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
             }
-            GpuiAction::OutlineReveal(id, tree, range) => {
+            GpuiAction::OutlineRow(id, tree, action) => {
                 if self.view == View::Files
                     && self.gpui_extra.outline_open
                     && let Some(doc) = self.documents.get_mut(self.active_document)
@@ -5727,13 +5739,14 @@ impl Tessel {
                         std::sync::Arc::ptr_eq(&tree, &c.symbols) && c.matches(doc)
                     })
                 {
-                    let offset = crate::json_outline::char_offset(
-                        &doc.text,
-                        range.start_line_number,
-                        range.start_column,
-                    );
-                    doc.tools.pending_char_range = Some((offset, offset));
-                    doc.tools.pending_scroll_line = Some(range.start_line_number.saturating_sub(1));
+                    match action {
+                        OutlineRowAction::Fold(key) => {
+                            crate::json_outline_panel::toggle_fold(doc, &key)
+                        }
+                        OutlineRowAction::Reveal(range, select) => {
+                            crate::json_outline_panel::reveal(doc, range, select)
+                        }
+                    }
                 }
             }
             GpuiAction::ExplorerToggleCompact => {
@@ -8100,6 +8113,55 @@ mod panel_snapshot_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn outline_fold_and_reveal_stay_with_the_displayed_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let text = r#"{"😀": [1,2]}"#;
+        for name in ["one.json", "two.json"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            app.documents
+                .push(crate::files::Document::open(dir.path(), &path).unwrap());
+        }
+        app.active_document = 0;
+        app.view = View::Files;
+        app.state.panels.right_open = true;
+        app.state.panels.right_tab = SideTab::Files;
+        app.apply_gpui_action(GpuiAction::OutlineToggle);
+        let (id, tree) = app.build_side_panels_snapshot(false).outline.unwrap();
+        let action = |row| GpuiAction::OutlineRow(id, tree.clone(), row);
+        let key = tree[0].key.clone();
+        app.apply_gpui_action(action(OutlineRowAction::Fold(key.clone())));
+        assert!(
+            app.build_side_panels_snapshot(false)
+                .outline_folds
+                .contains(&key)
+        );
+        app.apply_gpui_action(action(OutlineRowAction::Reveal(tree[0].range, true)));
+        assert_eq!(
+            app.documents[0].tools.pending_char_range,
+            Some((1, text.chars().count() - 1))
+        );
+        app.active_document = 1;
+        assert!(
+            app.build_side_panels_snapshot(false)
+                .outline_folds
+                .is_empty()
+        );
+        app.apply_gpui_action(action(OutlineRowAction::Reveal(tree[0].range, true)));
+        assert_eq!(app.documents[1].tools.pending_char_range, None);
+        app.active_document = 0;
+        app.documents[0].text.insert(0, ' ');
+        assert!(
+            app.build_side_panels_snapshot(false)
+                .outline_folds
+                .contains(&key)
+        );
+        app.apply_gpui_action(action(OutlineRowAction::Fold(key.clone())));
+        assert!(app.documents[0].tools.outline_folds.contains(&key));
     }
 
     #[test]
