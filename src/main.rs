@@ -106,6 +106,7 @@ mod native_recycle;
 mod native_review;
 mod native_task_board;
 mod office;
+pub mod outline_tree;
 pub mod palette;
 pub mod pane_grid;
 mod pane_header;

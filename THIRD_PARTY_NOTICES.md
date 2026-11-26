@@ -359,3 +359,5 @@ The local task form (`src/new_task_form.rs`, `src/app/new_task.rs`, `src/gpui_ui
 - `src/app/linear_task.rs` and the Linear launch controls follow `externalIssues.js` and `components/LinearDialog.vue` under that same attribution, with captured account authority and native first-turn callbacks.
 
 - `src/cookie_import_model.rs` recovers the unfinished native cookie-export model based on Tessel `src/main/cookieImport/cookieFile.js`, `cookies.js` and `src/renderer/src/browser/cookieImportText.js`, under the Orca/Tessel MIT attribution above (Copyright (c) 2026 Lovecast Inc.). Only synthetic cookie fixtures are included; no browser profile or real credentials are bundled.
+
+- `src/outline_tree.rs` and its synthetic reference vectors adapt Tessel `src/renderer/src/explorer/outlineTree.js` and the symbol shape in `editor/outline.js`, following the VS Code outline tree/range behavior cited by those files. The Orca/Tessel and Microsoft MIT notices above apply. The reference generator reads source code only; no user documents are bundled.
