@@ -1536,6 +1536,8 @@ impl Tessel {
             #[cfg(windows)]
             media_player: Default::default(),
             #[cfg(windows)]
+            editor_page: Default::default(),
+            #[cfg(windows)]
             agent_browsers: Default::default(),
             #[cfg(windows)]
             show_agent_browser: false,
@@ -2019,6 +2021,40 @@ impl Tessel {
     #[cfg(windows)]
     pub(crate) fn gpui_media_unobscured(&self) -> bool {
         !self.gpui_has_open_modal() && !self.floating.ui.is_open()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn sync_html_page(
+        &mut self,
+        window: &impl wry::raw_window_handle::HasWindowHandle,
+        id: u64,
+        rect: eframe::egui::Rect,
+        scale: f32,
+    ) {
+        if self.view == View::Files
+            && self.gpui_media_unobscured()
+            && let Some(doc) = self.documents.get(self.active_document)
+            && doc.instance_id() == id
+            && doc.preview_mode
+            && doc.tools.html_plain_text.is_none()
+            && doc.tools.html_link_menu.is_none()
+        {
+            self.editor_page.sync(window, doc, rect, scale);
+        }
+    }
+    #[cfg(windows)]
+    pub(crate) fn poll_html_page(&mut self) -> bool {
+        if self.view == View::Files
+            && self.gpui_media_unobscured()
+            && let Some(doc) = self.documents.get(self.active_document)
+            && doc.preview_mode
+            && doc.tools.html_plain_text.is_none()
+            && let Some(action) = self.editor_page.action(doc.instance_id())
+        {
+            self.apply_gpui_action(action);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn gpui_has_open_modal(&self) -> bool {

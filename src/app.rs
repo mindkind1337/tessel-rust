@@ -755,6 +755,8 @@ pub struct Tessel {
     #[cfg(windows)]
     pub(crate) media_player: crate::files::playback::native::Player,
     #[cfg(windows)]
+    pub(crate) editor_page: crate::browser::editor_page::EditorPage,
+    #[cfg(windows)]
     agent_browsers: crate::agent_browser::AgentBrowsers,
     #[cfg(windows)]
     show_agent_browser: bool,
@@ -994,6 +996,8 @@ impl Tessel {
             browser: crate::browser::Browser::default(),
             #[cfg(windows)]
             media_player: Default::default(),
+            #[cfg(windows)]
+            editor_page: Default::default(),
             #[cfg(windows)]
             agent_browsers: Default::default(),
             #[cfg(windows)]

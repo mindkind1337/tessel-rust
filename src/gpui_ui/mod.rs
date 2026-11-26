@@ -345,7 +345,10 @@ impl TesselGpuiRoot {
         panel_query_inputs::flush(self, cx);
         explorer_input::flush(self, cx);
         scm_input::flush(self, cx);
-        self.app.poll_for_gpui()
+        let changed = self.app.poll_for_gpui();
+        #[cfg(windows)]
+        let changed = self.app.poll_html_page() || changed;
+        changed
     }
 
     pub(crate) fn begin_drag(&mut self, drag: DragTarget, cx: &mut Context<Self>) {
@@ -1524,6 +1527,17 @@ impl Render for TesselGpuiRoot {
                 GpuiCenterMode::RemoteSftp => snapshot.remote.playback.as_ref(),
                 _ => None,
             };
+            let page = snapshot.active_document.as_ref().filter(|d| {
+                snapshot.center_mode == GpuiCenterMode::DocumentEditor
+                    && d.preview_mode
+                    && d.html_plain_text.is_none()
+                    && matches!(d.extension.as_str(), "html" | "htm")
+            });
+            self.app.editor_page.retain(
+                page.map(|d| d.instance_id),
+                !self.app.gpui_media_unobscured()
+                    || page.is_some_and(|d| d.html_link_menu.is_some()),
+            );
             self.app.media_player.retain(active);
             if !self.app.gpui_media_unobscured() {
                 self.app.media_player.hide();

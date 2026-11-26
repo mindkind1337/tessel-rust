@@ -27,7 +27,7 @@ impl HasWindowHandle for Parent {
     }
 }
 
-fn pump() {
+pub(crate) fn pump() {
     let mut msg = MSG::default();
     unsafe {
         while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {

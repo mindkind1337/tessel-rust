@@ -249,7 +249,46 @@ pub(crate) fn render_document_editor_stage(
         } else if matches!(doc.extension.as_str(), "md" | "markdown") {
             render_markdown_stage(doc, french, tokens, cx).into_any_element()
         } else {
-            render_readable_html_stage(doc, tokens, cx).into_any_element()
+            let readable = render_readable_html_stage(doc, tokens, cx).into_any_element();
+            #[cfg(windows)]
+            {
+                let owner = cx.weak_entity();
+                let id = doc.instance_id;
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(readable)
+                    .child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, cx| {
+                                let bounds = bounds.intersect(&window.content_mask().bounds);
+                                let rect = eframe::egui::Rect::from_min_size(
+                                    eframe::egui::pos2(
+                                        bounds.origin.x.into(),
+                                        bounds.origin.y.into(),
+                                    ),
+                                    eframe::egui::vec2(
+                                        bounds.size.width.into(),
+                                        bounds.size.height.into(),
+                                    ),
+                                );
+                                let _ = owner.update(cx, |root, _| {
+                                    root.app
+                                        .sync_html_page(window, id, rect, window.scale_factor())
+                                });
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .into_any_element()
+            }
+            #[cfg(not(windows))]
+            readable.into_any_element()
         }
     } else if let Some(native) = editor_input.render(doc, snapshot.font_size, tokens, cx) {
         native
