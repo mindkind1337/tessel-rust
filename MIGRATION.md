@@ -1689,3 +1689,5 @@ SSH browser previews schedule up to four asset reads at a time across tabs. A fi
 Switching Windows HTML editor tabs retains the project preview origin and its recent drafts. Each editor WebView serves requests for its own origin. Revoking folder trust also downgrades cached editor origins.
 
 The Windows GPUI HTML preview toolbar displays the decoded project-relative file path and the same three 24-pixel icon controls for local and SSH pages. Source and plain-text views retain their browser shortcut.
+
+The owner browser and editor share registered local and SSH drafts. The browser can serve an origin after the owner opens a page for that project and trust mode. Agent profiles retain separate browser state.

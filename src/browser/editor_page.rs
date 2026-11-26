@@ -57,15 +57,18 @@ pub(crate) struct EditorPage {
     pending: Rc<RefCell<Option<LinkGesture>>>,
 }
 impl EditorPage {
+    pub(crate) fn new(browser: &super::Browser) -> Self {
+        Self {
+            pages: browser.project_pages.for_editor(),
+            ..Default::default()
+        }
+    }
     pub(crate) fn set_scripts(&mut self, scripts: bool) {
         if self.scripts != scripts {
             self.retain(None, false);
             self.scripts = scripts;
             self.pages = self.pages.for_open(scripts);
         }
-    }
-    pub(crate) fn revoke_scripts(&self, folder: &super::html_trust::Folder) {
-        self.pages.restrict(folder);
     }
     pub(crate) fn retain(&mut self, id: Option<u64>, obscured: bool) {
         if self.document != id {
@@ -388,7 +391,8 @@ mod tests {
         let mut linked = Document::open(folder.path(), &linked).unwrap();
         linked.text = "<h1>Unsaved</h1>".into();
         let parent = hidden_parent();
-        let mut editor = EditorPage::default();
+        let mut browser = super::super::Browser::default();
+        let mut editor = EditorPage::new(&browser);
         let bounds = eframe::egui::Rect::from_min_size(
             eframe::egui::Pos2::ZERO,
             eframe::egui::vec2(320., 200.),
@@ -410,6 +414,21 @@ mod tests {
             "document.querySelector('h1')?.textContent === 'Unsaved'",
         );
         assert_eq!(view.url().unwrap(), first_url);
+        let profile = tempfile::tempdir().unwrap();
+        browser
+            .create_with_profile(&parent, profile.path().join("browser"))
+            .unwrap();
+        browser.open_project_page(&index, true).unwrap();
+        let owner_view = browser.view.as_ref().unwrap();
+        wait_for(owner_view, "!!document.querySelector('a')");
+        owner_view
+            .evaluate_script("document.querySelector('a').click()")
+            .unwrap();
+        wait_for(
+            owner_view,
+            "document.querySelector('h1')?.textContent === 'Unsaved'",
+        );
+        assert_eq!(owner_view.url().unwrap(), first_url);
     }
 
     #[test]

@@ -1390,6 +1390,10 @@ impl Tessel {
         let remote = crate::remote_panel::RemotePanel::with_profile(
             store.as_ref().map(|s| s.directory().to_owned()),
         );
+        #[cfg(windows)]
+        let browser = crate::browser::Browser::default();
+        #[cfg(windows)]
+        let editor_page = crate::browser::editor_page::EditorPage::new(&browser);
         let mut app = Self {
             #[cfg(windows)]
             window_frame: None,
@@ -1564,11 +1568,11 @@ impl Tessel {
             #[cfg(windows)]
             browser_tab_open: false,
             #[cfg(windows)]
-            browser: crate::browser::Browser::default(),
+            browser,
             #[cfg(windows)]
             media_player: Default::default(),
             #[cfg(windows)]
-            editor_page: Default::default(),
+            editor_page,
             #[cfg(windows)]
             agent_browsers: Default::default(),
             #[cfg(windows)]
@@ -6069,7 +6073,6 @@ impl Tessel {
                 {
                     if !trusted {
                         self.browser.revoke_preview_scripts(&folder);
-                        self.editor_page.revoke_scripts(&folder);
                     }
                     if let Err(error) = self.html_trust.decide(folder, trusted) {
                         self.error = error;

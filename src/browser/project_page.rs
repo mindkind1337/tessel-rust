@@ -48,6 +48,7 @@ fn asset_workers(count: usize) -> Result<AssetQueue, String> {
 
 #[derive(Clone)]
 struct Site {
+    opened_in_browser: bool,
     scripts: bool,
     authority: String,
     root: PathBuf,
@@ -57,6 +58,7 @@ struct Site {
 
 #[derive(Clone, Default)]
 pub(crate) struct Pages {
+    editor: bool,
     sites: Arc<Mutex<VecDeque<Arc<Site>>>>,
     scripts: bool,
 }
@@ -215,10 +217,16 @@ fn asset_response(
 }
 
 impl Pages {
+    pub(super) fn for_editor(&self) -> Self {
+        Self {
+            editor: true,
+            ..self.clone()
+        }
+    }
     pub(super) fn for_open(&self, scripts: bool) -> Self {
         Self {
-            sites: self.sites.clone(),
             scripts,
+            ..self.clone()
         }
     }
     pub(super) fn restrict(&self, folder: &super::html_trust::Folder) {
@@ -291,6 +299,7 @@ impl Pages {
                 sites.pop_front();
             }
             Arc::new(Site {
+                opened_in_browser: false,
                 scripts: self.scripts,
                 authority: format!(
                     "{}{:032x}.localhost",
@@ -303,6 +312,7 @@ impl Pages {
             })
         };
         let current = Arc::make_mut(&mut site);
+        current.opened_in_browser |= !self.editor;
         let mut url = url::Url::parse(&format!("http://{SCHEME}.{}/", current.authority)).unwrap();
         url.path_segments_mut().unwrap().pop_if_empty().extend(
             entry
@@ -343,9 +353,9 @@ impl Pages {
             return empty(404);
         };
         let Some(site) = self.sites.lock().ok().and_then(|mut sites| {
-            let i = sites
-                .iter()
-                .position(|site| site.authority == authority.as_str())?;
+            let i = sites.iter().position(|site| {
+                site.authority == authority.as_str() && (self.editor || site.opened_in_browser)
+            })?;
             let site = sites.remove(i)?;
             sites.push_back(site.clone());
             Some(site)
@@ -575,6 +585,36 @@ mod tests {
         assert!(matches!(events.try_recv(), Err(mpsc::TryRecvError::Empty)));
         releases.clear();
         events.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn owner_opens_only_the_selected_editor_origin_and_sees_later_ssh_drafts() {
+        let owner = Pages::default();
+        let editor = owner.for_editor();
+        let host = |alias: &str| crate::workspace::Host {
+            alias: alias.into(),
+            ..Default::default()
+        };
+        let open = |pages: &Pages, alias, text| {
+            pages
+                .open_remote(host(alias), "/site", "/site/index.html", text)
+                .unwrap()
+                .replace("http://tesselpreview.", "tesselpreview://")
+        };
+        let get = |pages: &Pages, url: &str| {
+            pages.serve_with(Request::get(url).body(vec![]).unwrap(), |_, _| {
+                panic!("draft requested from disk")
+            })
+        };
+        let a = open(&editor, "one", "first");
+        let b = open(&editor, "two", "private");
+        let trusted = open(&editor.for_open(true), "one", "trusted");
+        assert_eq!(get(&owner, &a).status(), 404);
+        assert_eq!(open(&owner, "one", "first"), a);
+        open(&editor, "one", "updated");
+        assert_eq!(get(&owner, &a).body().as_ref(), b"updated");
+        assert_eq!(get(&owner, &b).status(), 404);
+        assert_eq!(get(&owner, &trusted).status(), 404);
     }
 
     #[test]

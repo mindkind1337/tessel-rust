@@ -8,7 +8,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 - Local and SSH HTML previews show the project-relative page path with controls to reload, open in the browser, and manage folder trust.
 
-- Switching HTML editor tabs keeps recent drafts available to links in the same project preview.
+- Switching HTML editor tabs keeps recent drafts available to links in the same project preview. Opening that page in the owner browser preserves its address and linked drafts, including subsequent preview updates.
 
 - HTML previews share four background workers for SSH project assets across browser tabs. Local previews have their own queue.
 
