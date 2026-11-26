@@ -138,6 +138,11 @@ impl RemotePanel {
         }
     }
 
+    #[cfg(windows)]
+    pub(crate) fn html_preview(&self, path: &str) -> Option<(Host, &str, &str)> {
+        let doc = self.document.as_ref().filter(|doc| doc.path == path)?;
+        Some((self.host.clone()?, self.root.as_str(), doc.text.as_deref()?))
+    }
     pub fn terminal_host(&self, hosts: &[Host]) -> Option<Host> {
         self.host
             .clone()

@@ -860,6 +860,11 @@ pub(crate) enum GpuiAction {
     #[cfg(windows)]
     OpenHtmlInBrowser(u64),
     #[cfg(windows)]
+    OpenRemoteHtmlInBrowser {
+        host: String,
+        path: String,
+    },
+    #[cfg(windows)]
     ReloadHtmlPreview(u64),
     SetHtmlView(u64, HtmlViewMode),
     ToggleActiveDocumentPreview,
@@ -5558,6 +5563,26 @@ impl Tessel {
                     && let Err(error) = self.editor_page.reload(doc)
                 {
                     self.error = error;
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::OpenRemoteHtmlInBrowser {
+                host: expected,
+                path,
+            } => {
+                if self.view == View::Remote
+                    && !self.gpui_has_open_modal()
+                    && let Some((host, root, text)) = self.remote.html_preview(&path)
+                    && host.alias == expected
+                {
+                    match self.browser.open_remote_page(host, root, &path, text) {
+                        Ok(()) => {
+                            self.show_agent_browser = false;
+                            self.browser_tab_open = true;
+                            self.view = View::Browser;
+                        }
+                        Err(error) => self.error = error,
+                    }
                 }
             }
             #[cfg(windows)]

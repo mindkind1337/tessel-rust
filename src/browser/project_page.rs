@@ -25,6 +25,7 @@ const MAX_DRAFTS: usize = 20;
 struct Site {
     authority: String,
     root: PathBuf,
+    remote: Option<crate::workspace::Host>,
     drafts: VecDeque<(PathBuf, Arc<[u8]>)>,
 }
 
@@ -189,8 +190,36 @@ impl Pages {
         {
             return Err("This project page cannot be previewed.".into());
         }
+        self.register(root, entry, text, None)
+    }
+    pub(super) fn open_remote(
+        &self,
+        host: crate::workspace::Host,
+        root: &str,
+        file: &str,
+        text: &str,
+    ) -> Result<String, String> {
+        if crate::remote::preview_relative(root, file).is_none()
+            || mime(Path::new(file)) != "text/html; charset=utf-8"
+            || text.len() > crate::files::MAX_TEXT
+        {
+            return Err("This remote page cannot be previewed.".into());
+        }
+        self.register(root.into(), file.into(), text, Some(host))
+    }
+    fn register(
+        &self,
+        root: PathBuf,
+        entry: PathBuf,
+        text: &str,
+        remote: Option<crate::workspace::Host>,
+    ) -> Result<String, String> {
         let mut sites = self.0.lock().map_err(|_| "Project preview unavailable")?;
-        let mut site = if let Some(i) = sites.iter().position(|s| s.root == root) {
+        let mut site = if let Some(i) = sites.iter().position(|s| {
+            s.root == root
+                && s.remote.as_ref().map(|h| (&h.alias, &h.folder))
+                    == remote.as_ref().map(|h| (&h.alias, &h.folder))
+        }) {
             sites.remove(i).unwrap()
         } else {
             let mut nonce = [0u8; 16];
@@ -199,8 +228,13 @@ impl Pages {
                 sites.pop_front();
             }
             Arc::new(Site {
-                authority: format!("{:032x}.localhost", u128::from_be_bytes(nonce)),
+                authority: format!(
+                    "{}{:032x}.localhost",
+                    if remote.is_some() { "ssh-" } else { "" },
+                    u128::from_be_bytes(nonce)
+                ),
                 root,
+                remote,
                 drafts: VecDeque::new(),
             })
         };
@@ -221,7 +255,18 @@ impl Pages {
         sites.push_back(site);
         Ok(url.into())
     }
+    #[cfg(test)]
     fn serve(&self, req: Request<Vec<u8>>) -> Reply {
+        self.serve_with(req, crate::remote::execute)
+    }
+    fn serve_with(
+        &self,
+        req: Request<Vec<u8>>,
+        read_remote: impl FnOnce(
+            crate::workspace::Host,
+            crate::remote::Action,
+        ) -> Result<crate::remote::Reply, String>,
+    ) -> Reply {
         let head = req.method() == "HEAD";
         if !head && req.method() != "GET" {
             return empty(405);
@@ -239,7 +284,7 @@ impl Pages {
         }) else {
             return empty(404);
         };
-        let mut path = site.root.clone();
+        let mut parts = Vec::new();
         for raw in req.uri().path().split('/').filter(|s| !s.is_empty()) {
             if raw.bytes().enumerate().any(|(i, b)| {
                 b == b'%'
@@ -253,11 +298,57 @@ impl Pages {
             let Ok(part) = percent_encoding::percent_decode_str(raw).decode_utf8() else {
                 return empty(404);
             };
-            if !segment_ok(&part) {
+            if part.starts_with('.')
+                || part.contains(['/', '\\'])
+                || part.chars().any(char::is_control)
+                || (site.remote.is_none() && !segment_ok(&part))
+            {
                 return empty(404);
             }
-            path.push(part.as_ref());
+            parts.push(part);
         }
+        if let Some(host) = &site.remote {
+            if parts.is_empty() || req.uri().path().ends_with('/') {
+                parts.push(Cow::Borrowed("index.html"))
+            }
+            let root = site.root.to_str().unwrap();
+            let requested = format!("{}/{}", root.trim_end_matches('/'), parts.join("/"));
+            let path = Path::new(&requested);
+            if let Some((_, draft)) = site.drafts.iter().find(|(p, _)| p == path) {
+                return response(
+                    200,
+                    mime(path),
+                    draft.len() as u64,
+                    if head { vec![] } else { draft.to_vec() },
+                );
+            }
+            if crate::remote::preview_relative(root, &requested).is_none() {
+                return empty(404);
+            }
+            if let Ok(crate::remote::Reply::File {
+                root: actual,
+                path: resolved,
+                bytes,
+            }) = read_remote(
+                host.clone(),
+                crate::remote::Action::PreviewAsset {
+                    expected_root: root.into(),
+                    path: requested,
+                },
+            ) && actual == root
+                && crate::remote::preview_relative(root, &resolved).is_some()
+            {
+                return response(
+                    200,
+                    mime(Path::new(&resolved)),
+                    bytes.len() as u64,
+                    if head { vec![] } else { bytes },
+                );
+            }
+            return empty(404);
+        }
+        let mut path = site.root.clone();
+        path.extend(parts.iter().map(|s| s.as_ref()));
         if path.is_dir() {
             path.push("index.html")
         }
@@ -296,18 +387,43 @@ impl Pages {
         &self,
         builder: wry::WebViewBuilder<'a>,
     ) -> Result<wry::WebViewBuilder<'a>, String> {
+        self.attach_with(builder, crate::remote::execute)
+    }
+    fn attach_with<'a>(
+        &self,
+        builder: wry::WebViewBuilder<'a>,
+        read_remote: fn(
+            crate::workspace::Host,
+            crate::remote::Action,
+        ) -> Result<crate::remote::Reply, String>,
+    ) -> Result<wry::WebViewBuilder<'a>, String> {
+        let worker = move |pages: Pages| -> Result<_, String> {
+            let (send, recv) =
+                mpsc::sync_channel::<(Request<Vec<u8>>, wry::RequestAsyncResponder)>(64);
+            std::thread::Builder::new()
+                .name("project-page".into())
+                .spawn(move || {
+                    for (req, responder) in recv {
+                        responder.respond(pages.serve_with(req, read_remote));
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(send)
+        };
+        let local = worker(self.clone())?;
+        let remote = std::sync::OnceLock::new();
         let pages = self.clone();
-        let (send, recv) = mpsc::sync_channel::<(Request<Vec<u8>>, wry::RequestAsyncResponder)>(64);
-        std::thread::Builder::new()
-            .name("project-page".into())
-            .spawn(move || {
-                for (req, responder) in recv {
-                    responder.respond(pages.serve(req));
-                }
-            })
-            .map_err(|e| e.to_string())?;
         Ok(
             builder.with_asynchronous_custom_protocol(SCHEME.into(), move |_, req, responder| {
+                let send = if req.uri().host().is_some_and(|h| h.starts_with("ssh-")) {
+                    let Ok(send) = remote.get_or_init(|| worker(pages.clone())) else {
+                        responder.respond(empty(503));
+                        return;
+                    };
+                    send
+                } else {
+                    &local
+                };
                 if let Err(err) = send.try_send((req, responder)) {
                     let (_, responder) = match err {
                         mpsc::TrySendError::Full(item) | mpsc::TrySendError::Disconnected(item) => {
@@ -324,6 +440,107 @@ impl Pages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ssh_preview_keeps_drafts_and_assets_scoped_to_the_selected_host_and_posix_root() {
+        let pages = Pages::default();
+        let register = |alias: &str| {
+            pages
+                .open_remote(
+                    crate::workspace::Host {
+                        alias: alias.into(),
+                        folder: "/site".into(),
+                        ..Default::default()
+                    },
+                    "/site",
+                    "/site/pages/index.html",
+                    alias,
+                )
+                .unwrap()
+                .replace("http://tesselpreview.", "tesselpreview://")
+        };
+        for alias in ["host-a", "host-b"] {
+            let entry = register(alias);
+            let base = entry.strip_suffix("/pages/index.html").unwrap();
+            let get = |url: String| {
+                pages.serve_with(Request::get(url).body(vec![]).unwrap(), |host, action| {
+                    assert_eq!(host.alias, alias);
+                    let crate::remote::Action::PreviewAsset {
+                        expected_root,
+                        path,
+                    } = action
+                    else {
+                        panic!("wrong SFTP operation")
+                    };
+                    assert_eq!(expected_root, "/site");
+                    assert_eq!(path, "/site/assets/Mark:01.css");
+                    Ok(crate::remote::Reply::File {
+                        root: expected_root,
+                        path,
+                        bytes: b"body{}".to_vec(),
+                    })
+                })
+            };
+            assert_eq!(get(entry.clone()).body().as_ref(), alias.as_bytes());
+            assert_eq!(
+                get(format!("{base}/assets/Mark%3A01.css")).body().as_ref(),
+                b"body{}"
+            );
+            assert_eq!(get(format!("{base}/%2ehidden")).status(), 404);
+        }
+    }
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn hidden_browser_renders_remote_draft_with_sftp_asset_responses() {
+        let dir = tempfile::tempdir().unwrap();
+        let pages = Pages::default();
+        let url = pages
+            .open_remote(
+                crate::workspace::Host {
+                    alias: "sample".into(),
+                    folder: "/site".into(),
+                    ..Default::default()
+                },
+                "/site",
+                "/site/pages/index.html",
+                r#"<link rel="stylesheet" href="/asset.css"><p>SSH draft</p><img src="pixel.svg">"#,
+            )
+            .unwrap();
+        let parent = crate::webview_test_support::hidden_parent();
+        let mut context = wry::WebContext::new(Some(dir.path().into()));
+        let builder = wry::WebViewBuilder::new_with_web_context(&mut context);
+        let view = pages
+            .attach_with(builder, |host, action| {
+                assert_eq!(host.alias, "sample");
+                let crate::remote::Action::PreviewAsset {
+                    expected_root,
+                    path,
+                } = action
+                else {
+                    return Err("unexpected operation".into());
+                };
+                let bytes = match path.as_str() {
+                    "/site/asset.css" => b"p{color:rgb(4,5,6)}".to_vec(),
+                    "/site/pages/pixel.svg" => {
+                        br#"<svg xmlns="http://www.w3.org/2000/svg" width="19" height="1"/>"#
+                            .to_vec()
+                    }
+                    _ => return Err("missing".into()),
+                };
+                Ok(crate::remote::Reply::File {
+                    root: expected_root,
+                    path,
+                    bytes,
+                })
+            })
+            .unwrap()
+            .with_url(url)
+            .build_as_child(&parent)
+            .unwrap();
+        crate::webview_test_support::wait_for(
+            &view,
+            "document.querySelector('p')?.textContent === 'SSH draft' && getComputedStyle(document.querySelector('p')).color === 'rgb(4, 5, 6)' && document.images[0]?.naturalWidth === 19",
+        );
+    }
     #[test]
     fn project_page_serves_drafts_and_assets_within_its_project_origin() {
         assert!(!segment_ok("CON.txt"));

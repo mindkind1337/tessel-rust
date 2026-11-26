@@ -563,6 +563,34 @@ pub(crate) fn render(
                     cx,
                 )),
         );
+        #[cfg(windows)]
+        if text.is_some()
+            && path.rsplit_once('.').is_some_and(|(_, ext)| {
+                ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+            })
+            && let Some(host) = remote.connected.clone()
+        {
+            let path = path.clone();
+            body = body.child(
+                div()
+                    .id("remote-html-browser")
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.dispatch(
+                            GpuiAction::OpenRemoteHtmlInBrowser {
+                                host: host.clone(),
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    }))
+                    .child(if fr {
+                        "Ouvrir dans le navigateur"
+                    } else {
+                        "Open in browser"
+                    }),
+            );
+        }
         if let Some(text) = text {
             body = body.child(
                 div()

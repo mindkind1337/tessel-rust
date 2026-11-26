@@ -36,6 +36,11 @@ pub enum Action {
     },
     List(String),
     Read(String),
+    #[cfg(windows)]
+    PreviewAsset {
+        expected_root: String,
+        path: String,
+    },
     Save {
         path: String,
         original: Vec<u8>,
@@ -199,6 +204,20 @@ async fn canonical(session: &RawSftpSession, path: &str) -> Result<String, Strin
         return Err("Server returned an invalid absolute path".into());
     }
     Ok(resolved)
+}
+#[cfg(windows)]
+pub(crate) fn preview_relative<'a>(root: &str, path: &'a str) -> Option<&'a str> {
+    let rel = path
+        .strip_prefix(root.trim_end_matches('/'))?
+        .strip_prefix('/')?;
+    (root.starts_with('/')
+        && rel.split('/').all(|s| {
+            !s.is_empty()
+                && !s.starts_with('.')
+                && !s.contains('\\')
+                && !s.chars().any(char::is_control)
+        }))
+    .then_some(rel)
 }
 async fn scoped(session: &RawSftpSession, root: &str, path: &str) -> Result<String, String> {
     let joined = if path.is_empty() {
@@ -473,6 +492,38 @@ async fn operate_inner(
             closed?;
             Ok(value)
         }
+        #[cfg(windows)]
+        Action::PreviewAsset {
+            expected_root,
+            path: requested,
+        } => {
+            if expected_root != root || preview_relative(root, &requested).is_none() {
+                return Err("Invalid preview path".into());
+            }
+            let mut path = scoped(session, root, &requested).await?;
+            if preview_relative(root, &path).is_none() {
+                return Err("Invalid preview target".into());
+            }
+            if session
+                .stat(&path)
+                .await
+                .map_err(remote_error)?
+                .attrs
+                .file_type()
+                == russh_sftp::protocol::FileType::Dir
+            {
+                path = scoped(session, root, &format!("{path}/index.html")).await?;
+                if preview_relative(root, &path).is_none() {
+                    return Err("Invalid preview index".into());
+                }
+            }
+            let (bytes, _) = read(session, &path).await?;
+            Ok(Reply::File {
+                root: root.into(),
+                path,
+                bytes,
+            })
+        }
         Action::Read(requested) => {
             let path = scoped(session, root, &requested).await?;
             let (bytes, _) = read(session, &path).await?;
@@ -568,6 +619,81 @@ async fn operate_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires TESSEL_TEST_SFTP_SERVER pointing to an OpenSSH sftp-server binary"]
+    fn preview_asset_reads_a_real_sftp_subsystem_scoped_to_the_original_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("pages")).unwrap();
+        std::fs::write(dir.path().join("pages/index.html"), "page").unwrap();
+        std::fs::write(dir.path().join("site.css"), "body{}").unwrap();
+        std::fs::write(dir.path().join(".hidden"), "hidden").unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut child = tokio::process::Command::new(
+                    std::env::var_os("TESSEL_TEST_SFTP_SERVER").unwrap(),
+                )
+                .current_dir(dir.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+                let stream = Transport {
+                    reader: child.stdout.take().unwrap(),
+                    writer: child.stdin.take().unwrap(),
+                };
+                let session = RawSftpSession::new(stream);
+                session.init().await.unwrap();
+                let root = canonical(&session, ".").await.unwrap();
+                for (path, expected) in [
+                    ("site.css", Some("body{}")),
+                    ("pages", Some("page")),
+                    (".hidden", None),
+                    ("../outside", None),
+                ] {
+                    let result = operate(
+                        &session,
+                        &root,
+                        Action::PreviewAsset {
+                            expected_root: root.clone(),
+                            path: format!("{root}/{path}"),
+                        },
+                        false,
+                    )
+                    .await;
+                    if let Some(text) = expected {
+                        let Reply::File { bytes, .. } = result.unwrap() else {
+                            panic!("expected file")
+                        };
+                        assert_eq!(bytes, text.as_bytes());
+                    } else {
+                        assert!(result.is_err());
+                    }
+                }
+                assert!(
+                    operate(
+                        &session,
+                        &root,
+                        Action::PreviewAsset {
+                            expected_root: "/other".into(),
+                            path: format!("{root}/site.css")
+                        },
+                        false
+                    )
+                    .await
+                    .is_err()
+                );
+                let _ = session.close_session();
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            });
+    }
     #[test]
     fn remote_paths_are_component_scoped() {
         assert!(child_name("résumé.txt"));

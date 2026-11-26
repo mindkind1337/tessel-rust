@@ -675,6 +675,17 @@ impl Browser {
             }
         }
     }
+    pub(crate) fn open_remote_page(
+        &mut self,
+        host: crate::workspace::Host,
+        root: &str,
+        file: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        let url = self.project_pages.open_remote(host, root, file, text)?;
+        self.open_url(&url);
+        Ok(())
+    }
     pub(crate) fn open_project_page(&mut self, doc: &crate::files::Document) -> Result<(), String> {
         let url = self.project_pages.open(&doc.root, &doc.path, &doc.text)?;
         self.open_url(&url);
