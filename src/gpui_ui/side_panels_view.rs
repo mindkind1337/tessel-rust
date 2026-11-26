@@ -994,6 +994,7 @@ fn render_explorer_tab(
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
         .child(scroll)
         .child(outline)
+        .child(render_timeline(&sp.timeline, french, tokens, cx))
         .into_any_element()
 }
 
@@ -2619,6 +2620,113 @@ fn render_chip(
         }))
         .child(SharedString::from(label))
         .into_any_element()
+}
+
+fn render_timeline(
+    snap: &crate::file_timeline::Snapshot,
+    fr: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    use crate::file_timeline::Action;
+    let mut section = div().flex().flex_col();
+    section = section.child(render_chip(
+        "timeline-toggle",
+        if fr { "Chronologie" } else { "Timeline" }.into(),
+        snap.shown,
+        tokens,
+        GpuiAction::Timeline(Action::Toggle),
+        cx,
+    ));
+    if !snap.shown {
+        return section.into_any_element();
+    }
+    if let Some(file) = &snap.file {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .child(
+                    file.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .child(render_chip(
+                    "timeline-refresh",
+                    if fr { "Actualiser" } else { "Refresh" }.into(),
+                    false,
+                    tokens,
+                    GpuiAction::Timeline(Action::Refresh(file.clone(), false)),
+                    cx,
+                )),
+        );
+    }
+    if let Some(status) = snap.status(fr) {
+        section = section.child(render_empty_note(status, tokens));
+    }
+    if let (Some(file), Some(Ok(history))) = (&snap.file, &snap.data) {
+        let mut list = div()
+            .id("timeline-entries")
+            .max_h(px(160.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        let working = history.dirty.then(|| {
+            (
+                None,
+                if fr {
+                    "Modifications non validées"
+                } else {
+                    "Uncommitted Changes"
+                }
+                .to_owned(),
+            )
+        });
+        for (index, (commit, label)) in working
+            .into_iter()
+            .chain(
+                history
+                    .commits
+                    .iter()
+                    .map(|c| (Some(c.id.clone()), c.label())),
+            )
+            .enumerate()
+        {
+            let key = format!("timeline-{}", commit.as_deref().unwrap_or("working"));
+            let path = file.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(key))
+                    .debug_selector(move || format!("timeline-entry-{index}"))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .child(label)
+                    .on_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
+                        root.dispatch_action(
+                            GpuiAction::Timeline(Action::Open(
+                                path.clone(),
+                                commit.clone(),
+                                event.click_count() == 2,
+                            )),
+                            cx,
+                        );
+                    })),
+            );
+        }
+        if history.more {
+            list = list.child(render_chip(
+                "timeline-more",
+                if fr { "Charger la suite" } else { "Load More" }.into(),
+                false,
+                tokens,
+                GpuiAction::Timeline(Action::Refresh(file.clone(), true)),
+                cx,
+            ));
+        }
+        section = section.child(list);
+    }
+    section.into_any_element()
 }
 
 fn render_empty_note(text: &str, tokens: &GpuiThemeTokens) -> AnyElement {

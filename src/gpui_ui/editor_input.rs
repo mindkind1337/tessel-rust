@@ -377,6 +377,86 @@ mod tests {
     }
 
     #[gpui::test]
+    fn file_timeline_opens_clicked_commit_as_a_diff(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("repo");
+        std::fs::create_dir(&folder).unwrap();
+        let git = |args: &[&str]| {
+            let mut options = vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+            ];
+            options.extend_from_slice(args);
+            crate::git::run(&folder, &options, None).unwrap()
+        };
+        git(&["init", "-q"]);
+        let path = folder.join("history.txt");
+        std::fs::write(&path, "timeline fixture\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "File history fixture"]);
+        let hash = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let doc = Document::open(&folder, &path).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(folder), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let button = visual.debug_bounds("timeline-toggle").unwrap().center();
+            visual.simulate_click(button, Default::default());
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let title = format!("history.txt ({})", &hash[..7]);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds("timeline-entry-0") {
+                visual.simulate_click(bounds.center(), Default::default());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "commit row did not appear"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        loop {
+            let opened = view
+                .update(cx, |root, _, cx| {
+                    root.poll_backend(cx);
+                    root.app.gpui_editor_document().is_some_and(|doc| {
+                        doc.diff_title.as_ref() == Some(&title)
+                            && doc.text.contains("+timeline fixture")
+                    })
+                })
+                .unwrap();
+            if opened {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "click did not open commit diff"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+
+    #[gpui::test]
     fn outline_options_sort_visible_rows(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sort.json");

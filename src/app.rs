@@ -538,6 +538,7 @@ enum Message {
         result: Result<Box<Document>, String>,
     },
     DiffDocument {
+        source_doc: Option<u64>,
         root: PathBuf,
         path: PathBuf,
         title: String,
@@ -693,6 +694,7 @@ pub struct Tessel {
     #[cfg(feature = "visual-test")]
     visual_frames: usize,
     git_result: crate::git_result::GitResult,
+    timeline: crate::file_timeline::State,
     scm_state: crate::scm_state::ScmState,
     scm_panel: crate::scm_changes_panel::ScmChangesPanel,
     commit_in_flight: bool,
@@ -907,6 +909,7 @@ impl Tessel {
             #[cfg(feature = "visual-test")]
             visual_frames: 0,
             git_result: Default::default(),
+            timeline: Default::default(),
             scm_state: Default::default(),
             scm_panel: Default::default(),
             commit_in_flight: false,
@@ -1892,6 +1895,67 @@ impl Tessel {
             });
         });
     }
+    fn timeline_snapshot(&mut self, visible: bool) -> crate::file_timeline::Snapshot {
+        let shown = visible && self.state.editor_prefs.timeline_shown;
+        let file = (shown && self.view == View::Files)
+            .then(|| self.documents.get(self.active_document))
+            .flatten()
+            .filter(|d| d.root.is_absolute() && d.path.is_absolute())
+            .map(|d| d.path.clone());
+        self.timeline.select(file.clone());
+        crate::file_timeline::Snapshot {
+            shown,
+            file,
+            data: self.timeline.data.clone(),
+        }
+    }
+    fn timeline_action(&mut self, action: crate::file_timeline::Action) {
+        use crate::file_timeline::Action;
+        match action {
+            Action::Toggle => {
+                self.state.editor_prefs.timeline_shown = !self.state.editor_prefs.timeline_shown;
+                self.save();
+            }
+            Action::Refresh(path, more) if self.timeline.file.as_ref() == Some(&path) => {
+                self.timeline.refresh(more)
+            }
+            Action::Open(path, commit, pinned) if self.timeline.file.as_ref() == Some(&path) => {
+                let Some(doc) = self
+                    .documents
+                    .get(self.active_document)
+                    .filter(|d| d.path == path && self.view == View::Files)
+                else {
+                    return;
+                };
+                let Some(Ok(history)) = self.timeline.data.clone() else {
+                    return;
+                };
+                let source_doc = Some(doc.instance_id());
+                let root = doc.root.clone();
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let title = format!(
+                    "{name} ({})",
+                    commit
+                        .as_deref()
+                        .and_then(|c| c.get(..7))
+                        .unwrap_or(tr("Working tree"))
+                );
+                let sender = self.sender.clone();
+                thread::spawn(move || {
+                    let result = history.diff(commit.as_deref());
+                    let _ = sender.send(Message::DiffDocument {
+                        source_doc,
+                        root,
+                        path,
+                        title,
+                        pinned,
+                        result,
+                    });
+                });
+            }
+            _ => {}
+        }
+    }
     fn open_scm_diff(
         &mut self,
         area: crate::scm_changes_panel::ScmArea,
@@ -1941,6 +2005,7 @@ impl Tessel {
         thread::spawn(move || {
             let result = crate::git::file_diff(&root, &rel, old_rel.as_deref(), staged, untracked);
             let _ = sender.send(Message::DiffDocument {
+                source_doc: None,
                 root,
                 path: full_path,
                 title,
@@ -1975,6 +2040,7 @@ impl Tessel {
     }
     fn poll(&mut self) -> bool {
         let mut native_changed = self.share.poll_guest_requests();
+        native_changed |= self.timeline.poll();
         let mut completed_switches = Vec::new();
         for session in &mut self.sessions {
             if let Some(pending) = &session.restarting
@@ -2353,6 +2419,15 @@ impl Tessel {
                     }
                 }
                 Message::DiffDocument {
+                    source_doc: Some(id),
+                    ..
+                } if self.view != View::Files
+                    || self
+                        .documents
+                        .get(self.active_document)
+                        .is_none_or(|d| d.instance_id() != id) => {}
+                Message::DiffDocument {
+                    source_doc: _,
                     root,
                     path,
                     title,
@@ -2360,6 +2435,7 @@ impl Tessel {
                     result,
                 } => match result {
                     Ok(diff_text) => {
+                        native_changed = true;
                         let doc = Document::from_diff(
                             &root,
                             path.clone(),
@@ -4799,6 +4875,16 @@ impl Tessel {
             .flatten()
             .map(|d| d.path.clone());
         let actions_enabled = self.file_actions_ready();
+        let timeline = self.timeline_snapshot(true);
+        egui::TopBottomPanel::bottom("files-timeline-section")
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                if let Some(action) =
+                    crate::file_timeline::compat(ui, &timeline, crate::i18n::is_french())
+                {
+                    self.timeline_action(action);
+                }
+            });
         let old_prefs = self.state.editor_prefs;
         egui::TopBottomPanel::bottom("files-outline-section")
             .resizable(false)
@@ -11976,6 +12062,7 @@ impl Tessel {
                             &path,
                         );
                         let _ = sender.send(Message::DiffDocument {
+                            source_doc: None,
                             root,
                             path: full_path,
                             title,
@@ -12081,6 +12168,7 @@ impl Tessel {
                             &rel_path,
                         );
                         let _ = sender.send(Message::DiffDocument {
+                            source_doc: None,
                             root,
                             path: full_path,
                             title,

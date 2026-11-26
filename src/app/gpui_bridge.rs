@@ -452,6 +452,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_filter: Option<crate::side_panels_model::DashboardState>,
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
+    pub timeline: crate::file_timeline::Snapshot,
     pub outline_open: bool,
     pub outline_options_open: bool,
     pub outline_query: Option<String>,
@@ -927,6 +928,7 @@ pub(crate) enum GpuiAction {
     ExplorerToggleSearchMode,
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
+    Timeline(crate::file_timeline::Action),
     OutlineToggle,
     OutlineOptions(bool),
     OutlineFilterMode(bool),
@@ -1435,6 +1437,7 @@ impl Tessel {
             #[cfg(feature = "visual-test")]
             visual_frames: 0,
             git_result: Default::default(),
+            timeline: Default::default(),
             scm_state: Default::default(),
             scm_panel: Default::default(),
             commit_in_flight: false,
@@ -4108,6 +4111,7 @@ impl Tessel {
             self.gpui_extra.outline_cache = None;
         }
         GpuiSidePanelsSnapshot {
+            timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
             outline_folds: outline
                 .as_ref()
                 .and_then(|_| self.documents.get(self.active_document))
@@ -5846,6 +5850,7 @@ impl Tessel {
                 self.state.editor_prefs.show_git_ignored = next;
                 self.save();
             }
+            GpuiAction::Timeline(action) => self.timeline_action(action),
             GpuiAction::OutlineToggle => {
                 self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
                 self.gpui_extra.outline_options_open = false;

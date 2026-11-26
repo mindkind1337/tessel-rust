@@ -196,8 +196,12 @@ pub fn file_diff(
     if untracked {
         let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
         let path = crate::files::confined(&canonical_root, &root.join(relative))?;
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        use std::io::Read as _;
         const DIFF_PREVIEW_MAX: usize = 512 * 1024;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| f.take(DIFF_PREVIEW_MAX as u64 + 1).read_to_end(&mut bytes))
+            .map_err(|e| e.to_string())?;
         if bytes.iter().take(8192).any(|&b| b == 0) {
             return Ok(format!(
                 "diff --git a/{relative} b/{relative}\nnew file\nBinary files /dev/null and b/{relative} differ\n"

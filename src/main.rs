@@ -64,6 +64,7 @@ mod empty_state_panel;
 pub mod explorer_scm_model;
 pub mod explorer_tree;
 mod file_actions;
+mod file_timeline;
 mod files;
 pub mod finder_model;
 mod finder_panel;

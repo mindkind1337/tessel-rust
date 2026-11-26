@@ -264,6 +264,7 @@ pub struct EditorPreferences {
     pub compact_folders: bool,
     pub outline_follow_cursor: bool,
     pub outline_filter_on_type: bool,
+    pub timeline_shown: bool,
     pub outline_sort: crate::outline_tree::Sort,
     pub diff_word_wrap: bool,
 }
@@ -282,6 +283,7 @@ impl Default for EditorPreferences {
             compact_folders: false,
             outline_follow_cursor: true,
             outline_filter_on_type: true,
+            timeline_shown: false,
             outline_sort: Default::default(),
             diff_word_wrap: false,
         }
