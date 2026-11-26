@@ -1,7 +1,11 @@
 //! Isolated, script-restricted HTML child view hosted inside the GPUI document tab.
 use super::project_page::Pages;
 use crate::{app::gpui_bridge::GpuiAction, files::Document};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 use url::Url;
 use wry::{WebView, WebViewBuilder, raw_window_handle::HasWindowHandle};
 
@@ -43,6 +47,8 @@ pub(crate) struct EditorPage {
     context: Option<wry::WebContext>,
     profile: Option<tempfile::TempDir>,
     document: Option<u64>,
+    observed: String,
+    refresh_due: Option<Instant>,
     rect: Option<wry::Rect>,
     origin: (f32, f32),
     hidden: bool,
@@ -63,6 +69,8 @@ impl EditorPage {
             self.view.take();
             self.pages = Pages::editor(self.scripts);
             self.document = None;
+            self.observed = String::new();
+            self.refresh_due = None;
             self.rect = None;
             self.held = None;
             self.incoming = Default::default();
@@ -80,17 +88,44 @@ impl EditorPage {
             return Ok(());
         }
         if let Some(view) = &self.view {
-            self.pages.open(
+            let address = self.pages.open(
                 doc.tools.html_root.as_deref().unwrap_or(&doc.root),
                 &doc.path,
                 &doc.text,
             )?;
-            view.reload().map_err(|e| e.to_string())
+            // Trusted pages can navigate inside the project. Reload always belongs to
+            // the document tab, even when its child currently displays another file.
+            if view.url().is_ok_and(|current| current == address) {
+                view.reload()
+            } else {
+                view.load_url(&address)
+            }
+            .map_err(|e| e.to_string())?;
+            if self.observed != doc.text {
+                self.observed.clone_from(&doc.text);
+            }
+            self.refresh_due = None;
+            Ok(())
         } else {
             // Retry creating the child on the next paint if the earlier attempt failed.
             self.retain(None, false);
             Ok(())
         }
+    }
+    pub(crate) fn poll_draft(&mut self, doc: &Document, now: Instant) -> Result<bool, String> {
+        if self.document != Some(doc.instance_id()) || self.view.is_none() || self.hidden {
+            return Ok(false);
+        }
+        if self.observed != doc.text {
+            self.observed.clone_from(&doc.text);
+            self.refresh_due = Some(now + Duration::from_millis(350));
+        }
+        if self.refresh_due.is_some_and(|due| now >= due) {
+            self.refresh_due = None;
+            self.reload(doc)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
     #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn queue_external_fixture(&mut self, id: u64, url: Url) {
@@ -135,6 +170,7 @@ impl EditorPage {
         bounds: eframe::egui::Rect,
         scale: f32,
     ) {
+        let opening = self.document != Some(doc.instance_id());
         self.sync_source(parent, doc.instance_id(), bounds, scale, false, |pages| {
             pages.open(
                 doc.tools.html_root.as_deref().unwrap_or(&doc.root),
@@ -142,6 +178,9 @@ impl EditorPage {
                 &doc.text,
             )
         });
+        if opening && self.view.is_some() {
+            self.observed.clone_from(&doc.text);
+        }
     }
     pub(crate) fn sync_source(
         &mut self,
@@ -463,6 +502,93 @@ mod tests {
         );
         assert_eq!(view.url().unwrap(), address);
         assert_eq!(std::fs::read_to_string(index).unwrap(), "original on disk");
+    }
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_editor_page_reload_returns_from_linked_document_to_index_draft() {
+        let folder = tempfile::tempdir().unwrap();
+        let index = folder.path().join("index.html");
+        std::fs::write(&index, "<p>saved index</p><a href='report.html'>Report</a>").unwrap();
+        std::fs::write(folder.path().join("report.html"), "<h1>Report</h1>").unwrap();
+        let mut doc = Document::open(folder.path(), &index).unwrap();
+        let parent = hidden_parent();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(320., 200.),
+        );
+        let mut editor = EditorPage::default();
+        editor.set_scripts(true);
+        editor.sync(&parent, &doc, bounds, 1.);
+        let view = editor.view.as_ref().unwrap();
+        wait_for(
+            view,
+            "document.querySelector('a')?.textContent === 'Report'",
+        );
+        view.evaluate_script("document.querySelector('a').click()")
+            .unwrap();
+        wait_for(
+            view,
+            "location.pathname === '/report.html' && document.querySelector('h1')?.textContent === 'Report'",
+        );
+        doc.text = "<p>unsaved index</p>".into();
+        editor.reload(&doc).unwrap();
+        wait_for(
+            editor.view.as_ref().unwrap(),
+            "location.pathname === '/index.html' && document.querySelector('p')?.textContent === 'unsaved index'",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&index).unwrap(),
+            "<p>saved index</p><a href='report.html'>Report</a>"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_editor_page_updates_after_the_latest_draft_settles() {
+        let folder = tempfile::tempdir().unwrap();
+        let index = folder.path().join("index.html");
+        std::fs::write(&index, "<p>saved</p>").unwrap();
+        let mut doc = Document::open(folder.path(), &index).unwrap();
+        let parent = hidden_parent();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(320., 200.),
+        );
+        let mut editor = EditorPage::default();
+        editor.sync(&parent, &doc, bounds, 1.);
+        wait_for(
+            editor.view.as_ref().unwrap(),
+            "document.querySelector('p')?.textContent === 'saved'",
+        );
+        let start = Instant::now();
+        doc.text = "<p>first</p>".into();
+        assert!(!editor.poll_draft(&doc, start).unwrap());
+        doc.text = "<p>latest</p>".into();
+        assert!(
+            !editor
+                .poll_draft(&doc, start + Duration::from_millis(200))
+                .unwrap()
+        );
+        assert!(
+            !editor
+                .poll_draft(&doc, start + Duration::from_millis(549))
+                .unwrap()
+        );
+        assert!(
+            editor
+                .poll_draft(&doc, start + Duration::from_millis(550))
+                .unwrap()
+        );
+        wait_for(
+            editor.view.as_ref().unwrap(),
+            "document.querySelector('p')?.textContent === 'latest'",
+        );
+        assert!(
+            !editor
+                .poll_draft(&doc, start + Duration::from_secs(1))
+                .unwrap()
+        );
+        assert_eq!(std::fs::read_to_string(index).unwrap(), "<p>saved</p>");
     }
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]

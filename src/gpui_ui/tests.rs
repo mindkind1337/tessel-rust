@@ -173,9 +173,9 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let index = project.join("index.html");
-    std::fs::write(&index, r#"<p><a href="report.txt">Report</a></p><p><a href="https://example.invalid/">Site</a></p>"#).unwrap();
-    let target = project.join("report.txt");
-    std::fs::write(&target, "Fixture").unwrap();
+    std::fs::write(&index, r#"<p><a href="report.pdf">Report</a></p><p><a href="https://example.invalid/">Site</a></p>"#).unwrap();
+    let target = project.join("report.pdf");
+    std::fs::write(&target, crate::pdf::fixture()).unwrap();
     let view = cx.add_window(|_, cx| {
         let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
         root.app
@@ -210,15 +210,20 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
     }
     cx.refresh().unwrap();
     view.update(cx, |root, _, _| {
-        assert!(
-            root.app
-                .gpui_snapshot(960., 640., 4.)
-                .active_document
-                .unwrap()
-                .title
-                .ends_with("report.txt")
-        );
+        let report = root
+            .app
+            .gpui_snapshot(960., 640., 4.)
+            .active_document
+            .unwrap();
+        assert!(report.title.ends_with("report.pdf") && report.pdf_summary.is_some());
         assert_eq!(root.app.gpui_document_ids().len(), 2);
+        root.app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
+        let index = root
+            .app
+            .gpui_snapshot(960., 640., 4.)
+            .active_document
+            .unwrap();
+        assert!(index.title.ends_with("index.html") && index.preview_mode);
     })
     .unwrap();
 }

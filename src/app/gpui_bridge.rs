@@ -2139,10 +2139,18 @@ impl Tessel {
             && let Some(doc) = self.documents.get(self.active_document)
             && doc.preview_mode
             && doc.tools.html_plain_text.is_none()
-            && let Some(action) = self.editor_page.action(doc.instance_id())
         {
-            self.apply_gpui_action(action);
-            return true;
+            if let Some(action) = self.editor_page.action(doc.instance_id()) {
+                self.apply_gpui_action(action);
+                return true;
+            }
+            return self
+                .editor_page
+                .poll_draft(doc, std::time::Instant::now())
+                .unwrap_or_else(|error| {
+                    self.error = error;
+                    true
+                });
         }
         false
     }
