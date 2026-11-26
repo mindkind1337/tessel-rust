@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum Folder {
     Local(PathBuf),
     Ssh { host: String, root: String },
@@ -10,7 +10,7 @@ pub(crate) enum Folder {
 impl Folder {
     pub(crate) fn label(&self) -> String {
         match self {
-            Self::Local(path) => path.display().to_string(),
+            Self::Local(path) => dunce::simplified(path).display().to_string(),
             Self::Ssh { host, root } => format!("{host}:{root}"),
         }
     }

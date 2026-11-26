@@ -5672,7 +5672,15 @@ impl Tessel {
                     && let Some((host, root, text)) = self.remote.html_preview(&path)
                     && host.alias == expected
                 {
-                    match self.browser.open_remote_page(host, root, &path, text) {
+                    let folder = crate::browser::html_trust::Folder::Ssh {
+                        host: host.alias.clone(),
+                        root: root.into(),
+                    };
+                    let scripts = self.html_trust.decision(&folder) == Some(true);
+                    match self
+                        .browser
+                        .open_remote_page(host, root, &path, text, scripts)
+                    {
                         Ok(()) => {
                             self.show_agent_browser = false;
                             self.browser_tab_open = true;
@@ -5691,7 +5699,12 @@ impl Tessel {
                     && doc.diff_title.is_none()
                     && !doc.media
                 {
-                    match self.browser.open_project_page(doc) {
+                    let scripts = doc.tools.html_root.as_ref().is_some_and(|root| {
+                        self.html_trust
+                            .decision(&crate::browser::html_trust::Folder::Local(root.clone()))
+                            == Some(true)
+                    });
+                    match self.browser.open_project_page(doc, scripts) {
                         Ok(()) => {
                             self.show_agent_browser = false;
                             self.browser_tab_open = true;
@@ -5997,6 +6010,9 @@ impl Tessel {
                     && let Some((active, folder)) = self.active_html_folder()
                     && active == id
                 {
+                    if !trusted {
+                        self.browser.revoke_preview_scripts(&folder);
+                    }
                     if let Err(error) = self.html_trust.decide(folder, trusted) {
                         self.error = error;
                     }

@@ -43,6 +43,7 @@ fn next_address_generation() -> u64 {
 
 pub struct Browser {
     project_pages: project_page::Pages,
+    trusted_preview_folders: std::collections::HashSet<html_trust::Folder>,
     address_generation: u64,
     // Drop child OAuth popups first, then main view, then shared WebContext environment.
     popups: crate::browser_popup::win32::PopupManager,
@@ -80,6 +81,7 @@ impl Default for Browser {
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
         Self {
             project_pages: Default::default(),
+            trusted_preview_folders: Default::default(),
             address_generation: next_address_generation(),
             popups: Default::default(),
             view: None,
@@ -683,15 +685,61 @@ impl Browser {
         root: &str,
         file: &str,
         text: &str,
+        scripts: bool,
     ) -> Result<(), String> {
-        let url = self.project_pages.open_remote(host, root, file, text)?;
+        let folder = html_trust::Folder::Ssh {
+            host: host.alias.clone(),
+            root: root.into(),
+        };
+        let url = self
+            .project_pages
+            .for_open(scripts)
+            .open_remote(host, root, file, text)?;
+        if scripts {
+            self.trusted_preview_folders.insert(folder);
+        }
         self.open_url(&url);
         Ok(())
     }
-    pub(crate) fn open_project_page(&mut self, doc: &crate::files::Document) -> Result<(), String> {
-        let url = self.project_pages.open(&doc.root, &doc.path, &doc.text)?;
+    pub(crate) fn open_project_page(
+        &mut self,
+        doc: &crate::files::Document,
+        scripts: bool,
+    ) -> Result<(), String> {
+        let root = doc.tools.html_root.as_ref().unwrap_or(&doc.root);
+        let url = self
+            .project_pages
+            .for_open(scripts)
+            .open(root, &doc.path, &doc.text)?;
+        if scripts {
+            self.trusted_preview_folders
+                .insert(html_trust::Folder::Local(root.clone()));
+        }
         self.open_url(&url);
         Ok(())
+    }
+    pub(crate) fn revoke_preview_scripts(&mut self, folder: &html_trust::Folder) {
+        self.project_pages.restrict(folder);
+        if self.trusted_preview_folders.remove(folder)
+            && let Some(view) = self.view.take()
+        {
+            // A suspended history entry can retain its previous script environment.
+            // Recreate the controller to discard live and cached documents together.
+            let current = view
+                .url()
+                .ok()
+                .filter(|url| allowed(url))
+                .unwrap_or_else(|| self.committed_address.clone());
+            self.popups.close_all();
+            self.popup = None;
+            (self.sender, self.receiver) = mpsc::channel();
+            drop(view);
+            self.context.take();
+            self.clip.reset();
+            self.viewport = None;
+            self.webview_had_focus = false;
+            self.open_url(&current);
+        }
     }
     pub fn open_url(&mut self, url: &str) {
         self.address_editing = false;

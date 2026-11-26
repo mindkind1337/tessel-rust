@@ -23,6 +23,7 @@ const MAX_DRAFTS: usize = 20;
 
 #[derive(Clone)]
 struct Site {
+    scripts: bool,
     authority: String,
     root: PathBuf,
     remote: Option<crate::workspace::Host>,
@@ -30,7 +31,10 @@ struct Site {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>, bool);
+pub(crate) struct Pages {
+    sites: Arc<Mutex<VecDeque<Arc<Site>>>>,
+    scripts: bool,
+}
 
 fn segment_ok(s: &str) -> bool {
     let stem = s
@@ -186,14 +190,36 @@ fn asset_response(
 }
 
 impl Pages {
-    // The trusted renderer owns its own registry and WebView. Browser tabs
-    // retain a separate restricted registry.
     pub(crate) fn editor(scripts: bool) -> Self {
-        Self(Default::default(), scripts)
+        Self {
+            sites: Default::default(),
+            scripts,
+        }
+    }
+    pub(super) fn for_open(&self, scripts: bool) -> Self {
+        Self {
+            sites: self.sites.clone(),
+            scripts,
+        }
+    }
+    pub(super) fn restrict(&self, folder: &super::html_trust::Folder) {
+        let mut sites = self.sites.lock().unwrap_or_else(|err| err.into_inner());
+        for site in sites.iter_mut() {
+            let matches = match (folder, &site.remote) {
+                (super::html_trust::Folder::Local(path), None) => site.root == *path,
+                (super::html_trust::Folder::Ssh { host, root }, Some(remote)) => {
+                    remote.alias == *host && site.root.to_str() == Some(root.as_str())
+                }
+                _ => false,
+            };
+            if matches && site.scripts {
+                Arc::make_mut(site).scripts = false;
+            }
+        }
     }
     pub(super) fn open(&self, root: &Path, file: &Path, text: &str) -> Result<String, String> {
         let canonical = root.canonicalize().map_err(|e| e.to_string())?;
-        if self.1 && canonical != root {
+        if self.scripts && canonical != root {
             return Err("The trusted folder has moved.".into());
         }
         let root = canonical;
@@ -228,9 +254,13 @@ impl Pages {
         text: &str,
         remote: Option<crate::workspace::Host>,
     ) -> Result<String, String> {
-        let mut sites = self.0.lock().map_err(|_| "Project preview unavailable")?;
+        let mut sites = self
+            .sites
+            .lock()
+            .map_err(|_| "Project preview unavailable")?;
         let mut site = if let Some(i) = sites.iter().position(|s| {
-            s.root == root
+            s.scripts == self.scripts
+                && s.root == root
                 && s.remote.as_ref().map(|h| (&h.alias, &h.folder))
                     == remote.as_ref().map(|h| (&h.alias, &h.folder))
         }) {
@@ -242,6 +272,7 @@ impl Pages {
                 sites.pop_front();
             }
             Arc::new(Site {
+                scripts: self.scripts,
                 authority: format!(
                     "{}{:032x}.localhost",
                     if remote.is_some() { "ssh-" } else { "" },
@@ -281,21 +312,6 @@ impl Pages {
             crate::remote::Action,
         ) -> Result<crate::remote::Reply, String>,
     ) -> Reply {
-        let mut reply = self.serve_asset(req, read_remote);
-        if self.1 && reply.status().is_success() {
-            reply.headers_mut().insert("Content-Security-Policy", wry::http::HeaderValue::from_static(
-                "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; connect-src 'self' https: wss:; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"));
-        }
-        reply
-    }
-    fn serve_asset(
-        &self,
-        req: Request<Vec<u8>>,
-        read_remote: impl FnOnce(
-            crate::workspace::Host,
-            crate::remote::Action,
-        ) -> Result<crate::remote::Reply, String>,
-    ) -> Reply {
         let head = req.method() == "HEAD";
         if !head && req.method() != "GET" {
             let mut reply = empty(405);
@@ -307,7 +323,7 @@ impl Pages {
         let Some(authority) = req.uri().authority() else {
             return empty(404);
         };
-        let Some(site) = self.0.lock().ok().and_then(|mut sites| {
+        let Some(site) = self.sites.lock().ok().and_then(|mut sites| {
             let i = sites
                 .iter()
                 .position(|site| site.authority == authority.as_str())?;
@@ -317,6 +333,22 @@ impl Pages {
         }) else {
             return empty(404);
         };
+        let mut reply = Self::serve_asset(&site, req, read_remote);
+        if site.scripts && reply.status().is_success() {
+            reply.headers_mut().insert("Content-Security-Policy", wry::http::HeaderValue::from_static(
+                "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; connect-src 'self' https: wss:; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"));
+        }
+        reply
+    }
+    fn serve_asset(
+        site: &Site,
+        req: Request<Vec<u8>>,
+        read_remote: impl FnOnce(
+            crate::workspace::Host,
+            crate::remote::Action,
+        ) -> Result<crate::remote::Reply, String>,
+    ) -> Reply {
+        let head = req.method() == "HEAD";
         let mut parts = Vec::new();
         for raw in req.uri().path().split('/').filter(|s| !s.is_empty()) {
             if raw.bytes().enumerate().any(|(i, b)| {
@@ -486,6 +518,86 @@ impl Pages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trusted_ssh_sites_keep_distinct_origins_per_host_folder_and_mode() {
+        let registry = Pages::default();
+        let open = |alias: &str, trusted| {
+            registry
+                .for_open(trusted)
+                .open_remote(
+                    crate::workspace::Host {
+                        alias: alias.into(),
+                        ..Default::default()
+                    },
+                    "/site",
+                    "/site/index.html",
+                    "draft",
+                )
+                .unwrap()
+                .replace("http://tesselpreview.", "tesselpreview://")
+        };
+        let restricted = open("dev", false);
+        let trusted = open("dev", true);
+        let other = open("live", true);
+        let policy = |url: &str| {
+            let reply = registry.serve(Request::get(url).body(vec![]).unwrap());
+            assert_eq!(reply.status(), 200);
+            reply.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_ne!(trusted, restricted);
+        assert_eq!(policy(&restricted), POLICY);
+        assert!(policy(&trusted).contains("script-src 'self'"));
+        registry.restrict(&super::super::html_trust::Folder::Ssh {
+            host: "dev".into(),
+            root: "/site".into(),
+        });
+        assert_eq!(policy(&trusted), POLICY);
+        assert!(policy(&other).contains("script-src 'self'"));
+        assert_ne!(open("dev", true), trusted);
+        assert_eq!(policy(&trusted), POLICY);
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn hidden_owner_browser_runs_approved_draft_and_reopens_it_restricted_on_revocation() {
+        use crate::webview_test_support::{hidden_parent, wait_for};
+        let dir = tempfile::tempdir().unwrap();
+        let site = dir.path().join("site");
+        std::fs::create_dir(&site).unwrap();
+        let path = site.join("index.html");
+        std::fs::write(&path, "disk").unwrap();
+        std::fs::write(
+            site.join("module.js"),
+            "document.body.dataset.executed='yes'",
+        )
+        .unwrap();
+        let mut doc = crate::files::Document::open(&site, &path).unwrap();
+        doc.text = "<p>draft</p><script type='module' src='module.js'></script>".into();
+        let parent = hidden_parent();
+        let profile = dir.path().join("test-profile");
+        let mut browser = crate::browser::Browser::default();
+        browser
+            .create_with_profile(&parent, profile.clone())
+            .unwrap();
+        browser.open_project_page(&doc, true).unwrap();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.body?.dataset.executed === 'yes' && document.querySelector('p')?.textContent === 'draft'",
+        );
+        browser.revoke_preview_scripts(&super::super::html_trust::Folder::Local(
+            doc.tools.html_root.clone().unwrap(),
+        ));
+        assert!(browser.view.is_none() && browser.auto_start_pending);
+        browser.create_with_profile(&parent, profile).unwrap();
+        browser.navigate();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.readyState === 'complete' && document.querySelector('p')?.textContent === 'draft' && !document.body.dataset.executed",
+        );
+    }
     #[test]
     fn remote_directory_links_serve_registered_index_drafts_and_report_oversized_assets() {
         let pages = Pages::default();
@@ -815,7 +927,7 @@ mod tests {
         browser
             .create_with_profile(&parent, temp.path().join("browser-profile"))
             .unwrap();
-        browser.open_project_page(&doc).unwrap();
+        browser.open_project_page(&doc, false).unwrap();
         wait_for(
             browser.view.as_ref().unwrap(),
             "document.querySelector('#fixture')?.textContent === 'unsaved' && getComputedStyle(document.querySelector('#fixture')).color === 'rgb(11, 22, 33)' && document.images[0]?.naturalWidth === 12 && !document.body.dataset.executed",
@@ -837,7 +949,7 @@ mod tests {
         let second_path = nested.join("second.html");
         std::fs::write(&second_path, "<p>second page</p>").unwrap();
         let second = crate::files::Document::open(&root, &second_path).unwrap();
-        browser.open_project_page(&second).unwrap();
+        browser.open_project_page(&second, false).unwrap();
         wait_for(
             browser.view.as_ref().unwrap(),
             "document.body?.textContent === 'second page'",
