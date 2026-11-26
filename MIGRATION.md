@@ -1661,3 +1661,5 @@ GPUI uses a shared local and SSH image menu with menu-item focus, Up/Down naviga
 Both renderers use a private WebView2 child for the audio and video extensions in the Vue file-kind table. The player serves the selected document’s original bytes from memory, including HTTP byte-range requests for seeking. It does not navigate to filesystem paths or use the authenticated browser tab. SSH media reads use the same 30 MiB limit as local playback. Other platforms still need an embedded playback backend.
 
 Windows acceptance uses a hidden native parent and synthetic WAV and WebM files. It checks decoder metadata, playback, pause, seeking and reopening after an overlay. SSH routing is tested with synthetic SFTP replies.
+
+GPUI readable preview links now use the pinned local document opener, including existing-tab reuse, asynchronous loading and the editor tab limit. Full styled HTML rendering remains open.

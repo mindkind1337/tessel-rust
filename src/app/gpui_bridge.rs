@@ -5736,11 +5736,7 @@ impl Tessel {
                 {
                     match crate::preview::resolve(&root, &source, &href) {
                         Ok(crate::preview::Link::File(target)) => {
-                            if let Ok(doc) = crate::files::Document::open(&root, &target) {
-                                self.documents.push(doc);
-                                self.active_document = self.documents.len() - 1;
-                                self.view = View::Files;
-                            }
+                            self.open_document_at(root, target);
                         }
                         Ok(crate::preview::Link::Web(url)) => {
                             self.open_tessel_url_headless(url);
@@ -7237,6 +7233,26 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn preview_link_reuses_and_pins_open_target_preserving_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(root.join("state")), false, || {});
+        for name in ["index.html", "report.txt"] {
+            let path = root.join(name);
+            std::fs::write(&path, name).unwrap();
+            app.documents
+                .push(crate::files::Document::open(root, &path).unwrap());
+        }
+        app.active_document = 0;
+        app.documents[1].unpinned_preview = true;
+        app.apply_gpui_action(GpuiAction::FollowDocumentLink("report.txt".into()));
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.active_document, 1);
+        assert!(!app.documents[1].unpinned_preview);
+        assert!(app.documents[0].path.ends_with("index.html"));
+    }
+
     #[test]
     fn team_mcp_shared_poll_revalidates_real_sessions_before_persisted_mutation() {
         use crate::team_mcp_runtime::LivePane;
