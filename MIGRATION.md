@@ -1699,3 +1699,5 @@ Custom agents participate in the CLI availability scan. Detection checks the fir
 Custom-agent additions, edits, removals and visibility changes persist before the in-memory list changes. Both settings renderers keep a rejected agent draft available for correction. Editing an existing agent preserves its visibility setting.
 
 The native custom-agent form previews the selected accent and initial. Its eight swatches support keyboard navigation and retain the selected color across submissions.
+
+GPUI Settings covers the workspace below the 40-pixel toolbar. The navigation and page scroll independently, and Back to app closes Settings.

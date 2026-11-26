@@ -1,12 +1,10 @@
-//! 1:1 `GPUI` Settings Modal (`SettingsDialog.vue` parity):
-//! - `860×620px` modal with `220px` searchable 5-group left navigation rail
-//! - Interactive controls for all 22 `SettingsPageId` pages plus Windows DPAPI `Passwords` vault
+//! Native Settings workspace and page controls.
 
 use super::{
     FocusInputTarget, TesselGpuiRoot,
     icons::GpuiIcon,
     side_panels_view::render_focus_input_box,
-    theme::{GpuiThemeTokens, mono_font_family, rgba_with_alpha},
+    theme::{GpuiThemeTokens, TOOLBAR_HEIGHT_PX, mono_font_family},
 };
 use crate::{
     app::gpui_bridge::{GpuiAction, GpuiSettingsSnapshot, GpuiWorkspaceSnapshot},
@@ -28,6 +26,7 @@ use gpui::{
 };
 
 pub(crate) fn render_settings_modal(
+    viewport_width: f32,
     snapshot: &GpuiWorkspaceSnapshot,
     modal_query: &super::modal_query_input::Input,
     swatches: &[gpui::FocusHandle; 8],
@@ -38,17 +37,70 @@ pub(crate) fn render_settings_modal(
     let s = snapshot.settings.as_ref()?;
     let french = snapshot.french;
 
+    let back_label = if french {
+        "Retour à l'application"
+    } else {
+        "Back to app"
+    };
+    let back = div()
+        .id("settings-back")
+        .debug_selector(|| "settings-back".into())
+        .role(gpui::Role::Button)
+        .aria_label(back_label)
+        .tab_index(0)
+        .focus_visible(|style| style.bg(tokens.surface_2).text_color(tokens.text_strong))
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(10.))
+        .py(px(7.))
+        .rounded(px(tokens.radius_px))
+        .cursor_pointer()
+        .text_size(px(13.))
+        .text_color(tokens.text_dim)
+        .hover(|style| style.bg(tokens.surface_2).text_color(tokens.text_strong))
+        .on_click(cx.listener(|root, _, _, cx| root.dispatch_action(GpuiAction::CloseOverlays, cx)))
+        .on_key_down(cx.listener(|root, event: &gpui::KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                cx.stop_propagation();
+                root.dispatch_action(GpuiAction::CloseOverlays, cx);
+            }
+        }))
+        .child(GpuiIcon::ArrowLeft.render(14., tokens.text_dim))
+        .child(back_label);
     let mut nav_scroll = div()
         .id("gpui-settings-nav-scroll")
-        .flex_1()
-        .min_h_0()
+        .debug_selector(|| "settings-nav".into())
+        .role(gpui::Role::Navigation)
+        .aria_label(if french {
+            "Pages des paramètres"
+        } else {
+            "Settings pages"
+        })
+        .w(px((viewport_width * 0.24).clamp(200., 290.)))
+        .h_full()
+        .flex_none()
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(px(8.0));
+        .gap(px(8.))
+        .px(px(12.))
+        .pt(px(14.))
+        .pb(px(18.))
+        .bg(tokens.chrome)
+        .border_r_1()
+        .border_color(tokens.border)
+        .child(back)
+        .child(div().flex_none().child(modal_query.render(
+            FocusInputTarget::SettingsSearch,
+            french,
+            tokens,
+            cx,
+        )));
 
     for (g_idx, (group_title, pages)) in s.groups.iter().enumerate() {
-        let mut grp = div().flex().flex_col().gap(px(2.0)).child(
+        let mut grp = div().flex_none().flex().flex_col().gap(px(2.0)).child(
             div()
                 .px(px(6.0))
                 .text_size(px(10.0))
@@ -129,106 +181,53 @@ pub(crate) fn render_settings_modal(
         );
     }
 
-    let left_rail = div()
-        .w(px(220.0))
-        .h_full()
-        .p(px(10.0))
-        .bg(tokens.surface)
-        .border_r_1()
-        .border_color(tokens.border)
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .child(modal_query.render(FocusInputTarget::SettingsSearch, french, tokens, cx))
-        .child(nav_scroll);
-
     let page_body = render_settings_page_body(snapshot, s, focus_input, swatches, tokens, cx);
-
+    let wide = s.active_page_id == "skills" && s.search_query.trim().is_empty();
+    let (horizontal, top, bottom) = if viewport_width <= 760. {
+        (20., 24., 40.)
+    } else {
+        (40., 34., 60.)
+    };
     let right_col = div()
+        .id(SharedString::from(format!(
+            "settings-body-{}",
+            s.active_page_id
+        )))
+        .debug_selector(|| "settings-body".into())
         .flex_1()
         .min_w_0()
         .h_full()
-        .flex()
-        .flex_col()
+        .overflow_y_scroll()
         .child(
-            div()
-                .h(px(42.0))
-                .px(px(16.0))
-                .border_b_1()
-                .border_color(tokens.border)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(px(13.5))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(tokens.text_strong)
-                        .child(SharedString::from(if french {
-                            format!("Paramètres · {}", s.active_page_id)
-                        } else {
-                            format!("Settings · {}", s.active_page_id)
-                        })),
-                )
-                .child(
-                    div()
-                        .id("gpui-settings-close")
-                        .w(px(26.0))
-                        .h(px(26.0))
-                        .rounded(px(tokens.radius_px))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .hover(|st| st.bg(tokens.surface_2))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch_action(GpuiAction::CloseOverlays, cx);
-                        }))
-                        .child(GpuiIcon::Close.render(13.5, tokens.text_dim)),
-                ),
-        )
-        .child(
-            div()
-                .id("gpui-settings-body-scroll")
-                .debug_selector(|| "settings-body".into())
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .p(px(16.0))
-                .child(page_body),
+            div().w_full().flex().justify_center().child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .max_w(px(if wide { 1180. } else { 870. }))
+                    .px(px(horizontal))
+                    .pt(px(top))
+                    .pb(px(bottom))
+                    .child(page_body),
+            ),
         );
-
     Some(
         div()
-            .id("gpui-settings-backdrop")
+            .id("gpui-settings-page")
+            .debug_selector(|| "settings-page".into())
+            .role(gpui::Role::Dialog)
+            .aria_label(if french { "Paramètres" } else { "Settings" })
+            .aria_modal(true)
             .absolute()
-            .left(px(0.0))
-            .top(px(0.0))
-            .size_full()
-            .bg(rgba_with_alpha(tokens.bg, 0.72))
+            .top(px(TOOLBAR_HEIGHT_PX))
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .occlude()
+            .bg(tokens.surface)
             .flex()
-            .items_center()
-            .justify_center()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.dispatch_action(GpuiAction::CloseOverlays, cx);
-            }))
-            .child(
-                div()
-                    .id("gpui-settings-dialog")
-                    .w(px(860.0))
-                    .h(px(620.0))
-                    .rounded(px(tokens.radius_px + 3.0))
-                    .bg(tokens.panel)
-                    .border_1()
-                    .border_color(tokens.border_strong)
-                    .overflow_hidden()
-                    .flex()
-                    .flex_row()
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        cx.stop_propagation();
-                    }))
-                    .child(left_rail)
-                    .child(right_col),
-            )
+            .overflow_hidden()
+            .child(nav_scroll)
+            .child(right_col)
             .into_any_element(),
     )
 }

@@ -1705,6 +1705,7 @@ impl Render for TesselGpuiRoot {
             ))
             .when_some(
                 settings_view::render_settings_modal(
+                    viewport_w,
                     &snapshot,
                     &self.modal_query_input,
                     &self.agent_swatches,

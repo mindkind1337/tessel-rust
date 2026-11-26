@@ -18,6 +18,39 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn settings_workspace_resizes_below_toolbar_and_returns_to_app(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::OpenSettingsPage("appearance".into()));
+        root
+    });
+    for (w, h, rail) in [(740., 520., 200.), (1000., 750., 240.), (1440., 900., 290.)] {
+        cx.simulate_window_resize(view.into(), gpui::size(gpui::px(w), gpui::px(h)));
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let page = visual.debug_bounds("settings-page").unwrap();
+        assert_eq!(page.origin, gpui::point(gpui::px(0.), gpui::px(40.)));
+        assert_eq!(page.size, gpui::size(gpui::px(w), gpui::px(h - 40.)));
+        assert_eq!(
+            visual.debug_bounds("settings-nav").unwrap().size.width,
+            gpui::px(rail)
+        );
+    }
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let back = visual.debug_bounds("settings-back").unwrap().center();
+    visual.simulate_click(back, Default::default());
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("settings-page")
+            .is_none()
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn custom_agent_color_arrows_wrap_and_move_focus(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let view = cx.add_window(|_, cx| {
