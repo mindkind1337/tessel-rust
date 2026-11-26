@@ -401,6 +401,62 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved text\n");
         std::fs::write(&path, "current text\n").unwrap();
+        let click = |cx: &mut TestAppContext, selector: &'static str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                let loaded = view
+                    .update(cx, |root, _, cx| {
+                        if root.poll_backend(cx) {
+                            cx.notify();
+                        }
+                        root.app
+                            .gpui_snapshot(960., 640., super::super::theme::SPLIT_DIVIDER_PX)
+                            .side_panels
+                            .timeline
+                            .data
+                            .is_some()
+                    })
+                    .unwrap();
+                cx.refresh().unwrap();
+                if loaded {
+                    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+                    let point = visual
+                        .debug_bounds(selector)
+                        .unwrap_or_else(|| panic!("missing {selector}"))
+                        .center();
+                    visual.simulate_click(point, Default::default());
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timeline did not load before {selector}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+        };
+        for selector in [
+            "timeline-filter",
+            "timeline-filter-git",
+            "timeline-filter",
+            "timeline-filter-local",
+        ] {
+            click(cx, selector);
+        }
+        view.update(cx, |root, _, _| {
+            let timeline = root
+                .app
+                .gpui_snapshot(960., 640., super::super::theme::SPLIT_DIVIDER_PX)
+                .side_panels
+                .timeline;
+            assert!(!timeline.filters_open);
+            assert_eq!(
+                timeline.status(false).as_deref(),
+                Some("All timeline sources have been filtered out.")
+            );
+        })
+        .unwrap();
+        click(cx, "timeline-filter");
+        click(cx, "timeline-filter-local");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             view.update(cx, |root, _, cx| {

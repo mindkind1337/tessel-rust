@@ -1922,8 +1922,17 @@ impl Tessel {
         let pinned = pin.is_some();
         let file = pin.map(|p| p.path.clone()).or(active);
         self.timeline.profile = self.store.as_ref().map(|s| s.directory().to_owned());
-        self.timeline.select(file.clone());
+        let sources = crate::file_timeline::Sources {
+            git: self.state.editor_prefs.timeline_git,
+            local: self.state.editor_prefs.timeline_local,
+        };
+        if !shown {
+            self.timeline.filters_open = false;
+        }
+        self.timeline.select(file.clone(), sources);
         crate::file_timeline::Snapshot {
+            sources,
+            filters_open: self.timeline.filters_open,
             shown,
             pinned,
             file,
@@ -1935,6 +1944,17 @@ impl Tessel {
         match action {
             Action::Toggle => {
                 self.state.editor_prefs.timeline_shown = !self.state.editor_prefs.timeline_shown;
+                self.save();
+            }
+            Action::Filters(open) => self.timeline.filters_open = open,
+            Action::ToggleSource(source) => {
+                let prefs = &mut self.state.editor_prefs;
+                let value = match source {
+                    crate::file_timeline::Source::Git => &mut prefs.timeline_git,
+                    crate::file_timeline::Source::Local => &mut prefs.timeline_local,
+                };
+                *value = !*value;
+                self.timeline.filters_open = false;
                 self.save();
             }
             Action::TogglePin(path) if self.timeline.file.as_ref() == Some(&path) => {

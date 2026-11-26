@@ -8310,6 +8310,22 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn file_timeline_filters_survive_reopen_and_default_to_both() {
+        use crate::file_timeline::{Action, Source};
+        let old: crate::workspace::EditorPreferences = serde_json::from_str("{}").unwrap();
+        assert!(old.timeline_git && old.timeline_local);
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Tessel::new_for_gpui_in_dir(Some(dir.path().to_owned()), false, || {});
+        {
+            let mut app = open();
+            app.apply_gpui_action(GpuiAction::Timeline(Action::ToggleSource(Source::Git)));
+            assert!(app.error.is_empty(), "{}", app.error);
+        }
+        let prefs = open().state.editor_prefs;
+        assert!(!prefs.timeline_git && prefs.timeline_local);
+    }
+
+    #[test]
     fn outline_sort_survives_workspace_reopen_and_defaults_for_old_preferences() {
         use crate::outline_tree::Sort;
         let old: crate::workspace::EditorPreferences =

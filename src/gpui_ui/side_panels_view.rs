@@ -2641,6 +2641,60 @@ fn render_timeline(
     if !snap.shown {
         return section.into_any_element();
     }
+    let mut filter = div().relative().child(render_chip(
+        "timeline-filter",
+        if fr {
+            "Filtrer la chronologie"
+        } else {
+            "Filter Timeline"
+        }
+        .into(),
+        snap.filters_open,
+        tokens,
+        GpuiAction::Timeline(Action::Filters(!snap.filters_open)),
+        cx,
+    ));
+    if snap.filters_open {
+        use crate::file_timeline::Source;
+        let mut menu = div()
+            .id("timeline-source-menu")
+            .flex()
+            .flex_col()
+            .w(px(176.))
+            .p(px(4.))
+            .bg(tokens.surface)
+            .border_1()
+            .border_color(tokens.border)
+            .rounded(px(4.))
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|root, _: &gpui::MouseDownEvent, _, cx| {
+                root.dispatch_action(GpuiAction::Timeline(Action::Filters(false)), cx);
+            }));
+        for (key, source) in [
+            ("timeline-filter-git", Source::Git),
+            ("timeline-filter-local", Source::Local),
+        ] {
+            menu = menu.child(render_chip(
+                key,
+                source.label(fr).into(),
+                source.enabled(snap.sources),
+                tokens,
+                GpuiAction::Timeline(Action::ToggleSource(source)),
+                cx,
+            ));
+        }
+        filter = filter.child(
+            gpui::deferred(
+                gpui::anchored()
+                    .offset(point(px(0.), px(20.)))
+                    .snap_to_window_with_margin(px(4.))
+                    .child(menu),
+            )
+            .priority(2),
+        );
+    }
+    section = section.child(filter);
     if let Some(file) = &snap.file {
         section = section.child(
             div()
@@ -2666,7 +2720,7 @@ fn render_timeline(
         );
     }
     if let Some(status) = snap.status(fr) {
-        section = section.child(render_empty_note(status, tokens));
+        section = section.child(render_empty_note(&status, tokens));
     }
     if let (Some(file), Some(Ok(history))) = (&snap.file, &snap.data) {
         let mut list = div()

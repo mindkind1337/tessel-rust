@@ -265,6 +265,8 @@ pub struct EditorPreferences {
     pub outline_follow_cursor: bool,
     pub outline_filter_on_type: bool,
     pub timeline_shown: bool,
+    pub timeline_git: bool,
+    pub timeline_local: bool,
     pub outline_sort: crate::outline_tree::Sort,
     pub diff_word_wrap: bool,
 }
@@ -284,6 +286,8 @@ impl Default for EditorPreferences {
             outline_follow_cursor: true,
             outline_filter_on_type: true,
             timeline_shown: false,
+            timeline_git: true,
+            timeline_local: true,
             outline_sort: Default::default(),
             diff_word_wrap: false,
         }

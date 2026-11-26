@@ -19,6 +19,7 @@ pub struct Commit {
 
 #[derive(Debug, Default)]
 pub struct History {
+    scm_unavailable: bool,
     pub saves: Vec<crate::local_file_history::Entry>,
     root: PathBuf,
     relative: String,
@@ -122,6 +123,7 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
         None,
     )?;
     Ok(History {
+        scm_unavailable: false,
         saves: Vec::new(),
         root,
         relative,
@@ -132,22 +134,65 @@ fn read(file: &Path, limit: usize) -> Result<History, String> {
     })
 }
 
-fn load(file: &Path, limit: usize, profile: Option<&Path>) -> Result<History, String> {
-    let saves = profile
-        .map(|dir| crate::local_file_history::list(dir, file))
-        .transpose();
-    let mut history = match read(file, limit) {
-        Ok(h) => h,
-        Err(_)
-            if saves
-                .as_ref()
-                .is_ok_and(|v| v.as_ref().is_some_and(|s| !s.is_empty())) =>
-        {
-            History::default()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sources {
+    pub git: bool,
+    pub local: bool,
+}
+impl Default for Sources {
+    fn default() -> Self {
+        Self {
+            git: true,
+            local: true,
         }
-        Err(e) => return Err(saves.err().map(|err| err.to_string()).unwrap_or(e)),
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum Source {
+    Git,
+    Local,
+}
+impl Source {
+    pub fn label(self, fr: bool) -> &'static str {
+        match (self, fr) {
+            (Self::Git, true) => "Historique Git",
+            (Self::Git, false) => "Git History",
+            (Self::Local, true) => "Historique local",
+            (Self::Local, false) => "Local History",
+        }
+    }
+    pub fn enabled(self, sources: Sources) -> bool {
+        match self {
+            Self::Git => sources.git,
+            Self::Local => sources.local,
+        }
+    }
+}
+fn load(
+    file: &Path,
+    limit: usize,
+    profile: Option<&Path>,
+    sources: Sources,
+) -> Result<History, String> {
+    let mut history = if sources.git {
+        read(file, limit).unwrap_or_else(|_| History {
+            scm_unavailable: true,
+            ..Default::default()
+        })
+    } else {
+        History::default()
     };
-    history.saves = saves.ok().flatten().unwrap_or_default();
+    if sources.local
+        && let Some(dir) = profile
+    {
+        match crate::local_file_history::list(dir, file) {
+            Ok(saves) => history.saves = saves,
+            Err(error) if !history.dirty && history.commits.is_empty() => {
+                return Err(error.to_string());
+            }
+            Err(_) => {}
+        }
+    }
     Ok(history)
 }
 
@@ -200,6 +245,8 @@ impl History {
 #[derive(Default)]
 pub struct State {
     pub pin: Option<PinnedFile>,
+    sources: Sources,
+    pub filters_open: bool,
     pub profile: Option<PathBuf>,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
@@ -210,10 +257,13 @@ pub struct State {
     pending: Option<(u64, mpsc::Receiver<Result<History, String>>)>,
 }
 impl State {
-    pub fn select(&mut self, file: Option<PathBuf>) {
-        if self.file != file {
+    pub fn select(&mut self, file: Option<PathBuf>, sources: Sources) {
+        if self.file != file || self.sources != sources {
+            if self.file != file {
+                self.limit = 20;
+            }
+            self.sources = sources;
             self.file = file;
-            self.limit = 20;
             self.refresh(false);
         }
         self.start();
@@ -228,22 +278,32 @@ impl State {
         self.start();
     }
     fn start(&mut self) {
-        if self.pending.is_some() || self.data.is_some() {
+        if self.data.is_some() {
             return;
         }
         let Some(file) = self.file.clone() else {
             return;
         };
+        let sources = self.sources;
+        if !sources.git && !sources.local {
+            self.data = Some(Ok(Arc::default()));
+            return;
+        }
+        if self.pending.is_some() {
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         let limit = self.limit;
         let profile = self.profile.clone();
         self.pending = Some((self.revision, rx));
         thread::spawn(move || {
-            let _ = tx.send(load(&file, limit, profile.as_deref()));
+            let _ = tx.send(load(&file, limit, profile.as_deref(), sources));
         });
     }
     pub fn poll(&mut self) -> bool {
-        if crate::local_file_history::changed_since(&mut self.save_cursor, self.file.as_deref()) {
+        if crate::local_file_history::changed_since(&mut self.save_cursor, self.file.as_deref())
+            && (self.sources.git || self.sources.local)
+        {
             self.refresh(false);
         }
         let Some((revision, rx)) = &self.pending else {
@@ -286,6 +346,8 @@ pub struct PinnedFile {
 pub enum Action {
     Toggle,
     TogglePin(PathBuf),
+    Filters(bool),
+    ToggleSource(Source),
     Refresh(PathBuf, bool),
     Open(PathBuf, Option<String>, bool),
 }
@@ -293,6 +355,8 @@ pub enum Action {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub shown: bool,
+    pub filters_open: bool,
+    pub sources: Sources,
     pub pinned: bool,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
@@ -314,28 +378,51 @@ impl Snapshot {
             (false, false) => "Pin",
         }
     }
-    pub fn status(&self, fr: bool) -> Option<&str> {
-        match (&self.file, &self.data) {
-            (None, _) => Some(if fr {
-                "Aucun fichier actif."
-            } else {
-                "No active file."
-            }),
-            (_, None) => Some(if fr {
-                "Chargement de la chronologie…"
-            } else {
-                "Loading timeline…"
-            }),
-            (_, Some(Err(e))) => Some(e),
-            (_, Some(Ok(h))) if !h.dirty && h.commits.is_empty() && h.saves.is_empty() => {
-                Some(if fr {
-                    "Aucune modification Git pour ce fichier."
-                } else {
-                    "No Git changes for this file."
-                })
+    pub fn status(&self, fr: bool) -> Option<String> {
+        let file = match &self.file {
+            Some(file) => file,
+            None => {
+                return Some(
+                    if fr {
+                        "L'éditeur actif ne peut pas fournir d'informations de chronologie."
+                    } else {
+                        "The active editor cannot provide timeline information."
+                    }
+                    .into(),
+                );
             }
-            _ => None,
+        };
+        let h = match &self.data {
+            Some(Ok(h)) => h,
+            Some(Err(e)) => return Some(e.clone()),
+            None => {
+                let name = file.file_name().unwrap_or_default().to_string_lossy();
+                return Some(if fr {
+                    format!("Chargement de la chronologie pour {name}...")
+                } else {
+                    format!("Loading timeline for {name}...")
+                });
+            }
+        };
+        if h.dirty || !h.commits.is_empty() || !h.saves.is_empty() {
+            return None;
         }
+        let mut text = match (self.sources.git,self.sources.local,fr) {
+            (false,false,true) => "Toutes les sources de chronologie ont été filtrées.",
+            (false,false,false) => "All timeline sources have been filtered out.",
+            (_,true,true) => "L'historique local suivra les modifications récentes à mesure que vous les enregistrez, sauf si le fichier a été exclu ou s'il est trop volumineux.",
+            (_,true,false) => "Local History will track recent changes as you save them unless the file has been excluded or is too large.",
+            (_,false,true) => "Aucune information de chronologie filtrée n'a été fournie.",
+            (_,false,false) => "No filtered timeline information was provided.",
+        }.to_owned();
+        if h.scm_unavailable {
+            text.push_str(if fr {
+                " Le contrôle de code source n'a pas été configuré."
+            } else {
+                " Source Control has not been configured."
+            });
+        }
+        Some(text)
     }
 }
 fn relative_time(time: i64, now: i64, fr: bool) -> String {
@@ -433,6 +520,24 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
     if !snap.shown {
         return action;
     }
+    ui.menu_button(
+        if fr {
+            "Filtrer la chronologie"
+        } else {
+            "Filter Timeline"
+        },
+        |ui| {
+            for source in [Source::Git, Source::Local] {
+                if ui
+                    .selectable_label(source.enabled(snap.sources), source.label(fr))
+                    .clicked()
+                {
+                    action = Some(Action::ToggleSource(source));
+                    ui.close();
+                }
+            }
+        },
+    );
     if let Some(file) = &snap.file {
         ui.horizontal(|ui| {
             ui.label(snap.file_label(file, fr));
@@ -527,6 +632,7 @@ mod tests {
             old_path: None,
         };
         let h = History {
+            scm_unavailable: false,
             saves: Vec::new(),
             root: PathBuf::new(),
             relative: String::new(),
@@ -616,6 +722,29 @@ mod tests {
     }
 
     #[test]
+    fn file_timeline_loads_only_selected_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("project");
+        std::fs::create_dir(&repo).unwrap();
+        let file = repo.join("file.txt");
+        std::fs::write(&file, "one").unwrap();
+        git_fixture(&repo, &["init", "-q"]);
+        git_fixture(&repo, &["add", "."]);
+        git_fixture(&repo, &["commit", "-qm", "first"]);
+        let profile = dir.path().join("profile");
+        crate::local_file_history::record(&profile, &file, "one").unwrap();
+        std::fs::write(&file, "two").unwrap();
+        for git in [false, true] {
+            for local in [false, true] {
+                let data = load(&file, 20, Some(&profile), Sources { git, local }).unwrap();
+                assert_eq!(data.commits.len(), usize::from(git));
+                assert_eq!(data.dirty, git);
+                assert_eq!(data.saves.len(), usize::from(local));
+            }
+        }
+    }
+
+    #[test]
     fn file_timeline_abandons_old_worker_when_active_file_changes() {
         let (tx, rx) = mpsc::channel();
         let mut state = State {
@@ -623,7 +752,7 @@ mod tests {
             file: Some(PathBuf::from("previous")),
             ..State::default()
         };
-        state.select(None);
+        state.select(None, Sources::default());
         tx.send(Err("stale error".into())).unwrap();
         assert!(state.poll());
         assert!(state.file.is_none() && state.data.is_none() && state.pending.is_none());
