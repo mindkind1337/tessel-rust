@@ -6784,18 +6784,7 @@ impl Tessel {
                 ui.label(&d.tools.image_download_notice);
             }
             if let Some(texture) = &d.texture {
-                let available = ui.available_rect_before_wrap();
-                let bounds = (available.size() - egui::Vec2::splat(40.)).max(egui::Vec2::splat(1.));
-                let natural = texture.size_vec2();
-                let scale = (bounds.x / natural.x).min(bounds.y / natural.y).min(1.);
-                let rect = egui::Rect::from_center_size(available.center(), natural * scale);
-                let response = ui.put(
-                    rect,
-                    egui::Image::new(texture)
-                        .fit_to_exact_size(rect.size())
-                        .sense(egui::Sense::click()),
-                );
-                response.context_menu(|ui| {
+                crate::files::show_fitted_image(ui, texture).context_menu(|ui| {
                     if ui
                         .button(if french {
                             "Télécharger…"

@@ -6,7 +6,7 @@ use crate::{
 };
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, img, prelude::FluentBuilder as _, px, uniform_list,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
 fn button(
@@ -597,42 +597,41 @@ pub(crate) fn render(
             ));
         } else if let Some(image) = &remote.pixels {
             let size = image.size(0);
-            let image_view = img(image.clone())
-                .w(px(size.width.0 as f32))
-                .h(px(size.height.0 as f32));
             let path_for_menu = path.clone();
+            let image_view = super::editor_view::preview_image_pixels(image.clone())
+                .id("remote-preview-pixels")
+                .debug_selector(|| "remote-preview-pixels".into())
+                .when(!remote.busy, |el| {
+                    el.on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |root, event: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            root.dispatch(
+                                GpuiAction::Remote(Command::ImageMenu(
+                                    path_for_menu.clone(),
+                                    Some((
+                                        f32::from(event.position.x),
+                                        f32::from(event.position.y),
+                                    )),
+                                )),
+                                cx,
+                            );
+                        }),
+                    )
+                });
             let mut view = div()
-                .id("remote-media-scroll")
+                .id("remote-image-viewport")
+                .debug_selector(|| "remote-image-viewport".into())
                 .flex_1()
                 .min_h_0()
                 .w_full()
-                .overflow_scroll()
-                .child(
-                    div()
-                        .id("remote-preview-pixels")
-                        .debug_selector(|| "remote-preview-pixels".into())
-                        .w(px(size.width.0 as f32))
-                        .h(px(size.height.0 as f32))
-                        .when(remote.pdf.is_none() && !remote.busy, |el| {
-                            el.on_mouse_down(
-                                gpui::MouseButton::Right,
-                                cx.listener(move |root, event: &gpui::MouseDownEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    root.dispatch(
-                                        GpuiAction::Remote(Command::ImageMenu(
-                                            path_for_menu.clone(),
-                                            Some((
-                                                f32::from(event.position.x),
-                                                f32::from(event.position.y),
-                                            )),
-                                        )),
-                                        cx,
-                                    );
-                                }),
-                            )
-                        })
-                        .child(image_view),
-                );
+                .flex()
+                .flex_col()
+                .p(px(20.))
+                .child(super::editor_view::fitted_preview_image(
+                    image_view,
+                    [size.width.0 as usize, size.height.0 as usize],
+                ));
             if let Some((x, y)) = remote.image_menu {
                 let target = path.clone();
                 let menu = div()

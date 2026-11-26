@@ -209,7 +209,18 @@ mod tests {
         let rect = visual
             .debug_bounds("remote-preview-pixels")
             .expect("SSH image");
-        let pos = rect.origin + gpui::point(gpui::px(7.), gpui::px(7.));
+        let pane = visual.debug_bounds("remote-image-viewport").unwrap();
+        let width = f32::from(rect.size.width);
+        let height = f32::from(rect.size.height);
+        assert!(width > 0. && height > 0.);
+        assert!((width / height - 2.).abs() < 0.02);
+        assert!((f32::from(rect.center().x - pane.center().x)).abs() <= 1.);
+        assert!((f32::from(rect.center().y - pane.center().y)).abs() <= 1.);
+        let expected = 320_f32
+            .min(f32::from(pane.size.width) - 40.)
+            .min((f32::from(pane.size.height) - 40.) * 2.);
+        assert!((width - expected).abs() <= 1.);
+        let pos = rect.center();
         visual.simulate_mouse_down(pos, gpui::MouseButton::Right, Default::default());
         visual.simulate_mouse_up(pos, gpui::MouseButton::Right, Default::default());
         cx.refresh().unwrap();

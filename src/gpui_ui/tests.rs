@@ -53,6 +53,46 @@ fn local_image_menu_opens_on_the_displayed_pixels(cx: &mut gpui::TestAppContext)
     );
 }
 
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn tall_image_fits_the_local_viewport_and_the_margin_has_no_download_menu(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let path = project.join("portrait.png");
+    image::RgbaImage::new(100, 2000).save(&path).unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let pane = visual.debug_bounds("local-image-viewport").unwrap();
+    let image = visual.debug_bounds("local-preview-image").unwrap();
+    let expected_height = f32::from(pane.size.height) - 40.;
+    assert!(expected_height > 0. && expected_height < 2000.);
+    assert!(
+        (f32::from(image.size.height) - expected_height).abs() <= 1.,
+        "image {image:?} in {pane:?}; expected {expected_height}"
+    );
+    assert!((f32::from(image.size.width) - expected_height / 20.).abs() <= 1.);
+    let margin = gpui::point(pane.origin.x + gpui::px(10.), image.center().y);
+    visual.simulate_mouse_down(margin, gpui::MouseButton::Right, Default::default());
+    visual.simulate_mouse_up(margin, gpui::MouseButton::Right, Default::default());
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("local-image-menu")
+            .is_none()
+    );
+}
+
 #[test]
 fn gpui_remote_files_routes_palette_commands_and_editable_fields_to_the_real_panel() {
     use crate::remote_panel::control::Command;

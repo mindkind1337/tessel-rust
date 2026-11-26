@@ -19,7 +19,7 @@ use crate::{
 };
 use gpui::{
     Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder, Rgba,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, canvas, div, img, point,
+    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, img, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -1439,6 +1439,52 @@ pub(crate) fn render_office_summary(
         .child(tabs).child(body)
 }
 
+/// Keep the image and its right-click target at the same fitted size.
+pub(super) fn preview_image_pixels(image: std::sync::Arc<gpui::RenderImage>) -> gpui::Div {
+    use gpui::StyledImage;
+    div().relative().overflow_hidden().child(
+        img(image)
+            .absolute()
+            .size_full()
+            .object_fit(gpui::ObjectFit::Contain),
+    )
+}
+
+pub(super) fn fitted_preview_image(
+    image: impl Styled + IntoElement + 'static,
+    [width, height]: [usize; 2],
+) -> impl IntoElement {
+    canvas(
+        move |bounds, window, cx| {
+            let fitted = crate::files::fitted_image_size(
+                eframe::egui::vec2(width as f32, height as f32),
+                eframe::egui::vec2(f32::from(bounds.size.width), f32::from(bounds.size.height)),
+            );
+            if fitted.x <= 0. || fitted.y <= 0. {
+                return None;
+            }
+            let size = gpui::size(px(fitted.x), px(fitted.y));
+            let origin = bounds.center() - point(size.width / 2., size.height / 2.);
+            let mut element = image
+                .w(size.width)
+                .h(size.height)
+                .max_w(size.width)
+                .max_h(size.height)
+                .into_any_element();
+            element.prepaint_as_root(origin, size.map(gpui::AvailableSpace::Definite), window, cx);
+            Some(element)
+        },
+        |_, element, window, cx| {
+            if let Some(mut element) = element {
+                element.paint(window, cx);
+            }
+        },
+    )
+    .flex_1()
+    .min_h_0()
+    .w_full()
+}
+
 fn render_image_stage(
     doc: &GpuiActiveDocumentSummary,
     dims: [usize; 2],
@@ -1448,6 +1494,7 @@ fn render_image_stage(
 ) -> impl IntoElement {
     let id = doc.instance_id;
     let mut stage = div()
+        .debug_selector(|| "local-image-viewport".into())
         .size_full()
         .flex()
         .flex_col()
@@ -1455,15 +1502,10 @@ fn render_image_stage(
         .justify_center()
         .p(px(20.));
     if let Some(image) = &doc.media_pixels {
-        stage = stage.child(
-            img(image.clone())
+        stage = stage.child(fitted_preview_image(
+            preview_image_pixels(image.clone())
                 .id("local-preview-image")
                 .debug_selector(|| "local-preview-image".into())
-                .w(px(dims[0] as f32))
-                .h(px(dims[1] as f32))
-                .max_w_full()
-                .max_h_full()
-                .object_fit(gpui::ObjectFit::Contain)
                 .on_mouse_down(
                     gpui::MouseButton::Right,
                     cx.listener(move |root, event: &gpui::MouseDownEvent, _, cx| {
@@ -1477,7 +1519,8 @@ fn render_image_stage(
                         );
                     }),
                 ),
-        );
+            dims,
+        ));
     }
     if let Some((x, y)) = doc.image_menu {
         let menu = div()

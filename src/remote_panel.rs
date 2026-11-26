@@ -900,28 +900,15 @@ impl RemotePanel {
                         ));
                     }
                     if let Some(texture) = &preview.texture {
-                        egui::ScrollArea::both()
-                            .id_salt("remote-image")
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Image::new(texture)
-                                        .max_width(ui.available_width())
-                                        .maintain_aspect_ratio(true)
-                                        .sense(egui::Sense::click()),
-                                )
-                                .context_menu(|ui| {
-                                    if ui
-                                        .add_enabled(
-                                            !busy,
-                                            egui::Button::new(tr("Download original…")),
-                                        )
-                                        .clicked()
-                                    {
-                                        download = Some(doc.path.clone());
-                                        ui.close();
-                                    }
-                                });
-                            });
+                        crate::files::show_fitted_image(ui, texture).context_menu(|ui| {
+                            if ui
+                                .add_enabled(!busy, egui::Button::new(tr("Download original…")))
+                                .clicked()
+                            {
+                                download = Some(doc.path.clone());
+                                ui.close();
+                            }
+                        });
                     }
                 }
             } else if let Some(text) = &mut doc.text {

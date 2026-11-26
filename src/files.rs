@@ -16,6 +16,34 @@ pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub fn fitted_image_size(
+    natural: eframe::egui::Vec2,
+    available: eframe::egui::Vec2,
+) -> eframe::egui::Vec2 {
+    if natural.x <= 0. || natural.y <= 0. {
+        return eframe::egui::Vec2::ZERO;
+    }
+    let ratio = (available.x / natural.x)
+        .min(available.y / natural.y)
+        .clamp(0., 1.);
+    natural * ratio
+}
+
+pub fn show_fitted_image(
+    ui: &mut eframe::egui::Ui,
+    texture: &eframe::egui::TextureHandle,
+) -> eframe::egui::Response {
+    use eframe::egui;
+    let area = ui.available_rect_before_wrap();
+    let size = fitted_image_size(texture.size_vec2(), area.size() - egui::Vec2::splat(40.));
+    ui.put(
+        egui::Rect::from_center_size(area.center(), size),
+        egui::Image::new(texture)
+            .fit_to_exact_size(size)
+            .sense(egui::Sense::click()),
+    )
+}
+
 pub fn save_download(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
@@ -605,6 +633,34 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compatibility_image_preview_centers_the_click_target_at_the_fitted_dimensions() {
+        use eframe::egui;
+        let ctx = egui::Context::default();
+        for (natural, expected) in [
+            ([200, 600], [40., 120.]),
+            ([24, 12], [24., 12.]),
+            ([800, 80], [200., 20.]),
+        ] {
+            let tex = ctx.load_texture(
+                "preview",
+                egui::ColorImage::filled(natural, egui::Color32::WHITE),
+                Default::default(),
+            );
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let area =
+                        egui::Rect::from_min_size(egui::pos2(30., 40.), egui::vec2(240., 160.));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+                        let response = show_fitted_image(ui, &tex);
+                        assert_eq!(response.rect.center(), area.center());
+                        assert_eq!(response.rect.size(), egui::vec2(expected[0], expected[1]));
+                    });
+                });
+            });
+        }
+    }
+
     #[test]
     fn local_image_copy_preserves_opened_bytes_and_existing_destinations() {
         let dir = tempfile::tempdir().unwrap();

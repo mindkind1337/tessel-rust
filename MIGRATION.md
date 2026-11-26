@@ -1649,3 +1649,7 @@ GPUI Outline focus acceptance uses a temporary project, an actual rendered row a
 ### PDF page sizing
 
 Local and SSH previews in both renderers scale pages from the original PDF dimensions. Fit uses the widest page and a 48-pixel horizontal allowance, and manual zoom uses 25-percentage-point steps up to 400%. The worker still caps output pixels independently of display size. Both renderers use the worker’s per-page sizes for a continuous page column with 12-pixel gaps, 16-pixel vertical padding and viewport-driven rendering. GPUI uses the same page placement and pixel budget as Compatibility. Only visible GPU images enter the presentation list for the window.
+
+### Image previews
+
+Local and SSH previews in both renderers use the dimensions of the decoded image to center it with a 20-pixel gutter. Large images shrink to fit either axis, small images retain their original size, and the right-click download action follows the displayed image bounds.
