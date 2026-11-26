@@ -467,7 +467,7 @@ impl Document {
             if bytes.len() > 16 * 1024 * 1024 {
                 return Err("Image limit is 16 MiB".into());
             }
-            let image = crate::raster_preview::decode(&bytes)?;
+            let image = crate::raster_preview::decode(&extension, &bytes)?;
             return Ok(Self {
                 instance_id: Self::next_instance_id(),
                 root: root.to_owned(),

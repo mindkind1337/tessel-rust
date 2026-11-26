@@ -1163,6 +1163,13 @@ mod tests {
             .unwrap();
         assert_eq!(view.image.unwrap().size, [2, 3]);
         assert!(!view.path.exists());
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 2"><rect width="2" height="2" fill="red" opacity="0.5"/></svg>"#;
+        let view = prepare_preview("/server/image.SVG", svg).unwrap().unwrap();
+        let image = view.image.unwrap();
+        assert_eq!(image.size, [4, 2]);
+        assert_eq!(image.pixels[0].to_array(), [128, 0, 0, 128]);
+        assert_eq!(image.pixels[3].to_array(), [0; 4]);
+        assert!(!view.path.exists());
         assert!(prepare_preview("broken.png", b"invalid").unwrap().is_err());
         assert!(prepare_preview("script.html", b"<script>bad</script>").is_none());
     }

@@ -8540,6 +8540,7 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest",
+ "resvg",
  "rfd",
  "ring",
  "russh-sftp",

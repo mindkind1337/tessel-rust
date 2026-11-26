@@ -27,6 +27,11 @@ impl ImagePreview {
         *self = Self::default();
         let request =
             serde_json::json!({"op":"fs.download","projectId":key.scope.project,"path":key.path});
+        let extension = key
+            .path
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase())
+            .unwrap_or_default();
         self.key = Some(key);
         let Ok(reply) = session.request(request) else {
             self.failed = true;
@@ -40,7 +45,7 @@ impl ImagePreview {
                 .ok()
                 .and_then(Result::ok)
                 .and_then(|v| super::guest_download::original_bytes(&v))
-                .and_then(|b| crate::raster_preview::decode(&b).ok())
+                .and_then(|b| crate::raster_preview::decode(&extension, &b).ok())
                 .map(Arc::new);
             let _ = tx.send(image);
         });
