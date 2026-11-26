@@ -159,11 +159,11 @@ pub mod native {
 </script>"#).into_bytes()
     }
 
-    fn byte_range(header: &str, len: usize) -> Option<std::ops::Range<usize>> {
+    pub(crate) fn byte_range(header: &str, len: u64) -> Option<std::ops::Range<u64>> {
         let (start, end) = header.strip_prefix("bytes=")?.split_once('-')?;
         let number = |s: &str| {
             (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-                .then(|| s.parse::<usize>().ok())
+                .then(|| s.parse::<u64>().ok())
                 .flatten()
         };
         if start.is_empty() {
@@ -211,7 +211,8 @@ pub mod native {
                     .header("Accept-Ranges", "bytes")
                     .header("Content-Type", source.mime);
                 let range = if let Some(header) = request.headers().get("Range") {
-                    let Some(range) = header.to_str().ok().and_then(|s| byte_range(s, len)) else {
+                    let Some(range) = header.to_str().ok().and_then(|s| byte_range(s, len as u64))
+                    else {
                         return reply
                             .status(416)
                             .header("Content-Range", format!("bytes */{len}"))
@@ -222,7 +223,7 @@ pub mod native {
                         "Content-Range",
                         format!("bytes {}-{}/{len}", range.start, range.end - 1),
                     );
-                    range
+                    range.start as usize..range.end as usize
                 } else {
                     0..len
                 };

@@ -2,7 +2,7 @@
 use std::{
     borrow::Cow,
     fs::File,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     os::windows::{ffi::OsStringExt, io::AsRawHandle},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
@@ -115,6 +115,66 @@ fn empty(status: u16) -> Reply {
     response(status, "text/plain", 0, Vec::new())
 }
 
+fn asset_response(
+    mut file: File,
+    kind: &str,
+    size: u64,
+    head: bool,
+    range: Option<&wry::http::HeaderValue>,
+) -> Reply {
+    use wry::http::{HeaderValue, header};
+    let range = range.and_then(|value| value.to_str().ok()).filter(|value| {
+        value
+            .strip_prefix("bytes=")
+            .and_then(|bounds| bounds.split_once('-'))
+            .is_some_and(|(a, b)| {
+                !(a.is_empty() && b.is_empty())
+                    && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())
+            })
+    });
+    let partial = range.is_some();
+    let bytes = if let Some(value) = range {
+        let Some(range) = crate::files::playback::native::byte_range(value, size) else {
+            let mut reply = empty(416);
+            reply.headers_mut().insert(
+                header::CONTENT_RANGE,
+                format!("bytes */{size}").parse().unwrap(),
+            );
+            return reply;
+        };
+        // WebView2 buffers each protocol reply. A player can request the next chunk.
+        range.start..range.end.min(range.start.saturating_add(LIMIT))
+    } else {
+        if !head && size > LIMIT {
+            return empty(413);
+        }
+        0..size
+    };
+    let len = bytes.end - bytes.start;
+    let mut body = Vec::new();
+    if !head
+        && len > 0
+        && (file.seek(SeekFrom::Start(bytes.start)).is_err()
+            || file.take(len).read_to_end(&mut body).is_err()
+            || body.len() as u64 != len)
+    {
+        return empty(404);
+    }
+    let mut reply = response(if partial { 206 } else { 200 }, kind, len, body);
+    reply
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if partial {
+        reply.headers_mut().insert(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{size}", bytes.start, bytes.end - 1)
+                .parse()
+                .unwrap(),
+        );
+    }
+    reply
+}
+
 impl Pages {
     pub(super) fn open(&self, root: &Path, file: &Path, text: &str) -> Result<String, String> {
         let root = root.canonicalize().map_err(|e| e.to_string())?;
@@ -206,20 +266,7 @@ impl Pages {
                 if head { vec![] } else { site.draft.clone() },
             );
         }
-        if meta.len() > LIMIT {
-            return empty(413);
-        }
-        if head {
-            return response(200, kind, meta.len(), vec![]);
-        }
-        let mut bytes = Vec::new();
-        if file.take(LIMIT + 1).read_to_end(&mut bytes).is_err() {
-            return empty(404);
-        }
-        if bytes.len() as u64 > LIMIT {
-            return empty(413);
-        }
-        response(200, kind, bytes.len() as u64, bytes)
+        asset_response(file, kind, meta.len(), head, req.headers().get("Range"))
     }
     pub(super) fn attach<'a>(
         &self,
@@ -301,6 +348,51 @@ mod tests {
     }
 
     #[test]
+    fn project_assets_read_only_the_requested_range_even_past_the_response_limit() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("large.webm");
+        let mut f = File::create(&p).unwrap();
+        let offset = LIMIT + 8;
+        f.seek(SeekFrom::Start(offset)).unwrap();
+        f.write_all(b"tail").unwrap();
+        drop(f);
+        let size = offset + 4;
+        let serve = |range: &str, head| {
+            asset_response(
+                File::open(&p).unwrap(),
+                "video/webm",
+                size,
+                head,
+                Some(&range.parse().unwrap()),
+            )
+        };
+        for range in [
+            format!("bytes={offset}-"),
+            "bytes=-4".into(),
+            format!("bytes={offset}-{}", size + 9),
+        ] {
+            let reply = serve(&range, false);
+            assert_eq!(reply.status(), 206);
+            assert_eq!(reply.body().as_ref(), b"tail");
+            assert_eq!(
+                reply.headers()["content-range"],
+                format!("bytes {offset}-{}/{size}", size - 1)
+            );
+            assert_eq!(reply.headers()["accept-ranges"], "bytes");
+            let head = serve(&range, true);
+            assert_eq!(head.headers()["content-length"], "4");
+            assert!(head.body().is_empty());
+        }
+        assert_eq!(serve(&format!("bytes={size}-"), false).status(), 416);
+        assert_eq!(
+            serve("bytes=0-", true).headers()["content-length"],
+            LIMIT.to_string()
+        );
+        assert_eq!(serve("unknown=0-2", true).status(), 200);
+    }
+
+    #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn hidden_browser_renders_unsaved_project_html_local_css_and_image() {
         use crate::webview_test_support::{hidden_parent, wait_for};
@@ -314,10 +406,15 @@ mod tests {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="7"/>"#,
         )
         .unwrap();
+        std::fs::write(
+            nested.join("clip.webm"),
+            include_bytes!("../../tests/fixtures/player-blue.webm"),
+        )
+        .unwrap();
         let entry = nested.join("index.html");
         std::fs::write(&entry, "disk copy").unwrap();
         let mut doc = crate::files::Document::open(&root, &entry).unwrap();
-        doc.text = r#"<link rel="stylesheet" href="/site.css"><p id="fixture">unsaved</p><img src="pixel.svg"><script>document.body.dataset.executed="yes"</script>"#.into();
+        doc.text = r#"<link rel="stylesheet" href="/site.css"><p id="fixture">unsaved</p><img src="pixel.svg"><video preload="auto" src="clip.webm"></video><script>document.body.dataset.executed="yes"</script>"#.into();
         let parent = hidden_parent();
         let mut browser = crate::browser::Browser::default();
         browser
@@ -327,6 +424,20 @@ mod tests {
         wait_for(
             browser.view.as_ref().unwrap(),
             "document.querySelector('#fixture')?.textContent === 'unsaved' && getComputedStyle(document.querySelector('#fixture')).color === 'rgb(11, 22, 33)' && document.images[0]?.naturalWidth === 12 && !document.body.dataset.executed",
+        );
+        let view = browser.view.as_ref().unwrap();
+        view.set_visible(true).unwrap();
+        view.evaluate_script("document.querySelector('video').load()")
+            .unwrap();
+        wait_for(
+            view,
+            "(()=>{let v=document.querySelector('video');return v.readyState >= 1 && v.duration > 0.9 || [v.readyState, v.networkState, v.error?.message, v.duration, v.currentSrc]})()",
+        );
+        view.evaluate_script("document.querySelector('video').currentTime=0.4")
+            .unwrap();
+        wait_for(
+            view,
+            "document.querySelector('video').seeking === false && Math.abs(document.querySelector('video').currentTime - 0.4) < 0.05",
         );
     }
 }
