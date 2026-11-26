@@ -266,6 +266,46 @@ impl RemotePanel {
             let _ = tx.send(result.map(|diff| diff.lines().map(str::to_owned).collect()));
         });
     }
+    fn compare_git(&mut self, path: &str, id: Option<&str>) {
+        if self.busy() {
+            return;
+        }
+        let (Some(doc), Some(host)) = (&mut self.document, self.host.clone()) else {
+            return;
+        };
+        let Some(page) = &doc.git_history.page else {
+            return;
+        };
+        if doc.path != path {
+            return;
+        }
+        let commit = match id {
+            Some(id) => {
+                let Some(row) = page.commits.iter().find(|row| row.id == id) else {
+                    return;
+                };
+                Some(row.clone())
+            }
+            None if page.uncommitted => None,
+            None => return,
+        };
+        let (tx, rx) = mpsc::channel();
+        doc.comparison = Comparison {
+            pending: Some(rx),
+            lines: None,
+        };
+        self.error.clear();
+        let root = self.root.clone();
+        let path = doc.path.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(remote::file_history::diff(
+                host,
+                &root,
+                &path,
+                commit.as_ref(),
+            ));
+        });
+    }
     fn load_git_history(&mut self, path: &str, more: bool) {
         if self.busy() {
             return;
@@ -561,6 +601,7 @@ impl RemotePanel {
         let mut action = None;
         let mut compare = None;
         let mut git_request = None;
+        let mut git_diff = None;
         ui.add_enabled_ui(
             !busy && !dirty && self.rename.is_none() && self.delete.is_none(),
             |ui| {
@@ -717,12 +758,19 @@ impl RemotePanel {
                     .request_repaint_after(std::time::Duration::from_millis(80));
             }
             if let Some(page) = &doc.git_history.page {
-                if page.uncommitted {
-                    ui.label(if fr {
-                        "Modifications non commitées"
-                    } else {
-                        "Uncommitted Changes"
-                    });
+                if page.uncommitted
+                    && ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(if fr {
+                                "Modifications non commitées"
+                            } else {
+                                "Uncommitted Changes"
+                            }),
+                        )
+                        .clicked()
+                {
+                    git_diff = Some((doc.path.clone(), None));
                 }
                 if !page.uncommitted && page.commits.is_empty() {
                     ui.label(if fr { "Aucun commit." } else { "No commits." });
@@ -732,8 +780,18 @@ impl RemotePanel {
                     .max_height(180.)
                     .show(ui, |ui| {
                         for row in &page.commits {
-                            ui.label(row.message.lines().next().unwrap_or(""))
-                                .on_hover_text(row.details(fr));
+                            if ui
+                                .add_enabled(
+                                    ready,
+                                    egui::Button::new(
+                                        row.message.lines().next().unwrap_or(&row.id),
+                                    ),
+                                )
+                                .on_hover_text(row.details(fr))
+                                .clicked()
+                            {
+                                git_diff = Some((doc.path.clone(), Some(row.id.clone())));
+                            }
                         }
                     });
                 if page.more
@@ -895,6 +953,9 @@ impl RemotePanel {
                     tr("Download the original to view it locally")
                 ));
             }
+        }
+        if let Some((path, id)) = git_diff {
+            self.compare_git(&path, id.as_deref());
         }
         if let Some((path, more)) = git_request {
             self.load_git_history(&path, more);

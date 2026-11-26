@@ -423,17 +423,31 @@ pub(crate) fn render(
                 .max_h(px(180.))
                 .overflow_y_scroll();
             if page.uncommitted {
-                list = list.child(if fr {
-                    "Modifications non commitées"
-                } else {
-                    "Uncommitted Changes"
-                });
+                list = list.child(button(
+                    "ssh-uncommitted",
+                    if fr {
+                        "Modifications non commitées"
+                    } else {
+                        "Uncommitted Changes"
+                    },
+                    Command::GitDiff(path.clone(), None),
+                    !remote.busy,
+                    tokens,
+                    cx,
+                ));
             }
             if !page.uncommitted && page.commits.is_empty() {
                 list = list.child(if fr { "Aucun commit." } else { "No commits." });
             }
             for row in &page.commits {
-                list = list.child(div().child(row.details(fr)));
+                list = list.child(button(
+                    format!("ssh-diff-{}", row.id),
+                    row.details(fr),
+                    Command::GitDiff(path.clone(), Some(row.id.clone())),
+                    !remote.busy,
+                    tokens,
+                    cx,
+                ));
             }
             body = body.child(list);
             if page.more {

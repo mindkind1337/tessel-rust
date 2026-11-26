@@ -20,6 +20,7 @@ pub(crate) enum Command {
     Save,
     Compare(String, String),
     GitHistory(String, bool),
+    GitDiff(String, Option<String>),
     CloseComparison,
     Discard,
     Download,
@@ -215,6 +216,7 @@ impl RemotePanel {
         }
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         match command {
+            Command::GitDiff(path, id) => self.compare_git(&path, id.as_deref()),
             Command::GitHistory(path, more) => self.load_git_history(&path, more),
             Command::Compare(path, id) => self.compare_version(&path, &id),
             Command::CloseComparison => {
