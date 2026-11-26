@@ -24,6 +24,7 @@ struct LinkGesture {
 #[derive(Default)]
 pub(crate) struct EditorPage {
     view: Option<WebView>,
+    pages: Pages,
     context: Option<wry::WebContext>,
     profile: Option<tempfile::TempDir>,
     document: Option<u64>,
@@ -36,6 +37,7 @@ impl EditorPage {
     pub(crate) fn retain(&mut self, id: Option<u64>, obscured: bool) {
         if self.document != id {
             self.view.take();
+            self.pages = Pages::default();
             self.document = None;
             self.rect = None;
             self.pending = Default::default();
@@ -45,6 +47,19 @@ impl EditorPage {
             && let Some(view) = &self.view
         {
             self.hidden = view.set_visible(false).is_ok();
+        }
+    }
+    pub(crate) fn reload(&mut self, doc: &Document) -> Result<(), String> {
+        if self.document != Some(doc.instance_id()) {
+            return Ok(());
+        }
+        if let Some(view) = &self.view {
+            self.pages.open(&doc.root, &doc.path, &doc.text)?;
+            view.reload().map_err(|e| e.to_string())
+        } else {
+            // Retry creating the child on the next paint if the earlier attempt failed.
+            self.retain(None, false);
+            Ok(())
         }
     }
     pub(crate) fn action(&self, active: u64) -> Option<GpuiAction> {
@@ -108,7 +123,7 @@ impl EditorPage {
         rect: wry::Rect,
     ) -> Option<WebView> {
         parent.window_handle().ok()?;
-        let pages = Pages::default();
+        let pages = self.pages.clone();
         let address = pages.open(&doc.root, &doc.path, &doc.text).ok()?;
         if self.context.is_none() {
             let profile = tempfile::tempdir().ok()?;
@@ -178,6 +193,40 @@ impl EditorPage {
 mod tests {
     use super::*;
     use crate::webview_test_support::{hidden_parent, pump, wait_for};
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_editor_page_reload_keeps_unsaved_html_and_reads_changed_css() {
+        let folder = tempfile::tempdir().unwrap();
+        let index = folder.path().join("index.html");
+        let css = folder.path().join("page.css");
+        std::fs::write(&index, "original on disk").unwrap();
+        std::fs::write(&css, "p { color: rgb(11,22,33) }").unwrap();
+        let mut doc = Document::open(folder.path(), &index).unwrap();
+        doc.text = r#"<link rel="stylesheet" href="page.css"><p>first draft</p>"#.into();
+        let mut editor = EditorPage::default();
+        let parent = hidden_parent();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(300., 200.),
+        );
+        editor.sync(&parent, &doc, bounds, 1.);
+        let first = editor.view.as_ref().unwrap();
+        wait_for(
+            first,
+            "document.querySelector('p')?.textContent === 'first draft' && getComputedStyle(document.querySelector('p')).color === 'rgb(11, 22, 33)'",
+        );
+        let address = first.url().unwrap();
+        doc.text = doc.text.replace("first draft", "second draft");
+        std::fs::write(&css, "p { color: rgb(44,55,66) }").unwrap();
+        editor.reload(&doc).unwrap();
+        let view = editor.view.as_ref().unwrap();
+        wait_for(
+            view,
+            "document.querySelector('p')?.textContent === 'second draft' && getComputedStyle(document.querySelector('p')).color === 'rgb(44, 55, 66)'",
+        );
+        assert_eq!(view.url().unwrap(), address);
+        assert_eq!(std::fs::read_to_string(index).unwrap(), "original on disk");
+    }
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn native_editor_page_styles_and_routes_link_messages_without_leaving_index() {

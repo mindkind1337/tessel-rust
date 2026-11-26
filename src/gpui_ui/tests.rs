@@ -44,6 +44,16 @@ fn html_plain_mode_displays_selectable_body_and_switches_back_to_source(
         let pos = visual.debug_bounds(selector).unwrap().center();
         visual.simulate_click(pos, Default::default());
         cx.refresh().unwrap();
+        #[cfg(windows)]
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let reload = visual.debug_bounds("html-reload");
+            assert_eq!(reload.is_some(), selector == "html-preview-mode");
+            if let Some(bounds) = reload {
+                visual.simulate_click(bounds.center(), Default::default());
+                cx.refresh().unwrap();
+            }
+        }
         view.update(cx, |root, _, cx| {
             let doc = root
                 .app

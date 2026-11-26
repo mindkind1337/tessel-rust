@@ -1671,3 +1671,5 @@ GPUI HTML tabs expose Source, Preview and Plain text. The plain-text reader reta
 Local project HTML has an explicit restricted WebView2 browser-tab preview on Windows. Each recently used project retains its own origin and up to twenty HTML drafts. The fifty most recently used project origins remain available to browser history. The Windows editor renders local HTML in an isolated WebView2 child and falls back to the readable view when unavailable. SSH resource loading, folder trust and trusted scripts remain open.
 
 Local browser-preview assets support single byte ranges and HEAD metadata. WebView2 reads bounded ranges directly from the open project file, including offsets above the per-response cap.
+
+The Windows editor HTML preview reloads the same origin with the current unsaved HTML and fresh project assets. The source file stays untouched.

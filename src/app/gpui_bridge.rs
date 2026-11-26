@@ -859,6 +859,8 @@ pub(crate) enum GpuiAction {
     SaveActiveDocument,
     #[cfg(windows)]
     OpenHtmlInBrowser(u64),
+    #[cfg(windows)]
+    ReloadHtmlPreview(u64),
     SetHtmlView(u64, HtmlViewMode),
     ToggleActiveDocumentPreview,
     ForceRenderLargeMarkdown,
@@ -5543,6 +5545,19 @@ impl Tessel {
                         Ok(()) => doc.error.clear(),
                         Err(e) => doc.error = e,
                     }
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::ReloadHtmlPreview(id) => {
+                if self.view == View::Files
+                    && self.gpui_media_unobscured()
+                    && let Some(doc) = self.documents.get(self.active_document)
+                    && doc.instance_id() == id
+                    && doc.preview_mode
+                    && doc.tools.html_plain_text.is_none()
+                    && let Err(error) = self.editor_page.reload(doc)
+                {
+                    self.error = error;
                 }
             }
             #[cfg(windows)]

@@ -446,6 +446,26 @@ fn render_editor_toolbar(
                         #[cfg(windows)]
                         {
                             let id = doc.instance_id;
+                            if doc.preview_mode && doc.html_plain_text.is_none() {
+                                el = el.child(
+                                    div()
+                                        .id("html-reload")
+                                        .debug_selector(|| "html-reload".into())
+                                        .role(gpui::Role::Button)
+                                        .aria_label(if french {
+                                            "Actualiser l’aperçu"
+                                        } else {
+                                            "Reload preview"
+                                        })
+                                        .cursor_pointer()
+                                        .px(px(7.))
+                                        .py(px(3.))
+                                        .on_click(cx.listener(move |root, _, _, cx| {
+                                            root.dispatch(GpuiAction::ReloadHtmlPreview(id), cx)
+                                        }))
+                                        .child(GpuiIcon::RefreshCw.render(14., tokens.text)),
+                                );
+                            }
                             el = el.child(
                                 div()
                                     .id("html-open-browser")
