@@ -60,6 +60,7 @@ zeroize = "1"
 tokio = { version = "1", features = ["rt", "process", "io-util", "time", "sync", "net", "macros"] }
 russh-sftp = "3"
 hayro = { version = "0.8", features = ["embed-fonts"] }
+cssparser = "0.38"
 scraper = "0.29"
 pulldown-cmark = "0.13"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }

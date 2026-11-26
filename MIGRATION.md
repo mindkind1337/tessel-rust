@@ -1636,7 +1636,9 @@ The unfinished Explorer draft is not integrated unchanged: its line-based keys r
 `scripts/extract_outline_reference.mjs` evaluates the actual source model against synthetic symbols and records its hash and collation locale. The fixture covers 60 combinations of sorting/filtering/highlighting/folding plus ten text matching cases. No project files or credentials enter these fixtures. This is a shared model, not an activated Outline/Timeline UI; native language-service providers, section controls, navigation and Timeline history remain outstanding.
 Validation: both integration tests pass, covering all 70 source-generated vectors plus line-edit key stability. Final focused build: 37.52 seconds; strict all-target/all-feature Clippy passes with warnings denied (1m13s). Formatting and diff checks pass. README feature claims stay unchanged because the panel is not activated yet.
 
-## JSON, JSONC and HTML Outline in Files
+## JSON, JSONC, HTML and CSS Outline in Files
+
+The native CSS outline groups rules inside media queries and nested selectors. Grouped selectors have individual source positions. Local synthetic stylesheets are compared with Monaco’s installed CSS document-symbol provider. SCSS and Less require language-specific providers.
 
 HTML and HTM use a native document-symbol provider for both Files renderers. Element labels, hierarchy and UTF-16 source ranges are compared with the installed Monaco HTML language service on synthetic documents. Parsing is bounded to 128 nested elements and 50,000 symbols.
 

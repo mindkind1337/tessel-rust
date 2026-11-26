@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct Cache {
     document: u64,
-    html: bool,
+    provider: Option<Provider>,
     sort: Sort,
     followed: Option<crate::files::OutlineCursor>,
     text: Arc<str>,
@@ -17,7 +17,9 @@ pub(crate) struct Cache {
 
 impl Cache {
     pub(crate) fn matches(&self, doc: &Document) -> bool {
-        self.document == doc.instance_id() && self.html == is_html(doc) && *self.text == doc.text
+        self.document == doc.instance_id()
+            && self.provider == provider(doc)
+            && *self.text == doc.text
     }
     pub(crate) fn follow(&mut self, doc: &mut Document, enabled: bool) -> bool {
         let cursor = doc.tools.outline_cursor.filter(|_| enabled);
@@ -66,15 +68,16 @@ impl Cache {
         let mut cache = previous
             .filter(|cache| cache.matches(doc))
             .unwrap_or_else(|| {
-                let mut symbols = if is_html(doc) {
-                    crate::html_outline::document_symbols(&doc.text)
-                } else {
-                    crate::json_outline::document_symbols(&doc.text)
+                let mut symbols = match provider(doc) {
+                    Some(Provider::Html) => crate::html_outline::document_symbols(&doc.text),
+                    Some(Provider::Css) => crate::css_outline::document_symbols(&doc.text),
+                    Some(Provider::Json) => crate::json_outline::document_symbols(&doc.text),
+                    None => Vec::new(),
                 };
                 crate::outline_tree::keyed(&mut symbols, "");
                 Self {
                     document: doc.instance_id(),
-                    html: is_html(doc),
+                    provider: provider(doc),
                     sort: Sort::Position,
                     followed: None,
                     text: Arc::from(doc.text.as_str()),
@@ -91,21 +94,26 @@ impl Cache {
         cache
     }
 }
-fn is_html(doc: &Document) -> bool {
-    doc.path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Provider {
+    Json,
+    Html,
+    Css,
+}
+fn provider(doc: &Document) -> Option<Provider> {
+    let ext = doc.path.extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm") {
+        Some(Provider::Html)
+    } else if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("jsonc") {
+        Some(Provider::Json)
+    } else if ext.eq_ignore_ascii_case("css") {
+        Some(Provider::Css)
+    } else {
+        None
+    }
 }
 pub(crate) fn supported(doc: &Document) -> bool {
-    !doc.media
-        && doc.diff_title.is_none()
-        && (is_html(doc)
-            || doc
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonc")))
+    !doc.media && doc.diff_title.is_none() && provider(doc).is_some()
 }
 
 pub(crate) const SORT_OPTIONS: [(Sort, &str, &str); 3] = [
@@ -446,7 +454,7 @@ pub fn toggle_fold(doc: &mut Document, key: &str) {
 }
 
 pub fn reveal(doc: &mut Document, range: crate::outline_tree::Range, select: bool) {
-    if is_html(doc) {
+    if provider(doc) == Some(Provider::Html) {
         doc.preview_mode = false;
         doc.tools.html_plain_text = None;
     }

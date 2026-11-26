@@ -8582,6 +8582,7 @@ dependencies = [
  "bytes",
  "calamine",
  "chrono",
+ "cssparser 0.38.0",
  "csv",
  "directories",
  "dunce",

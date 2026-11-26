@@ -56,6 +56,7 @@ mod command_palette_panel;
 mod conversation_loader;
 mod conversation_model;
 pub mod cookie_import_model;
+pub mod css_outline;
 pub mod dev_update;
 pub mod device_login;
 pub mod dialogs_toolbar_model;

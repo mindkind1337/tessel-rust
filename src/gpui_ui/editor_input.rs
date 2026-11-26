@@ -757,6 +757,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn css_outline_selects_the_rule_in_the_live_editor_buffer(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("style.CSS");
+        std::fs::write(&path, "body {}").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "/*😀*/ @media print {h1, .title {color:red}}".into();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::OutlineToggle, cx);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let position = visual
+            .debug_bounds("outline-name-/1:@media print/4:.title")
+            .unwrap()
+            .center();
+        visual.simulate_click(position, Default::default());
+        visual.simulate_event(gpui::MouseDownEvent {
+            position,
+            modifiers: Default::default(),
+            button: gpui::MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        visual.simulate_event(gpui::MouseUpEvent {
+            position,
+            modifiers: Default::default(),
+            button: gpui::MouseButton::Left,
+            click_count: 2,
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(view.into(), "x");
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_editor_document().unwrap().text,
+                "/*😀*/ @media print {h1, x}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn outline_full_range_returns_keyboard_to_editor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.json");
