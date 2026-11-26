@@ -589,27 +589,19 @@ pub(crate) fn render(
             #[cfg(windows)]
             let toolbar = {
                 let viewing = remote.html_page.is_some();
-                let mut toolbar = toolbar.child(button(
-                    "remote-html-preview",
-                    if viewing {
-                        if fr {
-                            "Actualiser l’aperçu"
-                        } else {
-                            "Reload preview"
-                        }
-                    } else if fr {
-                        "Aperçu"
-                    } else {
-                        "Preview"
-                    },
-                    Command::HtmlPage {
-                        host: host.clone(),
-                        path: path.clone(),
-                    },
-                    !remote.busy,
-                    tokens,
-                    cx,
-                ));
+                let mut toolbar = toolbar.when(!viewing, |bar| {
+                    bar.child(button(
+                        "remote-html-preview",
+                        if fr { "Aperçu" } else { "Preview" },
+                        Command::HtmlPage {
+                            host: host.clone(),
+                            path: path.clone(),
+                        },
+                        !remote.busy,
+                        tokens,
+                        cx,
+                    ))
+                });
                 if viewing {
                     toolbar = toolbar.child(button(
                         "remote-html-source",
@@ -626,25 +618,27 @@ pub(crate) fn render(
                 }
                 let path = path.clone();
                 let host = host.clone();
-                toolbar.child(
-                    div()
-                        .id("remote-html-browser")
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.dispatch(
-                                GpuiAction::OpenRemoteHtmlInBrowser {
-                                    host: host.clone(),
-                                    path: path.clone(),
-                                },
-                                cx,
-                            )
-                        }))
-                        .child(if fr {
-                            "Ouvrir dans le navigateur"
-                        } else {
-                            "Open in browser"
-                        }),
-                )
+                toolbar.when(!viewing, |bar| {
+                    bar.child(
+                        div()
+                            .id("remote-html-browser")
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                root.dispatch(
+                                    GpuiAction::OpenRemoteHtmlInBrowser {
+                                        host: host.clone(),
+                                        path: path.clone(),
+                                    },
+                                    cx,
+                                )
+                            }))
+                            .child(if fr {
+                                "Ouvrir dans le navigateur"
+                            } else {
+                                "Open in browser"
+                            }),
+                    )
+                })
             };
             body = body.child(toolbar);
         }
@@ -654,7 +648,7 @@ pub(crate) fn render(
                 .child(SharedString::from(fallback.clone()))
                 .into_any_element();
             #[cfg(windows)]
-            let text = super::editor_view::html_viewport(*_id, text, snapshot, cx);
+            let text = super::editor_view::html_viewport(*_id, text, tokens, snapshot, cx);
             body = body.child(text);
         } else if remote.html_plain.is_some() {
             if let Some(state) = editor_input.plain() {

@@ -40,7 +40,7 @@ mod shortcuts;
 
 #[test]
 fn lot_b176_icons_and_theme_aliases_are_complete() {
-    assert_eq!(icons::GpuiIcon::ALL.len(), 45);
+    assert_eq!(icons::GpuiIcon::ALL.len(), 49);
     for icon in [
         icons::GpuiIcon::Gauge,
         icons::GpuiIcon::Moon,

@@ -7,15 +7,6 @@ pub(crate) enum Folder {
     Ssh { host: String, root: String },
 }
 
-impl Folder {
-    pub(crate) fn label(&self) -> String {
-        match self {
-            Self::Local(path) => dunce::simplified(path).display().to_string(),
-            Self::Ssh { host, root } => format!("{host}:{root}"),
-        }
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct Trust {
     decisions: Vec<(Folder, bool)>,

@@ -1687,3 +1687,5 @@ SSH Files can switch between editable HTML source and selectable plain text of t
 SSH browser previews schedule up to four asset reads at a time across tabs. A fifth read waits for capacity. Local preview requests use an independent worker.
 
 Switching Windows HTML editor tabs retains the project preview origin and its recent drafts. Each editor WebView serves requests for its own origin. Revoking folder trust also downgrades cached editor origins.
+
+The Windows GPUI HTML preview toolbar displays the decoded project-relative file path and the same three 24-pixel icon controls for local and SSH pages. Source and plain-text views retain their browser shortcut.

@@ -253,17 +253,35 @@ mod tests {
         })
         .unwrap();
         cx.refresh().unwrap();
+        let old = view
+            .update(cx, |root, _, _| {
+                let snap = root.app.gpui_remote_input_snapshot().unwrap();
+                let (old, text) = snap.html_page.unwrap();
+                assert_eq!(text.as_ref(), "Preview me");
+                assert!(snap.dirty);
+                assert!(
+                    root.remote_inputs
+                        .get(FocusInputTarget::RemoteText)
+                        .is_none()
+                );
+                assert_eq!(
+                    root.app
+                        .gpui_snapshot(960., 640., 4.)
+                        .html_toolbar
+                        .unwrap()
+                        .page_path,
+                    "/index.HTM"
+                );
+                old
+            })
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let reload = visual.debug_bounds("html-reload").unwrap();
+        let open = visual.debug_bounds("html-open-browser").unwrap();
+        assert_eq!(reload.size.width, gpui::px(24.));
+        assert!(open.origin.x > reload.origin.x);
+        visual.simulate_click(reload.center(), Default::default());
         view.update(cx, |root, _, cx| {
-            let snap = root.app.gpui_remote_input_snapshot().unwrap();
-            let (old, text) = snap.html_page.unwrap();
-            assert_eq!(text.as_ref(), "Preview me");
-            assert!(snap.dirty);
-            assert!(
-                root.remote_inputs
-                    .get(FocusInputTarget::RemoteText)
-                    .is_none()
-            );
-            root.dispatch(show(), cx);
             assert_ne!(
                 root.app
                     .gpui_remote_input_snapshot()

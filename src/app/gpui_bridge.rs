@@ -692,11 +692,21 @@ pub(crate) struct GpuiModalsSnapshot {
     pub dev_update_notice: Option<String>,
 }
 
+#[cfg(windows)]
+#[derive(Clone, Debug)]
+pub(crate) struct HtmlPreviewToolbar {
+    pub id: u64,
+    pub page_path: String,
+    pub decision: Option<bool>,
+    pub reload: GpuiAction,
+    pub open: GpuiAction,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiWorkspaceSnapshot {
     #[cfg(windows)]
-    pub html_folder: Option<(u64, String, Option<bool>)>,
+    pub html_toolbar: Option<HtmlPreviewToolbar>,
     #[cfg(windows)]
     pub held_html_link: Option<(u64, url::Url)>,
     pub theme: ThemeId,
@@ -3653,16 +3663,44 @@ impl Tessel {
 
         GpuiWorkspaceSnapshot {
             #[cfg(windows)]
-            html_folder: self.active_html_folder().map(|(id, folder)| {
-                (
+            html_toolbar: self.active_html_folder().and_then(|(id, folder)| {
+                let (page_path, reload, open) = match &folder {
+                    crate::browser::html_trust::Folder::Local(root) => {
+                        let doc = self.documents.get(self.active_document)?;
+                        let path = doc.path.strip_prefix(root).ok()?;
+                        (
+                            format!("/{}", path.to_string_lossy().replace('\\', "/")),
+                            GpuiAction::ReloadHtmlPreview(id),
+                            GpuiAction::OpenHtmlInBrowser(id),
+                        )
+                    }
+                    crate::browser::html_trust::Folder::Ssh { host, root } => {
+                        let (_, _, path, _) = self.remote.active_html_page(id)?;
+                        let relative = crate::remote::preview_relative(root, path)?;
+                        (
+                            format!("/{relative}"),
+                            GpuiAction::Remote(crate::remote_panel::control::Command::HtmlPage {
+                                host: host.clone(),
+                                path: path.into(),
+                            }),
+                            GpuiAction::OpenRemoteHtmlInBrowser {
+                                host: host.clone(),
+                                path: path.into(),
+                            },
+                        )
+                    }
+                };
+                Some(HtmlPreviewToolbar {
                     id,
-                    folder.label(),
-                    if self.editor_page.reconsider == Some(id) {
+                    page_path,
+                    reload,
+                    open,
+                    decision: if self.editor_page.reconsider == Some(id) {
                         None
                     } else {
                         self.html_trust.decision(&folder)
                     },
-                )
+                })
             }),
             #[cfg(windows)]
             held_html_link: self.editor_page.external_prompt(),

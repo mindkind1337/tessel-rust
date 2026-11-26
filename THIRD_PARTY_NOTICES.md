@@ -201,7 +201,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Lucide Icons (`src/icons.rs`, `src/*_panel.rs`)
+## Lucide Icons (`src/icons.rs`, `src/gpui_ui/icons.rs`, `src/*_panel.rs`)
 
 Vector icon geometry in `src/icons.rs` and native `egui` panels (`src/*_panel.rs`) includes
 icons derived from `lucide-vue-next` (`v0.577.0`), distributed under the ISC License with

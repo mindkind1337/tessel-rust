@@ -208,6 +208,7 @@ pub fn layout_mermaid_sequence(
 pub(super) fn html_viewport(
     id: u64,
     readable: gpui::AnyElement,
+    tokens: &GpuiThemeTokens,
     snapshot: &GpuiWorkspaceSnapshot,
     cx: &Context<TesselGpuiRoot>,
 ) -> gpui::AnyElement {
@@ -238,12 +239,12 @@ pub(super) fn html_viewport(
             .inset_0(),
         )
         .into_any_element();
-    let viewport = if let Some((_, folder, decision)) = snapshot
-        .html_folder
-        .as_ref()
-        .filter(|(active, _, _)| *active == id)
+    let viewport = if let Some(toolbar) = snapshot.html_toolbar.as_ref().filter(|bar| bar.id == id)
     {
+        use gpui::AppContext as _;
         let fr = snapshot.french;
+        let colors = *tokens;
+        let page_path: SharedString = toolbar.page_path.clone().into();
         let button = |selector: &'static str, label: &'static str, action: GpuiAction| {
             div()
                 .id(selector)
@@ -253,41 +254,129 @@ pub(super) fn html_viewport(
                 .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
                 .child(label)
         };
-        let mut bar = div().flex().flex_wrap().gap(px(6.)).px(px(8.)).py(px(3.));
-        match decision {
-            None => {
-                bar = bar.child(if fr {format!("Faire confiance aux fichiers de {folder} ? Les scripts pourront lire le dossier et accéder à Internet.")} else {format!("Trust files in {folder}? Scripts can read this folder and access the internet.")})
-                    .child(button("trust-html-folder",if fr {"Faire confiance"} else {"Trust folder"}, GpuiAction::DecideHtmlTrust(id,true)))
-                    .child(button("restrict-html-folder",if fr {"Garder le mode restreint"} else {"Keep restricted"},GpuiAction::DecideHtmlTrust(id,false)));
-            }
-            Some(true) => {
-                bar = bar.child(button(
-                    "restrict-html-folder",
-                    if fr {
-                        "Dossier de confiance · Désactiver les scripts"
-                    } else {
-                        "Trusted folder · Disable scripts"
-                    },
-                    GpuiAction::DecideHtmlTrust(id, false),
-                ))
-            }
-            Some(false) => {
-                bar = bar.child(button(
-                    "ask-html-trust",
-                    if fr {
-                        "Mode restreint · Gérer la confiance"
-                    } else {
-                        "Restricted mode · Manage trust"
-                    },
-                    GpuiAction::AskHtmlTrust(id),
-                ))
-            }
-        }
+        let question = div()
+            .flex().flex_wrap().items_center().gap(px(8.)).px(px(10.)).py(px(8.))
+            .text_size(px(12.)).border_b_1().border_color(tokens.border)
+            .bg(rgba_with_alpha(tokens.warn, 0.14))
+            .child(GpuiIcon::ShieldAlert.render(16., tokens.warn))
+            .child(div().flex_1().min_w_0().child(if fr {
+                "Faites-vous confiance aux fichiers de ce dossier ? Les scripts d'une page peuvent lire le dossier et utiliser Internet, comme un site web. Sans confiance, la page s'affiche sans ses scripts."
+            } else {
+                "Do you trust the files of this folder? The scripts of a page can read the folder and use the internet, as a website does. Without trust the page shows without its scripts."
+            }))
+            .child(button("trust-html-folder", if fr {"Faire confiance au dossier et exécuter les scripts"} else {"Trust the folder and run scripts"}, GpuiAction::DecideHtmlTrust(id,true)))
+            .child(button("restrict-html-folder", if fr {"Garder sans scripts"} else {"Keep it without scripts"}, GpuiAction::DecideHtmlTrust(id,false)));
+        let icon_button = |selector: &'static str,
+                           label: &'static str,
+                           icon: GpuiIcon,
+                           color,
+                           action: GpuiAction| {
+            let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
+            div()
+                .id(selector)
+                .debug_selector(move || selector.into())
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .size(px(24.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(bg))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| super::chrome::ToolbarTooltip {
+                        text: label.into(),
+                        bg,
+                        fg,
+                        border,
+                    })
+                    .into()
+                })
+                .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
+                .child(icon.render(14., color))
+        };
+        let trusted = toolbar.decision == Some(true);
+        let shield = if trusted {
+            icon_button(
+                "restrict-html-folder",
+                if fr {
+                    "Dossier de confiance : ses scripts s'exécutent. Cliquer pour revenir au mode restreint."
+                } else {
+                    "Trusted folder: its scripts run. Click to go back to restricted mode."
+                },
+                GpuiIcon::ShieldCheck,
+                tokens.accent,
+                GpuiAction::DecideHtmlTrust(id, false),
+            )
+        } else {
+            icon_button(
+                "ask-html-trust",
+                if fr {
+                    "Mode restreint : la page s'affiche sans scripts. Cliquer pour faire confiance au dossier."
+                } else {
+                    "Restricted mode: the page shows without scripts. Click to trust the folder."
+                },
+                GpuiIcon::ShieldAlert,
+                tokens.text_dim,
+                GpuiAction::AskHtmlTrust(id),
+            )
+        };
+        let bar = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .px(px(8.))
+            .py(px(3.))
+            .border_b_1()
+            .border_color(tokens.border)
+            .child(
+                div()
+                    .id("html-path")
+                    .debug_selector(|| "html-path".into())
+                    .flex_1()
+                    .min_w_0()
+                    .px(px(6.))
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(tokens.text_dim)
+                    .child(page_path.clone())
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| super::chrome::ToolbarTooltip {
+                            text: page_path.clone(),
+                            bg: colors.surface,
+                            fg: colors.text,
+                            border: colors.border,
+                        })
+                        .into()
+                    }),
+            )
+            .child(icon_button(
+                "html-reload",
+                if fr { "Recharger" } else { "Reload" },
+                GpuiIcon::RotateCw,
+                tokens.text_dim,
+                toolbar.reload.clone(),
+            ))
+            .child(icon_button(
+                "html-open-browser",
+                if fr {
+                    "Ouvrir dans un onglet navigateur"
+                } else {
+                    "Open in a browser tab"
+                },
+                GpuiIcon::ExternalLink,
+                tokens.text_dim,
+                toolbar.open.clone(),
+            ))
+            .child(shield);
         div()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
+            .when(toolbar.decision.is_none(), |el| el.child(question))
             .child(bar)
             .child(viewport)
             .into_any_element()
@@ -398,7 +487,7 @@ pub(crate) fn render_document_editor_stage(
             let readable = render_readable_html_stage(doc, tokens, cx).into_any_element();
             #[cfg(windows)]
             {
-                html_viewport(doc.instance_id, readable, snapshot, cx)
+                html_viewport(doc.instance_id, readable, tokens, snapshot, cx)
             }
             #[cfg(not(windows))]
             readable.into_any_element()
@@ -559,42 +648,24 @@ fn render_editor_toolbar(
                         #[cfg(windows)]
                         {
                             let id = doc.instance_id;
-                            if doc.preview_mode && doc.html_plain_text.is_none() {
+                            if !doc.preview_mode || doc.html_plain_text.is_some() {
                                 el = el.child(
                                     div()
-                                        .id("html-reload")
-                                        .debug_selector(|| "html-reload".into())
-                                        .role(gpui::Role::Button)
-                                        .aria_label(if french {
-                                            "Actualiser l’aperçu"
-                                        } else {
-                                            "Reload preview"
-                                        })
+                                        .id("html-open-browser")
                                         .cursor_pointer()
                                         .px(px(7.))
-                                        .py(px(3.))
+                                        .py(px(2.5))
+                                        .text_size(px(11.))
                                         .on_click(cx.listener(move |root, _, _, cx| {
-                                            root.dispatch(GpuiAction::ReloadHtmlPreview(id), cx)
+                                            root.dispatch(GpuiAction::OpenHtmlInBrowser(id), cx)
                                         }))
-                                        .child(GpuiIcon::RefreshCw.render(14., tokens.text)),
+                                        .child(if french {
+                                            "Ouvrir dans le navigateur"
+                                        } else {
+                                            "Open in browser"
+                                        }),
                                 );
                             }
-                            el = el.child(
-                                div()
-                                    .id("html-open-browser")
-                                    .cursor_pointer()
-                                    .px(px(7.))
-                                    .py(px(2.5))
-                                    .text_size(px(11.))
-                                    .on_click(cx.listener(move |root, _, _, cx| {
-                                        root.dispatch(GpuiAction::OpenHtmlInBrowser(id), cx)
-                                    }))
-                                    .child(if french {
-                                        "Ouvrir dans le navigateur"
-                                    } else {
-                                        "Open in browser"
-                                    }),
-                            );
                         }
                         el
                     },

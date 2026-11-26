@@ -48,9 +48,9 @@ fn html_folder_trust_controls_cover_decline_reconsider_grant_and_revoke(
             assert_eq!(
                 root.app
                     .gpui_snapshot(960., 640., 4.)
-                    .html_folder
+                    .html_toolbar
                     .unwrap()
-                    .2,
+                    .decision,
                 expected
             )
         })
@@ -458,7 +458,7 @@ fn gpui_theme_tokens_and_svg_icons_cover_all_palettes_and_glyphs() {
     assert!((mixed.color.red - 0.25).abs() < 1e-4);
     assert!((mixed.color.blue - 0.75).abs() < 1e-4);
 
-    assert_eq!(GpuiIcon::ALL.len(), 45);
+    assert_eq!(GpuiIcon::ALL.len(), 49);
     for icon in GpuiIcon::ALL {
         let svg_text = std::str::from_utf8(icon.svg_bytes()).expect("valid utf8 svg");
         assert!(svg_text.starts_with("<svg "));
