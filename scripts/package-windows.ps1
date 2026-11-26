@@ -2,17 +2,24 @@
 param()
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+function Assert-CleanCheckout {
+    $changes = @(git status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read checkout status.' }
+    if ($changes.Count) {
+        throw ("Package only a clean committed checkout. Changed paths:" + [Environment]::NewLine + ($changes -join [Environment]::NewLine))
+    }
+}
 Push-Location $repoRoot
 try {
-    $changes = git status --porcelain
-    if ($LASTEXITCODE -ne 0 -or $changes) { throw 'Package only a clean committed checkout.' }
+    Assert-CleanCheckout
     $commit = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read commit.' }
     $build = (git rev-list --count HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read build number.' }
     cargo build --release --locked -j 2
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
-    if ((git rev-parse HEAD).Trim() -ne $commit -or (git status --porcelain)) { throw 'Checkout changed during packaging; no archive was produced.' }
+    Assert-CleanCheckout
+    if ((git rev-parse HEAD).Trim() -ne $commit) { throw 'Checkout changed during packaging; no archive was produced.' }
     $exe = Join-Path $repoRoot 'target\release\tessel-rust.exe'
     $identity = (& $exe --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $identity.EndsWith("b$build ($($commit.Substring(0,7)))")) { throw 'Compiled build identity does not match the checkout.' }
