@@ -334,3 +334,48 @@ fn real_guest_git_refuses_config_editable_in_another_shared_project() {
     );
     assert!(result.is_err());
 }
+
+#[test]
+fn real_guest_file_history_is_scoped_paged_and_redacted() {
+    let mut repo = Repo::new();
+    repo.write("visible[1].txt", "first");
+    repo.write("visible1.txt", "other");
+    repo.write(".env", "private");
+    repo.baseline();
+    repo.write("visible1.txt", "unrelated");
+    repo.command(&["commit", "-qam", "unrelated"]);
+    repo.write("visible[1].txt", "second");
+    repo.command(&[
+        "commit",
+        "-qam",
+        "contact person@example.org or other%40example.org",
+    ]);
+    repo.write("visible[1].txt", "unsaved");
+    let query = |limit| json!({"path":"visible[1].txt","limit":limit});
+    let page = repo.request("scm.fileHistory", query(1)).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["hasMore"], true);
+    assert_eq!(page["uncommitted"], true);
+    assert_eq!(page["rel"], "visible[1].txt");
+    assert!(page["items"][0]["time"].as_i64().unwrap() > 1_000_000_000_000);
+    assert!(!page.to_string().contains("example."));
+    let all = repo.request("scm.fileHistory", query(50)).unwrap();
+    assert_eq!(all["hasMore"], false);
+    assert_eq!(all["items"].as_array().unwrap().len(), 2);
+    assert_eq!(all["items"][1]["message"], "baseline");
+    assert!(repo.request("scm.fileHistory", query(201)).is_err());
+    repo.command(&["config", "log.follow", "true"]);
+    repo.command(&["mv", "visible[1].txt", "renamed.txt"]);
+    repo.command(&["commit", "-qm", "renamed"]);
+    let renamed = repo
+        .request("scm.fileHistory", json!({"path":"renamed.txt"}))
+        .unwrap();
+    assert_eq!(renamed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(renamed["items"][0]["message"], "renamed");
+    for path in [".env", ".git/config", "../outside", ""] {
+        assert!(
+            repo.request("scm.fileHistory", json!({"path":path}))
+                .is_err()
+        );
+    }
+}

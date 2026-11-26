@@ -427,6 +427,8 @@ mod tests {
             let diff = scm(request);
             assert_eq!(diff["result"]["diff"], "", "{diff}");
         }
+        let history = scm(json!({"op":"scm.fileHistory","path":"private[1].log"}));
+        assert_eq!(history["error"], "This path is not shared.");
         for op in ["scm.stage", "scm.unstage", "scm.discard"] {
             let result = scm(json!({"op":op,"path":"private[1].log"}));
             assert!(result.get("error").is_some(), "{op}: {result}");

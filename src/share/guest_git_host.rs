@@ -600,6 +600,94 @@ fn dispatch_with_roots(
             }
             Ok(json!({"status": status, "entries": rows, "hidden": hidden, "truncated": truncated}))
         }
+        "scm.fileHistory" => {
+            let limit = match req.get("limit") {
+                None => 50,
+                Some(n) => n
+                    .as_u64()
+                    .filter(|n| (1..=200).contains(n))
+                    .ok_or("Invalid file history limit.")?,
+            };
+            let visible_file = || -> Result<String> {
+                let rel = checked_rel(root, req, hide_ignored, false)?;
+                let requested = req["path"].as_str().ok_or("This path is not shared.")?;
+                let paths = [requested.to_owned(), rel.clone()];
+                if !root.join(&rel).is_file() || sticky(&paths)?.contains(&true) {
+                    return Err("This path is not shared.".into());
+                }
+                Ok(rel)
+            };
+            let rel = visible_file()?;
+            // Stay at the authorized name even if Git is configured to follow
+            // renames. Earlier names require separate visibility decisions.
+            let count = format!("-n{}", limit + 1);
+            let log = run(
+                git,
+                &[
+                    "log",
+                    "--no-follow",
+                    "--no-patch",
+                    "--no-notes",
+                    "--no-show-signature",
+                    "--no-color",
+                    "-z",
+                    &count,
+                    "--format=%H%n%an%n%at%n%B",
+                    "--",
+                    &rel,
+                ],
+            )
+            .map_err(|e| bounded_err(root, &e))?;
+            if log.truncated || (!log.bytes.is_empty() && !log.bytes.ends_with(&[0])) {
+                return Err("Incomplete Git file history.".into());
+            }
+            let status = run(
+                git,
+                &[
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--ignore-submodules=all",
+                    "--",
+                    &rel,
+                ],
+            )
+            .map_err(|e| bounded_err(root, &e))?;
+            if status.truncated || visible_file()? != rel {
+                return Err("File history scope changed or status is incomplete.".into());
+            }
+            static EMAIL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+                regex::Regex::new(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+").unwrap()
+            });
+            let root_names: Vec<_> = shared_roots.iter().map(|p| p.to_string_lossy()).collect();
+            let roots: Vec<_> = root_names.iter().map(|p| p.as_ref()).collect();
+            let clean = |text: &str, max| {
+                EMAIL
+                    .replace_all(&guest_text::guest_text(text, &roots, max), "…")
+                    .into_owned()
+            };
+            let text = String::from_utf8_lossy(&log.bytes);
+            let mut records = text.split_terminator('\0');
+            let mut items = Vec::new();
+            for record in records.by_ref().take(limit as usize) {
+                let mut fields = record.splitn(4, '\n');
+                let id = fields.next().unwrap_or_default();
+                if !matches!(id.len(), 40 | 64) || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("Invalid Git history record.".into());
+                }
+                let author = fields.next().ok_or("Missing commit author.")?;
+                let time = fields
+                    .next()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .and_then(|v| v.checked_mul(1000))
+                    .ok_or("Invalid commit time.")?;
+                let message = fields.next().ok_or("Missing commit message.")?;
+                items.push(json!({"id":id,"author":clean(author,200),"time":time,"message":clean(message.trim(),4096)}));
+            }
+            Ok(
+                json!({"items":items,"hasMore":records.next().is_some(),"uncommitted":!status.bytes.is_empty(),"rel":req["path"]}),
+            )
+        }
         "scm.diff" => {
             let requested = req.get("path").and_then(Value::as_str).unwrap_or("");
             // `--relative`: names and the diff come out relative to the project folder, so
