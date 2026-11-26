@@ -1946,6 +1946,11 @@ impl Tessel {
                 self.state.editor_prefs.timeline_shown = !self.state.editor_prefs.timeline_shown;
                 self.save();
             }
+            Action::EmailAuthor(target) => {
+                if let Err(error) = open::that_detached(target) {
+                    self.error = error.to_string();
+                }
+            }
             Action::Filters(open) => self.timeline.filters_open = open,
             Action::ToggleSource(source) => {
                 let prefs = &mut self.state.editor_prefs;

@@ -355,6 +355,7 @@ pub enum Action {
     Refresh(PathBuf, bool),
     Open(PathBuf, Option<String>, bool),
     OpenGitHub(String),
+    EmailAuthor(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -642,6 +643,7 @@ pub struct Details {
     origin: Arc<std::sync::OnceLock<Option<String>>>,
     pub stats: Option<StatsReceiver>,
     pub heading: String,
+    pub author: Option<(String, Option<String>)>,
     pub text: String,
     pub hash: Option<String>,
     pub avatar: Option<Avatar>,
@@ -663,6 +665,22 @@ pub fn message_lines(message: &str) -> impl Iterator<Item = (bool, &str)> {
     })
 }
 
+/// Keep commit metadata inside one recipient, including literal URI punctuation.
+fn author_mailto(address: &str) -> Option<String> {
+    let (local, domain) = address.rsplit_once('@')?;
+    if local.is_empty()
+        || domain.is_empty()
+        || local.contains('@')
+        || address.chars().any(|c| c.is_control() || c.is_whitespace())
+        || address.contains([',', ';', '<', '>'])
+    {
+        return None;
+    }
+    let encode =
+        |value: &str| url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+    Some(format!("mailto:{}@{}", encode(local), encode(domain)))
+}
+
 impl Details {
     pub fn github_url(&self) -> Option<String> {
         Some(format!(
@@ -681,6 +699,7 @@ impl History {
                 origin: self.github_repo.clone(),
                 stats: None,
                 heading: date(save.timestamp),
+                author: None,
                 text: if fr {
                     "Fichier enregistré"
                 } else {
@@ -693,19 +712,15 @@ impl History {
         }
         if let Some(id) = key {
             let commit = self.commits.iter().find(|c| c.id == id)?;
-            let author = if commit.email.is_empty() {
-                commit.author.clone()
-            } else {
-                format!("{} <{}>", commit.author, commit.email)
-            };
             return Some(Details {
                 origin: self.github_repo.clone(),
                 stats: Some(commit.request_stats(&self.root, &self.github_repo)),
                 heading: format!(
-                    "{author} · {} ({})",
+                    ", {} ({})",
                     time_words(commit.time, now, fr, true),
                     date(commit.time.saturating_mul(1000))
                 ),
+                author: Some((commit.author.clone(), author_mailto(&commit.email))),
                 text: commit.message.clone(),
                 hash: Some(commit.id.clone()),
                 avatar: Some(Avatar::for_author(if commit.email.is_empty() {
@@ -718,6 +733,7 @@ impl History {
         self.dirty.then(|| Details {
             origin: self.github_repo.clone(),
             stats: None,
+            author: None,
             heading: format!(
                 "{} · {}",
                 if fr { "Vous" } else { "You" },
@@ -890,7 +906,20 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                                         );
                                     }
                                 }
-                                ui.strong(details.heading);
+                                if let Some((author, target)) = details.author {
+                                    if let Some(target) = target {
+                                        if ui
+                                            .link(eframe::egui::RichText::new(author).strong())
+                                            .on_hover_text(&target)
+                                            .clicked()
+                                        {
+                                            action = Some(Action::EmailAuthor(target));
+                                        }
+                                    } else {
+                                        ui.strong(author);
+                                    }
+                                }
+                                ui.label(details.heading);
                             });
                             for (bullet, line) in message_lines(&details.text) {
                                 if bullet {
@@ -977,6 +1006,28 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_timeline_author_link_has_one_recipient_and_no_headers() {
+        assert_eq!(
+            author_mailto("dev+tag@example.org").as_deref(),
+            Some("mailto:dev%2Btag@example.org")
+        );
+        assert_eq!(
+            author_mailto("a?b#c@example.org").as_deref(),
+            Some("mailto:a%3Fb%23c@example.org")
+        );
+        for invalid in [
+            "",
+            "@example.org",
+            "name@",
+            "a@b,c@d",
+            "a@b\r\nCc:someone",
+            "one two@host",
+        ] {
+            assert_eq!(author_mailto(invalid), None);
+        }
+    }
+
     #[test]
     fn file_timeline_message_paragraphs_and_bullets() {
         let message = " Title  \r\n\r\n - first\r* second\n+\tthird\n+literal\n- ";

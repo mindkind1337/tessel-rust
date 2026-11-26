@@ -2877,6 +2877,36 @@ impl gpui::Render for TimelineTooltip {
                 }
                 head = head.child(grid);
             }
+            if let Some((author, target)) = &d.author {
+                let name = div()
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child(author.clone());
+                head = if let Some(target) = target {
+                    let target = target.clone();
+                    let owner = self.owner.clone();
+                    head.child(
+                        name.id("timeline-email-author")
+                            .debug_selector(|| "timeline-email-author".into())
+                            .cursor_pointer()
+                            .text_color(self.tokens.accent)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                let _ = owner.update(cx, |root, cx| {
+                                    root.dispatch_action(
+                                        GpuiAction::Timeline(
+                                            crate::file_timeline::Action::EmailAuthor(
+                                                target.clone(),
+                                            ),
+                                        ),
+                                        cx,
+                                    )
+                                });
+                            })),
+                    )
+                } else {
+                    head.child(name)
+                };
+            }
             panel = panel.child(head.child(d.heading.clone()));
             for (bullet, line) in crate::file_timeline::message_lines(&d.text) {
                 let text = div().min_w_0().child(line.to_owned());

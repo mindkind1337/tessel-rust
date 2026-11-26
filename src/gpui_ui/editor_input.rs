@@ -607,6 +607,7 @@ mod tests {
                     cx.refresh().unwrap();
                     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
                     if visual.debug_bounds("timeline-hover-stats").is_some() {
+                        assert!(visual.debug_bounds("timeline-email-author").is_some());
                         assert!(visual.debug_bounds("timeline-message-bullet").is_some());
                         let copy = visual.debug_bounds("timeline-copy-hash").unwrap().center();
                         visual.simulate_mouse_move(copy, None, Default::default());
