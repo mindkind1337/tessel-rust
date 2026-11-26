@@ -30,7 +30,7 @@ struct Site {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>);
+pub(crate) struct Pages(Arc<Mutex<VecDeque<Arc<Site>>>>, bool);
 
 fn segment_ok(s: &str) -> bool {
     let stem = s
@@ -186,8 +186,17 @@ fn asset_response(
 }
 
 impl Pages {
+    // The trusted renderer owns its own registry and WebView. Browser tabs
+    // retain a separate restricted registry.
+    pub(crate) fn editor(scripts: bool) -> Self {
+        Self(Default::default(), scripts)
+    }
     pub(super) fn open(&self, root: &Path, file: &Path, text: &str) -> Result<String, String> {
-        let root = root.canonicalize().map_err(|e| e.to_string())?;
+        let canonical = root.canonicalize().map_err(|e| e.to_string())?;
+        if self.1 && canonical != root {
+            return Err("The trusted folder has moved.".into());
+        }
+        let root = canonical;
         let entry = crate::files::confined(&root, file)?;
         if !visible_relative(&root, &entry)
             || mime(&entry) != "text/html; charset=utf-8"
@@ -265,6 +274,21 @@ impl Pages {
         self.serve_with(req, crate::remote::execute)
     }
     fn serve_with(
+        &self,
+        req: Request<Vec<u8>>,
+        read_remote: impl FnOnce(
+            crate::workspace::Host,
+            crate::remote::Action,
+        ) -> Result<crate::remote::Reply, String>,
+    ) -> Reply {
+        let mut reply = self.serve_asset(req, read_remote);
+        if self.1 && reply.status().is_success() {
+            reply.headers_mut().insert("Content-Security-Policy", wry::http::HeaderValue::from_static(
+                "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; connect-src 'self' https: wss:; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"));
+        }
+        reply
+    }
+    fn serve_asset(
         &self,
         req: Request<Vec<u8>>,
         read_remote: impl FnOnce(

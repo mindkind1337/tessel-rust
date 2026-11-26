@@ -94,6 +94,8 @@ pub enum OutlineCursor {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    #[cfg(windows)]
+    pub html_root: Option<PathBuf>,
     pub html_plain_text: Option<std::sync::Arc<str>>,
     pub html_link_menu: Option<((f32, f32), String, bool)>,
     pub image_menu: Option<(f32, f32)>,
@@ -595,7 +597,15 @@ impl Document {
             media: false,
             pdf: None,
             office: None,
-            tools: EditorTools::default(),
+            tools: EditorTools {
+                #[cfg(windows)]
+                html_root: if matches!(extension.as_str(), "html" | "htm") {
+                    Some(root.canonicalize().map_err(|e| e.to_string())?)
+                } else {
+                    None
+                },
+                ..Default::default()
+            },
             syntax_cache: crate::syntax::SyntaxCache::default(),
             unpinned_preview: false,
             diff_title: None,

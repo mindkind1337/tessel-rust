@@ -5,6 +5,8 @@ mod control;
 mod cookie_import;
 mod downloads;
 pub(crate) mod editor_page;
+#[cfg(windows)]
+pub(crate) mod html_trust;
 mod private_fill;
 mod project_page;
 pub use private_fill::Reply as FillReply;

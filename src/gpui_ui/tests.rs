@@ -18,6 +18,48 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn html_folder_trust_controls_cover_decline_reconsider_grant_and_revoke(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let path = project.join("index.html");
+    std::fs::write(&path, "<p>index</p>").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        root
+    });
+    for (selector, expected) in [
+        ("restrict-html-folder", Some(false)),
+        ("ask-html-trust", None),
+        ("trust-html-folder", Some(true)),
+        ("restrict-html-folder", Some(false)),
+    ] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(point, Default::default());
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .html_folder
+                    .unwrap()
+                    .2,
+                expected
+            )
+        })
+        .unwrap();
+    }
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn html_external_prompt_dismisses_or_opens_in_the_owner_browser(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

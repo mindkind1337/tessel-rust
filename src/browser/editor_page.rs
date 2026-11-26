@@ -38,6 +38,8 @@ fn hold_external(slot: &RefCell<Option<Url>>, base: &Url, address: &str) {
 pub(crate) struct EditorPage {
     view: Option<WebView>,
     pages: Pages,
+    scripts: bool,
+    pub(crate) reconsider: Option<u64>,
     context: Option<wry::WebContext>,
     profile: Option<tempfile::TempDir>,
     document: Option<u64>,
@@ -49,10 +51,17 @@ pub(crate) struct EditorPage {
     pending: Rc<RefCell<Option<LinkGesture>>>,
 }
 impl EditorPage {
+    pub(crate) fn set_scripts(&mut self, scripts: bool) {
+        if self.scripts != scripts {
+            self.retain(None, false);
+            self.scripts = scripts;
+        }
+    }
     pub(crate) fn retain(&mut self, id: Option<u64>, obscured: bool) {
         if self.document != id {
+            self.reconsider = None;
             self.view.take();
-            self.pages = Pages::default();
+            self.pages = Pages::editor(self.scripts);
             self.document = None;
             self.rect = None;
             self.held = None;
@@ -71,7 +80,11 @@ impl EditorPage {
             return Ok(());
         }
         if let Some(view) = &self.view {
-            self.pages.open(&doc.root, &doc.path, &doc.text)?;
+            self.pages.open(
+                doc.tools.html_root.as_deref().unwrap_or(&doc.root),
+                &doc.path,
+                &doc.text,
+            )?;
             view.reload().map_err(|e| e.to_string())
         } else {
             // Retry creating the child on the next paint if the earlier attempt failed.
@@ -123,7 +136,11 @@ impl EditorPage {
         scale: f32,
     ) {
         self.sync_source(parent, doc.instance_id(), bounds, scale, false, |pages| {
-            pages.open(&doc.root, &doc.path, &doc.text)
+            pages.open(
+                doc.tools.html_root.as_deref().unwrap_or(&doc.root),
+                &doc.path,
+                &doc.text,
+            )
         });
     }
     pub(crate) fn sync_source(
@@ -183,6 +200,7 @@ impl EditorPage {
         }
         let base = Url::parse(&address).ok()?;
         let allowed = address.clone();
+        let native_links = remote || self.scripts;
         let pending = self.pending.clone();
         let builder = WebViewBuilder::new_with_web_context(self.context.as_mut()?);
         let builder = pages
@@ -198,7 +216,7 @@ impl EditorPage {
                 let origin = base.origin();
                 move |u| {
                     hold_external(&incoming, &base, &u);
-                    if remote {
+                    if native_links {
                         Url::parse(&u).is_ok_and(|url| {
                             url.origin() == origin
                                 && url.username().is_empty()
@@ -221,7 +239,7 @@ impl EditorPage {
             .with_drag_drop_handler(|_| true);
         // The remote page browses within its isolated project origin using native links.
         // Only the local document uses the editor's application link menu.
-        let builder = if remote {
+        let builder = if native_links {
             builder
         } else {
             let incoming = self.incoming.clone();
@@ -280,6 +298,42 @@ impl EditorPage {
 mod tests {
     use super::*;
     use crate::webview_test_support::{hidden_parent, pump, wait_for};
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn native_editor_page_recreates_the_document_when_folder_trust_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("index.html");
+        std::fs::write(
+            &path,
+            "<p>loaded</p><script type=module src='module.js'></script>",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("module.js"), "document.title='script ran'").unwrap();
+        let doc = Document::open(root.path(), &path).unwrap();
+        let parent = hidden_parent();
+        let mut editor = EditorPage::default();
+        let bounds = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(320., 200.),
+        );
+        let mut previous = String::new();
+        for trusted in [false, true, false] {
+            editor.set_scripts(trusted);
+            editor.sync(&parent, &doc, bounds, 1.);
+            let view = editor.view.as_ref().unwrap();
+            wait_for(
+                view,
+                if trusted {
+                    "document.title === 'script ran'"
+                } else {
+                    "document.readyState === 'complete' && document.querySelector('p')?.textContent === 'loaded' && document.title !== 'script ran'"
+                },
+            );
+            let address = view.url().unwrap();
+            assert_ne!(address, previous);
+            previous = address;
+        }
+    }
     #[test]
     fn held_destinations_are_external_web_links_without_credentials() {
         let incoming = RefCell::default();

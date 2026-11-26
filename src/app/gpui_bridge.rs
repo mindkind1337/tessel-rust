@@ -695,6 +695,8 @@ pub(crate) struct GpuiModalsSnapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiWorkspaceSnapshot {
     #[cfg(windows)]
+    pub html_folder: Option<(u64, String, Option<bool>)>,
+    #[cfg(windows)]
     pub held_html_link: Option<(u64, url::Url)>,
     pub theme: ThemeId,
     pub dark: bool,
@@ -910,6 +912,10 @@ pub(crate) enum GpuiAction {
     SelectOfficeSection(usize),
     HtmlLinkMenu(u64, String, (f32, f32)),
     CloseHtmlLinkMenu,
+    #[cfg(windows)]
+    AskHtmlTrust(u64),
+    #[cfg(windows)]
+    DecideHtmlTrust(u64, bool),
     #[cfg(windows)]
     ResolveHtmlExternal(u64, url::Url, bool),
     OpenHtmlLinkMenuTarget(u64),
@@ -1378,6 +1384,10 @@ impl Tessel {
             window_frame: None,
             floating: floating_terminal::State::new_with_repaint(floating_repaint, state.floating),
             state,
+            #[cfg(windows)]
+            html_trust: crate::browser::html_trust::Trust::load(
+                store.as_ref().map(|s| s.directory()),
+            ),
             store,
             error,
             sessions: vec![],
@@ -2035,6 +2045,48 @@ impl Tessel {
     }
 
     #[cfg(windows)]
+    fn active_html_folder(&self) -> Option<(u64, crate::browser::html_trust::Folder)> {
+        use crate::browser::html_trust::Folder;
+        match self.view {
+            View::Files => {
+                let doc = self.documents.get(self.active_document)?;
+                (doc.preview_mode
+                    && doc.tools.html_plain_text.is_none()
+                    && !doc.media
+                    && doc
+                        .path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|ext| {
+                            ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+                        }))
+                .then(|| {
+                    (
+                        doc.instance_id(),
+                        Folder::Local(
+                            doc.tools
+                                .html_root
+                                .clone()
+                                .unwrap_or_else(|| doc.root.clone()),
+                        ),
+                    )
+                })
+            }
+            View::Remote => {
+                let id = self.remote.html_page_id()?;
+                let (host, root, _, _) = self.remote.active_html_page(id)?;
+                Some((
+                    id,
+                    Folder::Ssh {
+                        host: host.alias,
+                        root: root.into(),
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+    #[cfg(windows)]
     pub(crate) fn sync_html_page(
         &mut self,
         window: &impl wry::raw_window_handle::HasWindowHandle,
@@ -2042,6 +2094,14 @@ impl Tessel {
         rect: eframe::egui::Rect,
         scale: f32,
     ) {
+        let Some((active, folder)) = self.active_html_folder() else {
+            return;
+        };
+        if active != id {
+            return;
+        }
+        self.editor_page
+            .set_scripts(self.html_trust.decision(&folder) == Some(true));
         if self.view == View::Remote
             && self.gpui_media_unobscured()
             && let Some((host, root, path, text)) = self.remote.active_html_page(id)
@@ -3578,6 +3638,18 @@ impl Tessel {
         };
 
         GpuiWorkspaceSnapshot {
+            #[cfg(windows)]
+            html_folder: self.active_html_folder().map(|(id, folder)| {
+                (
+                    id,
+                    folder.label(),
+                    if self.editor_page.reconsider == Some(id) {
+                        None
+                    } else {
+                        self.html_trust.decision(&folder)
+                    },
+                )
+            }),
             #[cfg(windows)]
             held_html_link: self.editor_page.external_prompt(),
             theme,
@@ -5907,6 +5979,29 @@ impl Tessel {
                 {
                     doc.tools.html_link_menu =
                         Some((pos, href, matches!(target, crate::preview::Link::Web(_))));
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::AskHtmlTrust(id) => {
+                if self.gpui_media_unobscured()
+                    && self
+                        .active_html_folder()
+                        .is_some_and(|(active, _)| active == id)
+                {
+                    self.editor_page.reconsider = Some(id);
+                }
+            }
+            #[cfg(windows)]
+            GpuiAction::DecideHtmlTrust(id, trusted) => {
+                if self.gpui_media_unobscured()
+                    && let Some((active, folder)) = self.active_html_folder()
+                    && active == id
+                {
+                    if let Err(error) = self.html_trust.decide(folder, trusted) {
+                        self.error = error;
+                    }
+                    self.editor_page.reconsider = None;
+                    self.editor_page.set_scripts(trusted);
                 }
             }
             #[cfg(windows)]

@@ -755,6 +755,8 @@ pub struct Tessel {
     #[cfg(windows)]
     pub(crate) media_player: crate::files::playback::native::Player,
     #[cfg(windows)]
+    html_trust: crate::browser::html_trust::Trust,
+    #[cfg(windows)]
     pub(crate) editor_page: crate::browser::editor_page::EditorPage,
     #[cfg(windows)]
     agent_browsers: crate::agent_browser::AgentBrowsers,
@@ -839,6 +841,10 @@ impl Tessel {
             window_frame,
             floating: floating_terminal::State::new(&cc.egui_ctx, state.floating),
             state,
+            #[cfg(windows)]
+            html_trust: crate::browser::html_trust::Trust::load(
+                store.as_ref().map(|s| s.directory()),
+            ),
             store,
             error,
             sessions: vec![],

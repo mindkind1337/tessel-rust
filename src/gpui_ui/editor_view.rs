@@ -238,6 +238,62 @@ pub(super) fn html_viewport(
             .inset_0(),
         )
         .into_any_element();
+    let viewport = if let Some((_, folder, decision)) = snapshot
+        .html_folder
+        .as_ref()
+        .filter(|(active, _, _)| *active == id)
+    {
+        let fr = snapshot.french;
+        let button = |selector: &'static str, label: &'static str, action: GpuiAction| {
+            div()
+                .id(selector)
+                .debug_selector(move || selector.into())
+                .cursor_pointer()
+                .px(px(5.))
+                .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
+                .child(label)
+        };
+        let mut bar = div().flex().flex_wrap().gap(px(6.)).px(px(8.)).py(px(3.));
+        match decision {
+            None => {
+                bar = bar.child(if fr {format!("Faire confiance aux fichiers de {folder} ? Les scripts pourront lire le dossier et accéder à Internet.")} else {format!("Trust files in {folder}? Scripts can read this folder and access the internet.")})
+                    .child(button("trust-html-folder",if fr {"Faire confiance"} else {"Trust folder"}, GpuiAction::DecideHtmlTrust(id,true)))
+                    .child(button("restrict-html-folder",if fr {"Garder le mode restreint"} else {"Keep restricted"},GpuiAction::DecideHtmlTrust(id,false)));
+            }
+            Some(true) => {
+                bar = bar.child(button(
+                    "restrict-html-folder",
+                    if fr {
+                        "Dossier de confiance · Désactiver les scripts"
+                    } else {
+                        "Trusted folder · Disable scripts"
+                    },
+                    GpuiAction::DecideHtmlTrust(id, false),
+                ))
+            }
+            Some(false) => {
+                bar = bar.child(button(
+                    "ask-html-trust",
+                    if fr {
+                        "Mode restreint · Gérer la confiance"
+                    } else {
+                        "Restricted mode · Manage trust"
+                    },
+                    GpuiAction::AskHtmlTrust(id),
+                ))
+            }
+        }
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(bar)
+            .child(viewport)
+            .into_any_element()
+    } else {
+        viewport
+    };
     let Some((_, url)) = snapshot
         .held_html_link
         .as_ref()

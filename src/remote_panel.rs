@@ -166,6 +166,10 @@ impl RemotePanel {
     }
 
     #[cfg(windows)]
+    pub(crate) fn html_page_id(&self) -> Option<u64> {
+        Some(self.document.as_ref()?.html_page.as_ref()?.0)
+    }
+    #[cfg(windows)]
     pub(crate) fn active_html_page(&self, id: u64) -> Option<(Host, &str, &str, &str)> {
         let doc = self.document.as_ref()?;
         if doc.html_page.as_ref()?.0 != id {
