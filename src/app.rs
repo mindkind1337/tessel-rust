@@ -14950,6 +14950,91 @@ $lock.Dispose()
     }
 
     #[test]
+    fn compatibility_outline_double_click_selects_the_property_for_typing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.json");
+        let original = r#"{"first":"😀","target":42,"last":3}"#;
+        std::fs::write(&path, original).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let mut document = Document::open(temp.path(), &path).unwrap();
+        document.preview_mode = false;
+        app.documents = vec![document];
+        app.active_document = 0;
+        app.view = View::Files;
+
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        let mut time = 0.0;
+        let mut frame = |events| {
+            time += 0.02;
+            ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1050.0, 750.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::SidePanel::left("files").show(ctx, |ui| app.explorer(ui));
+                    egui::CentralPanel::default().show(ctx, |ui| app.editor(ui));
+                },
+            )
+        };
+        let locate = |output: egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .into_iter()
+                .find_map(|clipped| {
+                    if let egui::Shape::Text(text) = clipped.shape
+                        && text.galley.text() == label
+                    {
+                        Some(text.visual_bounding_rect().center())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing visible label {label}"))
+        };
+        let pointer = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]
+        };
+        frame(vec![]);
+        let header = locate(
+            frame(vec![]),
+            if crate::i18n::is_french() {
+                "Plan"
+            } else {
+                "Outline"
+            },
+        );
+        frame(pointer(header, true));
+        frame(pointer(header, false));
+        frame(vec![]);
+        let row = locate(frame(vec![]), "target");
+        frame(pointer(row, true));
+        frame(pointer(row, false));
+        frame(vec![egui::Event::Text("ignored".into())]);
+        frame(pointer(row, true));
+        frame(pointer(row, false));
+        frame(vec![egui::Event::Text("replacement".into())]);
+        assert_eq!(
+            app.documents[0].text,
+            r#"{"first":"😀",replacement,"last":3}"#
+        );
+    }
+
+    #[test]
     fn document_shortcuts_cannot_save_or_close_behind_a_modal() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("example.txt");

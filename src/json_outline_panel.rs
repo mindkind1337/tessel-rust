@@ -70,10 +70,30 @@ fn draw(ui: &mut egui::Ui, symbols: &[Symbol], doc: &mut Document) {
                 ui.selectable_label(false, &symbol.name)
             })
             .inner;
-        if response.double_clicked() {
-            reveal(doc, symbol.range, true);
-        } else if response.clicked() {
-            reveal(doc, symbol.selection_range.unwrap_or(symbol.range), false);
+        if response.clicked() {
+            // egui counts successive clicks across widgets, including the section header.
+            // Keep the click pair tied to the document and symbol the user activated.
+            let history = ui.id().with(("outline-last-click", doc.instance_id()));
+            let now = ui.input(|i| i.time);
+            let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+            let select = response.clicked_by(egui::PointerButton::Primary)
+                && ui
+                    .data(|d| d.get_temp::<(egui::Id, f64)>(history))
+                    .is_some_and(|(row, time)| row == response.id && now - time < delay)
+                && (response.double_clicked() || response.triple_clicked());
+            ui.data_mut(|d| {
+                if select {
+                    d.remove::<(egui::Id, f64)>(history);
+                } else {
+                    d.insert_temp(history, (response.id, now));
+                }
+            });
+            let range = if select {
+                symbol.range
+            } else {
+                symbol.selection_range.unwrap_or(symbol.range)
+            };
+            reveal(doc, range, select);
         }
         if open && !symbol.children.is_empty() {
             ui.indent((doc.instance_id(), &symbol.key), |ui| {
