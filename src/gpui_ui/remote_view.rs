@@ -583,6 +583,8 @@ pub(crate) fn render(
                         cx,
                     )),
             );
+        } else if let Some(source) = &remote.playback {
+            body = body.child(super::editor_view::render_playback(source, fr, cx));
         } else if let Some(office) = &remote.office {
             body = body.child(super::editor_view::render_office_summary(
                 office, fr, tokens, cx, true,

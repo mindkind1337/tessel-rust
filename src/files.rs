@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "playback.rs"]
+pub mod playback;
 pub const MAX_TEXT: usize = 2 * 1024 * 1024;
 
 pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -340,6 +342,7 @@ pub struct Document {
     pub gpui_image: Option<std::sync::Arc<gpui::RenderImage>>,
     pub texture: Option<eframe::egui::TextureHandle>,
     pub media: bool,
+    pub playback: Option<playback::Source>,
     pub pdf: Option<crate::pdf::PdfView>,
     pub office: Option<crate::office::OfficeView>,
     pub tools: EditorTools,
@@ -405,6 +408,7 @@ impl Document {
             image: None,
             texture: None,
             gpui_image: None,
+            playback: None,
             media: true,
             pdf: None,
             office: None,
@@ -439,6 +443,7 @@ impl Document {
             image: None,
             texture: None,
             gpui_image: None,
+            playback: None,
             media: true,
             pdf: None,
             office: None,
@@ -453,6 +458,44 @@ impl Document {
         }
     }
 
+    fn binary_preview(root: &Path, path: PathBuf) -> Self {
+        Self {
+            instance_id: Self::next_instance_id(),
+            root: root.to_owned(),
+            path,
+            text: String::new(),
+            original: vec![],
+            error: String::new(),
+            preview_mode: true,
+            preview: None,
+            image: None,
+            texture: None,
+            gpui_image: None,
+            playback: None,
+            media: true,
+            pdf: None,
+            office: None,
+            tools: EditorTools::default(),
+            syntax_cache: crate::syntax::SyntaxCache::default(),
+            unpinned_preview: false,
+            diff_title: None,
+            deleted_on_disk: false,
+            last_edited_at: None,
+            force_large_markdown_render: false,
+            sheet_cache: None,
+        }
+    }
+
+    pub(crate) fn remote_playback(path: &str, mime: &'static str, bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > playback::MAX_BYTES {
+            return Err("Media preview limit is 30 MiB".into());
+        }
+        Ok(Self {
+            playback: Some(playback::Source::new(mime, bytes.to_vec())),
+            ..Self::binary_preview(Path::new(""), PathBuf::from(path))
+        })
+    }
+
     pub fn open(root: &Path, path: &Path) -> Result<Self> {
         let path = confined(root, path)?;
         let extension = path
@@ -463,55 +506,22 @@ impl Document {
         if crate::office::supported(&extension) {
             let office = crate::office::OfficeView::open(&path)?;
             return Ok(Self {
-                instance_id: Self::next_instance_id(),
-                root: root.to_owned(),
-                path,
-                text: String::new(),
-                original: vec![],
-                error: String::new(),
-                preview_mode: true,
-                preview: None,
-                image: None,
-                texture: None,
-                gpui_image: None,
-                media: true,
-                pdf: None,
                 office: Some(office),
-                tools: EditorTools::default(),
-                syntax_cache: crate::syntax::SyntaxCache::default(),
-                unpinned_preview: false,
-                diff_title: None,
-                deleted_on_disk: false,
-                last_edited_at: None,
-                force_large_markdown_render: false,
-                sheet_cache: None,
+                ..Self::binary_preview(root, path)
             });
         }
         if extension == "pdf" {
             let pdf = crate::pdf::PdfView::open(&path)?;
             return Ok(Self {
-                instance_id: Self::next_instance_id(),
-                root: root.to_owned(),
-                path,
-                text: String::new(),
-                original: vec![],
-                error: String::new(),
-                preview_mode: true,
-                preview: None,
-                image: None,
-                texture: None,
-                gpui_image: None,
-                media: true,
                 pdf: Some(pdf),
-                office: None,
-                tools: EditorTools::default(),
-                syntax_cache: crate::syntax::SyntaxCache::default(),
-                unpinned_preview: false,
-                diff_title: None,
-                deleted_on_disk: false,
-                last_edited_at: None,
-                force_large_markdown_render: false,
-                sheet_cache: None,
+                ..Self::binary_preview(root, path)
+            });
+        }
+        if let Some(mime) = playback::mime(&extension) {
+            let source = playback::Source::open(&path, mime)?;
+            return Ok(Self {
+                playback: Some(source),
+                ..Self::binary_preview(root, path)
             });
         }
         if crate::raster_preview::supported(&extension) {
@@ -537,6 +547,7 @@ impl Document {
                 image: Some(image),
                 texture: None,
                 gpui_image: None,
+                playback: None,
                 media: true,
                 pdf: None,
                 office: None,
@@ -578,6 +589,7 @@ impl Document {
             image: None,
             texture: None,
             gpui_image: None,
+            playback: None,
             media: false,
             pdf: None,
             office: None,

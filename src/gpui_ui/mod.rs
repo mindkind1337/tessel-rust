@@ -1503,6 +1503,21 @@ impl Render for TesselGpuiRoot {
             }
         }
         // Every new img() preview must participate here so discarded images leave the GPU atlas.
+        #[cfg(windows)]
+        {
+            let active = match snapshot.center_mode {
+                GpuiCenterMode::DocumentEditor => snapshot
+                    .active_document
+                    .as_ref()
+                    .and_then(|d| d.playback.as_ref()),
+                GpuiCenterMode::RemoteSftp => snapshot.remote.playback.as_ref(),
+                _ => None,
+            };
+            self.app.media_player.retain(active);
+            if !self.app.gpui_media_unobscured() {
+                self.app.media_player.hide();
+            }
+        }
         let media = match snapshot.center_mode {
             GpuiCenterMode::DocumentEditor => snapshot
                 .active_document

@@ -225,8 +225,21 @@ async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttr
         if attrs.file_type() != russh_sftp::protocol::FileType::File {
             return Err("Only regular remote files can be opened".into());
         }
-        if attrs.size.is_some_and(|n| n > MAX_FILE as u64) {
-            return Err("Remote download limit is 16 MiB".into());
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let limit = if crate::files::playback::mime(&extension).is_some() {
+            crate::files::playback::MAX_BYTES
+        } else {
+            MAX_FILE
+        };
+        if attrs.size.is_some_and(|n| n > limit as u64) {
+            return Err(format!(
+                "Remote download limit is {} MiB",
+                limit / (1024 * 1024)
+            ));
         }
         let mut bytes = Vec::new();
         loop {
@@ -235,8 +248,11 @@ async fn read(session: &RawSftpSession, path: &str) -> Result<(Vec<u8>, FileAttr
                     if data.data.is_empty() {
                         return Err("Server returned an empty non-EOF read".into());
                     }
-                    if bytes.len() + data.data.len() > MAX_FILE {
-                        return Err("Remote download limit is 16 MiB".into());
+                    if bytes.len() + data.data.len() > limit {
+                        return Err(format!(
+                            "Remote download limit is {} MiB",
+                            limit / (1024 * 1024)
+                        ));
                     }
                     bytes.extend_from_slice(&data.data);
                 }

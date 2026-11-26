@@ -49,6 +49,7 @@ pub(crate) struct Snapshot {
     pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub pdf: Option<crate::pdf::PdfSummary>,
+    pub playback: Option<crate::files::playback::Source>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
     pub versions: Vec<(String, i64)>,
@@ -161,6 +162,10 @@ impl RemotePanel {
         Snapshot {
             office,
             pdf,
+            playback: self
+                .document
+                .as_ref()
+                .and_then(|doc| doc.preview.as_ref()?.playback.clone()),
             image_menu: self.document.as_ref().and_then(|doc| doc.image_menu),
             pixels,
             git_history: self

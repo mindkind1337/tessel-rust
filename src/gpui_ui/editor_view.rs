@@ -218,7 +218,9 @@ pub(crate) fn render_document_editor_stage(
     let header = render_editor_toolbar(doc, french, tokens, cx).into_any_element();
     let tools_bar = render_editor_tools_bar(doc, &editor_input.tools, french, tokens, cx);
 
-    let content = if let Some(pdf) = &doc.pdf_summary {
+    let content = if let Some(source) = &doc.playback {
+        render_playback(source, french, cx).into_any_element()
+    } else if let Some(pdf) = &doc.pdf_summary {
         render_pdf_stage(pdf, PdfTarget::Local(doc.instance_id), french, tokens, cx)
             .into_any_element()
     } else if doc.office_summary.is_some() {
@@ -1437,6 +1439,67 @@ pub(crate) fn render_office_summary(
         .when(!summary.error.is_empty(), |el| el.child(SharedString::from(summary.error.clone())))
         .when(summary.truncated, |el| el.child(if french { "Aperçu tronqué aux limites du document." } else { "Preview truncated at the document limits." }))
         .child(tabs).child(body)
+}
+
+pub(super) fn render_playback(
+    source: &crate::files::playback::Source,
+    french: bool,
+    cx: &Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let stage = div()
+        .id("media-player-viewport")
+        .debug_selector(|| "media-player-viewport".into())
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .relative();
+    #[cfg(windows)]
+    {
+        let owner = cx.weak_entity();
+        let source = source.clone();
+        stage
+            .when(source.startup_failed(), |el| {
+                el.child(crate::files::playback::startup_error(french))
+            })
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), window, cx| {
+                        let bounds = bounds.intersect(&window.content_mask().bounds);
+                        let rect = eframe::egui::Rect::from_min_size(
+                            eframe::egui::pos2(bounds.origin.x.into(), bounds.origin.y.into()),
+                            eframe::egui::vec2(bounds.size.width.into(), bounds.size.height.into()),
+                        );
+                        let _ = owner.update(cx, |root, cx| {
+                            if root.app.gpui_media_unobscured() {
+                                let before = source.startup_failed();
+                                root.app.media_player.sync(
+                                    window,
+                                    &source,
+                                    rect,
+                                    window.scale_factor(),
+                                    french,
+                                );
+                                if before != source.startup_failed() {
+                                    cx.notify();
+                                }
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (source, cx);
+        stage.child(if french {
+            "La lecture multimédia intégrée nécessite Windows."
+        } else {
+            "Embedded media playback requires Windows."
+        })
+    }
 }
 
 /// Keep the image and its right-click target at the same fitted size.

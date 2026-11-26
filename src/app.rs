@@ -753,6 +753,8 @@ pub struct Tessel {
     #[cfg(windows)]
     pub(crate) browser: crate::browser::Browser,
     #[cfg(windows)]
+    pub(crate) media_player: crate::files::playback::native::Player,
+    #[cfg(windows)]
     agent_browsers: crate::agent_browser::AgentBrowsers,
     #[cfg(windows)]
     show_agent_browser: bool,
@@ -990,6 +992,8 @@ impl Tessel {
             browser_tab_open: false,
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
+            #[cfg(windows)]
+            media_player: Default::default(),
             #[cfg(windows)]
             agent_browsers: Default::default(),
             #[cfg(windows)]
@@ -6765,6 +6769,8 @@ impl Tessel {
                 self.state.font_size,
                 self.state.editor_prefs.diff_word_wrap,
             );
+        } else if let Some(source) = &d.playback {
+            source.show(ui);
         } else if let Some(office) = &mut d.office {
             office.show(ui);
         } else if let Some(pdf) = &mut d.pdf {
@@ -14282,6 +14288,30 @@ impl eframe::App for Tessel {
         }
         #[cfg(windows)]
         {
+            let media = crate::files::playback::Source::take_presented(ctx);
+            let unobscured = !self.native_modal_open()
+                && !self.side_panels_ui.any_modal_open()
+                && !self.share.has_pending_ask()
+                && !self.floating.ui.is_open()
+                && !egui::Popup::is_any_open(ctx);
+            self.media_player
+                .retain(media.as_ref().map(|(source, _)| source));
+            if let Some((source, bounds)) = media
+                && unobscured
+            {
+                self.media_player.sync(
+                    frame,
+                    &source,
+                    bounds,
+                    ctx.pixels_per_point(),
+                    self.state.language == crate::i18n::Language::French,
+                );
+            } else {
+                self.media_player.hide();
+            }
+        }
+        #[cfg(windows)]
+        {
             self.dispatch_native_actions(ctx);
             self.show_native_picker(ctx);
             self.show_native_drain(ctx);
@@ -15235,6 +15265,30 @@ $lock.Dispose()
         assert!(!frame(true, true)); // Holding W must not close successive panes.
         assert!(!frame(false, true));
         assert!(frame(true, true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn playback_editor_open_routes_local_media_to_both_renderers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("clip.WEBM");
+        std::fs::write(&path, include_bytes!("../tests/fixtures/player-blue.webm")).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(tmp.path().join("state")), false, || {});
+        app.apply_gpui_action(gpui_bridge::GpuiAction::AddProjectPath(tmp.path().into()));
+        app.apply_gpui_action(gpui_bridge::GpuiAction::OpenDocumentPath(path));
+        let snapshot = app.gpui_snapshot(960., 640., 4.);
+        assert!(snapshot.active_document.unwrap().playback.is_some());
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.editor(ui));
+        });
+        assert!(
+            crate::files::playback::Source::take_presented(&ctx)
+                .unwrap()
+                .1
+                .is_positive()
+        );
+        assert!(crate::files::playback::Source::take_presented(&ctx).is_none());
     }
 
     #[test]

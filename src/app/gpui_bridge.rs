@@ -416,6 +416,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub image_menu: Option<(f32, f32)>,
     pub image_download_notice: String,
     pub image_dims: Option<[usize; 2]>,
+    pub playback: Option<crate::files::playback::Source>,
     pub media_pixels: Option<std::sync::Arc<gpui::RenderImage>>,
     pub error: String,
 }
@@ -1518,6 +1519,8 @@ impl Tessel {
             #[cfg(windows)]
             browser: crate::browser::Browser::default(),
             #[cfg(windows)]
+            media_player: Default::default(),
+            #[cfg(windows)]
             agent_browsers: Default::default(),
             #[cfg(windows)]
             show_agent_browser: false,
@@ -1998,6 +2001,11 @@ impl Tessel {
     pub(crate) fn gpui_issues_menu_open(&self) -> bool {
         self.gpui_extra.issues_menu_open
     }
+    #[cfg(windows)]
+    pub(crate) fn gpui_media_unobscured(&self) -> bool {
+        !self.gpui_has_open_modal() && !self.floating.ui.is_open()
+    }
+
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
         self.command_palette.open || self.finder.is_open() || self.gpui_has_non_search_modal()
     }
@@ -3737,6 +3745,7 @@ impl Tessel {
             image_menu: doc.tools.image_menu,
             image_download_notice: doc.tools.image_download_notice.clone(),
             image_dims,
+            playback: doc.playback.clone(),
             media_pixels,
             error: doc.error.clone(),
         }

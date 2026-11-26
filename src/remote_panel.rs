@@ -61,6 +61,9 @@ fn prepare_preview(
     bytes: &[u8],
 ) -> Option<Result<Box<crate::files::Document>, String>> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
+    if let Some(mime) = crate::files::playback::mime(&extension) {
+        return Some(crate::files::Document::remote_playback(path, mime, bytes).map(Box::new));
+    }
     if !crate::office::supported(&extension)
         && extension != "pdf"
         && !crate::raster_preview::supported(&extension)
@@ -395,15 +398,18 @@ impl RemotePanel {
                 }
                 Ok(Reply::File { root, path, bytes }) => {
                     self.root = root;
-                    let text = if bytes.len() <= 2 * 1024 * 1024 && !bytes.contains(&0) {
-                        String::from_utf8(bytes.clone()).ok()
-                    } else {
-                        None
-                    };
                     let (preview, preview_error) = match preview {
                         Some(Ok(doc)) => (Some(doc), String::new()),
                         Some(Err(e)) => (None, e),
                         None => (None, String::new()),
+                    };
+                    let text = if preview.is_none()
+                        && bytes.len() <= 2 * 1024 * 1024
+                        && !bytes.contains(&0)
+                    {
+                        String::from_utf8(bytes.clone()).ok()
+                    } else {
+                        None
                     };
                     self.document = Some(RemoteDocument {
                         path,
@@ -412,7 +418,7 @@ impl RemotePanel {
                         comparison: Default::default(),
                         git_history: Default::default(),
                         image_menu: None,
-                        text: if preview.is_some() { None } else { text },
+                        text,
                         preview,
                         preview_error,
                     });
@@ -885,7 +891,9 @@ impl RemotePanel {
                 ui.colored_label(egui::Color32::LIGHT_RED, &doc.preview_error);
             }
             if let Some(preview) = &mut doc.preview {
-                if let Some(office) = &mut preview.office {
+                if let Some(source) = &preview.playback {
+                    source.show(ui);
+                } else if let Some(office) = &mut preview.office {
                     office.show(ui);
                 } else if let Some(pdf) = &mut preview.pdf {
                     pdf.show(ui);
@@ -1129,8 +1137,68 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn playback_ssh_reply_opens_the_player_in_both_renderers_even_for_text_like_bytes() {
+        let host = Host {
+            alias: "fixture".into(),
+            ..Default::default()
+        };
+        let path = "/media/clip.mp4".to_string();
+        let bytes = b"broken movie data".to_vec();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok((
+            Reply::File {
+                root: "/media".into(),
+                path: path.clone(),
+                bytes: bytes.clone(),
+            },
+            prepare_preview(&path, &bytes),
+            Ok(vec![]),
+        )))
+        .unwrap();
+        let mut panel = RemotePanel {
+            host: Some(host.clone()),
+            pending: Some(rx),
+            ..Default::default()
+        };
+        panel.poll();
+        assert!(panel.document.as_ref().unwrap().text.is_none());
+        assert!(
+            panel
+                .snapshot(std::slice::from_ref(&host))
+                .playback
+                .is_some()
+        );
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| panel.show(ui, std::slice::from_ref(&host)));
+        });
+        assert!(
+            crate::files::playback::Source::take_presented(&ctx)
+                .unwrap()
+                .1
+                .is_positive()
+        );
+    }
+
     #[test]
     fn remote_media_keeps_bytes_and_removes_temporary_files() {
+        for (path, bytes) in [
+            (
+                "/server/recording.WAV",
+                &include_bytes!("../tests/fixtures/player-silence.wav")[..],
+            ),
+            (
+                "/server/clip.WEBM",
+                &include_bytes!("../tests/fixtures/player-blue.webm")[..],
+            ),
+        ] {
+            let doc = prepare_preview(path, bytes).unwrap().unwrap();
+            assert!(doc.playback.is_some() && doc.media && !doc.dirty());
+            assert!(!doc.path.exists());
+        }
         let pdf = crate::pdf::fixture();
         let view = prepare_preview("/server/document.pdf", &pdf)
             .unwrap()

@@ -1655,3 +1655,9 @@ Local and SSH previews in both renderers scale pages from the original PDF dimen
 Local and SSH previews in both renderers use the dimensions of the decoded image to center it with a 20-pixel gutter. Large images shrink to fit either axis, small images retain their original size, and the right-click download action follows the displayed image bounds.
 
 GPUI uses a shared local and SSH image menu with menu-item focus, Up/Down navigation, Enter/Space activation and dismissal on Escape, a click outside the menu or window resizing. Original-file saving uses the same document-scoped actions for mouse and keyboard.
+
+### Audio and video previews on Windows
+
+Both renderers use a private WebView2 child for the audio and video extensions in the Vue file-kind table. The player serves the selected document’s original bytes from memory, including HTTP byte-range requests for seeking. It does not navigate to filesystem paths or use the authenticated browser tab. SSH media reads use the same 30 MiB limit as local playback. Other platforms still need an embedded playback backend.
+
+Windows acceptance uses a hidden native parent and synthetic WAV and WebM files. It checks decoder metadata, playback, pause, seeking and reopening after an overlay. SSH routing is tested with synthetic SFTP replies.
