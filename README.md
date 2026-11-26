@@ -116,6 +116,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Remote files
 
+- A successful SFTP text save keeps a private local version in the desktop profile, up to 50 distinct saves per SSH alias and case-sensitive path for files up to 256 KiB. Both native views list the save dates when you reopen the file.
+
 - The GPUI remote-file panel uses the shared SFTP operations for host selection, directory navigation, file/folder creation, confirmed deletion, rename, original downloads and basic UTF-8 editing. Unsaved changes and active operations guard navigation. Remote image and PDF previews use the original bytes, with PDF page and zoom controls.
 - Remote filename, rename and text fields use native GPUI editing state for caret movement, selection, clipboard operations, undo/redo and IME composition. Edits remain bound to their host and file; pending edits survive an operation, and discarded or replaced fields cannot write to a new target. Automated GPUI input tests cover Unicode, composition, undo/redo and operation races; native Windows visual acceptance remains pending.
 - On-demand SFTP browsing, original-file downloads (16 MiB) and UTF-8 editing (2 MiB) through OpenSSH config and existing key/agent authentication. Unknown host keys are refused; connections begin only after an explicit remote-file connection.

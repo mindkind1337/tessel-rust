@@ -1339,6 +1339,9 @@ impl Tessel {
             let repaint = std::sync::Arc::clone(&repaint);
             move || repaint()
         };
+        let remote = crate::remote_panel::RemotePanel::with_profile(
+            store.as_ref().map(|s| s.directory().to_owned()),
+        );
         let mut app = Self {
             #[cfg(windows)]
             window_frame: None,
@@ -1488,7 +1491,7 @@ impl Tessel {
             claude_chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
             share_tasks: crate::shared_task_apply::SnapshotCache::default(),
-            remote: crate::remote_panel::RemotePanel::default(),
+            remote,
             status_bar: Default::default(),
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn(telemetry_repaint),
             keep_awake: Default::default(),

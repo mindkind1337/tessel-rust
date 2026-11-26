@@ -406,6 +406,24 @@ pub(crate) fn render(
             );
     }
     if let Some((path, text, size)) = &remote.document {
+        if !remote.versions.is_empty() {
+            let mut list = div()
+                .id("remote-local-versions")
+                .max_h(px(95.))
+                .overflow_y_scroll()
+                .child(if fr {
+                    "Historique local"
+                } else {
+                    "Local History"
+                });
+            for &timestamp in &remote.versions {
+                list = list
+                    .child(div().child(
+                        crate::regional_date::long_local(timestamp, fr).unwrap_or_default(),
+                    ));
+            }
+            body = body.child(list);
+        }
         body = body.child(SharedString::from(path.clone())).child(
             div()
                 .flex()

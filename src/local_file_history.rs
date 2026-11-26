@@ -16,9 +16,9 @@ pub fn changed_since(cursor: &mut u64, file: Option<&Path>) -> bool {
 }
 
 const LIMIT: usize = 50;
-const MAX_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Entry {
     pub id: String,
     pub timestamp: i64,
@@ -118,31 +118,62 @@ pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String
 }
 
 pub fn record(profile: &Path, file: &Path, text: &str) -> io::Result<()> {
-    use std::io::Write;
-    if text.len() > MAX_BYTES {
-        return Ok(());
-    }
     let Some(dir) = folder(profile, file) else {
         return Ok(());
     };
-    fs::create_dir_all(&dir)?;
+    if append(&dir, file, text)? {
+        let mut latest = LAST_SAVE.lock().unwrap_or_else(|e| e.into_inner());
+        latest.0 = latest.0.wrapping_add(1);
+        file.clone_into(&mut latest.1);
+    }
+    Ok(())
+}
+
+/// SSH paths are case-sensitive and are only used as resource identifiers.
+pub(crate) fn remote_versions(
+    profile: &Path,
+    alias: &str,
+    path: &str,
+    saved: Option<&str>,
+) -> io::Result<Vec<Entry>> {
+    if alias.is_empty() || alias.contains('/') || !path.starts_with('/') {
+        return Err(io::Error::other("Invalid SSH history resource"));
+    }
+    let resource = format!("ssh://{}{path}", alias.to_ascii_lowercase());
+    let key = format!("{:x}", Sha256::digest(resource.as_bytes()));
+    let dir = profile.join("History").join("ssh").join(&key[..24]);
+    let file = Path::new(&resource);
+    if let Some(text) = saved {
+        append(&dir, file, text)?;
+    }
+    let mut versions = index(&dir, file)?.entries;
+    versions.reverse();
+    Ok(versions)
+}
+
+fn append(dir: &Path, file: &Path, text: &str) -> io::Result<bool> {
+    use std::io::Write;
+    if text.len() > MAX_BYTES {
+        return Ok(false);
+    }
+    fs::create_dir_all(dir)?;
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(dir.join(".lock"))?;
     fs2::FileExt::lock_exclusive(&lock)?;
-    let mut index = index(&dir, file)?;
+    let mut index = index(dir, file)?;
     if let Some(last) = index.entries.last()
         && fs::read(dir.join(&last.id)).is_ok_and(|s| s == text.as_bytes())
     {
-        return Ok(());
+        return Ok(false);
     }
     let mut random = [0u8; 8];
     getrandom::fill(&mut random).map_err(|_| io::Error::other("Cannot allocate history entry"))?;
     let id = format!("{:016x}", u64::from_le_bytes(random));
     let path = dir.join(&id);
-    let mut version = tempfile::NamedTempFile::new_in(&dir)?;
+    let mut version = tempfile::NamedTempFile::new_in(dir)?;
     version.write_all(text.as_bytes())?;
     version.as_file().sync_all()?;
     version.persist_noclobber(&path)?;
@@ -158,15 +189,10 @@ pub fn record(profile: &Path, file: &Path, text: &str) -> io::Result<()> {
         let _ = fs::remove_file(path);
         return Err(io::Error::other(e));
     }
-    {
-        let mut latest = LAST_SAVE.lock().unwrap_or_else(|e| e.into_inner());
-        latest.0 = latest.0.wrapping_add(1);
-        file.clone_into(&mut latest.1);
-    }
     if let Some(old) = obsolete {
         fs::remove_file(dir.join(old.id))?;
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

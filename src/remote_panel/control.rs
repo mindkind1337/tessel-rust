@@ -45,6 +45,7 @@ pub(crate) struct Snapshot {
     pub pdf: Option<crate::pdf::PdfSummaryTuple>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
+    pub versions: Vec<i64>,
 }
 
 impl RemotePanel {
@@ -79,6 +80,7 @@ impl RemotePanel {
             size: 32,
         });
         panel.document = Some(RemoteDocument {
+            versions: Vec::new(),
             path: "/demo/notes.txt".into(),
             original: b"Synthetic remote text\nSecond line\n".to_vec(),
             text: Some("Synthetic remote text\nSecond line\n".into()),
@@ -110,6 +112,7 @@ impl RemotePanel {
         let mut panel = Self::fixture();
         let original = crate::pdf::fixture();
         panel.document = Some(RemoteDocument {
+            versions: Vec::new(),
             path: "/demo/original.pdf".into(),
             preview: prepare_preview("original.pdf", &original).unwrap().ok(),
             original,
@@ -145,6 +148,11 @@ impl RemotePanel {
             office,
             pdf,
             pixels,
+            versions: self
+                .document
+                .iter()
+                .flat_map(|d| d.versions.iter().map(|v| v.timestamp))
+                .collect(),
             preview_error: self
                 .document
                 .as_ref()
@@ -434,6 +442,7 @@ mod tests {
         let original = encoded.into_inner();
         let mut panel = RemotePanel {
             document: Some(RemoteDocument {
+                versions: Vec::new(),
                 path: "/fixture/colors.png".into(),
                 preview: prepare_preview("colors.png", &original)
                     .unwrap()
@@ -471,6 +480,7 @@ mod tests {
                     bytes: b"original".to_vec(),
                 },
                 None,
+                Ok(Vec::new()),
             )))
             .unwrap();
         panel.poll();

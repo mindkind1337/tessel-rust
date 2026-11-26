@@ -9,7 +9,56 @@ use std::{
     io::Write,
     sync::mpsc::{self, Receiver},
 };
-type PreparedReply = Result<(Reply, Option<Result<Box<crate::files::Document>, String>>), String>;
+type Versions = Vec<crate::local_file_history::Entry>;
+type PreparedReply = Result<
+    (
+        Reply,
+        Option<Result<Box<crate::files::Document>, String>>,
+        Result<Versions, String>,
+    ),
+    String,
+>;
+
+fn execute_for_panel(
+    profile: Option<&std::path::Path>,
+    host: Host,
+    action: Action,
+    run: impl FnOnce(Host, Action) -> Result<Reply, String>,
+) -> PreparedReply {
+    let alias = host.alias.clone();
+    let save = match &action {
+        Action::Save {
+            path, replacement, ..
+        } => Some((
+            path.clone(),
+            (replacement.len() <= crate::local_file_history::MAX_BYTES)
+                .then(|| std::str::from_utf8(replacement).ok())
+                .flatten()
+                .map(str::to_owned),
+        )),
+        _ => None,
+    };
+    let reply = run(host, action)?;
+    let preview = match &reply {
+        Reply::File { path, bytes, .. } => prepare_preview(path, bytes),
+        _ => None,
+    };
+    let history = match (&reply, profile) {
+        (Reply::File { path, .. }, Some(profile)) => {
+            crate::local_file_history::remote_versions(profile, &alias, path, None)
+        }
+        (Reply::Saved, Some(profile)) => match save {
+            Some((path, text)) => {
+                crate::local_file_history::remote_versions(profile, &alias, &path, text.as_deref())
+            }
+            None => Ok(Vec::new()),
+        },
+        _ => Ok(Vec::new()),
+    }
+    .map_err(|e| format!("Local history: {e}"));
+    Ok((reply, preview, history))
+}
+
 fn prepare_preview(
     path: &str,
     bytes: &[u8],
@@ -34,6 +83,7 @@ fn prepare_preview(
 struct RemoteDocument {
     path: String,
     original: Vec<u8>,
+    versions: Versions,
     text: Option<String>,
     preview: Option<Box<crate::files::Document>>,
     preview_error: String,
@@ -47,6 +97,7 @@ impl RemoteDocument {
 }
 #[derive(Default)]
 pub struct RemotePanel {
+    profile: Option<std::path::PathBuf>,
     #[cfg(feature = "visual-test")]
     fixture_mode: bool,
     selected: usize,
@@ -68,6 +119,13 @@ pub struct RemotePanel {
     tree_alignment_attempted: bool,
 }
 impl RemotePanel {
+    pub fn with_profile(profile: Option<std::path::PathBuf>) -> Self {
+        Self {
+            profile,
+            ..Default::default()
+        }
+    }
+
     pub fn terminal_host(&self, hosts: &[Host]) -> Option<Host> {
         self.host
             .clone()
@@ -99,6 +157,7 @@ impl RemotePanel {
                 size: original.len() as u64,
             }],
             document: Some(RemoteDocument {
+                versions: Vec::new(),
                 path: "/demo/preview.png".into(),
                 preview: prepare_preview("preview.png", &original).unwrap().ok(),
                 original,
@@ -140,14 +199,9 @@ impl RemotePanel {
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
         self.error.clear();
+        let profile = self.profile.clone();
         std::thread::spawn(move || {
-            let result = remote::execute(host, action).map(|reply| {
-                let preview = match &reply {
-                    Reply::File { path, bytes, .. } => prepare_preview(path, bytes),
-                    _ => None,
-                };
-                (reply, preview)
-            });
+            let result = execute_for_panel(profile.as_deref(), host, action, remote::execute);
             let _ = tx.send(result);
         });
     }
@@ -161,9 +215,16 @@ impl RemotePanel {
         });
         if let Some(result) = result {
             self.pending = None;
-            let (result, preview) = match result {
-                Ok((reply, preview)) => (Ok(reply), preview),
-                Err(e) => (Err(e), None),
+            let (result, preview, versions) = match result {
+                Ok((reply, preview, versions)) => (
+                    Ok(reply),
+                    preview,
+                    versions.unwrap_or_else(|e| {
+                        self.error = e;
+                        Vec::new()
+                    }),
+                ),
+                Err(e) => (Err(e), None, Vec::new()),
             };
             match result {
                 Ok(Reply::Listing {
@@ -193,6 +254,7 @@ impl RemotePanel {
                     self.document = Some(RemoteDocument {
                         path,
                         original: bytes,
+                        versions,
                         text: if preview.is_some() { None } else { text },
                         preview,
                         preview_error,
@@ -208,8 +270,10 @@ impl RemotePanel {
                     if let Some(doc) = &mut self.document {
                         if doc.path == old {
                             doc.path = new;
+                            doc.versions.clear();
                         } else if let Some(suffix) = doc.path.strip_prefix(&(old + "/")) {
                             doc.path = format!("{new}/{suffix}");
+                            doc.versions.clear();
                         }
                     }
                     self.request(Action::List(parent));
@@ -223,6 +287,7 @@ impl RemotePanel {
                         && let Some(doc) = &mut self.document
                     {
                         doc.original = bytes;
+                        doc.versions = versions;
                     }
                 }
                 Err(e) => {
@@ -505,6 +570,22 @@ impl RemotePanel {
         if let Some(doc) = &mut self.document {
             ui.separator();
             ui.strong(&doc.path);
+            if !doc.versions.is_empty() {
+                ui.collapsing(
+                    crate::file_timeline::Source::Local.label(crate::i18n::is_french()),
+                    |ui| {
+                        for version in &doc.versions {
+                            ui.label(
+                                crate::regional_date::long_local(
+                                    version.timestamp,
+                                    crate::i18n::is_french(),
+                                )
+                                .unwrap_or_default(),
+                            );
+                        }
+                    },
+                );
+            }
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
@@ -619,6 +700,69 @@ impl RemotePanel {
 mod tests {
     use super::*;
     #[test]
+    fn remote_saved_history_requires_ack_and_reopens_by_host_and_exact_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path();
+        let path = "/root/Notes.txt";
+        let host = Host {
+            alias: "alpha".into(),
+            ..Host::default()
+        };
+        let save = |bytes: &[u8]| Action::Save {
+            path: path.into(),
+            original: Vec::new(),
+            replacement: bytes.to_vec(),
+        };
+        assert!(
+            execute_for_panel(Some(profile), host.clone(), save(b"rejected"), |_, _| Err(
+                "conflict".into()
+            ))
+            .is_err()
+        );
+        assert!(!profile.join("History").exists());
+        let ok = |_, _| Ok(Reply::Saved);
+        let (_, _, history) =
+            execute_for_panel(Some(profile), host.clone(), save(b"first"), ok).unwrap();
+        let first = history.unwrap().remove(0).id;
+        let (_, _, history) =
+            execute_for_panel(Some(profile), host.clone(), save(b"first"), ok).unwrap();
+        assert_eq!(history.unwrap().len(), 1);
+        let (_, _, history) =
+            execute_for_panel(Some(profile), host.clone(), save(b"second"), ok).unwrap();
+        let versions = history.unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[1].id, first);
+        let (_, _, history) = execute_for_panel(
+            Some(profile),
+            host.clone(),
+            save(&vec![b'x'; crate::local_file_history::MAX_BYTES + 1]),
+            ok,
+        )
+        .unwrap();
+        assert_eq!(history.unwrap().len(), 2);
+        for (alias, file, count) in [
+            ("alpha", path, 2),
+            ("alpha", "/root/notes.txt", 0),
+            ("beta", path, 0),
+        ] {
+            let host = Host {
+                alias: alias.into(),
+                ..Host::default()
+            };
+            let (_, _, history) =
+                execute_for_panel(Some(profile), host, Action::Read(file.into()), |_, _| {
+                    Ok(Reply::File {
+                        root: "/root".into(),
+                        path: file.into(),
+                        bytes: b"current".to_vec(),
+                    })
+                })
+                .unwrap();
+            assert_eq!(history.unwrap().len(), count);
+        }
+    }
+
+    #[test]
     fn remote_media_keeps_bytes_and_removes_temporary_files() {
         let pdf = crate::pdf::fixture();
         let view = prepare_preview("/server/document.pdf", &pdf)
@@ -646,6 +790,7 @@ mod tests {
             pending: Some(receiver),
             submitted: Some(b"edited".to_vec()),
             document: Some(RemoteDocument {
+                versions: Vec::new(),
                 path: "/fixture/file.txt".into(),
                 original: b"original".to_vec(),
                 text: Some("edited".into()),
@@ -669,7 +814,9 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         panel.pending = Some(receiver);
         panel.submitted = Some(b"edited".to_vec());
-        sender.send(Ok((Reply::Saved, None))).unwrap();
+        sender
+            .send(Ok((Reply::Saved, None, Ok(Vec::new()))))
+            .unwrap();
         panel.poll();
         assert!(!panel.busy());
         assert!(!panel.document.as_ref().unwrap().dirty());

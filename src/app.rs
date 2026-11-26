@@ -827,6 +827,9 @@ impl Tessel {
             .as_ref()
             .map(|s| crate::side_panels_model::ActivityStore::load(s.directory()))
             .unwrap_or_default();
+        let remote = crate::remote_panel::RemotePanel::with_profile(
+            store.as_ref().map(|s| s.directory().to_owned()),
+        );
         let mut app = Self {
             #[cfg(windows)]
             window_frame,
@@ -962,7 +965,7 @@ impl Tessel {
             claude_chats: Vec::new(),
             share: crate::share_panel::SharePanel::default(),
             share_tasks: crate::shared_task_apply::SnapshotCache::default(),
-            remote: crate::remote_panel::RemotePanel::default(),
+            remote,
             status_bar: Default::default(),
             status_telemetry: crate::status_metrics::StatusTelemetry::spawn({
                 let ctx = cc.egui_ctx.clone();
