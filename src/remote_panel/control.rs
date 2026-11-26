@@ -18,6 +18,8 @@ pub(crate) enum Command {
     CancelDialog,
     Edit(String),
     Save,
+    Compare(String, String),
+    CloseComparison,
     Discard,
     Download,
     PdfPage(isize),
@@ -45,7 +47,8 @@ pub(crate) struct Snapshot {
     pub pdf: Option<crate::pdf::PdfSummaryTuple>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
-    pub versions: Vec<i64>,
+    pub versions: Vec<(String, i64)>,
+    pub comparison: Option<std::sync::Arc<Vec<String>>>,
 }
 
 impl RemotePanel {
@@ -81,6 +84,7 @@ impl RemotePanel {
         });
         panel.document = Some(RemoteDocument {
             versions: Vec::new(),
+            comparison: Default::default(),
             path: "/demo/notes.txt".into(),
             original: b"Synthetic remote text\nSecond line\n".to_vec(),
             text: Some("Synthetic remote text\nSecond line\n".into()),
@@ -113,6 +117,7 @@ impl RemotePanel {
         let original = crate::pdf::fixture();
         panel.document = Some(RemoteDocument {
             versions: Vec::new(),
+            comparison: Default::default(),
             path: "/demo/original.pdf".into(),
             preview: prepare_preview("original.pdf", &original).unwrap().ok(),
             original,
@@ -148,10 +153,14 @@ impl RemotePanel {
             office,
             pdf,
             pixels,
+            comparison: self
+                .document
+                .as_ref()
+                .and_then(|d| d.comparison.lines.clone()),
             versions: self
                 .document
                 .iter()
-                .flat_map(|d| d.versions.iter().map(|v| v.timestamp))
+                .flat_map(|d| d.versions.iter().map(|v| (v.id.clone(), v.timestamp)))
                 .collect(),
             preview_error: self
                 .document
@@ -193,6 +202,12 @@ impl RemotePanel {
         }
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         match command {
+            Command::Compare(path, id) => self.compare_version(&path, &id),
+            Command::CloseComparison => {
+                if let Some(doc) = &mut self.document {
+                    doc.comparison.lines = None;
+                }
+            }
             Command::OfficeSection(index) => {
                 if let Some(office) = self
                     .document
@@ -443,6 +458,7 @@ mod tests {
         let mut panel = RemotePanel {
             document: Some(RemoteDocument {
                 versions: Vec::new(),
+                comparison: Default::default(),
                 path: "/fixture/colors.png".into(),
                 preview: prepare_preview("colors.png", &original)
                     .unwrap()

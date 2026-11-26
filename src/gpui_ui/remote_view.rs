@@ -10,15 +10,15 @@ use gpui::{
 };
 
 fn button(
-    id: &'static str,
-    label: &'static str,
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
     command: Command,
     enabled: bool,
     tokens: &GpuiThemeTokens,
     cx: &Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     div()
-        .id(id)
+        .id(id.into())
         .px(px(9.))
         .py(px(5.))
         .rounded(px(4.))
@@ -30,7 +30,7 @@ fn button(
                     root.dispatch(GpuiAction::Remote(command.clone()), cx)
                 }))
         })
-        .child(label)
+        .child(label.into())
 }
 
 fn field(
@@ -416,13 +416,56 @@ pub(crate) fn render(
                 } else {
                     "Local History"
                 });
-            for &timestamp in &remote.versions {
-                list = list
-                    .child(div().child(
-                        crate::regional_date::long_local(timestamp, fr).unwrap_or_default(),
-                    ));
+            for (id, timestamp) in &remote.versions {
+                list = list.child(div().child(button(
+                    format!("remote-version-{id}"),
+                    crate::regional_date::long_local(*timestamp, fr).unwrap_or_default(),
+                    Command::Compare(path.clone(), id.clone()),
+                    !remote.busy,
+                    tokens,
+                    cx,
+                )));
             }
             body = body.child(list);
+        }
+        if let Some(lines) = &remote.comparison {
+            body = body.child(button(
+                "remote-close-comparison",
+                if fr {
+                    "Fermer la comparaison"
+                } else {
+                    "Close comparison"
+                },
+                Command::CloseComparison,
+                true,
+                tokens,
+                cx,
+            ));
+            if lines.is_empty() {
+                body = body.child(if fr {
+                    "Aucune différence."
+                } else {
+                    "No differences."
+                });
+            } else {
+                let lines = lines.clone();
+                body = body.child(
+                    uniform_list(
+                        "remote-history-diff",
+                        lines.len(),
+                        cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
+                            range
+                                .map(|i| {
+                                    div()
+                                        .font_family(super::theme::mono_font_family())
+                                        .child(lines[i].clone())
+                                })
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                    .h(px(180.)),
+                );
+            }
         }
         body = body.child(SharedString::from(path.clone())).child(
             div()

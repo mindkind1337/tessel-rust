@@ -80,10 +80,17 @@ fn prepare_preview(
         crate::files::Document::open(dir.path(), &path).map(Box::new)
     })())
 }
+#[derive(Default)]
+struct Comparison {
+    pending: Option<Receiver<Result<Vec<String>, String>>>,
+    lines: Option<std::sync::Arc<Vec<String>>>,
+}
+
 struct RemoteDocument {
     path: String,
     original: Vec<u8>,
     versions: Versions,
+    comparison: Comparison,
     text: Option<String>,
     preview: Option<Box<crate::files::Document>>,
     preview_error: String,
@@ -158,6 +165,7 @@ impl RemotePanel {
             }],
             document: Some(RemoteDocument {
                 versions: Vec::new(),
+                comparison: Default::default(),
                 path: "/demo/preview.png".into(),
                 preview: prepare_preview("preview.png", &original).unwrap().ok(),
                 original,
@@ -205,7 +213,67 @@ impl RemotePanel {
             let _ = tx.send(result);
         });
     }
+    fn compare_version(&mut self, path: &str, id: &str) {
+        self.compare_version_with(path, id, remote::execute)
+    }
+    fn compare_version_with(
+        &mut self,
+        path: &str,
+        id: &str,
+        read: impl FnOnce(Host, Action) -> Result<Reply, String> + Send + 'static,
+    ) {
+        if self.busy() {
+            return;
+        }
+        let (Some(doc), Some(mut host), Some(profile)) =
+            (&mut self.document, self.host.clone(), self.profile.clone())
+        else {
+            return;
+        };
+        if doc.path != path || !doc.versions.iter().any(|entry| entry.id == id) {
+            return;
+        }
+        if !self.root.is_empty() {
+            host.folder = self.root.clone();
+        }
+        let alias = host.alias.clone();
+        let path = path.to_owned();
+        let id = id.to_owned();
+        let (tx, rx) = mpsc::channel();
+        doc.comparison = Comparison {
+            pending: Some(rx),
+            lines: None,
+        };
+        self.error.clear();
+        std::thread::spawn(move || {
+            let result = read(host, Action::Read(path.clone())).and_then(|reply| match reply {
+                Reply::File {
+                    path: returned,
+                    bytes,
+                    ..
+                } if returned == path => {
+                    crate::local_file_history::remote_diff(&profile, &alias, &path, &id, &bytes)
+                }
+                _ => Err("Remote file changed during comparison.".into()),
+            });
+            let _ = tx.send(result.map(|diff| diff.lines().map(str::to_owned).collect()));
+        });
+    }
     pub fn poll(&mut self) {
+        if let Some(doc) = &mut self.document
+            && let Some(rx) = &doc.comparison.pending
+        {
+            match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {}
+                result => {
+                    doc.comparison.pending = None;
+                    match result.unwrap_or_else(|_| Err("Remote comparison stopped.".into())) {
+                        Ok(lines) => doc.comparison.lines = Some(std::sync::Arc::new(lines)),
+                        Err(error) => self.error = error,
+                    }
+                }
+            }
+        }
         let result = self.pending.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -255,6 +323,7 @@ impl RemotePanel {
                         path,
                         original: bytes,
                         versions,
+                        comparison: Default::default(),
                         text: if preview.is_some() { None } else { text },
                         preview,
                         preview_error,
@@ -271,9 +340,11 @@ impl RemotePanel {
                         if doc.path == old {
                             doc.path = new;
                             doc.versions.clear();
+                            doc.comparison = Default::default();
                         } else if let Some(suffix) = doc.path.strip_prefix(&(old + "/")) {
                             doc.path = format!("{new}/{suffix}");
                             doc.versions.clear();
+                            doc.comparison = Default::default();
                         }
                     }
                     self.request(Action::List(parent));
@@ -288,6 +359,7 @@ impl RemotePanel {
                     {
                         doc.original = bytes;
                         doc.versions = versions;
+                        doc.comparison = Default::default();
                     }
                 }
                 Err(e) => {
@@ -299,6 +371,10 @@ impl RemotePanel {
     }
     pub fn busy(&self) -> bool {
         self.pending.is_some()
+            || self
+                .document
+                .as_ref()
+                .is_some_and(|d| d.comparison.pending.is_some())
     }
 
     pub(crate) fn poll_native_tree(
@@ -378,7 +454,7 @@ impl RemotePanel {
             return;
         }
         self.selected = self.selected.min(hosts.len().saturating_sub(1));
-        let busy = self.pending.is_some();
+        let busy = self.busy();
         let dirty = self.document.as_ref().is_some_and(RemoteDocument::dirty);
         if !hosts.is_empty() {
             ui.add_enabled_ui(
@@ -431,6 +507,7 @@ impl RemotePanel {
             ));
         }
         let mut action = None;
+        let mut compare = None;
         ui.add_enabled_ui(
             !busy && !dirty && self.rename.is_none() && self.delete.is_none(),
             |ui| {
@@ -575,16 +652,45 @@ impl RemotePanel {
                     crate::file_timeline::Source::Local.label(crate::i18n::is_french()),
                     |ui| {
                         for version in &doc.versions {
-                            ui.label(
-                                crate::regional_date::long_local(
-                                    version.timestamp,
-                                    crate::i18n::is_french(),
-                                )
-                                .unwrap_or_default(),
-                            );
+                            let date = crate::regional_date::long_local(
+                                version.timestamp,
+                                crate::i18n::is_french(),
+                            )
+                            .unwrap_or_default();
+                            if ui.add_enabled(!busy, egui::Button::new(date)).clicked() {
+                                compare = Some((doc.path.clone(), version.id.clone()));
+                            }
                         }
                     },
                 );
+            }
+            if let Some(lines) = &doc.comparison.lines {
+                if ui
+                    .small_button(if crate::i18n::is_french() {
+                        "Fermer la comparaison"
+                    } else {
+                        "Close comparison"
+                    })
+                    .clicked()
+                {
+                    doc.comparison.lines = None;
+                } else if lines.is_empty() {
+                    ui.label(if crate::i18n::is_french() {
+                        "Aucune différence."
+                    } else {
+                        "No differences."
+                    });
+                } else {
+                    let height = ui.text_style_height(&egui::TextStyle::Monospace);
+                    egui::ScrollArea::both()
+                        .id_salt("remote-history-diff")
+                        .max_height(200.)
+                        .show_rows(ui, height, lines.len(), |ui, range| {
+                            for i in range {
+                                ui.monospace(&lines[i]);
+                            }
+                        });
+                }
             }
             ui.horizontal(|ui| {
                 if ui
@@ -690,6 +796,9 @@ impl RemotePanel {
                 ));
             }
         }
+        if let Some((path, id)) = compare {
+            self.compare_version(&path, &id);
+        }
         if let Some(action) = action {
             self.request(action);
         }
@@ -699,6 +808,69 @@ impl RemotePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_version_compare_reads_current_host_and_preserves_draft() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = "/root/note.txt";
+        let versions = crate::local_file_history::remote_versions(
+            temp.path(),
+            "host",
+            path,
+            Some("saved version\n"),
+        )
+        .unwrap();
+        let id = versions[0].id.clone();
+        let mut panel = RemotePanel {
+            profile: Some(temp.path().into()),
+            host: Some(Host {
+                alias: "host".into(),
+                ..Default::default()
+            }),
+            root: "/root".into(),
+            document: Some(RemoteDocument {
+                path: path.into(),
+                versions,
+                comparison: Default::default(),
+                original: b"opened earlier".to_vec(),
+                text: Some("unsaved editor draft".into()),
+                preview: None,
+                preview_error: String::new(),
+            }),
+            ..Default::default()
+        };
+        panel.compare_version_with(path, "../missing", |_, _| {
+            panic!("unlisted version must not read SSH")
+        });
+        assert!(!panel.busy());
+        panel.compare_version_with(path, &id, move |host, action| {
+            assert_eq!(host.alias, "host");
+            assert_eq!(host.folder, "/root");
+            assert!(matches!(action,Action::Read(p) if p==path));
+            Ok(Reply::File {
+                root: "/root".into(),
+                path: path.into(),
+                bytes: b"remote now\n".to_vec(),
+            })
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while panel.busy() {
+            assert!(std::time::Instant::now() < deadline);
+            panel.poll();
+            std::thread::yield_now();
+        }
+        let snapshot = panel.snapshot(&[]);
+        let diff = snapshot.comparison.unwrap().join("\n");
+        assert!(diff.contains("-saved version") && diff.contains("+remote now"));
+        assert!(snapshot.dirty && !diff.contains("editor draft"));
+        assert_eq!(panel.document.as_ref().unwrap().original, b"opened earlier");
+        panel.command(control::Command::CloseComparison, &[]);
+        assert!(panel.snapshot(&[]).comparison.is_none());
+        assert_eq!(
+            panel.document.as_ref().unwrap().text.as_deref(),
+            Some("unsaved editor draft")
+        );
+    }
+
     #[test]
     fn remote_saved_history_requires_ack_and_reopens_by_host_and_exact_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -791,6 +963,7 @@ mod tests {
             submitted: Some(b"edited".to_vec()),
             document: Some(RemoteDocument {
                 versions: Vec::new(),
+                comparison: Default::default(),
                 path: "/fixture/file.txt".into(),
                 original: b"original".to_vec(),
                 text: Some("edited".into()),

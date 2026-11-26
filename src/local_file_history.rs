@@ -84,10 +84,17 @@ pub fn list(profile: &Path, file: &Path) -> io::Result<Vec<Entry>> {
 }
 
 pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String, String> {
-    use std::io::Read;
     let dir = folder(profile, file).ok_or("Invalid history path")?;
+    let old = version_text(&dir, file, id)?;
+    let path = crate::files::confined(root, file)?;
+    let current = bounded_text(&path, crate::files::MAX_TEXT)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    Ok(text_diff(&name, &old, &current))
+}
+
+fn version_text(dir: &Path, file: &Path, id: &str) -> Result<String, String> {
     if !valid_id(id)
-        || !index(&dir, file)
+        || !index(dir, file)
             .map_err(|e| e.to_string())?
             .entries
             .iter()
@@ -95,26 +102,27 @@ pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String
     {
         return Err("Saved version is no longer available.".into());
     }
-    let read = |p: &Path, limit: u64| -> Result<String, String> {
-        let mut s = String::new();
-        fs::File::open(p)
-            .and_then(|f| f.take(limit + 1).read_to_string(&mut s))
-            .map_err(|e| e.to_string())?;
-        if s.len() as u64 > limit {
-            return Err("File exceeds the text editor limit.".into());
-        }
-        Ok(s)
-    };
-    let path = crate::files::confined(root, file)?;
-    let old = read(&dir.join(id), MAX_BYTES as u64)?;
-    let current = read(&path, crate::files::MAX_TEXT as u64)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    Ok(similar::TextDiff::configure()
+    bounded_text(&dir.join(id), MAX_BYTES)
+}
+fn bounded_text(path: &Path, limit: usize) -> Result<String, String> {
+    use std::io::Read;
+    let mut s = String::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(limit as u64 + 1).read_to_string(&mut s))
+        .map_err(|e| e.to_string())?;
+    if s.len() > limit {
+        return Err("File exceeds the text editor limit.".into());
+    }
+    Ok(s)
+}
+
+fn text_diff(name: &str, old: &str, current: &str) -> String {
+    similar::TextDiff::configure()
         .timeout(std::time::Duration::from_millis(500))
-        .diff_lines(&old, &current)
+        .diff_lines(old, current)
         .unified_diff()
         .header(&format!("a/{name}"), &format!("b/{name}"))
-        .to_string())
+        .to_string()
 }
 
 pub fn record(profile: &Path, file: &Path, text: &str) -> io::Result<()> {
@@ -136,12 +144,7 @@ pub(crate) fn remote_versions(
     path: &str,
     saved: Option<&str>,
 ) -> io::Result<Vec<Entry>> {
-    if alias.is_empty() || alias.contains('/') || !path.starts_with('/') {
-        return Err(io::Error::other("Invalid SSH history resource"));
-    }
-    let resource = format!("ssh://{}{path}", alias.to_ascii_lowercase());
-    let key = format!("{:x}", Sha256::digest(resource.as_bytes()));
-    let dir = profile.join("History").join("ssh").join(&key[..24]);
+    let (dir, resource) = remote_resource(profile, alias, path)?;
     let file = Path::new(&resource);
     if let Some(text) = saved {
         append(&dir, file, text)?;
@@ -149,6 +152,36 @@ pub(crate) fn remote_versions(
     let mut versions = index(&dir, file)?.entries;
     versions.reverse();
     Ok(versions)
+}
+
+fn remote_resource(profile: &Path, alias: &str, path: &str) -> io::Result<(PathBuf, String)> {
+    if alias.is_empty() || alias.contains('/') || !path.starts_with('/') {
+        return Err(io::Error::other("Invalid SSH history resource"));
+    }
+    let resource = format!("ssh://{}{path}", alias.to_ascii_lowercase());
+    let key = format!("{:x}", Sha256::digest(resource.as_bytes()));
+    let dir = profile.join("History").join("ssh").join(&key[..24]);
+    Ok((dir, resource))
+}
+
+pub(crate) fn remote_diff(
+    profile: &Path,
+    alias: &str,
+    path: &str,
+    id: &str,
+    current: &[u8],
+) -> Result<String, String> {
+    if current.len() > crate::files::MAX_TEXT || current.contains(&0) {
+        return Err("Remote file is not editable text.".into());
+    }
+    let current = std::str::from_utf8(current).map_err(|_| "Remote file is not UTF-8 text.")?;
+    let (dir, resource) = remote_resource(profile, alias, path).map_err(|e| e.to_string())?;
+    let old = version_text(&dir, Path::new(&resource), id)?;
+    Ok(text_diff(
+        path.rsplit('/').next().unwrap_or(path),
+        &old,
+        current,
+    ))
 }
 
 fn append(dir: &Path, file: &Path, text: &str) -> io::Result<bool> {
