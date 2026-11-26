@@ -2011,10 +2011,6 @@ impl Tessel {
             self.gpui_extra.help_query.clear();
             return true;
         }
-        if self.overlay == Some(Overlay::Settings) && !self.gpui_extra.settings_search.is_empty() {
-            self.gpui_extra.settings_search.clear();
-            return true;
-        }
         false
     }
 
@@ -5153,6 +5149,9 @@ impl Tessel {
                 .expect("explorer input identity exhausted");
         }
         if overlay != self.overlay {
+            if overlay == Some(Overlay::Settings) {
+                self.gpui_extra.settings_search.clear();
+            }
             self.gpui_extra.modal_input_generation = self
                 .gpui_extra
                 .modal_input_generation
@@ -7217,6 +7216,7 @@ impl Tessel {
                 }
             }
             GpuiAction::OpenSettingsPage(page_id) => {
+                self.gpui_extra.settings_search.clear();
                 self.open_settings_by_page_id(&page_id);
             }
             GpuiAction::CloseOverlays => {

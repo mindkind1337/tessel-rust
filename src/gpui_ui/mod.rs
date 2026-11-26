@@ -1644,6 +1644,7 @@ impl Render for TesselGpuiRoot {
             .text_color(tokens.text)
             .font_family(ui_font_family())
             .on_action(cx.listener(linear_view::submit))
+            .capture_key_down(cx.listener(modal_query_input::find_settings))
             .on_key_down(cx.listener(Self::handle_key_down))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .capture_any_mouse_up(cx.listener(|root, _: &MouseUpEvent, _, cx| {

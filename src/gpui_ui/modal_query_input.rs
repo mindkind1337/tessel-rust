@@ -174,6 +174,41 @@ impl Input {
             .into_any_element()
     }
 }
+pub fn find_settings(
+    root: &mut TesselGpuiRoot,
+    event: &gpui::KeyDownEvent,
+    w: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    let key = &event.keystroke;
+    if key.key != "f"
+        || !key.modifiers.control
+        || key.modifiers.shift
+        || key.modifiers.alt
+        || key.modifiers.platform
+    {
+        return;
+    }
+    let Some((scope, _)) = root.app.gpui_modal_query() else {
+        return;
+    };
+    if scope.1 != FocusInputTarget::SettingsSearch || root.modal_query_input.scope() != Some(scope)
+    {
+        return;
+    }
+    let Some(input) = root.modal_query_input.state().cloned() else {
+        return;
+    };
+    cx.stop_propagation();
+    root.focus_input = scope.1;
+    input.read(cx).focus_handle(cx).focus(w, cx);
+    input.update(cx, |s, cx| {
+        if s.marked_text_range(w, cx).is_none() {
+            s.set_selected_text_range(0..s.as_str().encode_utf16().count(), w, cx);
+        }
+    });
+}
+
 pub fn flush(root: &mut TesselGpuiRoot, cx: &mut Context<TesselGpuiRoot>) {
     let Some(b) = root.modal_query_input.binding.as_ref() else {
         return;
@@ -403,7 +438,55 @@ mod tests {
         .unwrap();
     }
     #[gpui::test]
-    fn native_settings_search_keeps_entity_across_pages_and_toggle_blurs(cx: &mut TestAppContext) {
+    fn native_settings_escape_uses_focused_field_and_reopens_empty(cx: &mut TestAppContext) {
+        bindings(cx);
+        cx.update(|cx| {
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                Dismiss,
+                Some("TesselModalQuery"),
+            )])
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+            root.app.apply_gpui_action(GpuiAction::OpenSettings);
+            root
+        });
+        for field_focused in [true, false] {
+            cx.refresh().unwrap();
+            view.update(cx, |root, w, cx| {
+                let input = root.modal_query_input.state().unwrap().clone();
+                input.update(cx, |s, cx| s.replace_text_in_range(None, "git", w, cx));
+                flush(root, cx);
+                if !field_focused {
+                    root.focus_input = FocusInputTarget::None;
+                    root.focus_handle.focus(w, cx);
+                }
+            })
+            .unwrap();
+            cx.simulate_keystrokes(view.into(), "escape");
+            if field_focused {
+                view.update(cx, |root, w, cx| {
+                    assert_eq!(root.app.gpui_modal_query().unwrap().1, "");
+                    assert_eq!(
+                        root.modal_query_input.focused(w, cx),
+                        Some(FocusInputTarget::SettingsSearch)
+                    );
+                })
+                .unwrap();
+                cx.simulate_keystrokes(view.into(), "escape");
+            }
+            view.update(cx, |root, _, cx| {
+                assert!(root.app.gpui_modal_query().is_none());
+                root.dispatch(GpuiAction::OpenSettings, cx);
+                assert_eq!(root.app.gpui_modal_query().unwrap().1, "");
+            })
+            .unwrap();
+        }
+    }
+    #[gpui::test]
+    fn native_settings_search_selects_query_and_resets_on_navigation(cx: &mut TestAppContext) {
         bindings(cx);
         let dir = tempfile::tempdir().unwrap();
         let view = cx.add_window(|_, cx| {
@@ -421,14 +504,30 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        view.update(cx, |root, _, cx| {
+        view.update(cx, |root, w, cx| {
+            root.focus_input = FocusInputTarget::None;
+            root.focus_handle.focus(w, cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "ctrl-f");
+        view.update(cx, |root, w, cx| {
+            assert!(input.read(cx).focus_handle(cx).is_focused(w));
+            input.update(cx, |s, cx| {
+                assert_eq!(s.selected_text_range(false, w, cx).unwrap().range, 0..3);
+                s.replace_text_in_range(None, "theme", w, cx);
+            });
+            flush(root, cx);
+            assert_eq!(root.app.gpui_modal_query().unwrap().1, "theme");
             root.dispatch(GpuiAction::OpenSettingsPage("appearance".into()), cx)
         })
         .unwrap();
         cx.refresh().unwrap();
         view.update(cx, |root, _, cx| {
-            assert_eq!(root.modal_query_input.state(), Some(&input));
-            assert_eq!(root.app.gpui_modal_query().unwrap().1, "git");
+            assert_eq!(
+                root.modal_query_input.state().unwrap().read(cx).as_str(),
+                ""
+            );
+            assert_eq!(root.app.gpui_modal_query().unwrap().1, "");
             root.dispatch(GpuiAction::OpenSettings, cx);
         })
         .unwrap();

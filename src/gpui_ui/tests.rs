@@ -1018,7 +1018,7 @@ fn gpui_settings_twenty_two_pages_and_preferences_roundtrip() {
         assert_eq!(&cur.active_page_id, page_id);
     }
 
-    // Search filtering + Escape query clear before closing modal
+    // Page navigation clears the previous filter.
     app.apply_gpui_action(GpuiAction::SetSettingsSearch("git".into()));
     let filtered = app
         .gpui_snapshot(960.0, 640.0, 4.0)
@@ -1026,7 +1026,7 @@ fn gpui_settings_twenty_two_pages_and_preferences_roundtrip() {
         .expect("filtered settings");
     let filtered_count: usize = filtered.groups.iter().map(|(_, p)| p.len()).sum();
     assert!((1..22).contains(&filtered_count));
-    assert!(app.gpui_escape_clears_modal_search());
+    app.apply_gpui_action(GpuiAction::OpenSettingsPage("git".into()));
     assert!(
         app.gpui_snapshot(960.0, 640.0, 4.0)
             .settings
