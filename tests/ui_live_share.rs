@@ -129,7 +129,7 @@ fn click_events(pos: Pos2) -> Vec<Event> {
 fn live_share_dialog_subtabs_rights_grid_and_stop_confirmation_en_and_fr() {
     let dir = tempfile::Builder::new()
         .prefix("tessel-ui-ls-dialog-")
-        .tempdir_in(std::env::current_dir().unwrap())
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
     std::fs::write(dir.path().join("README.md"), "demo").unwrap();
 
@@ -235,7 +235,7 @@ fn live_share_dialog_subtabs_rights_grid_and_stop_confirmation_en_and_fr() {
 fn live_share_ask_enforces_900ms_arm_delay_blocks_escape_and_gates_trust_on_sas() {
     let dir = tempfile::Builder::new()
         .prefix("tessel-ui-ls-ask-")
-        .tempdir_in(std::env::current_dir().unwrap())
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
     std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
 
@@ -362,7 +362,7 @@ fn live_share_ask_enforces_900ms_arm_delay_blocks_escape_and_gates_trust_on_sas(
 fn live_share_pill_popover_presence_and_sidebar_badge_render_cleanly() {
     let dir = tempfile::Builder::new()
         .prefix("tessel-ui-ls-pill-")
-        .tempdir_in(std::env::current_dir().unwrap())
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
     let proj = SharedProject {
         id: 10,
@@ -465,7 +465,7 @@ fn live_share_pill_popover_presence_and_sidebar_badge_render_cleanly() {
 fn compatibility_guest_board_add_is_pending_without_waiting_for_host_commit() {
     let dir = tempfile::Builder::new()
         .prefix("tessel-guest-fixture-")
-        .tempdir_in(std::env::current_dir().unwrap())
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
     let project = SharedProject {
         id: 1,
@@ -565,8 +565,18 @@ fn compatibility_guest_board_add_is_pending_without_waiting_for_host_commit() {
 fn guest_file_fixture() -> (tempfile::TempDir, Host, SharePanel) {
     let dir = tempfile::Builder::new()
         .prefix("tessel-files-fixture-")
-        .tempdir_in(std::env::current_dir().unwrap())
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
+    // The parent checkout ignores Cargo's target directory. Give the fixture
+    // its own Git boundary so guest reads exercise only its own ignore rules.
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "--template="])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
     let projects: Vec<_> = (1..=2)
         .map(|id| {
             let path = dir.path().join(format!("p{id}"));
