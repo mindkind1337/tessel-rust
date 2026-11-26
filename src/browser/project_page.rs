@@ -21,6 +21,31 @@ const POLICY: &str = "default-src 'none'; script-src 'none'; style-src 'self' 'u
 const MAX_SITES: usize = 50;
 const MAX_DRAFTS: usize = 20;
 
+type AssetJob = Box<dyn FnOnce(bool) + Send>;
+type AssetQueue = mpsc::SyncSender<AssetJob>;
+
+fn asset_workers(count: usize) -> Result<AssetQueue, String> {
+    let (send, recv) = mpsc::sync_channel::<AssetJob>(64);
+    let recv = Arc::new(Mutex::new(recv));
+    for _ in 0..count {
+        let recv = recv.clone();
+        std::thread::Builder::new()
+            .name("project-page".into())
+            .spawn(move || {
+                loop {
+                    // Release the receiver before running I/O so other workers can dequeue.
+                    let next = recv.lock().unwrap().recv();
+                    match next {
+                        Ok(job) => job(true),
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(send)
+}
+
 #[derive(Clone)]
 struct Site {
     scripts: bool,
@@ -475,26 +500,13 @@ impl Pages {
             crate::remote::Action,
         ) -> Result<crate::remote::Reply, String>,
     ) -> Result<wry::WebViewBuilder<'a>, String> {
-        let worker = move |pages: Pages| -> Result<_, String> {
-            let (send, recv) =
-                mpsc::sync_channel::<(Request<Vec<u8>>, wry::RequestAsyncResponder)>(64);
-            std::thread::Builder::new()
-                .name("project-page".into())
-                .spawn(move || {
-                    for (req, responder) in recv {
-                        responder.respond(pages.serve_with(req, read_remote));
-                    }
-                })
-                .map_err(|e| e.to_string())?;
-            Ok(send)
-        };
-        let local = worker(self.clone())?;
-        let remote = std::sync::OnceLock::new();
+        let local = asset_workers(1)?;
+        static REMOTE: std::sync::OnceLock<Result<AssetQueue, String>> = std::sync::OnceLock::new();
         let pages = self.clone();
         Ok(
             builder.with_asynchronous_custom_protocol(SCHEME.into(), move |_, req, responder| {
                 let send = if req.uri().host().is_some_and(|h| h.starts_with("ssh-")) {
-                    let Ok(send) = remote.get_or_init(|| worker(pages.clone())) else {
+                    let Ok(send) = REMOTE.get_or_init(|| asset_workers(4)) else {
                         responder.respond(empty(503));
                         return;
                     };
@@ -502,13 +514,22 @@ impl Pages {
                 } else {
                     &local
                 };
-                if let Err(err) = send.try_send((req, responder)) {
-                    let (_, responder) = match err {
-                        mpsc::TrySendError::Full(item) | mpsc::TrySendError::Disconnected(item) => {
-                            item
+                let pages = pages.clone();
+                let job = move |accepted| {
+                    responder.respond(if accepted {
+                        pages.serve_with(req, read_remote)
+                    } else {
+                        empty(503)
+                    });
+                };
+                // Recover the responder on overload without blocking the WebView thread.
+                if let Err(error) = send.try_send(Box::new(job)) {
+                    let job = match error {
+                        mpsc::TrySendError::Full(job) | mpsc::TrySendError::Disconnected(job) => {
+                            job
                         }
                     };
-                    responder.respond(empty(503));
+                    job(false);
                 }
             }),
         )
@@ -518,6 +539,32 @@ impl Pages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn four_remote_assets_can_start_before_any_finishes() {
+        use std::time::Duration;
+        let queue = asset_workers(4).unwrap();
+        let (started, events) = mpsc::channel();
+        let mut releases = Vec::new();
+        for _ in 0..5 {
+            let started = started.clone();
+            let (release, wait) = mpsc::channel::<()>();
+            releases.push(release);
+            queue
+                .send(Box::new(move |accepted| {
+                    assert!(accepted);
+                    started.send(()).unwrap();
+                    let _ = wait.recv();
+                }))
+                .unwrap();
+        }
+        for _ in 0..4 {
+            events.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        assert!(matches!(events.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        releases.clear();
+        events.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
     #[test]
     fn trusted_ssh_sites_keep_distinct_origins_per_host_folder_and_mode() {
         let registry = Pages::default();
