@@ -29,6 +29,7 @@ use gpui::{
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_workspace_body(
     snapshot: &GpuiWorkspaceSnapshot,
+    tabs_focus: &gpui::FocusHandle,
     remote_inputs: &super::remote_inputs::Inputs,
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
@@ -67,6 +68,7 @@ pub(crate) fn render_workspace_body(
         .when(!hide_center, |el| {
             el.child(render_center_column(
                 snapshot,
+                tabs_focus,
                 remote_inputs,
                 editor_input,
                 chat_inputs,
@@ -111,6 +113,7 @@ pub(crate) fn render_workspace_body(
 #[allow(clippy::too_many_arguments)]
 fn render_center_column(
     snapshot: &GpuiWorkspaceSnapshot,
+    tabs_focus: &gpui::FocusHandle,
     remote_inputs: &super::remote_inputs::Inputs,
     editor_input: &super::editor_input::Input,
     chat_inputs: &super::chat_inputs::Inputs,
@@ -133,7 +136,7 @@ fn render_center_column(
         .flex_col()
         .overflow_hidden()
         .bg(tokens.term)
-        .child(render_view_tabs_bar(snapshot, tokens, cx))
+        .child(render_view_tabs_bar(snapshot, tabs_focus, tokens, cx))
         .child(
             div()
                 .id("gpui-center-stage")
@@ -221,11 +224,20 @@ fn render_center_column(
 
 fn render_view_tabs_bar(
     snapshot: &GpuiWorkspaceSnapshot,
+    tabs_focus: &gpui::FocusHandle,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     let mut bar = div()
         .id("gpui-view-tabs")
+        .track_focus(tabs_focus)
+        .tab_stop(false)
+        .role(gpui::Role::TabList)
+        .aria_label(if snapshot.french {
+            "Terminal, éditeurs et navigateurs"
+        } else {
+            "Terminal, editors and browsers"
+        })
         .h(px(VIEW_TABS_HEIGHT_PX))
         .w_full()
         .flex()
@@ -264,6 +276,15 @@ fn render_view_tabs_bar(
                 super::file_icons::render(path, tokens, tint).into_any_element()
             }
         };
+        let select = match kind {
+            crate::view_tabs::Kind::Terminal => Some(GpuiAction::SelectWorkTab),
+            #[cfg(windows)]
+            crate::view_tabs::Kind::Browser => Some(GpuiAction::SelectBrowserTab),
+            crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => guest_key
+                .clone()
+                .map(GpuiAction::SelectGuestDocument)
+                .or_else(|| doc_index.map(GpuiAction::SelectDocumentTab)),
+        };
         let close = match kind {
             #[cfg(windows)]
             crate::view_tabs::Kind::Browser => Some(GpuiAction::CloseBrowserTab),
@@ -288,6 +309,12 @@ fn render_view_tabs_bar(
             div()
                 .id(("view-tab", idx))
                 .debug_selector(move || format!("view-tab-{idx}"))
+                .role(gpui::Role::Tab)
+                .key_context("TesselViewTab")
+                .aria_selected(selected)
+                .aria_label(tab.title.clone())
+                .focusable()
+                .tab_stop(true)
                 .group("view-tab")
                 .relative()
                 .h_full()
@@ -326,27 +353,47 @@ fn render_view_tabs_bar(
                         root.dispatch(action.clone(), cx);
                     }))
                 })
-                .on_click(
-                    cx.listener(move |root, event: &gpui::ClickEvent, _, cx| match kind {
-                        crate::view_tabs::Kind::Terminal => {
-                            root.dispatch(GpuiAction::SelectWorkTab, cx)
-                        }
-                        #[cfg(windows)]
-                        crate::view_tabs::Kind::Browser => {
-                            root.dispatch(GpuiAction::SelectBrowserTab, cx)
-                        }
-                        crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
-                            if let Some(key) = &guest_key {
-                                root.dispatch(GpuiAction::SelectGuestDocument(key.clone()), cx);
-                            } else if let Some(doc_idx) = doc_index {
-                                root.dispatch(GpuiAction::SelectDocumentTab(doc_idx), cx);
-                                if event.click_count() == 2 {
-                                    root.dispatch(GpuiAction::KeepDocumentTab(doc_idx), cx);
-                                }
+                .focus_visible(|style| style.border_1().border_color(tokens.accent))
+                .when_some(select, |el, select| {
+                    let key_action = select.clone();
+                    el.on_key_down(cx.listener(
+                        move |root, event: &gpui::KeyDownEvent, window, cx| {
+                            let key = &event.keystroke;
+                            let mods = key.modifiers;
+                            if root.app.gpui_has_open_modal()
+                                || mods.control
+                                || mods.alt
+                                || mods.platform
+                                || mods.function
+                            {
+                                return;
                             }
-                        }
-                    }),
-                )
+                            match key.key.as_str() {
+                                "tab" if mods.shift => window.focus_prev(cx),
+                                "tab" => window.focus_next(cx),
+                                "enter" | "space" if !mods.shift => {
+                                    if !event.is_held {
+                                        root.dispatch(key_action.clone(), cx);
+                                    }
+                                }
+                                _ => return,
+                            }
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        },
+                    ))
+                    .on_click(cx.listener(
+                        move |root, event: &gpui::ClickEvent, window, cx| {
+                            root.dispatch(select.clone(), cx);
+                            root.focus_handle.focus(window, cx);
+                            if event.click_count() == 2
+                                && let Some(index) = doc_index
+                            {
+                                root.dispatch(GpuiAction::KeepDocumentTab(index), cx);
+                            }
+                        },
+                    ))
+                })
                 .when(selected, |el| {
                     el.child(
                         div()

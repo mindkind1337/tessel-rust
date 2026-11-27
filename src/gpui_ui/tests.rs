@@ -520,6 +520,29 @@ fn view_tab_mouse_gestures_keep_preview_and_confirm_dirty_close(cx: &mut gpui::T
     };
     click(cx, "view-tab-1", Left, 1);
     assert!(snapshot(cx).view_tabs[1].preview);
+    view.update(cx, |root, window, cx| {
+        root.focus_handle.focus(window, cx);
+        for _ in 0..128 {
+            window.focus_next(cx);
+            if window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("TesselViewTab"))
+            {
+                return;
+            }
+        }
+        panic!("center tabs must be reachable in the window tab order");
+    })
+    .unwrap();
+    assert!(snapshot(cx).view_tabs[1].selected);
+    cx.simulate_keystrokes(view.into(), "enter");
+    assert!(snapshot(cx).view_tabs[0].selected);
+    cx.simulate_keystrokes(view.into(), "tab space");
+    assert!(snapshot(cx).view_tabs[1].selected);
+    assert!(snapshot(cx).view_tabs[1].preview);
+    cx.simulate_keystrokes(view.into(), "shift-tab enter");
+    assert!(snapshot(cx).view_tabs[0].selected);
     click(cx, "view-tab-1", Left, 2);
     assert!(!snapshot(cx).view_tabs[1].preview);
     click(cx, "view-tab-0", Middle, 1);

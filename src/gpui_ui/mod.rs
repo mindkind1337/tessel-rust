@@ -103,6 +103,7 @@ pub(crate) enum DragTarget {
 pub(crate) struct TesselGpuiRoot {
     pub(crate) app: Tessel,
     pub(crate) focus_handle: FocusHandle,
+    view_tabs_focus: FocusHandle,
     pub(crate) focus_input: FocusInputTarget,
     pub(crate) left_width: f32,
     pub(crate) right_width: f32,
@@ -317,6 +318,7 @@ impl TesselGpuiRoot {
         Self {
             app,
             focus_handle,
+            view_tabs_focus: cx.focus_handle(),
             focus_input: FocusInputTarget::None,
             left_width: SIDEBAR_DEFAULT_WIDTH_PX,
             right_width: RIGHT_PANEL_DEFAULT_WIDTH_PX,
@@ -1410,6 +1412,7 @@ impl Render for TesselGpuiRoot {
                 self.editor_input
                     .prepare_styles(doc, snapshot.theme, snapshot.dark);
                 if self.effective_focus_target() == FocusInputTarget::EditorBody
+                    && !self.view_tabs_focus.contains_focused(window, cx)
                     && let Some(input) = self.editor_input.get(doc.instance_id)
                 {
                     window.focus(&input.read(cx).focus_handle(cx), cx);
@@ -1797,6 +1800,7 @@ impl Render for TesselGpuiRoot {
             )
             .child(shell::render_workspace_body(
                 &snapshot,
+                &self.view_tabs_focus,
                 &self.remote_inputs,
                 &self.editor_input,
                 &self.chat_inputs,
