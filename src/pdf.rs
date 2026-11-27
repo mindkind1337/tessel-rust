@@ -320,6 +320,7 @@ pub struct PageLayout {
 pub struct PagePreview {
     pub index: usize,
     pub rect: egui::Rect,
+    pub failed: bool,
     pub pixels: Option<Arc<gpui::RenderImage>>,
 }
 #[derive(Clone, Debug)]
@@ -406,6 +407,11 @@ impl PdfView {
                         self.native_pages
                             .insert(self.requested_page, (self.requested_scale, image));
                         self.native_failures.remove(&self.requested_page);
+                    } else {
+                        self.native_failures.insert(
+                            self.requested_page,
+                            (self.requested_scale, "Invalid PDF page image".into()),
+                        );
                     }
                 }
                 Err(e) => {
@@ -439,15 +445,18 @@ impl PdfView {
         {
             self.start_page_worker(index, render_scale);
         }
-        let error = wanted
-            .iter()
-            .find_map(|i| {
-                self.native_failures
-                    .get(i)
-                    .filter(|(s, _)| *s == render_scale)
-            })
-            .map(|(_, e)| e.clone())
-            .unwrap_or_default();
+        let failure = |index: usize| {
+            self.native_failures
+                .get(&index)
+                .filter(|(s, _)| *s == render_scale)
+        };
+        let error = if self.pages == 0 {
+            failure(0)
+                .map(|(_, error)| error.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         PdfSummary {
             visible: plan
                 .visible_pages
@@ -455,6 +464,7 @@ impl PdfView {
                 .map(|(index, rect)| PagePreview {
                     index,
                     rect,
+                    failed: failure(index).is_some(),
                     pixels: self
                         .native_pages
                         .get(&index)
@@ -621,7 +631,14 @@ mod tests {
         drop(sender);
         let summary = view.gpui_poll_summary();
         assert!(!summary.busy);
-        assert!(summary.error.contains("stopped"));
+        assert!(summary.error.is_empty());
+        assert!(!summary.visible[0].failed);
+        assert!(
+            summary
+                .visible
+                .iter()
+                .any(|page| page.index == 1 && page.failed)
+        );
         assert!(view.pending.is_none());
     }
     #[test]
@@ -714,6 +731,50 @@ mod tests {
         assert_eq!(view.effective_scale(), 1.5);
         view.set_viewport(20.);
         assert_eq!(view.effective_scale(), 0.2);
+    }
+
+    #[cfg(feature = "visual-test")]
+    #[gpui::test]
+    fn unreadable_pdf_replaces_reading_notice_inside_viewport(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("damaged.pdf");
+        let bytes = b"%PDF-1.7\ntruncated".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        doc.pdf.as_mut().unwrap().pending = Some(receiver);
+        let window = cx.add_window(|_, cx| {
+            let mut root = crate::gpui_ui::TesselGpuiRoot::new_in_dir(
+                Some(dir.path().join("state")),
+                false,
+                cx,
+            );
+            root.app
+                .apply_gpui_action(crate::app::gpui_bridge::GpuiAction::AddProjectPath(
+                    dir.path().into(),
+                ));
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        let viewport = visual.debug_bounds("pdf-page-viewport").unwrap();
+        assert!(viewport.contains(&visual.debug_bounds("pdf-reading").unwrap().center()));
+        let error = raster(bytes, 0, 1.)
+            .err()
+            .expect("damaged fixture should fail");
+        sender.send(Err(error)).unwrap();
+        window
+            .update(cx, |root, _, cx| {
+                assert!(root.app.poll_for_gpui());
+                cx.notify();
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("pdf-reading").is_none());
+        assert_eq!(visual.debug_bounds("pdf-page-viewport").unwrap(), viewport);
+        assert!(viewport.contains(&visual.debug_bounds("pdf-read-error").unwrap().center()));
     }
 
     #[cfg(feature = "visual-test")]

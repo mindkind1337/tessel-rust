@@ -1690,6 +1690,39 @@ pub(super) fn render_pdf_stage(
         .h(px(layout.extent.y))
         .min_w_full()
         .min_h_full();
+    let notice = |id: &'static str, index: usize, text: &'static str, failed: bool| {
+        div()
+            .id((id, index))
+            .debug_selector(move || id.into())
+            .role(gpui::Role::Status)
+            .px(px(20.))
+            .py(px(16.))
+            .text_color(if failed {
+                tokens.danger
+            } else {
+                tokens.text_dim
+            })
+            .child(text)
+    };
+    if !error.is_empty() {
+        content = content.child(notice(
+            "pdf-read-error",
+            0,
+            if french {
+                "Ce PDF n'a pas pu être lu."
+            } else {
+                "This PDF could not be read."
+            },
+            true,
+        ));
+    } else if *pages == 0 && *busy {
+        content = content.child(notice(
+            "pdf-reading",
+            0,
+            if french { "Lecture…" } else { "Reading…" },
+            false,
+        ));
+    }
     for page in visible {
         let index = page.index;
         let rect = page.rect;
@@ -1700,6 +1733,24 @@ pub(super) fn render_pdf_stage(
             .w(px(rect.width()))
             .h(px(rect.height()))
             .bg(gpui::white());
+        if page.failed {
+            content = content.child(
+                placeholder.child(
+                    notice(
+                        "pdf-page-error",
+                        index,
+                        if french {
+                            "Cette page n'a pas pu être affichée."
+                        } else {
+                            "This page could not be displayed."
+                        },
+                        true,
+                    )
+                    .bg(tokens.surface),
+                ),
+            );
+            continue;
+        }
         content = content.child(placeholder.when_some(page.pixels.clone(), |el, pixels| {
             el.child(
                 img(pixels)
@@ -1722,16 +1773,6 @@ pub(super) fn render_pdf_stage(
         .flex()
         .flex_col()
         .child(toolbar)
-        .when(!error.is_empty(), |el| {
-            el.child(SharedString::from(error.clone()))
-        })
-        .when(*pages == 0 && *busy, |el| {
-            el.child(if french {
-                "Chargement…"
-            } else {
-                "Loading…"
-            })
-        })
         .child(stage)
 }
 
