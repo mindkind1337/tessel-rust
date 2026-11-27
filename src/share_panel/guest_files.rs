@@ -6,6 +6,8 @@ pub(crate) struct GuestFilesView {
     pub image_menu: bool,
     pub download_menu: Option<FileKey>,
     pub directory: String,
+    pub tabs: Vec<FileKey>,
+    pub confirm_close: bool,
     pub entries: Vec<crate::guest_file_listing::Entry>,
     pub document: Option<crate::guest_file_editor::Document>,
     pub notices: Vec<String>,
@@ -73,6 +75,8 @@ impl SharePanel {
             version_diff: self.guest_versions.diff.clone(),
             version_text: self.guest_versions.text.clone(),
             directory: self.guest_file_listing.path.clone(),
+            tabs: self.guest_file_editor.tabs.clone(),
+            confirm_close: self.confirm_guest_file_discard,
             entries: self.guest_file_listing.entries.clone(),
             document: doc,
             notices,
@@ -119,7 +123,7 @@ impl SharePanel {
             && !self.guest_file_editor.has_draft()
         {
             if super::guest_image::ImagePreview::supports(&key.path) {
-                self.guest_file_editor.discard();
+                self.guest_file_editor.clear_active_document();
                 self.guest_image.open(key, session);
                 return true;
             }
@@ -128,6 +132,81 @@ impl SharePanel {
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
     }
+    pub(super) fn select_guest_tab(&mut self, key: FileKey) {
+        if self.guest_file_editor.tabs.contains(&key)
+            && self
+                .guest_file_editor
+                .document
+                .as_ref()
+                .is_none_or(|doc| doc.key != key)
+        {
+            self.open_guest_file(key);
+        }
+    }
+
+    pub(super) fn confirm_guest_close(&mut self, key: &FileKey, discard: bool) {
+        if self.confirm_guest_file_discard
+            && self
+                .guest_file_editor
+                .document
+                .as_ref()
+                .is_some_and(|doc| &doc.key == key)
+        {
+            self.confirm_guest_file_discard = false;
+            if discard && !self.guest_file_editor.busy() {
+                self.discard_guest_tab(key);
+            }
+        }
+    }
+
+    pub(super) fn close_guest_tab(&mut self, key: &FileKey) {
+        self.poll_guest_scope();
+        if self.guest_files_scope != Some(key.scope) || self.guest_file_editor.busy() {
+            return;
+        }
+        let Some(index) = self
+            .guest_file_editor
+            .tabs
+            .iter()
+            .position(|tab| tab == key)
+        else {
+            return;
+        };
+        if self
+            .guest_file_editor
+            .document
+            .as_ref()
+            .is_none_or(|doc| &doc.key != key)
+        {
+            self.guest_file_editor.tabs.remove(index);
+            return;
+        }
+        if self.guest_file_editor.has_draft() {
+            self.confirm_guest_file_discard = true;
+            return;
+        }
+        self.discard_guest_tab(key);
+    }
+
+    fn discard_guest_tab(&mut self, key: &FileKey) {
+        let index = self
+            .guest_file_editor
+            .tabs
+            .iter()
+            .position(|tab| tab == key)
+            .unwrap_or(0);
+        self.guest_file_editor.discard();
+        if let Some(next) = self
+            .guest_file_editor
+            .tabs
+            .get(index)
+            .or_else(|| self.guest_file_editor.tabs.last())
+            .cloned()
+        {
+            self.open_guest_file(next);
+        }
+    }
+
     pub fn edit_guest_file(&mut self, key: &FileKey, text: String) -> bool {
         self.poll_guest_scope();
         self.guest_file_editor.edit(key, text)
@@ -258,6 +337,37 @@ impl SharePanel {
         {
             self.open_guest_file(FileKey { scope, path });
         }
+        let mut selected = None;
+        let mut closed = None;
+        ui.horizontal_wrapped(|ui| {
+            for key in &self.guest_file_editor.tabs {
+                let active = self
+                    .guest_file_editor
+                    .document
+                    .as_ref()
+                    .is_some_and(|doc| doc.key == *key);
+                if ui.selectable_label(active, &key.path).clicked() && !active {
+                    selected = Some(key.clone());
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text(if french {
+                        "Fermer le fichier"
+                    } else {
+                        "Close file"
+                    })
+                    .clicked()
+                {
+                    closed = Some(key.clone());
+                }
+            }
+        });
+        if let Some(key) = closed {
+            self.close_guest_tab(&key);
+        }
+        if let Some(key) = selected {
+            self.select_guest_tab(key);
+        }
         if self.guest_image.busy() {
             ui.spinner();
             ui.ctx().request_repaint_after(Duration::from_millis(50));
@@ -342,7 +452,7 @@ impl SharePanel {
                     if self.guest_file_editor.has_draft() {
                         self.confirm_guest_file_discard = true;
                     } else {
-                        self.guest_file_editor.discard();
+                        self.discard_guest_tab(&document.key);
                     }
                 }
             });
@@ -485,8 +595,7 @@ impl SharePanel {
                         )
                         .clicked()
                     {
-                        self.guest_file_editor.discard();
-                        self.confirm_guest_file_discard = false;
+                        self.confirm_guest_close(&document.key, true);
                     }
                 });
             }

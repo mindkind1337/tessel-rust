@@ -1268,6 +1268,59 @@ fn render_share_modal(
                             }
                         }
                     }
+                    if !files.tabs.is_empty() {
+                        let mut tabs = div().flex().flex_wrap().gap(px(3.));
+                        for (index, key) in files.tabs.iter().enumerate() {
+                            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key);
+                            tabs = tabs.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .child(modal_btn(
+                                        format!("guest-doc-tab-{index}"),
+                                        key.path.clone(),
+                                        active,
+                                        tokens,
+                                        GpuiAction::Share(ShareGpuiAction::GuestSelectTab(
+                                            key.clone(),
+                                        )),
+                                        cx,
+                                    ))
+                                    .child(modal_btn(
+                                        format!("guest-doc-close-{index}"),
+                                        "×".into(),
+                                        false,
+                                        tokens,
+                                        GpuiAction::Share(ShareGpuiAction::GuestCloseTab(
+                                            key.clone(),
+                                        )),
+                                        cx,
+                                    )),
+                            );
+                        }
+                        if let Some(doc) = &files.document {
+                            tabs = tabs
+                                .child(super::chrome::copy_path_button(
+                                    doc.key.path.clone(),
+                                    french,
+                                    *tokens,
+                                ))
+                                .child(modal_btn(
+                                    "guest-copy-text",
+                                    if french {
+                                        "Copier le texte"
+                                    } else {
+                                        "Copy text"
+                                    }
+                                    .into(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::CopyGuestFileText(doc.key.clone()),
+                                    cx,
+                                ));
+                        }
+                        content = content.child(tabs);
+                    }
                     if let Some((key, pixels)) = &files.image {
                         let size = pixels.size(0);
                         let scale = (600.0f32 / size.width.0 as f32)
@@ -1312,44 +1365,46 @@ fn render_share_modal(
                         }
                     }
                     if let Some(doc) = &files.document {
-                        let (preview, partial) = doc.preview();
-                        content = content
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(doc.key.path.clone()),
-                                    )
-                                    .child(super::chrome::copy_path_button(
-                                        doc.key.path.clone(),
-                                        french,
-                                        *tokens,
-                                    ))
-                                    .child(modal_btn(
-                                        "guest-copy-text",
-                                        if french {
-                                            "Copier le texte"
-                                        } else {
-                                            "Copy text"
-                                        }
-                                        .into(),
-                                        false,
-                                        tokens,
-                                        GpuiAction::CopyGuestFileText(doc.key.clone()),
-                                        cx,
+                        if files.confirm_close {
+                            for (discard, label) in [
+                                (
+                                    false,
+                                    if french {
+                                        "Conserver le brouillon"
+                                    } else {
+                                        "Keep draft"
+                                    },
+                                ),
+                                (
+                                    true,
+                                    if french {
+                                        "Abandonner le brouillon"
+                                    } else {
+                                        "Discard draft"
+                                    },
+                                ),
+                            ] {
+                                content = content.child(modal_btn(
+                                    format!("guest-close-confirm-{discard}"),
+                                    label.into(),
+                                    false,
+                                    tokens,
+                                    GpuiAction::Share(ShareGpuiAction::GuestConfirmClose(
+                                        doc.key.clone(),
+                                        discard,
                                     )),
-                            )
-                            .child(
-                                div()
-                                    .id("guest-file-preview")
-                                    .max_h(px(160.))
-                                    .overflow_y_scroll()
-                                    .child(preview.to_owned()),
-                            );
+                                    cx,
+                                ));
+                            }
+                        }
+                        let (preview, partial) = doc.preview();
+                        content = content.child(
+                            div()
+                                .id("guest-file-preview")
+                                .max_h(px(160.))
+                                .overflow_y_scroll()
+                                .child(preview.to_owned()),
+                        );
                         if partial {
                             content = content.child(if french {
                                 "Aperçu partiel (64 Kio)."

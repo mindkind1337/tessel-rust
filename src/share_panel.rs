@@ -3390,6 +3390,9 @@ pub(crate) enum ShareGpuiAction {
     GuestImageMenu(crate::guest_file_editor::Key),
     GuestDownload(crate::guest_file_editor::Key),
     GuestOpenFile(crate::guest_file_editor::Key),
+    GuestSelectTab(crate::guest_file_editor::Key),
+    GuestCloseTab(crate::guest_file_editor::Key),
+    GuestConfirmClose(crate::guest_file_editor::Key, bool),
     GuestVersion(crate::guest_file_editor::Key, Option<String>),
     GuestHistory(crate::guest_file_editor::Key, bool),
     GuestProject {
@@ -3664,6 +3667,14 @@ impl SharePanel {
                 self.choose_guest_download(&key);
             }
 
+            ShareGpuiAction::GuestSelectTab(key) => self.select_guest_tab(key),
+            ShareGpuiAction::GuestConfirmClose(key, discard) => {
+                self.poll_guest_scope();
+                if self.guest_files_scope == Some(key.scope) {
+                    self.confirm_guest_close(&key, discard);
+                }
+            }
+            ShareGpuiAction::GuestCloseTab(key) => self.close_guest_tab(&key),
             ShareGpuiAction::GuestOpenFile(key) => {
                 self.open_guest_file(key);
             }

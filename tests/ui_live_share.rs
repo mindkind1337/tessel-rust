@@ -1104,3 +1104,35 @@ fn compatibility_guest_git_draft_cannot_cross_projects_and_survives_leave() {
     draw_guest_files(&ctx, &mut panel, click_events(confirm));
     assert!(panel.guest_git_snapshot().draft.is_empty());
 }
+
+#[test]
+fn guest_text_tabs_reopen_from_host_and_close_to_the_neighbor() {
+    use share_panel::ShareGpuiAction::{GuestCloseTab, GuestSelectTab};
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let a = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    let b = guest_file_editor::Key {
+        scope,
+        path: "b.txt".into(),
+    };
+    for key in [&a, &b] {
+        panel.open_guest_file(key.clone());
+        await_guest_document(&mut panel, key);
+    }
+    std::fs::write(dir.path().join("p1/a.txt"), "updated by the host").unwrap();
+    panel.apply_gpui_share_action(GuestSelectTab(a.clone()), &[]);
+    await_guest_document(&mut panel, &a);
+    assert_eq!(
+        panel.guest_file_document().unwrap().text.as_str(),
+        "updated by the host"
+    );
+    panel.apply_gpui_share_action(GuestCloseTab(a.clone()), &[]);
+    await_guest_document(&mut panel, &b);
+    panel.apply_gpui_share_action(GuestSelectTab(a), &[]);
+    assert_eq!(panel.guest_file_document().unwrap().key, b);
+    panel.apply_gpui_share_action(GuestCloseTab(b), &[]);
+    assert!(panel.guest_file_document().is_none());
+}

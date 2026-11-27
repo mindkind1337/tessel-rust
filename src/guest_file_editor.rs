@@ -94,6 +94,7 @@ struct Pending {
 pub struct Editor {
     scope: Option<Scope>,
     writable: bool,
+    pub(crate) tabs: Vec<Key>,
     pub document: Option<Document>,
     pending: Option<Pending>,
     pub notice: Option<Notice>,
@@ -123,6 +124,7 @@ impl Editor {
     pub fn bind(&mut self, scope: Option<Scope>, writable: bool) -> bool {
         let changed = self.scope != scope || self.writable != writable;
         if self.scope != scope {
+            self.tabs.clear();
             let uncertain = self
                 .pending
                 .as_ref()
@@ -140,6 +142,11 @@ impl Editor {
                 self.oversized_edit = false;
                 self.notice = None;
             }
+            if let Some(doc) = &self.document
+                && Some(doc.key.scope) == scope
+            {
+                self.tabs.push(doc.key.clone());
+            }
             self.scope = scope;
         }
         self.writable = scope.is_some() && writable;
@@ -149,14 +156,14 @@ impl Editor {
         if !self.editable() {
             return false;
         }
+        let Some(document) = self.document.as_mut().filter(|d| &d.key == key) else {
+            return false;
+        };
         if text.len() > MAX_READ {
             self.oversized_edit = true;
             self.notice = Some(Notice::TooLarge);
             return false;
         }
-        let Some(document) = self.document.as_mut().filter(|d| &d.key == key) else {
-            return false;
-        };
         self.oversized_edit = false;
         if text.len() > MAX_EDIT {
             self.notice = Some(Notice::TooLarge);
@@ -176,11 +183,18 @@ impl Editor {
         if self.pending.is_some() {
             return false;
         }
+        if let Some(doc) = &self.document {
+            self.tabs.retain(|key| key != &doc.key);
+        }
+        self.clear_active_document();
+        true
+    }
+
+    pub(crate) fn clear_active_document(&mut self) {
         self.document = None;
         self.uncertain_write = false;
         self.oversized_edit = false;
         self.notice = None;
-        true
     }
     pub fn open(
         &mut self,
@@ -293,6 +307,9 @@ impl Editor {
             Operation::Read(key) => {
                 let text = decode_text(&value, MAX_READ);
                 if let Some(text) = text {
+                    if !self.tabs.contains(&key) {
+                        self.tabs.push(key.clone());
+                    }
                     let text = Arc::new(text);
                     self.notice = (text.len() > MAX_EDIT).then_some(Notice::TooLarge);
                     self.document = Some(Document {

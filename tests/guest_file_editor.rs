@@ -283,3 +283,19 @@ fn conflict_preserves_draft_and_saves_use_the_acknowledged_baseline() {
     });
     assert_eq!(editor.notice, Some(Notice::UnsavedDraft));
 }
+
+#[test]
+fn stale_oversized_edit_leaves_active_file_savable() {
+    let now = Instant::now();
+    let mut editor = Editor::default();
+    let active = key(3, "second.txt");
+    loaded(&mut editor, active.clone(), "original", now);
+    assert!(editor.edit(&active, "changed".into()));
+    assert!(!editor.edit(&key(3, "first.txt"), "x".repeat(8 * 1024 * 1024 + 1)));
+    assert_eq!(editor.notice, None);
+    let (tx, rx) = mpsc::sync_channel(1);
+    editor.save(&active, now, |_| Ok(rx));
+    tx.send(Ok(json!({"ok":true}))).unwrap();
+    editor.poll(now);
+    assert!(!editor.has_draft());
+}

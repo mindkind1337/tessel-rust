@@ -576,3 +576,48 @@ fn native_guest_copy_text_includes_the_part_beyond_preview(cx: &mut TestAppConte
         Some(full_text.as_str())
     );
 }
+
+#[gpui::test]
+fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, _) = joined_guest(cx);
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(dir.path().join("project-1").join(name), name).unwrap();
+    }
+    for (selector, expected) in [
+        ("guest-tab-files", None),
+        ("guest-entry-0", None),
+        ("guest-copy-text", Some("a.txt")),
+        ("guest-entry-1", None),
+        ("guest-doc-tab-1", None),
+        ("guest-copy-text", Some("b.txt")),
+        ("guest-doc-tab-0", None),
+        ("guest-copy-text", Some("a.txt")),
+        ("guest-doc-close-0", None),
+        ("guest-copy-text", Some("b.txt")),
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(rect) = visual.debug_bounds(selector) {
+                visual.simulate_click(rect.center(), Default::default());
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Some(text) = expected {
+            assert_eq!(
+                cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                    .as_deref(),
+                Some(text)
+            );
+        }
+    }
+}
