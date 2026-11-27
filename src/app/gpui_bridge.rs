@@ -2053,14 +2053,13 @@ impl Tessel {
 
     pub(crate) fn outline_document_id(&self) -> Option<u64> {
         if self.gpui_has_open_modal()
-            || self.view != View::Files
             || !self.gpui_extra.outline_open
             || !self.right_tool_visible(SideTab::Files)
         {
             return None;
         }
         self.documents
-            .get(self.active_document)
+            .get(self.local_explorer_document_index()?)
             .filter(|doc| crate::json_outline_panel::supported(doc))
             .map(|doc| doc.instance_id())
     }
@@ -4698,15 +4697,15 @@ impl Tessel {
             std::sync::Arc::default()
         };
 
+        let outline_index = self.local_explorer_document_index();
         if self
             .gpui_extra
             .outline_query
             .as_ref()
             .is_some_and(|(id, _)| {
-                self.documents
-                    .get(self.active_document)
+                outline_index
+                    .and_then(|i| self.documents.get(i))
                     .is_none_or(|d| d.instance_id() != *id)
-                    || self.view != View::Files
                     || visible != Some(SideTab::Files)
                     || !self.gpui_extra.outline_open
             })
@@ -4720,10 +4719,10 @@ impl Tessel {
             .map(|(_, q)| q.clone());
         let outline = if visible == Some(SideTab::Files)
             && self.gpui_extra.outline_open
-            && self.view == View::Files
+            && let Some(index) = outline_index
         {
             self.documents
-                .get_mut(self.active_document)
+                .get_mut(index)
                 .filter(|doc| crate::json_outline_panel::supported(doc))
                 .map(|doc| {
                     let mut cache = crate::json_outline_panel::Cache::current(
@@ -4823,7 +4822,7 @@ impl Tessel {
                 .map_or("", |c| c.placeholder(french)),
             outline_folds: outline
                 .as_ref()
-                .and_then(|_| self.documents.get(self.active_document))
+                .and_then(|_| outline_index.and_then(|i| self.documents.get(i)))
                 .map(|d| d.tools.outline_folds.clone())
                 .unwrap_or_default(),
             outline_open: self.gpui_extra.outline_open,
@@ -4832,13 +4831,11 @@ impl Tessel {
             outline_filter_on_type: self.state.editor_prefs.outline_filter_on_type,
             outline_sort: self.state.editor_prefs.outline_sort,
             outline_follow_cursor: self.state.editor_prefs.outline_follow_cursor,
-            outline_scroll_generation: self
-                .documents
-                .get(self.active_document)
+            outline_scroll_generation: outline_index
+                .and_then(|i| self.documents.get(i))
                 .map_or(0, |d| d.tools.outline_scroll_generation),
-            outline_selected: self
-                .documents
-                .get(self.active_document)
+            outline_selected: outline_index
+                .and_then(|i| self.documents.get(i))
                 .and_then(|doc| doc.tools.outline_selected.clone()),
             outline,
             dashboard_vm,
@@ -7000,7 +6997,8 @@ impl Tessel {
             }
             GpuiAction::OutlineNavigate(id, key) => {
                 if self.outline_document_id() == Some(id)
-                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && let Some(index) = self.local_explorer_document_index()
+                    && let Some(doc) = self.documents.get_mut(index)
                     && let Some(cache) = self
                         .gpui_extra
                         .outline_cache
@@ -7018,6 +7016,14 @@ impl Tessel {
                         query,
                         !self.state.editor_prefs.outline_filter_on_type,
                     );
+                    if key == eframe::egui::Key::Enter
+                        && rows.iter().any(|entry| {
+                            Some(&entry.row.key) == doc.tools.outline_selected.as_ref()
+                        })
+                    {
+                        self.active_document = index;
+                        self.view = View::Files;
+                    }
                     if crate::json_outline_panel::navigate(doc, &rows, !query.is_empty(), key) {
                         doc.tools.outline_scroll_generation =
                             doc.tools.outline_scroll_generation.wrapping_add(1);
@@ -7041,10 +7047,9 @@ impl Tessel {
                 }
             }
             GpuiAction::OutlineRow(id, tree, action) => {
-                if self.view == View::Files
-                    && self.gpui_extra.outline_open
-                    && let Some(doc) = self.documents.get_mut(self.active_document)
-                    && doc.instance_id() == id
+                if self.outline_document_id() == Some(id)
+                    && let Some(index) = self.local_explorer_document_index()
+                    && let Some(doc) = self.documents.get_mut(index)
                     && self.gpui_extra.outline_cache.as_ref().is_some_and(|c| {
                         std::sync::Arc::ptr_eq(&tree, &c.symbols) && c.matches(doc)
                     })
@@ -7057,6 +7062,8 @@ impl Tessel {
                             crate::json_outline_panel::toggle_fold(doc, &key)
                         }
                         OutlineRowAction::Reveal(key, range, select) => {
+                            self.active_document = index;
+                            self.view = View::Files;
                             doc.tools.outline_selected = Some(key);
                             crate::json_outline_panel::reveal(doc, range, select)
                         }
@@ -11265,7 +11272,7 @@ mod panel_snapshot_tests {
                 .push(crate::files::Document::open(dir.path(), &path).unwrap());
         }
         app.active_document = 0;
-        app.view = View::Files;
+        app.view = View::Work;
         app.state.panels.right_open = true;
         app.state.panels.right_tab = SideTab::Files;
         app.apply_gpui_action(GpuiAction::OutlineToggle);
@@ -11273,6 +11280,7 @@ mod panel_snapshot_tests {
         let action = |row| GpuiAction::OutlineRow(id, tree.clone(), row);
         let key = tree[0].key.clone();
         app.apply_gpui_action(action(OutlineRowAction::SetAllFolds { expand: false }));
+        assert!(matches!(app.view, View::Work));
         let parents = crate::outline_tree::parent_keys(&tree);
         assert_eq!(parents.len(), 3);
         assert_eq!(
@@ -11296,6 +11304,7 @@ mod panel_snapshot_tests {
             app.documents[0].tools.pending_char_range,
             Some((1, text.chars().count() - 1))
         );
+        assert!(matches!(app.view, View::Files));
         app.active_document = 1;
         assert!(
             app.build_side_panels_snapshot(false)

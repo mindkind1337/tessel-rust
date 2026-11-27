@@ -2277,16 +2277,24 @@ impl Tessel {
         }
     }
 
-    fn timeline_editor(&self) -> Option<&Document> {
+    fn local_explorer_document_index(&self) -> Option<usize> {
         self.timeline_surface()?;
-        self.documents
+        if self
+            .documents
             .get(self.active_document)
-            .filter(|doc| self.visible_document_tab(doc))
-            .or_else(|| {
-                self.documents
-                    .iter()
-                    .find(|doc| self.visible_document_tab(doc))
-            })
+            .is_some_and(|doc| self.visible_document_tab(doc))
+        {
+            Some(self.active_document)
+        } else {
+            self.documents
+                .iter()
+                .position(|doc| self.visible_document_tab(doc))
+        }
+    }
+
+    fn timeline_editor(&self) -> Option<&Document> {
+        self.documents
+            .get(self.local_explorer_document_index()?)
             .filter(|doc| doc.path.is_absolute() && doc.root.is_absolute())
     }
 
