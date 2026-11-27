@@ -816,7 +816,7 @@ pub(crate) enum GpuiAction {
     ChooseLayout(crate::layout_broadcast_ui::LayoutMenuAction),
     MovePane {
         from: u64,
-        to: u64,
+        to: Option<u64>,
         zone: crate::pane_grid::DropZone,
     },
     ResizeSplitDivider {

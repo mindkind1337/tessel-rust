@@ -435,6 +435,25 @@ pub enum DropZone {
 }
 
 impl DropZone {
+    pub fn workspace_edge(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
+        if width <= 0.
+            || height <= 0.
+            || !(0.0..=width).contains(&x)
+            || !(0.0..=height).contains(&y)
+        {
+            return None;
+        }
+        [
+            (Self::Left, x),
+            (Self::Right, width - x),
+            (Self::Top, y),
+            (Self::Bottom, height - y),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, distance)| *distance <= 28.)
+        .map(|(zone, _)| zone)
+    }
     pub fn at(x: f32, y: f32, allow_swap: bool) -> Option<Self> {
         if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
             return None;
@@ -457,15 +476,18 @@ impl DropZone {
 pub fn reposition_leaf(
     tree: &PaneNode,
     from: &str,
-    to: &str,
+    to: Option<&str>,
     zone: DropZone,
     split_id: String,
 ) -> Option<PaneNode> {
-    if from == to {
+    if Some(from) == to {
         return None;
     }
     let source = find_leaf(Some(tree), from)?;
-    let target = find_leaf(Some(tree), to)?;
+    let target = match to {
+        Some(id) => Some(find_leaf(Some(tree), id)?),
+        None => None,
+    };
     if zone == DropZone::Center {
         fn swap(node: &mut PaneNode, a: &PaneLeaf, b: &PaneLeaf) {
             match node {
@@ -478,7 +500,7 @@ pub fn reposition_leaf(
             }
         }
         let mut next = tree.clone();
-        swap(&mut next, source, target);
+        swap(&mut next, source, target?);
         return Some(next);
     }
     let rest = without_leaves(tree, &HashSet::from([from.to_owned()]))?;
@@ -487,18 +509,24 @@ pub fn reposition_leaf(
     } else {
         SplitDir::Col
     };
-    let mut children = vec![
-        PaneNode::Leaf(source.clone()),
-        PaneNode::Leaf(target.clone()),
-    ];
-    if matches!(zone, DropZone::Right | DropZone::Bottom) {
-        children.reverse();
+    let before = matches!(zone, DropZone::Left | DropZone::Top);
+    let split = |other, percent| {
+        let source = PaneNode::Leaf(source.clone());
+        let (children, sizes) = if before {
+            (vec![source, other], vec![percent, 100. - percent])
+        } else {
+            (vec![other, source], vec![100. - percent, percent])
+        };
+        PaneNode::split(split_id, dir, children, sizes)
+    };
+    match target {
+        Some(leaf) => Some(replace_leaf(
+            &rest,
+            &leaf.id,
+            &split(PaneNode::Leaf(leaf.clone()), 50.),
+        )),
+        None => Some(split(rest, 35.)),
     }
-    Some(replace_leaf(
-        &rest,
-        to,
-        &PaneNode::split(split_id, dir, children, vec![50., 50.]),
-    ))
 }
 
 /// Splits leaf `target_id` in `dir`, placing `new_leaf` immediately after `target_id`.
@@ -1480,6 +1508,13 @@ mod drop_tests {
         ] {
             assert_eq!(DropZone::at(x, y, swap), Some(expected));
         }
+        assert_eq!(DropZone::workspace_edge(28., 50., 180., 100.), Some(Left));
+        assert_eq!(DropZone::workspace_edge(29., 50., 180., 100.), None);
+        assert_eq!(DropZone::workspace_edge(5., 5., 180., 100.), Some(Left));
+        assert_eq!(
+            DropZone::workspace_edge(100., 99., 180., 100.),
+            Some(Bottom)
+        );
         assert_eq!(DropZone::at(f32::NAN, 0.5, true), None);
         let a = PaneLeaf::new("one", LeafKind::Browser).with_view_path("branch");
         let b = PaneLeaf::new("two", LeafKind::Agent).with_worktree("agent-dir");
@@ -1490,7 +1525,7 @@ mod drop_tests {
             vec![30., 70.],
         );
         for zone in [Center, Left, Right, Top, Bottom] {
-            let next = reposition_leaf(&root, "one", "two", zone, "new".into()).unwrap();
+            let next = reposition_leaf(&root, "one", Some("two"), zone, "new".into()).unwrap();
             let PaneNode::Split { dir, sizes, .. } = &next else {
                 panic!()
             };
@@ -1519,6 +1554,6 @@ mod drop_tests {
                 }
             );
         }
-        assert!(reposition_leaf(&root, "one", "gone", Top, "new".into()).is_none());
+        assert!(reposition_leaf(&root, "one", Some("gone"), Top, "new".into()).is_none());
     }
 }

@@ -2506,4 +2506,31 @@ fn pane_drop_header_swaps_native_grid_tiles(cx: &mut gpui::TestAppContext) {
     assert_eq!(tiles[1].session_id, ids[0]);
     assert_eq!(tiles[0].rect_px.left, tiles[1].rect_px.left);
     assert!(tiles[1].rect_px.top > tiles[0].rect_px.top);
+    // Drop against the outside edge, including over the source's own tile.
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let src = visual
+        .debug_bounds(Box::leak(
+            format!("pane-drag-header-{}", ids[0]).into_boxed_str(),
+        ))
+        .unwrap()
+        .center();
+    let grid = visual.debug_bounds("pane-grid-drop-bounds").unwrap();
+    let edge = gpui::point(grid.origin.x + gpui::px(3.), src.y);
+    visual.simulate_mouse_down(src, Left, Default::default());
+    visual.simulate_mouse_move(
+        src + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(edge, Some(Left), Default::default());
+    visual.simulate_mouse_up(edge, Left, Default::default());
+    let tiles = view
+        .update(cx, |root, _, _| {
+            root.app.gpui_snapshot(900., 600., 4.).tiles
+        })
+        .unwrap();
+    assert_eq!(tiles[0].session_id, ids[0]);
+    assert_eq!(tiles[0].rect_px.height, tiles[1].rect_px.height);
+    assert!(tiles[0].rect_px.width < tiles[1].rect_px.width);
 }

@@ -310,14 +310,14 @@ impl TerminalLayout {
         true
     }
 
-    pub fn move_pane(&mut self, from: u64, to: u64, zone: pane_grid::DropZone) -> bool {
+    pub fn move_pane(&mut self, from: u64, to: Option<u64>, zone: pane_grid::DropZone) -> bool {
         let Some(tree) = self.tree.as_ref() else {
             return false;
         };
         let Some(candidate) = pane_grid::reposition_leaf(
             tree,
             &from.to_string(),
-            &to.to_string(),
+            to.map(|id| id.to_string()).as_deref(),
             zone,
             format!("split-{}", self.next_split),
         ) else {
@@ -419,15 +419,29 @@ mod tests {
         let room = [1000., 600.];
         layout.sync(&[1, 2, 3], room);
         let mode = layout.grid_mode;
-        assert!(layout.move_pane(1, 2, DropZone::Center));
+        assert!(layout.move_pane(1, Some(2), DropZone::Center));
         assert_eq!(layout.grid_mode, mode);
-        assert!(layout.move_pane(1, 3, DropZone::Top));
+        assert!(layout.move_pane(1, Some(3), DropZone::Top));
         assert_eq!(layout.grid_mode, Some(GridMode::Manual));
+        assert!(layout.move_pane(2, None, DropZone::Right));
+        let Some(PaneNode::Split {
+            dir,
+            children,
+            sizes,
+            ..
+        }) = &layout.tree
+        else {
+            panic!()
+        };
+        assert_eq!(*dir, SplitDir::Row);
+        assert_eq!(sizes, &[65., 35.]);
+        assert!(matches!(&children[1], PaneNode::Leaf(leaf) if leaf.id == "2"));
+        assert!(matches!(&children[0], PaneNode::Split { .. }));
         let mut restored: TerminalLayout =
             serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap();
         assert!(!restored.sync(&[1, 2, 3], room));
         assert_eq!(restored, layout);
-        assert!(!restored.move_pane(1, 7, DropZone::Left));
+        assert!(!restored.move_pane(1, Some(7), DropZone::Left));
         assert_eq!(restored, layout);
     }
 
