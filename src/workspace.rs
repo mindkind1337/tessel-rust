@@ -1650,6 +1650,14 @@ impl Store {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    prepare_atomic_write(path, bytes)?
+        .persist(path)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Stage the bytes beside the destination so callers can recheck it before the rename.
+pub(crate) fn prepare_atomic_write(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     let parent = path.parent().ok_or("No parent directory")?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     if let Ok(metadata) = fs::metadata(path) {
@@ -1659,8 +1667,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     temp.write_all(bytes).map_err(|e| e.to_string())?;
     temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(temp)
 }
 
 #[cfg(test)]

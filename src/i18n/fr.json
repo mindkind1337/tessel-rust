@@ -12,6 +12,8 @@
   "Download…": "Télécharger…",
   "File changed on disk. Compare the versions, reload the file, or keep your edits.": "Le fichier a changé sur le disque. Comparez les versions, rechargez le fichier ou conservez vos modifications.",
   "Deleted on disk: saving creates it again.": "Supprimé sur le disque : l’enregistrement le recréera.",
+  "File encoding changed during save. Save again to use the current encoding.": "L’encodage du fichier a changé pendant l’enregistrement. Enregistrez de nouveau pour utiliser l’encodage actuel.",
+  "This is not a regular file.": "Ce chemin ne désigne pas un fichier ordinaire.",
   "File downloaded.": "Fichier téléchargé.",
   "Insert path in the active pane": "Insérer le chemin dans le volet actif",
   "Open a terminal here": "Ouvrir un terminal ici",

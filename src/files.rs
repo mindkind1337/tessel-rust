@@ -1,4 +1,4 @@
-use crate::workspace::{Result, atomic_write};
+use crate::workspace::{Result, prepare_atomic_write};
 use std::{
     fs,
     io::Read,
@@ -80,9 +80,18 @@ fn read_editor_text(path: &Path) -> Result<(String, bool)> {
 
 pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    fs::File::open(path)
-        .map_err(|e| e.to_string())?
-        .take((MAX_TEXT + 1) as u64)
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|e| e.to_string())?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("This is not a regular file.".into());
+    }
+    file.take((MAX_TEXT + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > MAX_TEXT {
@@ -910,6 +919,55 @@ impl Document {
         self.write_draft(profile, true)
     }
 
+    fn encoded_draft(&self) -> Result<String> {
+        if self.utf8_bom {
+            if self.text.len() > MAX_TEXT - UTF8_BOM.len_utf8() {
+                return Err("Text editor limit is 2 MiB.".into());
+            }
+            Ok(format!("{UTF8_BOM}{}", self.text))
+        } else {
+            Ok(self.text.clone())
+        }
+    }
+
+    fn persist_existing_draft(
+        &mut self,
+        mut staged: tempfile::NamedTempFile,
+        encoded: &mut String,
+    ) -> Result<()> {
+        let mut restaged = false;
+        loop {
+            let (disk, bom) = match self.read_current_disk() {
+                Err(_)
+                    if fs::symlink_metadata(&self.path)
+                        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    self.observe_disk(None);
+                    return Err("Deleted on disk: saving creates it again.".into());
+                }
+                result => result?,
+            };
+            let encoding_changed = self.utf8_bom != bom;
+            self.utf8_bom = bom;
+            if disk.as_bytes() != self.original {
+                return self.remember_conflict(disk);
+            }
+            if !encoding_changed {
+                staged.persist(&self.path).map_err(|err| err.to_string())?;
+                return Ok(());
+            }
+            if restaged {
+                return Err(
+                    "File encoding changed during save. Save again to use the current encoding."
+                        .into(),
+                );
+            }
+            *encoded = self.encoded_draft()?;
+            staged = prepare_atomic_write(&self.path, encoded.as_bytes())?;
+            restaged = true;
+        }
+    }
+
     fn write_draft(&mut self, profile: Option<&Path>, recreate: bool) -> Result<()> {
         if self.media {
             return Err("This document is read-only".into());
@@ -943,18 +1001,12 @@ impl Document {
                 false
             }
         };
-        let encoded = if self.utf8_bom {
-            if self.text.len() > MAX_TEXT - UTF8_BOM.len_utf8() {
-                return Err("Text editor limit is 2 MiB.".into());
-            }
-            std::borrow::Cow::Owned(format!("{UTF8_BOM}{}", self.text))
-        } else {
-            std::borrow::Cow::Borrowed(self.text.as_str())
-        };
+        let mut encoded = self.encoded_draft()?;
         if missing {
             save_download(&self.path, encoded.as_bytes()).map_err(|err| err.to_string())?;
         } else {
-            atomic_write(&self.path, encoded.as_bytes())?;
+            let staged = prepare_atomic_write(&self.path, encoded.as_bytes())?;
+            self.persist_existing_draft(staged, &mut encoded)?;
         }
         self.deleted_on_disk = false;
         if let Some(profile) = profile {
@@ -962,7 +1014,11 @@ impl Document {
         }
         self.tools.conflict_disk = None;
         self.tools.comparison = None;
-        self.original = self.text.as_bytes().to_vec();
+        let mut bytes = encoded.into_bytes();
+        if self.utf8_bom {
+            bytes.drain(..UTF8_BOM.len_utf8());
+        }
+        self.original = bytes;
         self.last_edited_at = None;
         Ok(())
     }
@@ -1064,6 +1120,43 @@ mod tests {
         assert!(doc.save(None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
     }
+    #[test]
+    fn staged_draft_keeps_a_later_external_edit_or_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "draft".into();
+        let mut encoded = doc.encoded_draft().unwrap();
+        let staged = prepare_atomic_write(&doc.path, encoded.as_bytes()).unwrap();
+        fs::write(&path, "other writer").unwrap();
+        assert!(doc.persist_existing_draft(staged, &mut encoded).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "other writer");
+        assert_eq!(doc.tools.conflict_disk.as_deref(), Some("other writer"));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        let staged = prepare_atomic_write(&doc.path, encoded.as_bytes()).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(doc.persist_existing_draft(staged, &mut encoded).is_err());
+        assert!(doc.deleted_on_disk && doc.dirty());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn staged_draft_retries_with_a_late_utf8_bom_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "draft".into();
+        let staged = prepare_atomic_write(&doc.path, doc.text.as_bytes()).unwrap();
+        fs::write(&path, "\u{feff}base").unwrap();
+        let mut encoded = doc.encoded_draft().unwrap();
+        doc.persist_existing_draft(staged, &mut encoded).unwrap();
+        assert!(doc.tools.conflict_disk.is_none());
+        assert_eq!(encoded, "\u{feff}draft");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\u{feff}draft");
+    }
+
     #[test]
     fn utf8_bom_stays_out_of_the_editor_and_round_trips_on_save_and_recreation() {
         let dir = tempfile::tempdir().unwrap();
