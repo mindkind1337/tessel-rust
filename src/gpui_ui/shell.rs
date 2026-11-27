@@ -1628,7 +1628,7 @@ fn render_side_browser(
                             } else if snapshot
                                 .side_browser
                                 .as_ref()
-                                .is_some_and(|p| p.retry_available)
+                                .is_some_and(|p| p.failed_address.is_some())
                             {
                                 "Retry"
                             } else {
@@ -1709,7 +1709,13 @@ fn render_side_browser(
                 .side_browser
                 .as_ref()
                 .filter(|page| !page.error.is_empty()),
-            |el, page| el.child(div().text_color(tokens.warn).child(page.error.clone())),
+            |el, page| {
+                el.child(
+                    div()
+                        .text_color(tokens.warn)
+                        .child(super::editor_view::browser_error_notice(page, tokens)),
+                )
+            },
         );
     #[cfg(windows)]
     let page = {

@@ -2492,6 +2492,29 @@ pub(super) fn download_list(
     rows
 }
 
+pub(super) fn browser_error_notice(
+    page: &crate::app::gpui_bridge::GpuiBrowserSnapshot,
+    tokens: &GpuiThemeTokens,
+) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(page.error.clone())
+        .when_some(page.failed_address.clone(), |row, address| {
+            row.child(
+                div()
+                    .id("browser-copy-failed-address")
+                    .cursor_pointer()
+                    .text_color(tokens.accent)
+                    .child(crate::i18n::tr("Copy Address"))
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.clone()));
+                    }),
+            )
+        })
+}
+
 pub(crate) fn render_browser_stage(
     snapshot: &GpuiWorkspaceSnapshot,
     browser_input: &super::browser_input::Input,
@@ -2673,7 +2696,7 @@ pub(crate) fn render_browser_stage(
                         }))
                         .child(crate::i18n::tr(if b.loading_navigation.is_some() {
                             "Stop"
-                        } else if b.retry_available {
+                        } else if b.failed_address.is_some() {
                             "Retry"
                         } else {
                             "Reload"
@@ -2791,7 +2814,7 @@ pub(crate) fn render_browser_stage(
                     .border_color(tokens.danger)
                     .text_size(px(11.0))
                     .text_color(tokens.text_strong)
-                    .child(SharedString::from(b.error.clone())),
+                    .child(browser_error_notice(b, tokens)),
             )
         })
         .child(viewport_body)

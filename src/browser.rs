@@ -566,8 +566,8 @@ impl Browser {
         self.popup = None;
     }
 
-    pub fn retry_available(&self) -> bool {
-        self.failed_page.is_some()
+    pub fn failed_address(&self) -> Option<&str> {
+        self.failed_page.as_ref().map(|(url, _)| url.as_str())
     }
 
     pub fn error_str(&self) -> &str {
@@ -1386,7 +1386,7 @@ impl Browser {
                 let response = ui
                     .button(tr(if loading.is_some() {
                         "Stop"
-                    } else if self.retry_available() {
+                    } else if self.failed_address().is_some() {
                         "Retry"
                     } else {
                         "Reload"
@@ -1448,7 +1448,14 @@ impl Browser {
             });
         }
         if !self.error_str().is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_RED, self.error_str());
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(egui::Color32::LIGHT_RED, self.error_str());
+                if let Some(address) = self.failed_address()
+                    && ui.button(tr("Copy Address")).clicked()
+                {
+                    ui.ctx().copy_text(address.to_owned());
+                }
+            });
         }
         if self.agent_root.is_none() {
             ui.horizontal(|ui| {
@@ -1753,13 +1760,14 @@ mod tests {
             .unwrap();
         browser.open_url(&url);
         let deadline = Instant::now() + Duration::from_secs(20);
-        while !browser.retry_available() {
+        while browser.failed_address().is_none() {
             assert!(Instant::now() < deadline, "no connection failure reported");
             pump();
             browser.poll();
         }
         assert!(!browser.error_str().is_empty());
         assert_eq!(browser.address_str(), url);
+        assert_eq!(browser.failed_address(), Some(url.as_str()));
         let server = TcpListener::bind(addr).unwrap();
         server.set_nonblocking(true).unwrap();
         browser.reload_now();
@@ -1788,7 +1796,7 @@ mod tests {
             }
         }
         assert!(retried);
-        assert!(!browser.retry_available());
+        assert!(browser.failed_address().is_none());
         assert!(browser.error_str().is_empty());
     }
 
