@@ -17,6 +17,7 @@ struct Binding {
 
 #[derive(Default)]
 pub(crate) struct Inputs {
+    pub(super) copied_message: Option<(u64, usize, std::time::Instant)>,
     pub questions: super::question_inputs::Inputs,
     bindings: HashMap<u64, Binding>,
 }

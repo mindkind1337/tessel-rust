@@ -961,7 +961,7 @@ impl Chat {
             .max_height((ui.available_height() - 100.0).max(80.0))
             .show(ui, |ui| {
                 for (role, text) in &self.transcript {
-                    ui.strong(tr(role));
+                    crate::chat::citations::show_header(ui, role, tr(role), text);
                     crate::chat::citations::show_message(ui, role, text, &mut clicked);
                     ui.separator();
                 }

@@ -17,6 +17,61 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 
+fn copy_message_button(
+    key: (u64, usize),
+    body: &str,
+    copied: bool,
+    french: bool,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let text = SharedString::from(body.to_owned());
+    let copy = move |root: &mut TesselGpuiRoot, cx: &mut Context<TesselGpuiRoot>| {
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+        let marker = (key.0, key.1, std::time::Instant::now());
+        root.chat_inputs.copied_message = Some(marker);
+        cx.notify();
+        cx.spawn(async move |root, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if root.chat_inputs.copied_message == Some(marker) {
+                    root.chat_inputs.copied_message = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    };
+    let keyboard = copy.clone();
+    let label = match (french, copied) {
+        (true, true) => "Copié",
+        (false, true) => "Copied",
+        (true, false) => "Copier le message",
+        (false, false) => "Copy message",
+    };
+    div()
+        .id(("copy-message", key.1))
+        .debug_selector(move || format!("copy-chat-message-{}", key.1))
+        .focusable()
+        .tab_stop(true)
+        .role(gpui::Role::Button)
+        .px(px(5.))
+        .text_size(px(10.))
+        .cursor_pointer()
+        .on_click(cx.listener(move |root, _, _, cx| {
+            cx.stop_propagation();
+            copy(root, cx);
+        }))
+        .on_key_down(cx.listener(move |root, event: &gpui::KeyDownEvent, _, cx| {
+            if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                cx.stop_propagation();
+                keyboard(root, cx);
+            }
+        }))
+        .child(label)
+}
+
 fn render_reply_prose(
     idx: usize,
     pane_id: u64,
@@ -296,17 +351,28 @@ pub(crate) fn render_native_chat_pane_body(
                     .flex_col()
                     .gap(px(4.0))
                     .child(
-                        div().flex().items_center().justify_between().child(
-                            div()
-                                .text_size(px(10.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(if is_user {
-                                    tokens.accent
-                                } else {
-                                    tokens.text_strong
-                                })
-                                .child(SharedString::from(role.clone())),
-                        ),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(if is_user {
+                                        tokens.accent
+                                    } else {
+                                        tokens.text_strong
+                                    })
+                                    .child(SharedString::from(role.clone())),
+                            )
+                            .when(crate::chat::citations::copyable(role, body), |header| {
+                                let key = (composer_id, msg_idx);
+                                let copied = chat_inputs
+                                    .copied_message
+                                    .is_some_and(|(id, idx, _)| (id, idx) == key);
+                                header.child(copy_message_button(key, body, copied, french, cx))
+                            }),
                     )
                     .children(
                         crate::chat::blocks::message_blocks(role, body)

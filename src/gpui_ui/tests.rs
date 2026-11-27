@@ -860,6 +860,22 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
     });
     cx.refresh().unwrap();
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    for (selector, expected) in [
+        ("copy-chat-message-0", "begin"),
+        ("copy-chat-message-1", reply.as_str()),
+    ] {
+        let button = visual
+            .debug_bounds(selector)
+            .expect("message copy control")
+            .center();
+        visual.simulate_mouse_move(button, None, Default::default());
+        visual.simulate_click(button, Default::default());
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some(expected)
+        );
+    }
     let copy = visual
         .debug_bounds("copy-reply-code")
         .expect("copy button")

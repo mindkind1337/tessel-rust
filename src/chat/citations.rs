@@ -11,6 +11,37 @@ pub(crate) struct Citations {
     pub links: Vec<(Range<usize>, PathBuf)>,
 }
 
+pub(crate) fn copyable(role: &str, text: &str) -> bool {
+    !text.is_empty() && (role == "You" || assistant_role(role))
+}
+
+pub(crate) fn show_header(ui: &mut eframe::egui::Ui, role: &str, label: &str, text: &str) {
+    ui.horizontal(|ui| {
+        ui.strong(label);
+        if !copyable(role, text) {
+            return;
+        }
+        let id = ui.next_auto_id().with("message-copy");
+        let now = ui.input(|input| input.time);
+        let copied = ui
+            .data(|data| data.get_temp::<f64>(id))
+            .is_some_and(|until| now < until);
+        if ui
+            .small_button(crate::i18n::tr(if copied {
+                "Copied"
+            } else {
+                "Copy message"
+            }))
+            .clicked()
+        {
+            ui.ctx().copy_text(text.to_owned());
+            ui.data_mut(|data| data.insert_temp(id, now + 1.5));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(1500));
+        }
+    });
+}
+
 pub(crate) fn show_message(
     ui: &mut eframe::egui::Ui,
     role: &str,
