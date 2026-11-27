@@ -44,6 +44,8 @@ pub(crate) enum ExplorerCommand {
     CopyPath,
     CopyRelative,
     Download,
+    OpenEditor,
+    ExternalEditor,
     InsertPath,
     TerminalHere,
     #[cfg(windows)]
@@ -6522,6 +6524,8 @@ impl Tessel {
                     InsertPath if key.is_some() => self.insert_explorer_path(&root, &path, None),
                     TerminalHere => self.open_project_terminal_here(&root, &path),
                     Open if !directory => self.open_document_preview(path),
+                    OpenEditor if !directory => self.open_document(path),
+                    ExternalEditor if !directory => self.open_external_project_file(root, path),
                     CopyPath => {
                         self.gpui_extra.copied_clipboard =
                             Some(dunce::simplified(&path).display().to_string())

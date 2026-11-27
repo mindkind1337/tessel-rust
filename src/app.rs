@@ -617,6 +617,7 @@ enum Message {
     ),
     #[cfg(windows)]
     RevealError(String),
+    ExternalOpen(PathBuf, Result<Option<PathBuf>, String>),
     DownloadProgress(PathBuf, usize),
     DownloadFinished(PathBuf, Result<crate::local_download::Report, String>),
     FileAction(Result<crate::file_actions::Change, String>),
@@ -2635,6 +2636,16 @@ impl Tessel {
                 }
                 #[cfg(windows)]
                 Message::RevealError(error) => self.error = error,
+                Message::ExternalOpen(root, result) => {
+                    native_changed = true;
+                    match result {
+                        Ok(Some(path)) if self.state.active().is_some_and(|p| p.path == root) => {
+                            self.open_document_at(root, path)
+                        }
+                        Err(error) => self.error = error,
+                        _ => {}
+                    }
+                }
                 Message::DownloadProgress(root, n) => {
                     native_changed = true;
                     self.explorer_tree.download_notice =
@@ -5457,6 +5468,9 @@ impl Tessel {
                 TreeAction::InsertPath { root: owner, path } => {
                     self.insert_explorer_path(&owner, &path, Some(ui.ctx()))
                 }
+                TreeAction::ExternalEditor { root, path } => {
+                    self.open_external_project_file(root, path)
+                }
                 TreeAction::TerminalHere { root: owner, path } => {
                     self.open_project_terminal_here(&owner, &path)
                 }
@@ -5583,6 +5597,21 @@ impl Tessel {
         }
     }
 
+    fn open_external_project_file(&mut self, root: PathBuf, path: PathBuf) {
+        if self.state.active().is_none_or(|p| p.path != root) {
+            return;
+        }
+        let sender = self.sender.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("external-editor".into())
+            .spawn(move || {
+                let result = crate::external_editor::open(&root, &path);
+                let _ = sender.send(Message::ExternalOpen(root, result));
+            })
+        {
+            self.error = error.to_string();
+        }
+    }
     fn download_project_item(&mut self, root: PathBuf, path: PathBuf) {
         if self.file_action_pending
             || self

@@ -333,20 +333,22 @@ fn local_path(raw: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-pub(crate) fn destination(root: &Path, cwd: &Path, path: &Path) -> Result<PathBuf, String> {
-    let path = crate::files::confined(root, &cwd.join(path))?;
-    // Program, shortcut and macro formats refused by Vue's chatFileLinks.
-    // Script formats that Vue can display as text use the internal editor here.
+pub(crate) fn blocked_program(path: &Path) -> bool {
     const BLOCKED: &str = "exe com msi msp mst msix msixbundle appx appxbundle appinstaller app psc1 pssc vbe wsh wsc ws sct jse lnk scr pif cpl dll ocx sys drv website application appref-ms gadget msc scf jar settingcontent-ms library-ms searchconnector-ms diagcab chm hlp xll xlam ppam docm dotm xlsm xltm xlsb pptm potm ppsm iso img vhd vhdx";
-    if path
-        .extension()
+    path.extension()
         .and_then(|s| s.to_str())
         .is_some_and(|ext| {
             BLOCKED
                 .split_ascii_whitespace()
                 .any(|blocked| blocked.eq_ignore_ascii_case(ext))
         })
-    {
+}
+
+pub(crate) fn destination(root: &Path, cwd: &Path, path: &Path) -> Result<PathBuf, String> {
+    let path = crate::files::confined(root, &cwd.join(path))?;
+    // Program, shortcut and macro formats refused by Vue's chatFileLinks.
+    // Script formats that Vue can display as text use the internal editor here.
+    if blocked_program(&path) {
         return Err("This file type cannot be opened from chat.".into());
     }
     Ok(path)

@@ -101,7 +101,17 @@ impl Menu {
         let translate = |en, french| if fr { french } else { en };
         let mut choices = Vec::new();
         if self.key.is_some() && !self.directory {
-            choices.push((Open, translate("Open", "Ouvrir")));
+            choices.extend([
+                (Open, translate("Open", "Ouvrir")),
+                (
+                    OpenEditor,
+                    translate("Open in editor", "Ouvrir dans l’éditeur"),
+                ),
+                (
+                    ExternalEditor,
+                    translate("Open in VS Code", "Ouvrir dans VS Code"),
+                ),
+            ]);
         }
         choices.push((
             TerminalHere,

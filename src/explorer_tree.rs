@@ -279,6 +279,10 @@ pub enum TreeAction {
         root: PathBuf,
         path: PathBuf,
     },
+    ExternalEditor {
+        root: PathBuf,
+        path: PathBuf,
+    },
     TerminalHere {
         root: PathBuf,
         path: PathBuf,
@@ -1608,6 +1612,28 @@ impl ExplorerTree {
                             ui.close();
                             return;
                         };
+                        if !row.dir {
+                            for (label, action) in [
+                                ("Open", TreeAction::OpenFile(menu_path.clone())),
+                                (
+                                    "Open in editor",
+                                    TreeAction::OpenPinnedFile(menu_path.clone()),
+                                ),
+                                (
+                                    "Open in VS Code",
+                                    TreeAction::ExternalEditor {
+                                        root: root_path.clone(),
+                                        path: menu_path.clone(),
+                                    },
+                                ),
+                            ] {
+                                if ui.button(tr(label)).clicked() {
+                                    emitted = Some(action);
+                                    ui.close();
+                                    return;
+                                }
+                            }
+                        }
                         if ui.button(tr("Open a terminal here")).clicked() {
                             emitted = Some(TreeAction::TerminalHere {
                                 root: root_path.clone(),
