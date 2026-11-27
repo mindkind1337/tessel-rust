@@ -11125,6 +11125,53 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn file_timeline_late_comparison_cannot_replace_a_new_view_or_cross_projects() {
+        use super::super::{Message, TimelineOrigin, TimelineSurface};
+        use crate::file_timeline::Action;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("one");
+        let other = temp.path().join("two");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(&path, "notes").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(root.clone()));
+        app.apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+        let path = app.documents[0].path.clone();
+        let project = app.state.active_project;
+        app.state.editor_prefs.timeline_shown = true;
+        app.timeline_snapshot(true);
+        app.timeline_action(Action::TogglePin(path.clone()));
+        app.select_work_tab();
+        let surface = app.timeline_surface().unwrap();
+        assert!(matches!(surface, TimelineSurface::Work(_)));
+        let late = || Message::DiffDocument {
+            project,
+            source_doc: Some(TimelineOrigin::Pinned(project, surface)),
+            root: root.clone(),
+            path: path.clone(),
+            area: crate::view_tabs_browser_model::DiffTabArea::Unstaged,
+            pinned: false,
+            result: Ok("old result".into()),
+        };
+        app.apply_gpui_action(GpuiAction::SelectDocumentTab(0));
+        app.sender.send(late()).unwrap();
+        app.poll();
+        assert_eq!(app.documents.len(), 1);
+        for view in [View::Remote, View::GuestFiles] {
+            app.view = view;
+            assert!(app.timeline_snapshot(true).file.is_none());
+        }
+        app.apply_gpui_action(GpuiAction::AddProjectPath(other));
+        app.sender.send(late()).unwrap();
+        app.poll();
+        assert!(app.timeline_snapshot(true).file.is_none());
+        assert!(app.timeline.pin.is_none());
+        assert_eq!(app.documents.len(), 1);
+    }
+
+    #[test]
     fn file_timeline_filters_survive_reopen_and_default_to_both() {
         use crate::file_timeline::{Action, Source};
         let old: crate::workspace::EditorPreferences = serde_json::from_str("{}").unwrap();

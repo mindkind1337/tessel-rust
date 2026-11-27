@@ -598,6 +598,16 @@ mod tests {
             })
             .unwrap();
         }
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::SelectWorkTab, cx);
+            let timeline = root.app.gpui_snapshot(960., 640., 4.).side_panels.timeline;
+            assert_eq!(timeline.file.unwrap().file_name().unwrap(), "history.txt");
+            assert_eq!(timeline.pinned, pin);
+            if pin {
+                root.dispatch(GpuiAction::SelectBrowserTab, cx);
+            }
+        })
+        .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let title = format!("history.txt ({})", &hash[..7]);
         loop {

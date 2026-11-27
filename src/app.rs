@@ -651,9 +651,18 @@ enum SessionStart<'a> {
     Directory(PathBuf),
     History(&'a crate::side_panels_model::SessionHistoryEntry),
 }
+#[derive(Clone, Copy, PartialEq)]
+enum TimelineSurface {
+    Editor,
+    Work(Option<u64>),
+    #[cfg(windows)]
+    Browser(u64),
+    #[cfg(windows)]
+    EmptyGrid(u64),
+}
 enum TimelineOrigin {
-    Tab(u64),
-    Pinned(Option<u64>),
+    Tab(u64, TimelineSurface),
+    Pinned(Option<u64>, TimelineSurface),
 }
 #[derive(PartialEq)]
 enum View {
@@ -2256,6 +2265,31 @@ impl Tessel {
             });
         });
     }
+    fn timeline_surface(&self) -> Option<TimelineSurface> {
+        match self.view {
+            View::Files => Some(TimelineSurface::Editor),
+            View::Work => Some(TimelineSurface::Work(self.active_session)),
+            #[cfg(windows)]
+            View::Browser => Some(TimelineSurface::Browser(self.browser.tab_id)),
+            #[cfg(windows)]
+            View::EmptyBrowserGrid => Some(TimelineSurface::EmptyGrid(self.browser.tab_id)),
+            View::GuestFiles | View::Remote => None,
+        }
+    }
+
+    fn timeline_editor(&self) -> Option<&Document> {
+        self.timeline_surface()?;
+        self.documents
+            .get(self.active_document)
+            .filter(|doc| self.visible_document_tab(doc))
+            .or_else(|| {
+                self.documents
+                    .iter()
+                    .find(|doc| self.visible_document_tab(doc))
+            })
+            .filter(|doc| doc.path.is_absolute() && doc.root.is_absolute())
+    }
+
     fn timeline_snapshot(&mut self, visible: bool) -> crate::file_timeline::Snapshot {
         let shown = visible && self.state.editor_prefs.timeline_shown;
         if self
@@ -2266,16 +2300,12 @@ impl Tessel {
         {
             self.timeline.pin = None;
         }
-        let active = (shown && self.view == View::Files)
-            .then(|| self.documents.get(self.active_document))
+        let local = shown && self.timeline_surface().is_some();
+        let active = local
+            .then(|| self.timeline_editor())
             .flatten()
-            .filter(|d| d.root.is_absolute() && d.path.is_absolute())
             .map(|d| d.path.clone());
-        let pin = self
-            .timeline
-            .pin
-            .as_ref()
-            .filter(|_| shown && self.view == View::Files);
+        let pin = self.timeline.pin.as_ref().filter(|_| local);
         let pinned = pin.is_some();
         let file = pin.map(|p| p.path.clone()).or(active);
         self.timeline.profile = self.store.as_ref().map(|s| s.directory().to_owned());
@@ -2327,11 +2357,7 @@ impl Tessel {
             Action::TogglePin(path) if self.timeline.file.as_ref() == Some(&path) => {
                 if self.timeline.pin.is_some() {
                     self.timeline.pin = None;
-                } else if let Some(doc) = self
-                    .documents
-                    .get(self.active_document)
-                    .filter(|d| d.path == path && self.view == View::Files)
-                {
+                } else if let Some(doc) = self.timeline_editor().filter(|doc| doc.path == path) {
                     self.timeline.pin = Some(crate::file_timeline::PinnedFile {
                         project: self.state.active_project,
                         root: doc.root.clone(),
@@ -2343,22 +2369,24 @@ impl Tessel {
                 self.timeline.refresh(more)
             }
             Action::Open(path, commit, pinned) if self.timeline.file.as_ref() == Some(&path) => {
-                if self.view != View::Files {
+                let Some(surface) = self.timeline_surface() else {
                     return;
-                }
+                };
                 let (origin, root) = if let Some(pin) = self
                     .timeline
                     .pin
                     .as_ref()
                     .filter(|p| p.path == path && p.project == self.state.active_project)
                 {
-                    (TimelineOrigin::Pinned(pin.project), pin.root.clone())
-                } else if let Some(doc) = self
-                    .documents
-                    .get(self.active_document)
-                    .filter(|d| d.path == path)
-                {
-                    (TimelineOrigin::Tab(doc.instance_id()), doc.root.clone())
+                    (
+                        TimelineOrigin::Pinned(pin.project, surface),
+                        pin.root.clone(),
+                    )
+                } else if let Some(doc) = self.timeline_editor().filter(|d| d.path == path) {
+                    (
+                        TimelineOrigin::Tab(doc.instance_id(), surface),
+                        doc.root.clone(),
+                    )
                 } else {
                     return;
                 };
@@ -2947,10 +2975,10 @@ impl Tessel {
                     }
                 }
                 Message::DiffDocument {
-                    source_doc: Some(TimelineOrigin::Pinned(project)),
+                    source_doc: Some(TimelineOrigin::Pinned(project, surface)),
                     ref path,
                     ..
-                } if self.view != View::Files
+                } if self.timeline_surface() != Some(surface)
                     || self.state.active_project != project
                     || self
                         .timeline
@@ -2958,13 +2986,12 @@ impl Tessel {
                         .as_ref()
                         .is_none_or(|p| &p.path != path || p.project != project) => {}
                 Message::DiffDocument {
-                    source_doc: Some(TimelineOrigin::Tab(id)),
+                    source_doc: Some(TimelineOrigin::Tab(id, surface)),
+                    project,
                     ..
-                } if self.view != View::Files
-                    || self
-                        .documents
-                        .get(self.active_document)
-                        .is_none_or(|d| d.instance_id() != id) => {}
+                } if self.timeline_surface() != Some(surface)
+                    || self.state.active_project != project
+                    || self.timeline_editor().is_none_or(|d| d.instance_id() != id) => {}
                 Message::DiffDocument {
                     project,
                     source_doc: _,
