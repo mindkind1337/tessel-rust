@@ -2717,7 +2717,7 @@ pub(crate) fn render_browser_stage(
                         }))
                         .child(crate::i18n::tr(if b.loading_navigation.is_some() {
                             "Stop"
-                        } else if b.failed_address.is_some() {
+                        } else if b.retry_available {
                             "Retry"
                         } else {
                             "Reload"

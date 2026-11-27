@@ -1628,7 +1628,7 @@ fn render_side_browser(
                             } else if snapshot
                                 .side_browser
                                 .as_ref()
-                                .is_some_and(|p| p.failed_address.is_some())
+                                .is_some_and(|p| p.retry_available)
                             {
                                 "Retry"
                             } else {

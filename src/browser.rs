@@ -38,6 +38,7 @@ enum Event {
     },
     PageStateChanged,
     LoadStarted,
+    RendererExited,
     LoadFailed {
         address: String,
         reason: LoadFailure,
@@ -553,7 +554,9 @@ impl Browser {
 
     pub fn reload_now(&self) {
         if let Some(view) = &self.view {
-            if let Some((address, _)) = &self.failed_page {
+            if let Some((address, reason)) = &self.failed_page
+                && *reason != LoadFailure::RendererExited
+            {
                 let _ = view.load_url(address);
             } else {
                 let _ = view.reload();
@@ -578,7 +581,10 @@ impl Browser {
 
     pub fn https_recovery_url(&self) -> Option<String> {
         let (address, reason) = self.failed_page.as_ref()?;
-        if reason.is_certificate() || !crate::view_tabs_browser_model::is_local_url(address) {
+        if *reason == LoadFailure::RendererExited
+            || reason.is_certificate()
+            || !crate::view_tabs_browser_model::is_local_url(address)
+        {
             return None;
         }
         let mut url = url::Url::parse(address).ok()?;
@@ -597,8 +603,15 @@ impl Browser {
         }
     }
 
+    pub fn retry_available(&self) -> bool {
+        self.failed_page.is_some()
+    }
+
     pub fn failed_address(&self) -> Option<&str> {
-        self.failed_page.as_ref().map(|(url, _)| url.as_str())
+        self.failed_page
+            .as_ref()
+            .filter(|(_, reason)| *reason != LoadFailure::RendererExited)
+            .map(|(url, _)| url.as_str())
     }
 
     pub fn error_message(&self) -> String {
@@ -720,6 +733,7 @@ impl Browser {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoadFailure {
+    RendererExited,
     Dns,
     Timeout,
     Connection,
@@ -757,6 +771,9 @@ impl LoadFailure {
 
     fn message(self, address: &str) -> String {
         match self {
+            Self::RendererExited => {
+                tr("The browser page stopped unexpectedly. Retry to restore it.").into()
+            }
             Self::Dns => tr("The host name could not be resolved.").into(),
             Self::Timeout => tr("The connection timed out.").into(),
             Self::Connection => tr("Could not connect to this page.").into(),
@@ -1126,6 +1143,28 @@ impl Browser {
                     &mut 0,
                 )
                 .map_err(|e| e.to_string())?;
+            let loading = self.navigation.clone();
+            let notify = self.sender.clone();
+            view.webview()
+                .add_ProcessFailed(
+                    &webview2_com::ProcessFailedEventHandler::create(Box::new(move |_, args| {
+                        use webview2_com::Microsoft::Web::WebView2::Win32::{
+                            COREWEBVIEW2_PROCESS_FAILED_KIND,
+                            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+                        };
+                        if let Some(args) = args {
+                            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                            args.ProcessFailedKind(&mut kind)?;
+                            if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
+                                loading.set(None);
+                                let _ = notify.send(Event::RendererExited);
+                            }
+                        }
+                        Ok(())
+                    })),
+                    &mut 0,
+                )
+                .map_err(|e| e.to_string())?;
             let location = self.sender.clone();
             view.webview()
                 .add_SourceChanged(
@@ -1282,6 +1321,12 @@ impl Browser {
                 Event::Title(title) => self.title = page_title(&title, &self.committed_address),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
+                Event::RendererExited => {
+                    self.playing_audio = false;
+                    self.error.clear();
+                    self.failed_page =
+                        Some((self.committed_address.clone(), LoadFailure::RendererExited));
+                }
                 Event::LoadStarted => self.failed_page = None,
                 Event::LoadFailed { address, reason } => {
                     self.observe_navigation(address.clone());
@@ -1472,7 +1517,7 @@ impl Browser {
                 let response = ui
                     .button(tr(if loading.is_some() {
                         "Stop"
-                    } else if self.failed_address().is_some() {
+                    } else if self.retry_available() {
                         "Retry"
                     } else {
                         "Reload"
@@ -1882,6 +1927,61 @@ mod tests {
         assert_ne!(page.address_str(), "https://localhost/a");
         page.try_https("https://localhost/b");
         assert_eq!(page.address_str(), "https://localhost/b");
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn retry_restores_a_crashed_webview_renderer() {
+        use crate::webview_test_support::{hidden_parent, pump, wait_for};
+        use std::time::{Duration, Instant};
+        use windows::core::HSTRING;
+        use wry::WebViewExtWindows as _;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("page.html");
+        std::fs::write(&file, "<title>Crash recovery fixture</title>").unwrap();
+        let parent = hidden_parent();
+        let mut page = Browser::default();
+        page.create_with_profile(&parent, dir.path().join("profile"))
+            .unwrap();
+        page.open_project_page(
+            &crate::files::Document::open(dir.path(), &file).unwrap(),
+            false,
+        )
+        .unwrap();
+        let view = page.view.as_ref().unwrap();
+        wait_for(view, "document.title === 'Crash recovery fixture'");
+        unsafe {
+            view.webview()
+                .CallDevToolsProtocolMethod(
+                    &HSTRING::from("Page.crash"),
+                    &HSTRING::from("{}"),
+                    &webview2_com::CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                        |_, _| Ok(()),
+                    )),
+                )
+                .unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !page.retry_available() {
+            assert!(Instant::now() < deadline, "renderer exit was not reported");
+            pump();
+            page.poll();
+        }
+        assert_eq!(
+            page.failed_page.as_ref().unwrap().1,
+            LoadFailure::RendererExited
+        );
+        assert!(page.failed_address().is_none());
+        assert!(page.loading_navigation().is_none());
+        let original = page.current_location().to_owned();
+        page.reload_now();
+        wait_for(
+            page.view.as_ref().unwrap(),
+            "document.title === 'Crash recovery fixture'",
+        );
+        page.poll();
+        assert_eq!(page.current_location(), original);
+        assert!(!page.retry_available());
     }
 
     #[test]

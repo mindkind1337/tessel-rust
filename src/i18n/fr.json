@@ -4,6 +4,7 @@
   "The certificate for {host} has been revoked.": "Le certificat de {host} a été révoqué.",
   "Tessel couldn't verify the certificate for {host}.": "Tessel n’a pas pu vérifier le certificat de {host}.",
   "this address": "cette adresse",
+  "The browser page stopped unexpectedly. Retry to restore it.": "La page s’est arrêtée de façon inattendue. Réessayez pour la restaurer.",
   "Try HTTPS": "Essayer HTTPS",
   "Copy Address": "Copier l’adresse",
   "Match case": "Respecter la casse",
