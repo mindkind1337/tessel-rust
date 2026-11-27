@@ -162,8 +162,19 @@ fn render_command_palette(
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    let child = m.palette_selected
+        + m.palette_rows
+            .iter()
+            .take(m.palette_selected + 1)
+            .filter(|r| r.header.is_some())
+            .count();
     let mut list = div()
         .id("gpui-palette-scroll")
+        .debug_selector(|| "palette-list".into())
+        .when_some(
+            inputs.list_scroll(crate::app::gpui_bridge::NativeSearchKind::Palette, child),
+            |el, scroll| el.track_scroll(scroll),
+        )
         .max_h(px(360.0))
         .overflow_y_scroll()
         .flex()
@@ -174,6 +185,7 @@ fn render_command_palette(
         if let Some(hdr) = &row.header {
             list = list.child(
                 div()
+                    .flex_shrink_0()
                     .pt(px(4.0))
                     .px(px(8.0))
                     .text_size(px(10.0))
@@ -186,9 +198,13 @@ fn render_command_palette(
         let cmd_id = row.command.id.clone();
         let scope = inputs.scope(crate::app::gpui_bridge::NativeSearchKind::Palette);
         let query = m.palette_query.clone();
+        let hover_query = query.clone();
+        let hover_choice = cmd_id.clone();
         list = list.child(
             div()
                 .id(("gpui-palette-row", idx as u64))
+                .flex_shrink_0()
+                .debug_selector(move || format!("palette-row-{idx}"))
                 .px(px(10.0))
                 .py(px(6.0))
                 .rounded(px(tokens.radius_px - 1.0))
@@ -202,6 +218,18 @@ fn render_command_palette(
                 .justify_between()
                 .gap(px(8.0))
                 .hover(|s| s.bg(tokens.surface_2))
+                .on_mouse_move(cx.listener(move |root, _, _, cx| {
+                    if let Some(scope) = scope {
+                        super::search_inputs::hover(
+                            root,
+                            scope,
+                            &hover_query,
+                            idx,
+                            &hover_choice,
+                            cx,
+                        );
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(scope) = scope {
                         super::search_inputs::choose(this, scope, &query, &cmd_id, false, cx);
@@ -291,6 +319,14 @@ fn render_file_finder(
 
     let mut list = div()
         .id("gpui-finder-scroll")
+        .debug_selector(|| "finder-list".into())
+        .when_some(
+            inputs.list_scroll(
+                crate::app::gpui_bridge::NativeSearchKind::Finder,
+                f.selected,
+            ),
+            |el, scroll| el.track_scroll(scroll),
+        )
         .max_h(px(360.0))
         .overflow_y_scroll()
         .flex()
@@ -303,9 +339,12 @@ fn render_file_finder(
         let scope = inputs.scope(crate::app::gpui_bridge::NativeSearchKind::Finder);
         let query = f.query.clone();
         let relative = rel.clone();
+        let hover_query = query.clone();
+        let hover_choice = relative.clone();
         list = list.child(
             div()
                 .id(("gpui-finder-row", idx as u64))
+                .flex_shrink_0()
                 .debug_selector(move || format!("finder-row-{idx}"))
                 .px(px(10.0))
                 .py(px(5.5))
@@ -322,6 +361,18 @@ fn render_file_finder(
                 .items_center()
                 .gap(px(6.))
                 .hover(|s| s.bg(tokens.surface_2))
+                .on_mouse_move(cx.listener(move |root, _, _, cx| {
+                    if let Some(scope) = scope {
+                        super::search_inputs::hover(
+                            root,
+                            scope,
+                            &hover_query,
+                            idx,
+                            &hover_choice,
+                            cx,
+                        );
+                    }
+                }))
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     if let Some(scope) = scope {
                         super::search_inputs::choose(

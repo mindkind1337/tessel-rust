@@ -91,6 +91,14 @@ impl Finder {
         });
         self.poll();
     }
+    pub(crate) fn hover_result(&mut self, index: usize, path: &str) -> bool {
+        if self.state.selected == index || self.results.get(index).map(String::as_str) != Some(path)
+        {
+            return false;
+        }
+        self.state.selected = index;
+        true
+    }
     pub(crate) fn native_selected_path(&self) -> Option<&str> {
         self.open
             .then(|| self.results.get(self.state.selected).map(String::as_str))
@@ -254,12 +262,15 @@ impl Finder {
                 .show(ui, |ui| {
                     for (index, path) in self.results.iter().enumerate() {
                         let row = ui.selectable_label(self.state.selected == index, path);
+                        if row.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+                            self.state.selected = index;
+                        }
                         if row.clicked() {
                             let insert = ui.input(|i| i.modifiers.ctrl);
                             selected = Some((path.clone(), insert));
                         }
                         if (up || down) && self.state.selected == index {
-                            row.scroll_to_me(Some(egui::Align::Center));
+                            row.scroll_to_me(None);
                         }
                     }
                 });

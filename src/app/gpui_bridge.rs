@@ -2053,6 +2053,35 @@ impl Tessel {
         ))
     }
 
+    pub(crate) fn hover_search_result(
+        &mut self,
+        scope: NativeSearchScope,
+        query: &str,
+        index: usize,
+        choice: &str,
+    ) -> bool {
+        if self.gpui_native_search_input() != Some((scope, query)) {
+            return false;
+        }
+        match scope.kind {
+            NativeSearchKind::Finder => self.finder.hover_result(index, choice),
+            NativeSearchKind::Palette => {
+                if self.command_palette.index == index {
+                    return false;
+                }
+                let cmds =
+                    self.build_palette_commands(self.state.theme.unwrap_or(ThemeId::Classic));
+                if crate::palette::filter_palette_commands(&cmds, query)
+                    .get(index)
+                    .is_none_or(|row| row.command.id != choice)
+                {
+                    return false;
+                }
+                self.command_palette.index = index;
+                true
+            }
+        }
+    }
     pub(crate) fn gpui_native_search_choice(&self, scope: NativeSearchScope) -> Option<String> {
         let (current, query) = self.gpui_native_search_input()?;
         if current != scope {

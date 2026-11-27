@@ -13,9 +13,20 @@ struct Binding {
     state: Entity<EditableTextState>,
     synced: String,
     too_long: bool,
+    scroll: gpui::ScrollHandle,
+    reveal: std::cell::Cell<bool>,
     navigation_serial: u64,
     navigation: Option<(String, Option<String>)>,
     _changed: Subscription,
+}
+impl Binding {
+    fn remember_selection(&mut self, query: String, choice: Option<String>) {
+        self.navigation_serial = self
+            .navigation_serial
+            .checked_add(1)
+            .expect("search navigation exhausted");
+        self.navigation = Some((query, choice));
+    }
 }
 #[derive(Default)]
 pub(crate) struct Inputs {
@@ -49,6 +60,13 @@ impl Inputs {
     }
     pub fn scope(&self, kind: NativeSearchKind) -> Option<NativeSearchScope> {
         self.bindings.get(&kind).map(|b| b.scope)
+    }
+    pub fn list_scroll(&self, kind: NativeSearchKind, child: usize) -> Option<&gpui::ScrollHandle> {
+        let b = self.bindings.get(&kind)?;
+        if b.reveal.replace(false) {
+            b.scroll.scroll_to_item(child);
+        }
+        Some(&b.scroll)
     }
     pub fn get(&self, kind: NativeSearchKind) -> Option<&Entity<EditableTextState>> {
         self.bindings.get(&kind).map(|b| &b.state)
@@ -93,6 +111,8 @@ impl Inputs {
                 state,
                 synced: text.to_owned(),
                 too_long: false,
+                scroll: Default::default(),
+                reveal: std::cell::Cell::new(true),
                 navigation_serial: 0,
                 navigation: None,
                 _changed: changed,
@@ -200,6 +220,7 @@ fn acknowledge(root: &mut TesselGpuiRoot, scope: NativeSearchScope) {
         && let Some(b) = root.search_inputs.bindings.get_mut(&scope.kind)
     {
         b.synced = text.to_owned();
+        b.reveal.set(true);
     }
 }
 enum SearchAction {
@@ -287,11 +308,8 @@ fn act(
             root.dispatch(GpuiAction::NativeSearchStep { scope, delta }, cx);
             let choice = root.app.gpui_native_search_choice(scope);
             if let Some(b) = root.search_inputs.bindings.get_mut(&scope.kind) {
-                b.navigation_serial = b
-                    .navigation_serial
-                    .checked_add(1)
-                    .expect("search navigation exhausted");
-                b.navigation = Some((query, choice));
+                b.reveal.set(true);
+                b.remember_selection(query, choice);
             }
         }
         SearchAction::Dismiss => {}
@@ -300,6 +318,24 @@ fn act(
         root.focus_input = FocusInputTarget::None;
     }
 }
+pub(crate) fn hover(
+    root: &mut TesselGpuiRoot,
+    scope: NativeSearchScope,
+    query: &str,
+    index: usize,
+    choice: &str,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    if let Some(b) = root.search_inputs.bindings.get_mut(&scope.kind)
+        && b.scope == scope
+        && b.state.read(cx).as_str() == query
+        && root.app.hover_search_result(scope, query, index, choice)
+    {
+        b.remember_selection(query.into(), Some(choice.into()));
+        cx.notify();
+    }
+}
+
 pub(crate) fn choose(
     root: &mut TesselGpuiRoot,
     scope: NativeSearchScope,
@@ -338,6 +374,109 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+    #[gpui::test]
+    fn native_search_long_lists_reveal_keyboard_selection_and_follow_pointer(
+        cx: &mut TestAppContext,
+    ) {
+        bindings(cx);
+        for kind in [NativeSearchKind::Finder, NativeSearchKind::Palette] {
+            let dir = tempfile::tempdir().unwrap();
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                match kind {
+                    NativeSearchKind::Finder => {
+                        root.app.install_finder_input_fixture(dir.path().into());
+                        root.app.complete_finder_scan_for_test(
+                            (0..60).map(|i| format!("example-{i:02}.txt")).collect(),
+                        );
+                    }
+                    NativeSearchKind::Palette => {
+                        root.app.apply_gpui_action(GpuiAction::ToggleCommandPalette)
+                    }
+                }
+                root
+            });
+            cx.refresh().unwrap();
+            let ids = view
+                .update(cx, |root, w, cx| {
+                    w.focus(
+                        &root
+                            .search_inputs
+                            .get(kind)
+                            .unwrap()
+                            .read(cx)
+                            .focus_handle(cx),
+                        cx,
+                    );
+                    let m = root.app.gpui_snapshot(960., 640., 4.).modals;
+                    match kind {
+                        NativeSearchKind::Finder => m.finder.unwrap().results,
+                        NativeSearchKind::Palette => {
+                            m.palette_rows.into_iter().map(|r| r.command.id).collect()
+                        }
+                    }
+                })
+                .unwrap();
+            assert!(ids.len() > 15);
+            let prefix = if kind == NativeSearchKind::Finder {
+                "finder"
+            } else {
+                "palette"
+            };
+            let assert_choice = |cx: &mut TestAppContext, index: usize| {
+                view.update(cx, |root, _, _| {
+                    let scope = root.search_inputs.scope(kind).unwrap();
+                    assert_eq!(
+                        root.app.gpui_native_search_choice(scope).as_ref(),
+                        Some(&ids[index])
+                    );
+                })
+                .unwrap();
+            };
+            for (key, index) in [("up", ids.len() - 1), ("down", 0)] {
+                cx.simulate_keystrokes(view.into(), key);
+                cx.refresh().unwrap();
+                assert_choice(cx, index);
+                let (row, list) = view
+                    .update(cx, |root, _, _| {
+                        let scroll = &root.search_inputs.bindings[&kind].scroll;
+                        let child = if kind == NativeSearchKind::Palette {
+                            let rows = root.app.gpui_snapshot(960., 640., 4.).modals.palette_rows;
+                            index
+                                + rows
+                                    .iter()
+                                    .take(index + 1)
+                                    .filter(|r| r.header.is_some())
+                                    .count()
+                        } else {
+                            index
+                        };
+                        {
+                            let mut row = scroll.bounds_for_item(child).unwrap();
+                            row.origin += scroll.offset();
+                            (row, scroll.bounds())
+                        }
+                    })
+                    .unwrap();
+                assert!(
+                    row.top() >= list.top() - gpui::px(1.)
+                        && row.bottom() <= list.bottom() + gpui::px(1.),
+                    "{prefix} {key}: row {row:?}, list {list:?}"
+                );
+            }
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let row = visual
+                .debug_bounds(if kind == NativeSearchKind::Finder {
+                    "finder-row-3"
+                } else {
+                    "palette-row-3"
+                })
+                .unwrap();
+            visual.simulate_mouse_move(row.center(), None, Default::default());
+            assert_choice(cx, 3);
+        }
     }
     #[gpui::test]
     fn native_finder_ctrl_click_inserts_relative_path_or_opens_without_a_terminal(
