@@ -8272,7 +8272,47 @@ impl Tessel {
         }
         let mut save_prefs = prefs_changed;
         if !d.error.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_RED, &d.error);
+            ui.colored_label(egui::Color32::LIGHT_RED, tr(&d.error));
+        }
+        if let Some(disk) = d.tools.conflict_disk.clone() {
+            let french = self.state.language == crate::i18n::Language::French;
+            ui.horizontal(|ui| {
+                for action in crate::files::ConflictAction::ALL {
+                    if ui.button(action.label(french)).clicked()
+                        && let Err(error) = d.resolve_conflict(&disk, action)
+                    {
+                        d.error = error;
+                    }
+                }
+            });
+            if let Some(comparison) = d.comparison() {
+                if let Some(patch) = comparison.patch.get() {
+                    if patch.line_count() == 0 {
+                        ui.label(if french {
+                            "Versions identiques."
+                        } else {
+                            "Versions are identical."
+                        });
+                    } else {
+                        egui::ScrollArea::both()
+                            .id_salt("disk-comparison")
+                            .max_height(180.)
+                            .show_rows(
+                                ui,
+                                ui.text_style_height(&egui::TextStyle::Monospace),
+                                patch.line_count(),
+                                |ui, rows| {
+                                    for i in rows {
+                                        ui.monospace(patch.line(i));
+                                    }
+                                },
+                            );
+                    }
+                } else {
+                    ui.spinner();
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                }
+            }
         }
         let mut link = None;
         if d.diff_title.is_some() {

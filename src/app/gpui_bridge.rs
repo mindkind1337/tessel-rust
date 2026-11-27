@@ -71,6 +71,7 @@ pub(crate) struct GpuiExtraUiState {
     outline_open: bool,
     outline_options_open: bool,
     outline_query: Option<(u64, String)>,
+    disk_comparison_pending: bool,
     outline_cache: Option<crate::json_outline_panel::Cache>,
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
@@ -119,6 +120,7 @@ impl Default for GpuiExtraUiState {
             outline_open: false,
             outline_options_open: false,
             outline_query: None,
+            disk_comparison_pending: false,
             outline_cache: None,
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
@@ -421,6 +423,8 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub external_available: bool,
     pub title: String,
     pub path_display: String,
+    pub conflict_disk: Option<std::sync::Arc<str>>,
+    pub comparison: Option<std::sync::Arc<crate::files::DiskComparison>>,
     pub breadcrumb_path: Vec<String>,
     pub breadcrumb_symbols: std::sync::Arc<[crate::json_outline_panel::EditorBreadcrumb]>,
     pub extension: String,
@@ -974,6 +978,7 @@ pub(crate) enum GpuiAction {
     // Document / Diff / Rich Preview actions
     OpenChatCitation(u64, crate::chat::citations::FileLink),
     OpenDocumentPath(PathBuf),
+    ResolveDiskConflict(u64, std::sync::Arc<str>, crate::files::ConflictAction),
     SaveActiveDocument,
     OpenEditorExternally(u64),
     SaveGuestDocument(crate::guest_file_editor::Key),
@@ -1820,6 +1825,7 @@ impl Tessel {
                 .iter()
                 .any(|session| session.profile_migration.is_some() || session.restarting.is_some())
             || self.transcript_trash_busy
+            || self.gpui_extra.disk_comparison_pending
             || self
                 .gpui_extra
                 .outline_cache
@@ -3912,6 +3918,11 @@ impl Tessel {
             None
         };
 
+        self.gpui_extra.disk_comparison_pending = active_document
+            .as_ref()
+            .and_then(|doc| doc.comparison.as_ref())
+            .is_some_and(|comparison| comparison.patch.get().is_none());
+
         #[cfg(windows)]
         let browser = GpuiBrowserSnapshot {
             started: self.browser.is_started(),
@@ -4307,6 +4318,8 @@ impl Tessel {
             syntax_highlighting: preferences.syntax_highlighting,
             doc_index,
             title,
+            conflict_disk: doc.tools.conflict_disk.clone(),
+            comparison: doc.comparison().cloned(),
             breadcrumb_path: {
                 let path = dunce::simplified(&doc.path);
                 path.strip_prefix(dunce::simplified(&doc.root))
@@ -6291,6 +6304,16 @@ impl Tessel {
                 }
             }
             GpuiAction::OpenEditorExternally(id) => self.open_active_file_externally(id),
+            GpuiAction::ResolveDiskConflict(id, expected, action) => {
+                if self.gpui_is_document_view()
+                    && !self.gpui_has_open_modal()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                    && doc.instance_id() == id
+                    && let Err(error) = doc.resolve_conflict(&expected, action)
+                {
+                    doc.error = error;
+                }
+            }
             GpuiAction::SaveActiveDocument => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
                     match doc.save(self.store.as_ref().map(|s| s.directory())) {

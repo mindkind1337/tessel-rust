@@ -875,6 +875,57 @@ mod tests {
     }
 
     #[gpui::test]
+    fn disk_conflict_buttons_compare_then_reload_the_original_tab(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.txt");
+        std::fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        doc.text = "my draft".into();
+        std::fs::write(&path, "disk edit").unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root.dispatch(GpuiAction::SaveActiveDocument, cx);
+            root
+        });
+        let click = |cx: &mut TestAppContext, selector| {
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let pos = visual.debug_bounds(selector).unwrap().center();
+            visual.simulate_click(pos, Default::default());
+        };
+        click(cx, "disk-conflict-compare");
+        view.update(cx, |root, _, _| {
+            let doc = root.app.gpui_editor_document().unwrap();
+            assert_eq!(doc.text, "my draft");
+            let comparison = doc.comparison().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while comparison.patch.get().is_none() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let patch = comparison.patch.get().unwrap();
+            assert!((0..patch.line_count()).any(|i| patch.line(i).starts_with("-disk edit")));
+            assert!((0..patch.line_count()).any(|i| patch.line(i).starts_with("+my draft")));
+        })
+        .unwrap();
+        click(cx, "disk-conflict-reload");
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            let doc = root.app.gpui_editor_document().unwrap();
+            assert_eq!(doc.instance_id(), id);
+            assert!(!doc.dirty());
+            assert_eq!(
+                root.editor_input.get(id).unwrap().read(cx).as_str(),
+                "disk edit"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn outline_breadcrumb_follows_caret_with_panel_closed_and_reveals_parent(
         cx: &mut TestAppContext,
     ) {

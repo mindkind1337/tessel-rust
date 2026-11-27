@@ -527,8 +527,73 @@ pub(crate) fn render_document_editor_stage(
                     .border_color(tokens.danger)
                     .text_size(px(11.5))
                     .text_color(tokens.text_strong)
-                    .child(SharedString::from(doc.error.clone())),
+                    .child(SharedString::from(crate::i18n::tr(&doc.error).to_owned())),
             )
+        })
+        .when_some(doc.conflict_disk.as_ref(), |el, disk| {
+            let mut bar = div().flex().items_center().gap(px(8.)).px(px(12.));
+            for action in crate::files::ConflictAction::ALL {
+                let label = action.label(french);
+                let command =
+                    GpuiAction::ResolveDiskConflict(doc.instance_id, disk.clone(), action);
+                bar = bar.child(
+                    div()
+                        .id(label)
+                        .debug_selector(move || {
+                            match action {
+                                crate::files::ConflictAction::Compare => "disk-conflict-compare",
+                                crate::files::ConflictAction::Reload => "disk-conflict-reload",
+                                crate::files::ConflictAction::Keep => "disk-conflict-keep",
+                            }
+                            .into()
+                        })
+                        .role(gpui::Role::Button)
+                        .aria_label(label)
+                        .cursor_pointer()
+                        .text_color(tokens.accent)
+                        .on_click(
+                            cx.listener(move |root, _, _, cx| root.dispatch(command.clone(), cx)),
+                        )
+                        .child(label),
+                );
+            }
+            el.child(bar)
+        })
+        .when_some(doc.comparison.as_ref(), |el, comparison| {
+            if let Some(patch) = comparison.patch.get() {
+                if patch.line_count() == 0 {
+                    return el.child(if french {
+                        "Versions identiques."
+                    } else {
+                        "Versions are identical."
+                    });
+                }
+                let count = patch.line_count();
+                let comparison = comparison.clone();
+                el.child(
+                    gpui::uniform_list(
+                        "disk-comparison",
+                        count,
+                        cx.processor(move |_, rows: std::ops::Range<usize>, _, _| {
+                            let patch = comparison.patch.get().expect("completed comparison");
+                            rows.map(|i| {
+                                div()
+                                    .font_family(mono_font_family())
+                                    .child(patch.line(i).to_owned())
+                            })
+                            .collect::<Vec<_>>()
+                        }),
+                    )
+                    .h(px(180.))
+                    .flex_shrink_0(),
+                )
+            } else {
+                el.child(if french {
+                    "Comparaison…"
+                } else {
+                    "Comparing…"
+                })
+            }
         })
         .child(content)
         .into_any_element()

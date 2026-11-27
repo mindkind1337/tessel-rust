@@ -75,8 +75,37 @@ pub enum OutlineCursor {
     Chars(usize),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ConflictAction {
+    Compare,
+    Reload,
+    Keep,
+}
+
+impl ConflictAction {
+    pub(crate) const ALL: [Self; 3] = [Self::Compare, Self::Reload, Self::Keep];
+    pub(crate) fn label(self, french: bool) -> &'static str {
+        match (self, french) {
+            (Self::Compare, false) => "Compare",
+            (Self::Compare, true) => "Comparer",
+            (Self::Reload, false) => "Reload from Disk",
+            (Self::Reload, true) => "Recharger depuis le disque",
+            (Self::Keep, false) => "Keep My Edits",
+            (Self::Keep, true) => "Conserver mes modifications",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DiskComparison {
+    draft: String,
+    pub(crate) patch: std::sync::OnceLock<crate::saved_version_diff::Patch>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub(crate) conflict_disk: Option<std::sync::Arc<str>>,
+    comparison: Option<std::sync::Arc<DiskComparison>>,
     #[cfg(windows)]
     pub html_root: Option<PathBuf>,
     pub html_plain_text: Option<std::sync::Arc<str>>,
@@ -716,16 +745,99 @@ impl Document {
     pub fn dirty(&self) -> bool {
         !self.media && self.text.as_bytes() != self.original
     }
-    pub fn save(&mut self, profile: Option<&Path>) -> Result<()> {
-        if self.media {
-            return Err("This document is read-only".into());
-        }
+    fn read_current_disk(&self) -> Result<Vec<u8>> {
         let actual = confined(&self.root, &self.path)?;
         if actual != self.path {
             return Err("File target changed since opening.".into());
         }
-        if read(&self.path)? != self.original {
-            return Err("File changed on disk. Save is blocked to preserve external changes; compare or reload first.".into());
+        read(&actual)
+    }
+
+    fn remember_conflict(&mut self, disk: Vec<u8>) -> Result<()> {
+        self.tools.conflict_disk = None;
+        self.tools.comparison = None;
+        if disk.contains(&0) {
+            return Err("Binary file: text editing is disabled.".into());
+        }
+        let text =
+            String::from_utf8(disk).map_err(|_| "This file is not UTF-8 text.".to_owned())?;
+        self.tools.conflict_disk = Some(text.into());
+        Err(
+            "File changed on disk. Compare the versions, reload the file, or keep your edits."
+                .into(),
+        )
+    }
+
+    pub(crate) fn comparison(&self) -> Option<&std::sync::Arc<DiskComparison>> {
+        self.tools
+            .comparison
+            .as_ref()
+            .filter(|c| c.draft == self.text)
+    }
+
+    pub(crate) fn resolve_conflict(
+        &mut self,
+        expected: &std::sync::Arc<str>,
+        action: ConflictAction,
+    ) -> Result<()> {
+        if !self
+            .tools
+            .conflict_disk
+            .as_ref()
+            .is_some_and(|disk| std::sync::Arc::ptr_eq(disk, expected))
+        {
+            return Ok(());
+        }
+        let disk = self.read_current_disk()?;
+        if disk != expected.as_bytes() {
+            return self.remember_conflict(disk);
+        }
+        if matches!(action, ConflictAction::Compare) {
+            if self.comparison().is_none() {
+                let comparison = std::sync::Arc::new(DiskComparison {
+                    draft: self.text.clone(),
+                    patch: Default::default(),
+                });
+                let job = comparison.clone();
+                let disk = expected.clone();
+                let name = self
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                std::thread::Builder::new()
+                    .name("editor-conflict-diff".into())
+                    .spawn(move || {
+                        let diff = crate::saved_version_diff::text_diff(&name, &disk, &job.draft);
+                        let _ = job.patch.set(crate::saved_version_diff::Patch::new(diff));
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.tools.comparison = Some(comparison);
+            }
+            return Ok(());
+        }
+        self.original = disk;
+        if matches!(action, ConflictAction::Reload) {
+            self.text = expected.to_string();
+            self.preview = None;
+            self.sheet_cache = None;
+            self.tools.html_plain_text = None;
+        }
+        self.last_edited_at = self.dirty().then(std::time::Instant::now);
+        self.tools.conflict_disk = None;
+        self.tools.comparison = None;
+        self.error.clear();
+        Ok(())
+    }
+
+    pub fn save(&mut self, profile: Option<&Path>) -> Result<()> {
+        if self.media {
+            return Err("This document is read-only".into());
+        }
+        let disk = self.read_current_disk()?;
+        if disk != self.original {
+            return self.remember_conflict(disk);
         }
         if self.text.len() > MAX_TEXT {
             return Err("Text editor limit is 2 MiB.".into());
@@ -734,6 +846,8 @@ impl Document {
         if let Some(profile) = profile {
             let _ = crate::local_file_history::record(profile, &self.path, &self.text);
         }
+        self.tools.conflict_disk = None;
+        self.tools.comparison = None;
         self.original = self.text.as_bytes().to_vec();
         self.last_edited_at = None;
         Ok(())
@@ -836,6 +950,30 @@ mod tests {
         assert!(doc.save(None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
     }
+    #[test]
+    fn disk_conflict_requires_a_new_choice_after_another_external_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("document.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "draft".into();
+        fs::write(&path, "writer one").unwrap();
+        assert!(doc.save(None).is_err());
+        let first = doc.tools.conflict_disk.clone().unwrap();
+        fs::write(&path, "writer two").unwrap();
+        assert!(doc.resolve_conflict(&first, ConflictAction::Keep).is_err());
+        doc.resolve_conflict(&first, ConflictAction::Reload)
+            .unwrap();
+        assert_eq!(doc.text, "draft");
+        let second = doc.tools.conflict_disk.clone().unwrap();
+        doc.resolve_conflict(&second, ConflictAction::Keep).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "writer two");
+        assert!(doc.dirty());
+        doc.save(None).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "draft");
+        assert!(!doc.dirty());
+    }
+
     #[test]
     fn images_decode_read_only_and_reject_oversized_dimensions() {
         let dir = tempfile::tempdir().unwrap();
