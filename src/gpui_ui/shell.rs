@@ -366,14 +366,12 @@ fn render_view_tabs_bar(
         let browser_drag: Option<CenterBrowserDrag> = None;
         let drag_title = tab.title.clone();
         let drag_tokens = *tokens;
-        let mut hint = tab.hint.clone();
-        if tab.preview {
-            hint.push_str(if snapshot.french {
-                "\nAperçu : double-cliquez pour le garder ouvert"
-            } else {
-                "\nPreview: double-click to keep it open"
-            });
-        }
+        let lang = crate::view_tabs_browser_model::TabsLang::from(snapshot.french);
+        let hint = if doc_index.is_some() {
+            crate::view_tabs_browser_model::editor_hint(&tab.title, &tab.hint, tab.preview, lang)
+        } else {
+            tab.hint.clone()
+        };
         let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
         bar = bar.child(
             div()
@@ -548,9 +546,22 @@ fn render_view_tabs_bar(
                     )
                 })
                 .when_some(close, |el, action| {
+                    let (hint, name) =
+                        crate::view_tabs_browser_model::close_labels(&tab.title, tab.dirty, lang);
                     el.child(
                         div()
                             .id(("close-view-tab", idx))
+                            .role(gpui::Role::Button)
+                            .aria_label(name)
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::chrome::ToolbarTooltip {
+                                    text: hint.clone().into(),
+                                    bg,
+                                    fg,
+                                    border,
+                                })
+                                .into()
+                            })
                             .debug_selector(move || format!("view-tab-close-{idx}"))
                             .size(px(18.))
                             .flex_shrink_0()

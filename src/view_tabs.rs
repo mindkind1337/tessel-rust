@@ -239,11 +239,16 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             Vec2::splat(18.0),
         );
         let button = ui.interact(close_rect, body.id.with("close"), egui::Sense::click());
+        let (close_hint, close_name) = crate::view_tabs_browser_model::close_labels(
+            tab.title,
+            tab.dirty,
+            crate::view_tabs_browser_model::TabsLang::from(crate::i18n::is_french()),
+        );
         button.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
                 ui.is_enabled(),
-                format!("{} {}", tr("Close"), tab.title),
+                close_name.as_str(),
             )
         });
         if tab.selected || body.hovered() || button.hovered() || button.has_focus() {
@@ -262,7 +267,7 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             );
         }
         close = button.clicked() || body.clicked_by(egui::PointerButton::Middle);
-        button.on_hover_text(tr("Close"));
+        button.on_hover_text(close_hint);
     }
 
     if ui.is_enabled() && (tab.closable || tab.has_file_menu) {

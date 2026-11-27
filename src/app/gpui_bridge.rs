@@ -3758,7 +3758,7 @@ impl Tessel {
             sound: None,
             id: "work".into(),
             title: tr("Terminal").into(),
-            hint: tr("Terminal").into(),
+            hint: self.tab_language().terminal_hint().into(),
             kind: crate::view_tabs::Kind::Terminal,
             doc_index: None,
             guest_key: None,

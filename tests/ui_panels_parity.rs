@@ -18,6 +18,9 @@ mod i18n;
 #[path = "../src/icons.rs"]
 mod icons;
 #[allow(dead_code)]
+#[path = "../src/pane_grid.rs"]
+mod pane_grid;
+#[allow(dead_code)]
 #[path = "../src/project_panel.rs"]
 mod project_panel;
 #[allow(dead_code)]
@@ -32,6 +35,9 @@ mod tasks_board_panel;
 #[allow(dead_code)]
 #[path = "../src/view_tabs.rs"]
 mod view_tabs;
+#[allow(dead_code)]
+#[path = "../src/view_tabs_browser_model.rs"]
+mod view_tabs_browser_model;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -3769,7 +3769,7 @@ impl Tessel {
                         crate::view_tabs::Tab {
                             title: tr("Terminal"),
                             file_path: None,
-                            hint: tr("Terminal"),
+                            hint: self.tab_language().terminal_hint(),
                             kind: crate::view_tabs::Kind::Terminal,
                             selected: self.view == View::Work || self.empty_browser_grid(),
                             dirty: false,
@@ -3827,7 +3827,12 @@ impl Tessel {
                             crate::view_tabs::Tab {
                                 title,
                                 file_path: Some(&paths[i]),
-                                hint: &paths[i],
+                                hint: &crate::view_tabs_browser_model::editor_hint(
+                                    title,
+                                    &paths[i],
+                                    document.unpinned_preview,
+                                    self.tab_language(),
+                                ),
                                 kind,
                                 selected: self.view == View::Files && self.active_document == i,
                                 dirty: document.dirty(),

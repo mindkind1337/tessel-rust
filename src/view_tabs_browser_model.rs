@@ -398,6 +398,36 @@ pub struct ViewTabItem {
     pub close_aria_label: Option<String>,
 }
 
+impl From<bool> for TabsLang {
+    fn from(french: bool) -> Self {
+        if french { Self::Fr } else { Self::En }
+    }
+}
+
+impl TabsLang {
+    pub fn terminal_hint(self) -> &'static str {
+        match self {
+            Self::En => "The terminals and agents of this project",
+            Self::Fr => "Les terminaux et les agents de ce projet",
+        }
+    }
+}
+
+pub fn editor_hint(label: &str, path: &str, preview: bool, lang: TabsLang) -> String {
+    let mut hint = if label == path {
+        path.to_owned()
+    } else {
+        format!("{label}\n{path}")
+    };
+    if preview {
+        hint.push_str(match lang {
+            TabsLang::En => "\nPreview: double-click to keep it open",
+            TabsLang::Fr => "\nAperçu : double-cliquez pour le garder ouvert",
+        });
+    }
+    hint
+}
+
 fn wrap_host_hint(host: Option<&str>, hint: String, lang: TabsLang) -> String {
     match (host, lang) {
         (Some(h), TabsLang::En) => {
@@ -412,7 +442,7 @@ fn wrap_host_hint(host: Option<&str>, hint: String, lang: TabsLang) -> String {
     }
 }
 
-fn close_labels(label: &str, dirty: bool, lang: TabsLang) -> (String, String) {
+pub fn close_labels(label: &str, dirty: bool, lang: TabsLang) -> (String, String) {
     match (dirty, lang) {
         (true, TabsLang::En) => (
             "Unsaved changes. Close (Ctrl+W)".to_string(),
@@ -440,18 +470,14 @@ pub fn build_view_tabs(
     lang: TabsLang,
 ) -> Vec<ViewTabItem> {
     let mut out = Vec::new();
-    let (term_label, term_hint) = match lang {
-        TabsLang::En => ("Terminal", "The terminals and agents of this project"),
-        TabsLang::Fr => ("Terminal", "Les terminaux et les agents de ce projet"),
-    };
     out.push(ViewTabItem {
         key: "terminal".to_string(),
         id: "terminal".to_string(),
         path: None,
         file_for_icon: None,
         kind: ViewTabKind::Terminal,
-        label: term_label.to_string(),
-        hint: term_hint.to_string(),
+        label: "Terminal".to_string(),
+        hint: lang.terminal_hint().to_string(),
         active: shown.is_terminal(),
         preview: false,
         dirty: false,
@@ -514,26 +540,12 @@ pub fn build_view_tabs(
                 for (entry, input) in strip.files.iter().zip(label_inputs.iter()) {
                     let doc_path = doc_path_of(&entry.path, input.diff);
                     let label = editor_tab_label(input, &label_inputs, lang);
-                    let base_path_hint = if label == doc_path {
-                        doc_path.to_string()
-                    } else {
-                        format!("{label}\n{doc_path}")
-                    };
                     let preview = !entry.pinned;
-                    let hint = if live_share_host.is_some() {
-                        wrap_host_hint(live_share_host, base_path_hint, lang)
-                    } else if preview {
-                        match lang {
-                            TabsLang::En => {
-                                format!("{base_path_hint}\nPreview: double-click to keep it open")
-                            }
-                            TabsLang::Fr => format!(
-                                "{base_path_hint}\nAperçu : double-cliquez pour le garder ouvert"
-                            ),
-                        }
-                    } else {
-                        base_path_hint
-                    };
+                    let hint = wrap_host_hint(
+                        live_share_host,
+                        editor_hint(&label, doc_path, preview && live_share_host.is_none(), lang),
+                        lang,
+                    );
                     let current = strip
                         .active_path
                         .as_deref()
