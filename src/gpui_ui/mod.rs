@@ -839,10 +839,13 @@ impl TesselGpuiRoot {
             }
             return;
         }
-        if key == "f3"
-            && !ctrl
+        let find_navigation = (key == "f3" && !ctrl)
+            || (cfg!(target_os = "macos")
+                && key == "g"
+                && ks.modifiers.platform
+                && !ks.modifiers.control);
+        if find_navigation
             && !alt
-            && !event.keystroke.modifiers.platform
             && matches!(
                 native_target,
                 Some(

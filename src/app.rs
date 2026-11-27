@@ -8313,7 +8313,7 @@ impl Tessel {
                 let (index, shift) =
                     input.events.iter().enumerate().find_map(|(index, event)| {
                         let egui::Event::Key {
-                            key: egui::Key::F3,
+                            key,
                             pressed: true,
                             modifiers,
                             ..
@@ -8321,11 +8321,12 @@ impl Tessel {
                         else {
                             return None;
                         };
-                        let allowed = if modifiers.shift {
-                            egui::Modifiers::SHIFT
-                        } else {
-                            egui::Modifiers::NONE
+                        let mut allowed = match key {
+                            egui::Key::F3 => egui::Modifiers::NONE,
+                            egui::Key::G if cfg!(target_os = "macos") => egui::Modifiers::MAC_CMD,
+                            _ => return None,
                         };
+                        allowed.shift = modifiers.shift;
                         modifiers
                             .matches_exact(allowed)
                             .then_some((index, modifiers.shift))

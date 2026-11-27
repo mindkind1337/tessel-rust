@@ -639,7 +639,12 @@ mod tests {
             source.update(cx, |s, cx| s.set_selected_text_range(3..6, window, cx));
         })
         .unwrap();
-        for (key, expected) in [("f3", 10..13), ("f3", 3..6), ("shift-f3", 10..13)] {
+        let (next, previous) = if cfg!(target_os = "macos") {
+            ("cmd-g", "cmd-shift-g")
+        } else {
+            ("f3", "shift-f3")
+        };
+        for (key, expected) in [("f3", 10..13), (next, 3..6), (previous, 10..13)] {
             cx.simulate_keystrokes(view.into(), key);
             cx.refresh().unwrap();
             view.update(cx, |root, window, cx| {
