@@ -718,6 +718,15 @@ struct ActiveAgentInstall {
     finished: bool,
 }
 
+#[cfg(windows)]
+struct PendingBrowserLaunch {
+    project: u64,
+    root: PathBuf,
+    tab: u64,
+    checkout: PathBuf,
+    launch: Launch,
+}
+
 pub struct Tessel {
     #[cfg(windows)]
     window_frame: Option<crate::window_frame::WindowFrame>,
@@ -825,6 +834,8 @@ pub struct Tessel {
     owner_task_launches: Vec<task_launch::Pending>,
     owner_task_turns: Vec<task_launch::Running>,
     owner_task_reviews: Vec<task_review::Pending>,
+    #[cfg(windows)]
+    pending_browser_launch: Option<PendingBrowserLaunch>,
     worktree_state: crate::worktree_state::WorktreeState,
     worktree_cleanup: Option<crate::worktree_cleanup_panel::WorktreeCleanupModal>,
     pending_transcript_trash: Option<crate::side_panels_model::SessionHistoryEntry>,
@@ -1073,6 +1084,8 @@ impl Tessel {
             owner_task_launches: Vec::new(),
             owner_task_turns: Vec::new(),
             owner_task_reviews: Vec::new(),
+            #[cfg(windows)]
+            pending_browser_launch: None,
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -1960,6 +1973,14 @@ impl Tessel {
                     source_cwd,
                     summary,
                 } => {
+                    #[cfg(windows)]
+                    if let Some(request) = &self.pending_browser_launch
+                        && request.project == project_id
+                        && request.root != source_cwd
+                    {
+                        self.worktree_state
+                            .refresh_project(project_id, request.root.clone());
+                    }
                     if self.new_task.open && self.new_task.project == project_id {
                         if self.new_task.source == source_cwd {
                             self.new_task.isolation = Some(summary.is_some_and(|s| s.has_commits));
@@ -2095,6 +2116,23 @@ impl Tessel {
                         }
                     }
                 }
+            }
+        }
+        #[cfg(windows)]
+        if let Some(request) = &self.pending_browser_launch {
+            if !matches!(self.view, View::Browser | View::EmptyBrowserGrid)
+                || self.browser.tab_id != request.tab
+                || self.browser.view_worktree.as_ref() != Some(&request.checkout)
+                || !self
+                    .state
+                    .active()
+                    .is_some_and(|p| p.id == request.project && p.path == request.root)
+            {
+                self.pending_browser_launch = None;
+            } else if self.worktree_state.has_inspected(request.project)
+                && let Some(request) = self.pending_browser_launch.take()
+            {
+                self.launch_from_browser_grid(request.launch);
             }
         }
     }
@@ -6572,6 +6610,24 @@ impl Tessel {
     #[cfg(windows)]
     fn launch_from_browser_grid(&mut self, launch: Launch) {
         let worktree = if let Some(path) = self.browser.view_worktree.as_deref() {
+            if let Some(project) = self
+                .state
+                .projects
+                .iter()
+                .find(|p| Some(p.id) == self.state.active_project)
+                && !self.worktree_state.has_inspected(project.id)
+            {
+                self.pending_browser_launch = Some(PendingBrowserLaunch {
+                    project: project.id,
+                    root: project.path.clone(),
+                    tab: self.browser.tab_id,
+                    checkout: path.to_owned(),
+                    launch,
+                });
+                self.worktree_state
+                    .refresh_project(project.id, project.path.clone());
+                return;
+            }
             let checkout = self
                 .state
                 .active_project

@@ -1616,6 +1616,8 @@ impl Tessel {
             owner_task_launches: Vec::new(),
             owner_task_turns: Vec::new(),
             owner_task_reviews: Vec::new(),
+            #[cfg(windows)]
+            pending_browser_launch: None,
             worktree_state: Default::default(),
             worktree_cleanup: None,
             pending_delete_worktree: None,
@@ -8399,18 +8401,24 @@ mod panel_snapshot_tests {
         drop(app);
         let mut app = start();
         check(&mut app);
-        let pid = app.state.active_project.unwrap();
-        app.worktree_state.refresh_missing(&app.state.projects);
+        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
+        assert!(app.pending_browser_launch.is_some());
+        app.apply_gpui_action(GpuiAction::FocusSession(main));
+        app.poll_worktrees();
+        assert!(app.pending_browser_launch.is_none());
+        assert_eq!(app.sessions.len(), 1);
+        app.select_browser_page(app.browser.tab_id);
+        app.select_work_tab();
+        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
         let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while app.worktree_state.summary(pid).is_none() {
+        while app.sessions.len() == 1 {
             app.poll_worktrees();
             assert!(
                 std::time::Instant::now() < until,
-                "checkout discovery timed out"
+                "checkout launch timed out"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
         let session = app.sessions.last().unwrap();
         assert_eq!(
             session.cwd.canonicalize().unwrap(),

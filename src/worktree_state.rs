@@ -97,6 +97,11 @@ impl WorktreeState {
         self.summaries.get(&project_id).and_then(Option::as_ref)
     }
 
+    #[cfg(windows)]
+    pub fn has_inspected(&self, project_id: u64) -> bool {
+        self.summaries.contains_key(&project_id)
+    }
+
     #[must_use]
     pub const fn is_busy(&self) -> bool {
         self.busy_ops > 0
