@@ -2018,6 +2018,17 @@ impl Tessel {
         };
         self.open_document_at_mode(root, path, pinned);
     }
+    fn open_explorer_content_hit(&mut self, path: PathBuf, line: usize) {
+        if let Some(root) = self.state.active().map(|p| p.path.clone()) {
+            self.explorer_tree.select_content_hit(&path, line);
+            self.open_document_at_position(
+                root,
+                path,
+                !self.state.editor_prefs.preview_tabs,
+                Some(crate::files::FilePosition { line, column: 1 }),
+            );
+        }
+    }
     fn open_chat_citation(&mut self, pane: u64, link: &crate::chat::citations::FileLink) {
         let path = &link.path;
         let Some(project) = self.state.active() else {
@@ -5375,6 +5386,9 @@ impl Tessel {
                 }
                 TreeAction::OpenPinnedFile(path) if !self.file_action_pending => {
                     self.open_document(path)
+                }
+                TreeAction::OpenContentHit { path, line } if !self.file_action_pending => {
+                    self.open_explorer_content_hit(path, line)
                 }
                 TreeAction::CopyPath(path) => {
                     ui.ctx().copy_text(path.display().to_string());

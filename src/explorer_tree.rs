@@ -263,6 +263,10 @@ pub enum TreeContextKind {
 pub enum TreeAction {
     OpenFile(PathBuf),
     OpenPinnedFile(PathBuf),
+    OpenContentHit {
+        path: PathBuf,
+        line: usize,
+    },
     CopyPath(PathBuf),
     Context {
         kind: TreeContextKind,
@@ -502,6 +506,7 @@ pub struct ExplorerTree {
     restore_open: HashSet<String>,
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
     selected_key: Option<String>,
+    selected_hit: Option<(PathBuf, usize)>,
     compact_folders: bool,
     show_dotfiles: bool,
     filter_query: String,
@@ -551,6 +556,7 @@ impl ExplorerTree {
             restore_open: HashSet::new(),
             expanded_by_project: VecDeque::new(),
             selected_key: None,
+            selected_hit: None,
             compact_folders: false,
             show_dotfiles: true,
             filter_query: String::new(),
@@ -822,6 +828,7 @@ impl ExplorerTree {
         self.pending_queue.clear();
         self.queued_keys.clear();
         self.selected_key = None;
+        self.selected_hit = None;
         self.last_row_rects.clear();
         self.content_search_hits.clear();
         self.content_search_limited = false;
@@ -1224,7 +1231,19 @@ impl ExplorerTree {
                         let w = ui.available_width().max(120.0_f32);
                         let (rect, resp) =
                             ui.allocate_exact_size(egui::vec2(w, 34.0_f32), egui::Sense::click());
-                        if resp.hovered() {
+                        let selected = self.hit_selected(hit);
+                        resp.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::SelectableLabel,
+                                ui.is_enabled(),
+                                selected,
+                                format!("{}:{}", hit.rel_display, hit.line),
+                            )
+                        });
+                        if selected {
+                            ui.painter()
+                                .rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
+                        } else if resp.hovered() {
                             ui.painter().rect_filled(
                                 rect,
                                 4.0_f32,
@@ -1248,10 +1267,11 @@ impl ExplorerTree {
                             egui::FontId::monospace(10.5_f32),
                             ui.visuals().weak_text_color(),
                         );
-                        if resp.double_clicked() {
-                            emitted = Some(TreeAction::OpenPinnedFile(hit.path.clone()));
-                        } else if resp.clicked() {
-                            emitted = Some(TreeAction::OpenFile(hit.path.clone()));
+                        if resp.clicked() {
+                            emitted = Some(TreeAction::OpenContentHit {
+                                path: hit.path.clone(),
+                                line: hit.line,
+                            });
                         }
                     }
                 });
@@ -1490,6 +1510,7 @@ impl ExplorerTree {
 
         if let Some((idx, row_path, pinned)) = clicked_row {
             let row = self.cached_tree.rows[idx].clone();
+            self.selected_hit = None;
             self.selected_key = Some(row.path.clone());
             if row.dir {
                 let paths = toggled_paths(&row);
@@ -1581,6 +1602,17 @@ impl ExplorerTree {
         self.gpui_schedule_filter(Instant::now());
     }
 
+    fn hit_selected(&self, hit: &ContentMatch) -> bool {
+        self.selected_hit
+            .as_ref()
+            .is_some_and(|(path, line)| path == &hit.path && *line == hit.line)
+    }
+
+    pub(crate) fn select_content_hit(&mut self, path: &Path, line: usize) {
+        self.selected_key = None;
+        self.selected_hit = Some((path.to_owned(), line));
+    }
+
     #[allow(dead_code)]
     pub(crate) fn gpui_click_row(&mut self, key: &str, pinned: bool) -> Option<TreeAction> {
         let idx = self.cached_tree.rows.iter().position(|r| r.path == key)?;
@@ -1590,6 +1622,7 @@ impl ExplorerTree {
             .get(&row.path)
             .cloned()
             .unwrap_or_else(|| PathBuf::from(&row.path));
+        self.selected_hit = None;
         self.selected_key = Some(row.path.clone());
         if row.dir {
             let paths = toggled_paths(&row);
@@ -1699,6 +1732,7 @@ impl ExplorerTree {
                 .take(250)
                 .map(|h| ExplorerGpuiContentHit {
                     path: h.path.clone(),
+                    selected: self.hit_selected(h),
                     rel_display: h.rel_display.clone(),
                     line: h.line,
                     preview: h.preview.clone(),
@@ -1800,6 +1834,7 @@ pub(crate) struct ExplorerGpuiRow {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct ExplorerGpuiContentHit {
+    pub selected: bool,
     pub path: PathBuf,
     pub rel_display: String,
     pub line: usize,
@@ -1944,6 +1979,76 @@ mod native_filter_tests {
             16
         );
     }
+    #[test]
+    fn compatibility_content_hit_click_preserves_the_matched_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alpha.txt");
+        std::fs::write(&path, "needle here\nsecond needle").unwrap();
+        let mut tree = fixture(dir.path());
+        tree.gpui_toggle_search_mode();
+        tree.gpui_set_filter_query("needle".into());
+        tree.gpui_advance_filter(Instant::now() + Duration::from_secs(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = tree.gpui_rows_snapshot(Some(dir.path()), None);
+            if !snapshot.loading {
+                assert_eq!(snapshot.content_hits.len(), 2);
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        }
+        let cx = egui::Context::default();
+        let mut draw = |events| {
+            let mut action = None;
+            let output = cx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |cx| {
+                    egui::CentralPanel::default().show(cx, |ui| {
+                        action = tree.show(ui, Some(dir.path()), None, true);
+                    });
+                },
+            );
+            (output, action)
+        };
+        let (layout, _) = draw(vec![]);
+        let pos = layout
+            .shapes
+            .iter()
+            .find_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape
+                    && t.galley.text() == "alpha.txt:2"
+                {
+                    Some(t.pos + egui::vec2(5., 5.))
+                } else {
+                    None
+                }
+            })
+            .expect("second result row");
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw(vec![egui::Event::PointerMoved(pos), button(true)]);
+        let (_, action) = draw(vec![button(false)]);
+        assert_eq!(
+            action,
+            Some(TreeAction::OpenContentHit {
+                path: path.clone(),
+                line: 2
+            })
+        );
+        tree.select_content_hit(&path, 2);
+        let snapshot = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        assert!(!snapshot.content_hits[0].selected);
+        assert!(snapshot.content_hits[1].selected);
+    }
+
     #[test]
     fn native_filter_refresh_rechecks_changed_file_without_changing_query() {
         let dir = tempfile::tempdir().unwrap();

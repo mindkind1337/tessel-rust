@@ -484,7 +484,11 @@ fn render_explorer_tab(
                     .px(px(6.0))
                     .py(px(4.0))
                     .rounded(px(tokens.radius_px - 1.0))
-                    .bg(tokens.surface)
+                    .bg(if hit.selected {
+                        tokens.accent_soft
+                    } else {
+                        tokens.surface
+                    })
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
@@ -539,6 +543,7 @@ fn render_explorer_tab(
             scroll = scroll.child(
                 div()
                     .id(("gpui-ex-row", idx as u64))
+                    .debug_selector(move || format!("explorer-file-row-{idx}"))
                     .pl(px(6.0 + indent))
                     .pr(px(6.0))
                     .py(px(3.0))
@@ -553,11 +558,11 @@ fn render_explorer_tab(
                     .justify_between()
                     .gap(px(4.0))
                     .hover(|s| s.bg(tokens.surface_2))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         this.dispatch_action(
                             GpuiAction::ExplorerClickRow {
                                 key: row_key.clone(),
-                                pinned: true,
+                                pinned: event.click_count() == 2,
                             },
                             cx,
                         );

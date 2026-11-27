@@ -18,6 +18,74 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_file_row_previews_then_pins_with_a_double_click(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("example.txt"), "example").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        let snapshot = root.app.gpui_snapshot(960., 640., 4.);
+        if !snapshot.toolbar.right_open || snapshot.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        root
+    });
+    for click_count in [1, 2] {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let bounds = loop {
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds("explorer-file-row-0") {
+                break bounds;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "file row did not appear"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let position = bounds.center();
+        visual.simulate_event(gpui::MouseDownEvent {
+            position,
+            button: gpui::MouseButton::Left,
+            click_count,
+            ..Default::default()
+        });
+        visual.simulate_event(gpui::MouseUpEvent {
+            position,
+            button: gpui::MouseButton::Left,
+            click_count,
+            ..Default::default()
+        });
+        loop {
+            let preview = view
+                .update(cx, |root, _, _| {
+                    root.app.poll_for_gpui();
+                    root.app
+                        .gpui_snapshot(960., 640., 4.)
+                        .view_tabs
+                        .iter()
+                        .find(|t| t.title == "example.txt")
+                        .map(|t| t.preview)
+                })
+                .unwrap();
+            if let Some(preview) = preview {
+                assert_eq!(preview, click_count == 1);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "file did not open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn view_tab_layout_keeps_long_unicode_titles_and_controls_separate(
     test: &mut gpui::TestAppContext,
 ) {

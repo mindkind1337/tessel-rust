@@ -6495,14 +6495,7 @@ impl Tessel {
                 }
             }
             GpuiAction::ExplorerOpenContentHit { path, line } => {
-                if let Some(root) = self.state.active().map(|p| p.path.clone()) {
-                    self.open_document_at_position(
-                        root,
-                        path,
-                        !self.state.editor_prefs.preview_tabs,
-                        Some(crate::files::FilePosition { line, column: 1 }),
-                    );
-                }
+                self.open_explorer_content_hit(path, line)
             }
             GpuiAction::ExplorerNewItem { dir } => {
                 let active_root = self.state.active().map(|p| p.path.clone());
