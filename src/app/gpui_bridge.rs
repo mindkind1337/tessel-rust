@@ -4067,7 +4067,10 @@ impl Tessel {
                 can_apply_grid: !project_session_ids.is_empty() || self.sessions.len() < 100,
                 more_menu_open: self.gpui_extra.toolbar_more_open,
                 issues_menu_open: self.gpui_extra.issues_menu_open,
-                can_arrange_panes: project_session_ids.len() >= 2,
+                can_arrange_panes: visible
+                    .as_ref()
+                    .map_or(project_session_ids.len(), |ids| ids.len())
+                    >= 2,
                 waiting_agents_count: total_waiting_agents,
                 first_waiting_pane,
                 unread_notifications: self.notifications.unread_count(),
@@ -8304,6 +8307,81 @@ mod panel_snapshot_tests {
                 .rect_px,
             smaller.rect_px
         );
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn arrange_targets_visible_checkout_but_fixed_presets_use_project_root() {
+        use crate::layout_broadcast_ui::LayoutMenuAction;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("main");
+        let checkout = dir.path().join("feature");
+        for path in [&project, &checkout] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+        let [main, a, b] = [0; 3].map(|_| {
+            app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            app.active_session.unwrap()
+        });
+        for id in [a, b] {
+            app.sessions
+                .iter_mut()
+                .find(|s| s.id == id)
+                .unwrap()
+                .worktree = Some(crate::workspace::SavedWorktree {
+                path: checkout.clone(),
+                branch: "feature".into(),
+                base_branch: None,
+            });
+        }
+        let key = crate::terminal_layout::project_key(app.state.active_project);
+        app.state
+            .terminal_layouts
+            .get_mut(&key)
+            .unwrap()
+            .rebuild_ordered(&[main, a, b], &[3]);
+        let grid = app.gpui_snapshot(1200., 640., 4.);
+        assert!(grid.toolbar.can_arrange_panes);
+        let div = &grid.dividers[0];
+        app.apply_gpui_action(GpuiAction::ResizeSplitDivider {
+            split_id: div.split_id.clone(),
+            dir: div.dir,
+            index: div.index,
+            split_side_px: div.split_side_px,
+            delta_px: 125.,
+        });
+        app.new_browser_page();
+        app.apply_gpui_action(GpuiAction::LayoutMenu(Some(720.)));
+        app.apply_gpui_action(GpuiAction::ChooseLayout(LayoutMenuAction::ArrangeGrid));
+        assert!(app.view == View::Browser);
+        let grid = app.gpui_snapshot(1200., 640., 4.);
+        assert_eq!(grid.tiles.len(), 2);
+        assert!((grid.tiles[0].rect_px.width - grid.tiles[1].rect_px.width).abs() < 0.001);
+        app.apply_gpui_action(GpuiAction::FocusSession(main));
+        assert!(!app.gpui_snapshot(1200., 640., 4.).toolbar.can_arrange_panes);
+        let before = app.state.terminal_layouts[&key].clone();
+        app.apply_gpui_action(GpuiAction::LayoutMenu(Some(720.)));
+        app.apply_gpui_action(GpuiAction::ChooseLayout(LayoutMenuAction::ArrangeGrid));
+        assert_eq!(before, app.state.terminal_layouts[&key]);
+        app.apply_gpui_action(GpuiAction::FocusSession(b));
+        app.new_browser_page();
+        app.apply_gpui_action(GpuiAction::LayoutMenu(Some(720.)));
+        app.apply_gpui_action(GpuiAction::ChooseLayout(LayoutMenuAction::ApplyPreset(
+            crate::pane_grid::GridPreset::TwoByTwo,
+        )));
+        assert!(app.view == View::Work);
+        assert_eq!(app.active_session, Some(main));
+        assert_eq!(app.browser_labels().len(), 2);
+        assert_eq!(app.sessions.len(), 4);
+        let shell = app.sessions.last().unwrap();
+        assert!(shell.worktree.is_none());
+        assert_eq!(
+            shell.cwd.canonicalize().unwrap(),
+            project.canonicalize().unwrap()
+        );
+        assert_eq!(app.gpui_snapshot(1200., 640., 4.).tiles.len(), 2);
     }
 
     #[cfg(all(windows, feature = "visual-test"))]

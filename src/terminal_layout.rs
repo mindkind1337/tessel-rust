@@ -229,6 +229,48 @@ impl TerminalLayout {
         self.grid_mode = Some(GridMode::Tiled);
     }
 
+    pub fn arrange_view(&mut self, visible: Option<&HashSet<u64>>, room: [f64; 2]) -> bool {
+        let Some(ids) = visible else {
+            if pane_grid::tree_leaves(self.tree.as_ref(), |_| true).len() < 2 {
+                return false;
+            }
+            self.tile(room, None);
+            return true;
+        };
+        if ids.len() < 2 || self.next_split >= u64::MAX - 1_000 {
+            return false;
+        }
+        let mut next = self.next_split;
+        let tree = pane_grid::tile_tree(
+            self.tree.as_ref(),
+            |leaf| leaf.id.parse::<u64>().is_ok_and(|id| ids.contains(&id)),
+            None,
+            room[0],
+            room[1],
+            || {
+                let id = format!("split-{next}");
+                next += 1;
+                id
+            },
+        );
+        let allowed = pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+            .into_iter()
+            .filter_map(|leaf| leaf.id.parse().ok())
+            .collect();
+        let candidate = Self {
+            tree,
+            next_split: next,
+            maximized: None,
+            focused: self.focused,
+            grid_mode: self.grid_mode,
+        };
+        if candidate.validate(&allowed).is_err() {
+            return false;
+        }
+        *self = candidate;
+        true
+    }
+
     pub fn rebuild_ordered(&mut self, ordered_ids: &[u64], row_counts: &[usize]) {
         let existing: std::collections::HashMap<String, PaneLeaf> =
             pane_grid::tree_leaves(self.tree.as_ref(), |_| true)

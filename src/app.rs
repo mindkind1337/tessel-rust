@@ -4280,7 +4280,7 @@ impl Tessel {
                 .with_shortcut("Ctrl+Shift+O"),
             );
         }
-        if pane_count > 1 {
+        if self.visible_grid_pane_count() > 1 {
             commands.push(
                 PaletteCommand::new(
                     "layout:arrange",
@@ -6401,11 +6401,18 @@ impl Tessel {
     fn grid_worktree_ids(&self) -> Option<std::collections::HashSet<u64>> {
         let project = self.state.active_project;
         let panes = || self.sessions.iter().filter(|s| s.project == project);
-        let active = panes().find(|s| Some(s.id) == self.active_session)?;
-        let scope = active
-            .worktree
-            .as_ref()
-            .map(|wt| crate::sidebar_model::norm_sidebar_path(&wt.path.to_string_lossy()));
+        let scope = panes()
+            .find(|s| Some(s.id) == self.active_session)
+            .and_then(|s| s.worktree.as_ref())
+            .map(|wt| wt.path.as_path());
+        #[cfg(windows)]
+        let scope = if self.view == View::Browser {
+            self.browser.view_worktree.as_deref()
+        } else {
+            scope
+        };
+        let scope =
+            scope.map(|path| crate::sidebar_model::norm_sidebar_path(&path.to_string_lossy()));
         let matches = |pane: &Session| match (&scope, &pane.worktree) {
             (None, None) => true,
             (Some(scope), Some(wt)) => {
@@ -6416,6 +6423,18 @@ impl Tessel {
         panes()
             .any(|s| !matches(s))
             .then(|| panes().filter(|s| matches(s)).map(|s| s.id).collect())
+    }
+
+    fn visible_grid_pane_count(&self) -> usize {
+        self.grid_worktree_ids().map_or_else(
+            || {
+                self.sessions
+                    .iter()
+                    .filter(|s| s.project == self.state.active_project)
+                    .count()
+            },
+            |ids| ids.len(),
+        )
     }
 
     fn active_project_work_pane(&self) -> Option<u64> {
@@ -6539,8 +6558,7 @@ impl Tessel {
             }
             LayoutMenuAction::SplitDown => self.split_active_shell(crate::pane_grid::SplitDir::Col),
             LayoutMenuAction::ArrangeGrid => {
-                self.view = View::Work;
-                self.tile_sessions(None);
+                self.arrange_visible_grid();
             }
             LayoutMenuAction::ApplyPreset(preset) => {
                 self.apply_grid_preset(preset);
@@ -6626,7 +6644,10 @@ impl Tessel {
             self.sessions.push(s);
             spawned_ids.push(id);
         }
-        let fin = plan.finalize(&spawned_ids, self.active_session);
+        let active_grid_pane = (self.view == View::Work)
+            .then_some(self.active_session)
+            .flatten();
+        let fin = plan.finalize(&spawned_ids, active_grid_pane);
         if fin.ordered_ids.is_empty() {
             return;
         }
@@ -6640,10 +6661,15 @@ impl Tessel {
         self.grid_dirty = false;
         self.save();
     }
-    fn tile_sessions(&mut self, columns: Option<usize>) {
+    fn arrange_visible_grid(&mut self) {
+        if self.view == View::GuestFiles {
+            return;
+        }
+        let visible = self.grid_worktree_ids();
         let key = crate::terminal_layout::project_key(self.state.active_project);
-        if let Some(layout) = self.state.terminal_layouts.get_mut(&key) {
-            layout.tile(self.grid_room, columns);
+        if let Some(layout) = self.state.terminal_layouts.get_mut(&key)
+            && layout.arrange_view(visible.as_ref(), self.grid_room)
+        {
             self.save();
         }
     }
@@ -7085,7 +7111,7 @@ impl Tessel {
                                     session_id: conversation_id.as_deref(),
                                     title: session.pane_name.as_deref().unwrap_or(&session.title),
                                     maximized: maximized.is_some(),
-                                    multiple_panes: ids.len() > 1,
+                                    multiple_panes: geometry.tiles.len() > 1,
                                     terminal_output: session.terminal.is_some(),
                                     can_rename: true,
                                     is_agent: is_agent_pane,
@@ -7873,10 +7899,7 @@ impl Tessel {
             }
         }
         if arrange {
-            if let Some(layout) = self.state.terminal_layouts.get_mut(&key) {
-                layout.tile(self.grid_room, None);
-            }
-            self.grid_dirty = true;
+            self.arrange_visible_grid();
         }
         if let Some(id) = maximize {
             self.state
@@ -14874,7 +14897,7 @@ impl eframe::App for Tessel {
                         french: toolbar_french,
                         has_active_pane: self.active_project_work_pane().is_some(),
                         can_split_shell: self.can_split_shell(pane_count > 0),
-                        pane_count,
+                        pane_count: self.visible_grid_pane_count(),
                         can_apply_grid: pane_count > 0 || self.sessions.len() < 100,
                     };
                     let mut layout_action = None;
@@ -15054,12 +15077,7 @@ impl eframe::App for Tessel {
                             floating_open: self.floating.ui.is_open(),
                             left_open: self.state.panels.left_open,
                             right_open: self.state.panels.right_open,
-                            can_arrange_panes: self
-                                .sessions
-                                .iter()
-                                .filter(|s| s.project == self.state.active_project)
-                                .count()
-                                >= 2,
+                            can_arrange_panes: self.visible_grid_pane_count() >= 2,
                         });
                     let mut picked = None;
                     let shown_more = egui::Popup::menu(&more_btn)
