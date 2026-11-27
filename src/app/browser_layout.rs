@@ -5,6 +5,7 @@ use std::{io::Read, path::PathBuf};
 
 const FILE: &str = "owner-browser-tabs.json";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RESTORED_SIDE_PAGES: usize = 50;
 
 #[derive(Serialize, Deserialize)]
 struct SavedPage(String, String, #[serde(default)] Option<i8>);
@@ -122,7 +123,12 @@ impl Tessel {
         let Ok(layout) = serde_json::from_slice::<Layout>(&bytes) else {
             return;
         };
-        for (index, SavedPage(url, title, zoom)) in layout.side_pages.into_iter().enumerate() {
+        for (index, SavedPage(url, title, zoom)) in layout
+            .side_pages
+            .into_iter()
+            .take(MAX_RESTORED_SIDE_PAGES)
+            .enumerate()
+        {
             let mut page = Browser::from_restart_location(&url, &title);
             page.zoom_override = zoom.map(|steps| steps.clamp(-6, 10));
             if layout.selected_side == Some(index) {
@@ -203,6 +209,29 @@ mod tests {
         assert!(app.gpui_explorer_input().is_none());
         app.close_side_browser(side);
         assert!(app.right_tool_visible(crate::workspace::SideTab::Files));
+    }
+
+    #[test]
+    fn restart_restores_only_first_fifty_side_pages_and_skips_missing_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let layout = Layout {
+            side_pages: (0..51)
+                .map(|i| SavedPage(format!("https://page.example/{i}"), i.to_string(), None))
+                .collect(),
+            selected_side: Some(50),
+            groups: Vec::new(),
+            visible_project: None,
+        };
+        std::fs::write(state.join(FILE), serde_json::to_vec(&layout).unwrap()).unwrap();
+        let app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(app.side_browsers.len(), 50);
+        assert!(app.selected_side_browser.is_none());
+        assert_eq!(
+            app.side_browsers.values().last().unwrap().address_str(),
+            "https://page.example/49"
+        );
     }
 
     #[test]

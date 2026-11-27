@@ -46,6 +46,13 @@ fn next_address_generation() -> u64 {
     .expect("browser address identity exhausted")
 }
 
+struct FinishingView {
+    downloads: Vec<u64>,
+    // Drop the controller before the environment that created it.
+    _view: WebView,
+    _context: Option<WebContext>,
+}
+
 pub struct Browser {
     pub(crate) tab_id: u64,
     title: String,
@@ -61,6 +68,7 @@ pub struct Browser {
     view: Option<WebView>,
     // Drop view before its environment.
     context: Option<WebContext>,
+    finishing_views: Vec<FinishingView>,
     address: String,
     committed_address: String,
     address_editing: bool,
@@ -103,6 +111,7 @@ impl Default for Browser {
             popups: Default::default(),
             view: None,
             context: None,
+            finishing_views: Vec::new(),
             address: "https://example.com".into(),
             committed_address: "https://example.com".into(),
             address_editing: false,
@@ -129,10 +138,60 @@ impl Default for Browser {
 }
 
 impl Browser {
-    pub(crate) fn change_presentation(&mut self) {
+    pub(crate) fn change_presentation(&mut self, to_side: bool) {
+        self.poll();
+        let address = self
+            .view
+            .as_ref()
+            .and_then(|view| view.url().ok())
+            .unwrap_or_else(|| self.current_location().to_owned());
+        let address = if allowed(&address) {
+            address
+        } else {
+            "about:blank".to_owned()
+        };
         self.visible(false);
         self.close_popups();
-        self.cancel_native_address_edit();
+        if let Some(view) = self.view.take() {
+            let context = self.context.take();
+            let downloads: Vec<_> = self
+                .downloads
+                .iter()
+                .filter(|row| row.status == "Downloading")
+                .filter(|row| {
+                    !self
+                        .finishing_views
+                        .iter()
+                        .any(|old| old.downloads.contains(&row.id))
+                })
+                .map(|row| row.id)
+                .collect();
+            if downloads.is_empty() {
+                drop(view);
+                drop(context);
+            } else {
+                // Unload the document while WebView2 finishes its original file operations.
+                let _ = view.load_url("about:blank");
+                self.finishing_views.push(FinishingView {
+                    downloads,
+                    _view: view,
+                    _context: context,
+                });
+            }
+        }
+        (self.sender, self.receiver) = mpsc::channel();
+        self.popup = None;
+        self.playing_audio = false;
+        self.address_editing = false;
+        self.committed_address = address.clone();
+        self.auto_start_pending = !to_side || address != "about:blank";
+        self.address = if to_side && address == "about:blank" {
+            String::new()
+        } else {
+            address
+        };
+        self.title = self.title.trim().chars().take(200).collect();
+        self.error.clear();
         self.tab_id = next_address_generation();
         self.invalidate_address_input();
     }
@@ -194,13 +253,16 @@ impl Browser {
         })
     }
 
-    pub(crate) fn restart_location(&self) -> (String, String) {
-        let location = if self.view.is_none() && self.auto_start_pending && !self.address_editing {
+    fn current_location(&self) -> &str {
+        if self.view.is_none() && self.auto_start_pending && !self.address_editing {
             &self.address
         } else {
             &self.committed_address
-        };
-        match Self::restorable_url(location) {
+        }
+    }
+
+    pub(crate) fn restart_location(&self) -> (String, String) {
+        match Self::restorable_url(self.current_location()) {
             Some(url) => (url, self.title.clone()),
             None => ("about:blank".into(), String::new()),
         }
@@ -843,6 +905,11 @@ impl Browser {
         let mut changed = false;
         self.popups.prune_closed();
         self.downloads = self.download_tracker.poll();
+        self.finishing_views.retain(|view| {
+            self.downloads
+                .iter()
+                .any(|row| row.status == "Downloading" && view.downloads.contains(&row.id))
+        });
         while let Ok(event) = self.receiver.try_recv() {
             changed = true;
             match event {
@@ -928,6 +995,9 @@ impl Browser {
         if self.view.is_some() {
             self.navigate();
         } else {
+            if allowed(url) {
+                self.committed_address = url.to_owned();
+            }
             self.auto_start_pending = true;
         }
     }
@@ -1399,6 +1469,16 @@ mod tests {
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn project_switch_finishes_in_flight_download_in_original_folder() {
+        check_owner_download_during_move(false);
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn moving_downloading_page_twice_keeps_original_operation_and_releases_old_controller() {
+        check_owner_download_during_move(true);
+    }
+
+    fn check_owner_download_during_move(move_page: bool) {
         use crate::app::{Tessel, gpui_bridge::GpuiAction};
         use crate::webview_test_support::{hidden_parent, pump};
         use std::io::{BufRead, BufReader, Write};
@@ -1478,6 +1558,13 @@ mod tests {
         let file = PathBuf::from(&app.browser.download_summaries()[0].4);
         assert!(file.starts_with(first.canonicalize().unwrap()));
         assert_eq!(file.file_name().unwrap(), "transfer.bin");
+        if move_page {
+            app.apply_gpui_action(GpuiAction::DockBrowser(app.browser.tab_id));
+            let side = app.selected_side_browser.unwrap();
+            assert_eq!(app.side_browsers[&side].finishing_views.len(), 1);
+            app.apply_gpui_action(GpuiAction::UndockBrowser(side));
+            assert_eq!(app.browser.finishing_views.len(), 1);
+        }
         app.apply_gpui_action(GpuiAction::AddProjectPath(second));
         assert!(app.browser.download_summaries().is_empty());
         release.send(()).unwrap();
@@ -1502,6 +1589,7 @@ mod tests {
                 .iter()
                 .any(|row| row.1 == "Completed" && row.2 == 32768)
             {
+                assert!(app.browser.finishing_views.is_empty());
                 break;
             }
             assert!(
@@ -1561,20 +1649,43 @@ mod tests {
         );
         app.apply_gpui_action(GpuiAction::CloseBrowserPage(ids[2]));
         assert_eq!(app.browser.tab_id, ids[0]);
+        app.browser.zoom_override = Some(2);
+        app.browser.toggle_mute();
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "(localStorage.setItem('move-fixture','session retained'),history.pushState({old:true},''),true)",
+        );
         app.apply_gpui_action(GpuiAction::DockBrowser(ids[0]));
         assert_eq!(app.browser.tab_id, ids[1]);
         let side = app.selected_side_browser.unwrap();
         assert_ne!(side, ids[0]);
+        let page = app.side_browsers.get_mut(&side).unwrap();
+        assert!(!page.is_started());
+        assert_eq!(page.tab_label().0, "first");
+        assert_eq!(page.zoom_override, Some(2));
+        assert!(page.muted);
+        page.create_with_profile(&parent, dir.path().join("owner-profile"))
+            .unwrap();
+        page.navigate_now();
         wait_for(
             app.side_browsers[&side].view.as_ref().unwrap(),
-            "document.querySelector('#draft').value === 'first!'",
+            "document.title === 'first' && document.querySelector('#draft').value === '' && !history.state && localStorage.getItem('move-fixture') === 'session retained'",
+        );
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "(document.querySelector('#draft').value = 'side draft') === 'side draft'",
         );
         app.apply_gpui_action(GpuiAction::UndockBrowser(side));
         assert!(app.side_browsers.is_empty());
         assert_ne!(app.browser.tab_id, side);
+        assert!(!app.browser.is_started());
+        app.browser
+            .create_with_profile(&parent, dir.path().join("owner-profile"))
+            .unwrap();
+        app.browser.navigate_now();
         wait_for(
             app.browser.view.as_ref().unwrap(),
-            "document.querySelector('#draft').value === 'first!'",
+            "document.title === 'first' && document.querySelector('#draft').value === '' && localStorage.getItem('move-fixture') === 'session retained'",
         );
         app.apply_gpui_action(GpuiAction::CloseBrowserPage(app.browser.tab_id));
         assert_eq!(app.browser.tab_id, ids[1]);
@@ -1582,6 +1693,25 @@ mod tests {
             app.browser.view.as_ref().unwrap(),
             "document.querySelector('#draft').value === 'second!'",
         );
+    }
+
+    #[test]
+    fn moving_blank_and_unloaded_pages_discards_only_the_unsubmitted_address() {
+        let mut page = Browser::new_address_page();
+        page.set_native_address_draft("draft.example".into());
+        page.change_presentation(true);
+        assert_eq!(page.address_str(), "");
+        assert!(!page.auto_start_pending);
+        page.change_presentation(false);
+        assert_eq!(page.address_str(), "about:blank");
+        page.open_url("https://selected.example/");
+        page.set_native_address_draft("https://draft.example/".into());
+        page.change_presentation(true);
+        assert_eq!(page.address_str(), "https://selected.example/");
+        assert!(page.auto_start_pending);
+        page.open_url("file:///outside");
+        page.change_presentation(false);
+        assert_eq!(page.address_str(), "about:blank");
     }
 
     #[test]

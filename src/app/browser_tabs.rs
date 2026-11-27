@@ -123,7 +123,7 @@ impl Tessel {
             return;
         }
         if let Some(mut page) = self.take_center_browser(id) {
-            page.change_presentation();
+            page.change_presentation(true);
             let id = page.tab_id;
             self.side_browsers.insert(id, page);
             self.select_side_browser(id);
@@ -186,7 +186,7 @@ impl Tessel {
             return;
         }
         if let Some(mut page) = self.take_side_browser(id) {
-            page.change_presentation();
+            page.change_presentation(false);
             let was_open = self.browser_tab_open || self.view == View::Browser;
             let previous = self.replace_browser_page(page);
             if was_open {
