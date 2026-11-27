@@ -239,6 +239,9 @@ impl Tessel {
     }
 
     fn browser_opening_worktree(&self) -> Option<std::path::PathBuf> {
+        if self.view == View::Files {
+            return self.selected_tab_worktree().map(std::path::Path::to_owned);
+        }
         if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
             return self.browser.view_worktree.clone();
         }

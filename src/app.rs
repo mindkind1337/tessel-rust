@@ -3559,6 +3559,60 @@ impl Tessel {
             }
         }
     }
+    fn document_worktree<'a>(&self, doc: &'a Document) -> Option<&'a std::path::Path> {
+        let project = self.state.active()?;
+        let root = dunce::simplified(&doc.root);
+        if !root.is_absolute() || root == dunce::simplified(&project.path) {
+            return None;
+        }
+        let session_matches = self.sessions.iter().any(|s| {
+            s.project == doc.project
+                && s.worktree
+                    .as_ref()
+                    .is_some_and(|wt| dunce::simplified(&wt.path) == root)
+        });
+        let git_matches = || {
+            self.worktree_state
+                .summary(project.id)
+                .is_some_and(|summary| {
+                    summary
+                        .worktrees
+                        .iter()
+                        .any(|wt| dunce::simplified(std::path::Path::new(&wt.path)) == root)
+                })
+        };
+        #[cfg(windows)]
+        if self.browser_tab_open
+            && self.browser.view_worktree.as_deref().map(dunce::simplified) == Some(root)
+        {
+            return Some(root);
+        }
+        (session_matches || git_matches()).then_some(root)
+    }
+
+    fn selected_tab_worktree(&self) -> Option<&std::path::Path> {
+        #[cfg(windows)]
+        if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
+            return self.browser.view_worktree.as_deref().map(dunce::simplified);
+        }
+        if self.view == View::Files
+            && let Some(doc) = self.documents.get(self.active_document)
+            && doc.project == self.state.active_project
+        {
+            return self.document_worktree(doc);
+        }
+        self.sessions
+            .iter()
+            .find(|s| Some(s.id) == self.active_session && s.project == self.state.active_project)
+            .and_then(|s| s.worktree.as_ref())
+            .map(|wt| dunce::simplified(&wt.path))
+    }
+
+    fn visible_document_tab(&self, doc: &Document) -> bool {
+        doc.project == self.state.active_project
+            && self.document_worktree(doc) == self.selected_tab_worktree()
+    }
+
     fn project_document(&self, index: usize) -> bool {
         self.documents
             .get(index)
@@ -3591,7 +3645,7 @@ impl Tessel {
             .documents
             .iter()
             .enumerate()
-            .filter(|(_, doc)| doc.project == self.state.active_project)
+            .filter(|(_, doc)| self.visible_document_tab(doc))
             .map(|(i, _)| i);
         let next = if forward {
             indices
@@ -3611,14 +3665,20 @@ impl Tessel {
 
     fn close_project_documents(&mut self, keep: Option<usize>) {
         self.remaining_close_requests.clear();
-        for i in (0..self.documents.len()).rev() {
-            if self.project_document(i) && keep != Some(i) {
-                if self.documents[i].dirty() {
-                    self.remaining_close_requests
-                        .push(self.documents[i].instance_id());
-                } else {
-                    self.remove_document(i);
-                }
+        let targets: Vec<_> = self
+            .documents
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(i, doc)| Some(*i) != keep && self.visible_document_tab(doc))
+            .map(|(i, _)| i)
+            .collect();
+        for i in targets {
+            if self.documents[i].dirty() {
+                self.remaining_close_requests
+                    .push(self.documents[i].instance_id());
+            } else {
+                self.remove_document(i);
             }
         }
         self.advance_close_requests();
@@ -3652,9 +3712,23 @@ impl Tessel {
                 std::cmp::Ordering::Equal => None,
                 std::cmp::Ordering::Greater => Some(pending - 1),
             });
+        let closing_active = self.view == View::Files && index == self.active_document;
+        let neighbor = closing_active
+            .then(|| {
+                (index + 1..self.documents.len())
+                    .chain((0..index).rev())
+                    .find(|i| self.visible_document_tab(&self.documents[*i]))
+            })
+            .flatten();
+        if closing_active && neighbor.is_none() {
+            self.select_work_tab();
+        }
         self.documents.remove(index);
-        self.active_document =
-            active_after_close(self.active_document, index, self.documents.len());
+        self.active_document = active_after_close(
+            neighbor.unwrap_or(self.active_document),
+            index,
+            self.documents.len(),
+        );
         self.reconcile_editor_selection();
     }
     fn request_document_close(&mut self, index: usize) {
@@ -3700,7 +3774,7 @@ impl Tessel {
         for key in keys
             .iter()
             .zip(&self.documents)
-            .filter(|(_, doc)| doc.project == self.state.active_project)
+            .filter(|(_, doc)| self.visible_document_tab(doc))
             .map(|(key, _)| key)
             .chain(&guest_keys)
         {
@@ -3759,6 +3833,7 @@ impl Tessel {
             .map(|d| d.path.to_string_lossy().into_owned())
             .collect();
         let (labels, guest_labels) = self.document_tab_labels(&paths);
+        let mut selected = None;
         let mut close = None;
         let mut keep_open = None;
         let mut close_others = None;
@@ -3820,7 +3895,7 @@ impl Tessel {
                         .documents
                         .iter()
                         .enumerate()
-                        .filter(|(_, doc)| doc.project == self.state.active_project)
+                        .filter(|(_, doc)| self.visible_document_tab(doc))
                     {
                         let title = &labels[i];
                         let kind = if document.diff_title.is_some() {
@@ -3861,8 +3936,7 @@ impl Tessel {
                         } else if tab.close_all {
                             close_all = true;
                         } else if tab.body.clicked() {
-                            self.view = View::Files;
-                            self.active_document = i;
+                            selected = Some(i);
                         }
                     }
                     let mut clicked = None;
@@ -3905,6 +3979,10 @@ impl Tessel {
             } else {
                 self.select_browser_page(id);
             }
+        }
+        if let Some(index) = selected {
+            self.active_document = index;
+            self.view = View::Files;
         }
         if let Some(index) = keep_open
             && let Some(doc) = self.documents.get_mut(index)
@@ -6606,6 +6684,29 @@ impl Tessel {
     }
 
     fn select_work_tab(&mut self) {
+        if self.view == View::Files {
+            let scope = self.selected_tab_worktree();
+            let target = self
+                .sessions
+                .iter()
+                .filter(|s| {
+                    s.project == self.state.active_project
+                        && s.worktree.as_ref().map(|wt| dunce::simplified(&wt.path)) == scope
+                })
+                .min_by_key(|s| Some(s.id) != self.active_session)
+                .map(|s| s.id);
+            #[cfg(windows)]
+            if target.is_none()
+                && let Some(page) = self.browser_in_checkout(scope)
+            {
+                self.select_browser_page(page);
+                self.view = View::EmptyBrowserGrid;
+                self.active_session = None;
+                return;
+            }
+            self.active_session = target;
+            self.remember_active_work_pane();
+        }
         #[cfg(windows)]
         if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
             self.active_session = self.browser_grid_target();

@@ -3792,7 +3792,7 @@ impl Tessel {
             .iter()
             .zip(labels)
             .enumerate()
-            .filter(|(_, (doc, _))| doc.project == self.state.active_project)
+            .filter(|(_, (doc, _))| self.visible_document_tab(doc))
         {
             let kind = if doc.diff_title.is_some() {
                 crate::view_tabs::Kind::Diff
@@ -5790,14 +5790,21 @@ impl Tessel {
                 }
             }
             GpuiAction::KeepDocumentTab(idx) => {
-                if self.project_document(idx)
+                if self
+                    .documents
+                    .get(idx)
+                    .is_some_and(|doc| self.visible_document_tab(doc))
                     && let Some(doc) = self.documents.get_mut(idx)
                 {
                     doc.unpinned_preview = false;
                 }
             }
             GpuiAction::CloseDocumentTab(idx) => {
-                if self.project_document(idx) {
+                if self
+                    .documents
+                    .get(idx)
+                    .is_some_and(|doc| self.visible_document_tab(doc))
+                {
                     self.request_document_close(idx);
                 }
             }
@@ -9343,6 +9350,76 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
         assert_eq!(app.documents[app.active_document].text, "project one draft");
         assert!(app.gpui_is_document_view());
+    }
+
+    #[test]
+    fn checkout_tabs_scope_labels_cycling_terminal_and_bulk_close() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("main");
+        let feature = temp.path().join("feature");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        for dir in [&main, &feature] {
+            std::fs::create_dir(dir).unwrap();
+            for name in ["notes.txt", "other.txt"] {
+                std::fs::write(dir.join(name), name).unwrap();
+            }
+        }
+        app.apply_gpui_action(GpuiAction::AddProjectPath(main.clone()));
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let main_id = app.active_session.unwrap();
+        let project = app.state.active_project;
+        app.new_session_in_worktree(
+            project,
+            Launch::CodexChat,
+            None,
+            false,
+            Some(crate::workspace::SavedWorktree {
+                path: feature.clone(),
+                branch: "feature".into(),
+                base_branch: None,
+            }),
+        );
+        let feature_id = app.active_session.unwrap();
+        for (dir, name) in [
+            (&main, "notes.txt"),
+            (&feature, "notes.txt"),
+            (&main, "other.txt"),
+            (&feature, "other.txt"),
+        ] {
+            let mut doc = crate::files::Document::open(dir, &dir.join(name)).unwrap();
+            doc.project = project;
+            app.documents.push(doc);
+        }
+        app.documents[0].text.push_str(" unsaved");
+        let files = |app: &mut Tessel| {
+            app.gpui_snapshot(960., 640., 4.)
+                .view_tabs
+                .into_iter()
+                .filter_map(|t| t.doc_index.map(|i| (i, t.title)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            files(&mut app),
+            [(1, "notes.txt".into()), (3, "other.txt".into())]
+        );
+        app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
+        app.apply_gpui_action(GpuiAction::CloseDocumentTab(0));
+        assert!(app.pending_close.is_none());
+        app.cycle_project_document(true);
+        assert_eq!(app.active_document, 3);
+        app.close_project_documents(Some(3));
+        assert!(app.pending_close.is_none());
+        assert_eq!(files(&mut app), [(2, "other.txt".into())]);
+        app.close_project_documents(None);
+        assert!(app.view == View::Work);
+        assert_eq!(app.active_session, Some(feature_id));
+        assert!(files(&mut app).is_empty());
+        app.apply_gpui_action(GpuiAction::FocusSession(main_id));
+        assert_eq!(
+            files(&mut app),
+            [(0, "notes.txt".into()), (1, "other.txt".into())]
+        );
+        assert!(app.documents[0].dirty());
     }
 
     #[test]
