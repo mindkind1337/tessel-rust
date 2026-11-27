@@ -399,10 +399,12 @@ cleanup() {
     tmux -L tessel kill-server 2>/dev/null || :
     rm -f first.sh second.sh
     cd /
-    rmdir "$fixture_dir/tmux-$(id -u)" "$fixture_dir" 2>/dev/null || :
+    socket_dir="$fixture_dir/tmux-$(id -u)"
+    rm -f -- "$socket_dir/harness" "$socket_dir/tessel"
+    rmdir "$socket_dir" "$fixture_dir"
 }
 trap cleanup EXIT
-tmux -L tessel -f /dev/null new-session -d -s fixture 'sleep 60'
+export XDG_CONFIG_HOME="$fixture_dir"
 "#,
         );
         for name in ["first", "second"] {
@@ -425,6 +427,12 @@ attached() {
 }
 tmux -L harness -f /dev/null new-session -d -s a 'env -u TMUX sh first.sh'
 attached "$first" 1
+test "$(tmux -L tessel show-options -gv history-limit)" = 50000
+test "$(tmux -L tessel display-message -p -t "=$first:" '#{history_limit}')" = 50000
+test "$(tmux -L tessel show-options -gv mouse)" = on
+tmux -L tessel list-keys -T root WheelUpPane | grep -q 'mouse_any_flag.*PPage'
+tmux -L tessel list-keys -T root WheelDownPane | grep -q 'mouse_any_flag.*NPage'
+tmux -L tessel show-options -sv terminal-overrides | grep -Fq 'xterm-256color:RGB:Ms='
 pid=$(tmux -L tessel display-message -p -t "=$first:" '#{pane_pid}')
 tmux -L harness new-session -d -s b 'env -u TMUX sh second.sh'
 attached "$second" 1

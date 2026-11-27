@@ -6,7 +6,7 @@
 //! - System `tmux` on `PATH` always takes precedence over bundled `~/.tessel-server/bin/tmux`.
 //! - Applies `status off`, `history-limit 50000`, `screen-256color`, `escape-time 10`,
 //!   `focus-events on`, `mouse on`, `set-clipboard on`, alternate-screen wheel forwarding, and
-//!   RGB + OSC 52 `terminal-overrides`, plus `prefix None` + `unbind C-b` only on `tmux >= 3.2`.
+//!   RGB + OSC 52 `terminal-overrides`, plus `prefix None` only on `tmux >= 3.2`.
 //! - Fresh pane creation (`reattach = false`) kills any stale `=<name>` session before creating
 //!   a clean one; automatic reconnect (`reattach = true`) reattaches with `new-session -A -D`.
 //! - Skips `tmux` wrapping when `jump_host` or `proxy_command` is configured or when the user
@@ -241,15 +241,12 @@ pub fn tmux_server_options(version: Option<TmuxVersion>) -> Vec<String> {
         "set -g focus-events on".to_owned(),
         "set -g mouse on".to_owned(),
         "set -g set-clipboard on".to_owned(),
-        "set -as terminal-overrides \",xterm*:Tc:RGB,xterm*:Ms=\\\\E]52;c;%p2%s\\\\7\"".to_owned(),
-        "bind -n WheelUpPane if-shell -F \"#{alternate_on}\" \"send-keys PPage\" \"copy-mode -e\\; send-keys -M\""
-            .to_owned(),
-        "bind -n WheelDownPane if-shell -F \"#{alternate_on}\" \"send-keys NPage\" \"send-keys -M\""
-            .to_owned(),
+        r"set -ga terminal-overrides ',xterm-256color:RGB:Ms=\E]52;%p1%s;%p2%s\007'".to_owned(),
+        r##"bind-key -n WheelUpPane if-shell -Ft= "#{mouse_any_flag}" "send-keys -M" "if-shell -Ft= '#{alternate_on}' 'send-keys PPage' 'copy-mode -e; send-keys -M'""##.to_owned(),
+        r##"bind-key -n WheelDownPane if-shell -Ft= "#{mouse_any_flag}" "send-keys -M" "if-shell -Ft= '#{alternate_on}' 'send-keys NPage' 'send-keys -M'""##.to_owned(),
     ];
     if version.is_some_and(TmuxVersion::supports_prefix_none) {
         opts.push("set -g prefix None".to_owned());
-        opts.push("unbind C-b".to_owned());
     }
     opts
 }
@@ -283,36 +280,32 @@ pub fn build_tmux_wrap_command(
     validate_binary_expr(binary_expr)?;
     validate_remote_folder_arg(folder)?;
 
-    let session = tmux_session_name(pane_id);
-    let exact_target = format!("={session}");
-    let mut parts = Vec::new();
-
-    if !folder.is_empty() {
-        parts.push(format!("cd -- {}", posix_quote(folder)));
-    }
-    parts.push(format!("{binary_expr} -L {TMUX_SOCKET} start-server"));
-    for opt in tmux_server_options(version) {
-        parts.push(format!(
-            "{binary_expr} -L {TMUX_SOCKET} {opt} >/dev/null 2>&1 || true"
-        ));
-    }
-    if !reattach {
-        parts.push(format!(
-            "{binary_expr} -L {TMUX_SOCKET} kill-session -t {} >/dev/null 2>&1 || true",
-            posix_quote(&exact_target)
-        ));
-        parts.push(format!(
-            "exec {binary_expr} -L {TMUX_SOCKET} new-session -s {}",
-            posix_quote(&session)
-        ));
+    let options = tmux_server_options(version).join(r" \; ");
+    let start = tmux_start(binary_expr, pane_id, reattach, &options);
+    if folder.is_empty() {
+        Ok(start)
     } else {
-        parts.push(format!(
-            "exec {binary_expr} -L {TMUX_SOCKET} new-session -A -D -s {}",
-            posix_quote(&session)
-        ));
+        Ok(format!("cd -- {} || exit 1; {start}", posix_quote(folder)))
     }
+}
 
-    Ok(parts.join(" && "))
+// One tmux command queue applies the global options before the first window
+// exists, including when there is no server listening on this socket yet.
+fn tmux_start(binary: &str, pane: &str, reattach: bool, options: &str) -> String {
+    let name = tmux_session_name(pane);
+    let cleanup = if reattach {
+        String::new()
+    } else {
+        format!(
+            "{binary} -L {TMUX_SOCKET} kill-session -t {} >/dev/null 2>&1 || :; ",
+            posix_quote(&format!("={name}"))
+        )
+    };
+    let flags = if reattach { "-A -D " } else { "" };
+    format!(
+        r"{cleanup}exec {binary} -u -L {TMUX_SOCKET} {options} \; new-session {flags}-s {}",
+        posix_quote(&name)
+    )
 }
 
 /// Builds the remote cleanup command run when the user explicitly closes an SSH pane.
@@ -351,26 +344,18 @@ pub fn build_ssh_launch_remote_script(
         )));
     }
 
-    let session = tmux_session_name(pane_id.unwrap_or(alias));
-    let exact_target = format!("={session}");
     let cd_prefix = if folder.is_empty() {
         String::new()
     } else {
-        format!("cd -- {} && ", posix_quote(folder))
+        format!("cd -- {} || exit 1; ", posix_quote(folder))
     };
-    let attach_step = if reattach {
-        format!(
-            "exec \"$_t_tmux\" -L {TMUX_SOCKET} new-session -A -D -s {}",
-            posix_quote(&session)
-        )
-    } else {
-        format!(
-            "\"$_t_tmux\" -L {TMUX_SOCKET} kill-session -t {} >/dev/null 2>&1 || true; \
-             exec \"$_t_tmux\" -L {TMUX_SOCKET} new-session -s {}",
-            posix_quote(&exact_target),
-            posix_quote(&session)
-        )
-    };
+    let options = tmux_server_options(None).join(r" \; ");
+    let attach_step = tmux_start(
+        r#""$_t_tmux""#,
+        pane_id.unwrap_or(alias),
+        reattach,
+        r#""$@""#,
+    );
 
     let script = format!(
         "{cd_prefix}_t_tmux=''; \
@@ -378,18 +363,10 @@ pub fn build_ssh_launch_remote_script(
          elif [ -x \"$HOME/.tessel-server/bin/tmux\" ] && [ ! -L \"$HOME/.tessel-server/bin/tmux\" ]; then \
          _t_tmux=\"$HOME/.tessel-server/bin/tmux\"; fi; \
          if [ -n \"$_t_tmux\" ]; then \
-         \"$_t_tmux\" -L {TMUX_SOCKET} start-server >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g status off >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g history-limit 50000 >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g default-terminal 'screen-256color' >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -sg escape-time 10 >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g focus-events on >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g mouse on >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g set-clipboard on >/dev/null 2>&1 || true; \
+         set -- {options}; \
          _t_ver=$(\"$_t_tmux\" -V 2>/dev/null | sed -n 's/^tmux [^0-9]*\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\).*/\\1.\\2/p'); \
          case \"$_t_ver\" in 3.[2-9]|3.[1-9][0-9]*|[4-9].*|[1-9][0-9]*.*) \
-         \"$_t_tmux\" -L {TMUX_SOCKET} set -g prefix None >/dev/null 2>&1 || true; \
-         \"$_t_tmux\" -L {TMUX_SOCKET} unbind C-b >/dev/null 2>&1 || true ;; esac; \
+         set -- \"$@\" \\; set -g prefix None ;; esac; \
          {attach_step}; \
          fi; \
          exec \"${{SHELL:-/bin/sh}}\" -l"

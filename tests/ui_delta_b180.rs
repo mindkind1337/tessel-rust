@@ -60,7 +60,10 @@ fn lot_b180_tmux_options_and_fresh_vs_reattach_commands() {
     assert!(!old.iter().any(|o| o.contains("prefix None")));
     let new = tmux_server_options(Some(TmuxVersion::new(3, 4)));
     assert!(new.iter().any(|o| o == "set -g prefix None"));
-    assert!(new.iter().any(|o| o == "unbind C-b"));
+    assert!(
+        new.iter()
+            .any(|o| o.contains("mouse_any_flag") && o.contains("PPage"))
+    );
 
     let fresh = build_tmux_wrap_command("tmux", "p1", "/srv/app", None, false).unwrap();
     assert!(fresh.contains("kill-session -t '=tessel-p1'"));
