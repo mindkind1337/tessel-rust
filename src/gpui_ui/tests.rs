@@ -856,6 +856,12 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
         app.inject_codex_frame_for_test(pane,json!({"method":"turn/started","params":{"threadId":"synthetic-thread","turn":{"id":"turn-1"}}}));
         app.inject_codex_frame_for_test(pane,json!({"method":"item/agentMessage/delta","params":{"threadId":"synthetic-thread","turnId":"turn-1","itemId":"reply","delta":reply}}));
         }
+        let tail = "Further output\n".repeat(90);
+        if claude {
+            app.inject_claude_frame_for_test(pane,json!({"type":"assistant","message":{"id":"next","content":[{"type":"text","text":tail}]}}));
+        } else {
+            app.inject_codex_frame_for_test(pane,json!({"method":"item/agentMessage/delta","params":{"threadId":"synthetic-thread","turnId":"turn-1","itemId":"next","delta":tail}}));
+        }
         root
     });
     cx.refresh().unwrap();
@@ -888,6 +894,18 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
         Some(code)
     );
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let viewport = visual.debug_bounds("chat-transcript").unwrap();
+    let before = visual.debug_bounds("chat-row-1").unwrap().origin.y;
+    let up = visual.debug_bounds("scroll-reply-1").unwrap().center();
+    visual.simulate_mouse_move(up, None, Default::default());
+    visual.simulate_click(up, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let after = visual.debug_bounds("chat-row-1").unwrap().origin.y;
+    assert!(
+        after < before && (after - viewport.origin.y).abs() <= gpui::px(12.),
+        "row {before:?} -> {after:?}; viewport {viewport:?}"
+    );
     let bounds = visual.debug_bounds("chat-citation-body").unwrap();
     let click = gpui::point(bounds.origin.x + gpui::px(5.), bounds.center().y);
     visual.simulate_mouse_move(click, None, Default::default());

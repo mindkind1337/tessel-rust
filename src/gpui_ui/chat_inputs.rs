@@ -8,6 +8,7 @@ use std::collections::HashMap;
 gpui::actions!(tessel_chat_composer, [Submit]);
 
 struct Binding {
+    transcript: gpui::ScrollHandle,
     id: u64,
     state: Entity<EditableTextState>,
     synced: String,
@@ -42,6 +43,10 @@ impl Inputs {
             FocusInputTarget::ChatQuestion { pane_id, q_idx } => self.questions.get(pane_id, q_idx),
             _ => None,
         }
+    }
+
+    pub fn transcript(&self, pane: u64) -> Option<&gpui::ScrollHandle> {
+        self.bindings.get(&pane).map(|b| &b.transcript)
     }
 
     pub fn get(&self, pane: u64) -> Option<&Entity<EditableTextState>> {
@@ -114,9 +119,11 @@ impl Inputs {
                     b.synced = text.to_owned();
                 }
             });
+            let transcript = self.transcript(pane).cloned().unwrap_or_default();
             self.bindings.insert(
                 pane,
                 Binding {
+                    transcript,
                     id,
                     state,
                     synced: chat.composer.clone(),

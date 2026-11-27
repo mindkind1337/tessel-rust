@@ -1141,8 +1141,7 @@ impl Chat {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for (role, text) in self.history.iter().chain(self.transcript.iter()) {
-                    citations::show_header(ui, role, role, text);
-                    citations::show_message(ui, role, text, &mut clicked);
+                    citations::show_message(ui, role, role, text, &mut clicked);
                     ui.separator();
                 }
             });

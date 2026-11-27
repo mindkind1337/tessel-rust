@@ -15,7 +15,7 @@ pub(crate) fn copyable(role: &str, text: &str) -> bool {
     !text.is_empty() && (role == "You" || assistant_role(role))
 }
 
-pub(crate) fn show_header(ui: &mut eframe::egui::Ui, role: &str, label: &str, text: &str) {
+fn show_header(ui: &mut eframe::egui::Ui, role: &str, label: &str, text: &str) {
     ui.horizontal(|ui| {
         ui.strong(label);
         if !copyable(role, text) {
@@ -45,9 +45,12 @@ pub(crate) fn show_header(ui: &mut eframe::egui::Ui, role: &str, label: &str, te
 pub(crate) fn show_message(
     ui: &mut eframe::egui::Ui,
     role: &str,
+    label: &str,
     text: &str,
     clicked: &mut Option<PathBuf>,
 ) {
+    let top = ui.cursor().min;
+    show_header(ui, role, label, text);
     for block in super::blocks::message_blocks(role, text) {
         match block {
             super::blocks::Block::Prose(prose) => show_prose(ui, role, prose, clicked),
@@ -70,6 +73,18 @@ pub(crate) fn show_message(
                 });
             }
         }
+    }
+    if assistant_role(role)
+        && !text.is_empty()
+        && ui
+            .small_button("↑")
+            .on_hover_text(crate::i18n::tr("Scroll this message to top"))
+            .clicked()
+    {
+        ui.scroll_to_rect(
+            eframe::egui::Rect::from_min_max(top, top),
+            Some(eframe::egui::Align::TOP),
+        );
     }
 }
 
@@ -96,7 +111,7 @@ fn show_prose(ui: &mut eframe::egui::Ui, role: &str, text: &str, clicked: &mut O
     }
 }
 
-pub(super) fn assistant_role(role: &str) -> bool {
+pub(crate) fn assistant_role(role: &str) -> bool {
     matches!(role, "Codex" | "Claude") || role.starts_with("Codex \u{b7} ")
 }
 

@@ -72,6 +72,43 @@ fn copy_message_button(
         .child(label)
 }
 
+fn scroll_reply_button(
+    handle: gpui::ScrollHandle,
+    index: usize,
+    french: bool,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let keyboard = handle.clone();
+    let label = if french {
+        "Faire défiler ce message en haut"
+    } else {
+        "Scroll this message to top"
+    };
+    div()
+        .id(("scroll-reply-top", index))
+        .debug_selector(move || format!("scroll-reply-{index}"))
+        .focusable()
+        .tab_stop(true)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .self_end()
+        .px(px(5.))
+        .cursor_pointer()
+        .on_click(cx.listener(move |_, _, _, cx| {
+            cx.stop_propagation();
+            handle.scroll_to_top_of_item(index);
+            cx.notify();
+        }))
+        .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
+            if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                cx.stop_propagation();
+                keyboard.scroll_to_top_of_item(index);
+                cx.notify();
+            }
+        }))
+        .child("↑")
+}
+
 fn render_reply_prose(
     idx: usize,
     pane_id: u64,
@@ -248,6 +285,10 @@ pub(crate) fn render_native_chat_pane_body(
 
     let mut transcript_list = div()
         .id(("chat-transcript", pane_id))
+        .debug_selector(|| "chat-transcript".into())
+        .when_some(chat_inputs.transcript(pane_id), |list, handle| {
+            list.track_scroll(handle)
+        })
         .flex_1()
         .min_h_0()
         .w_full()
@@ -323,6 +364,9 @@ pub(crate) fn render_native_chat_pane_body(
                 .child(hint),
         );
     } else {
+        let first_message = usize::from(chat.can_load_older)
+            + usize::from(chat.approval.is_some())
+            + usize::from(!chat.questions.is_empty());
         for (msg_idx, (role, body)) in chat.messages.iter().enumerate() {
             let is_user = role == "You";
             let is_tool = role.contains("Tool");
@@ -341,6 +385,8 @@ pub(crate) fn render_native_chat_pane_body(
             transcript_list = transcript_list.child(
                 div()
                     .id(("chat-msg", (pane_id as usize) * 2048 + msg_idx))
+                    .debug_selector(move || format!("chat-row-{msg_idx}"))
+                    .flex_none()
                     .w_full()
                     .p(px(9.0))
                     .rounded(px(tokens.radius_px))
@@ -386,6 +432,19 @@ pub(crate) fn render_native_chat_pane_body(
                                     render_code_block(index, language, text, french, tokens, cx)
                                 }
                             }),
+                    )
+                    .when(
+                        crate::chat::citations::assistant_role(role) && !body.is_empty(),
+                        |row| {
+                            row.when_some(chat_inputs.transcript(pane_id), |row, handle| {
+                                row.child(scroll_reply_button(
+                                    handle.clone(),
+                                    first_message + msg_idx,
+                                    french,
+                                    cx,
+                                ))
+                            })
+                        },
                     ),
             );
         }
