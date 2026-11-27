@@ -332,6 +332,13 @@ pub fn changed_line_hunks(original: &str, current: &str) -> Vec<(usize, usize)> 
     hunks
 }
 
+/// One-based file-link coordinates, with columns measured in UTF-16 units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FilePosition {
+    pub line: usize,
+    pub column: usize,
+}
+
 pub struct Document {
     instance_id: u64,
     pub root: PathBuf,
@@ -359,6 +366,32 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
+    pub(crate) fn reveal_location(&mut self, position: Option<FilePosition>) {
+        let Some(position) = position else { return };
+        if self.media {
+            return;
+        }
+        let mut offset = 0;
+        let mut lines = self.text.split('\n').enumerate().peekable();
+        while let Some((index, line)) = lines.next() {
+            if index + 1 >= position.line || lines.peek().is_none() {
+                let mut units = position.column.saturating_sub(1);
+                for c in line.trim_end_matches('\r').chars() {
+                    if units < c.len_utf16() {
+                        break;
+                    }
+                    units -= c.len_utf16();
+                    offset += 1;
+                }
+                self.preview_mode = false;
+                self.tools.pending_char_range = Some((offset, offset));
+                self.tools.pending_scroll_line = Some(index);
+                return;
+            }
+            offset += line.chars().count() + 1;
+        }
+    }
+
     pub(crate) fn next_instance_id() -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         NEXT.try_update(

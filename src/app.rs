@@ -606,6 +606,7 @@ impl Session {
     }
 }
 struct PendingDocument {
+    position: Option<crate::files::FilePosition>,
     request: std::sync::Arc<()>,
     pinned: bool,
 }
@@ -2017,7 +2018,8 @@ impl Tessel {
         };
         self.open_document_at_mode(root, path, pinned);
     }
-    fn open_chat_citation(&mut self, pane: u64, path: &std::path::Path) {
+    fn open_chat_citation(&mut self, pane: u64, link: &crate::chat::citations::FileLink) {
+        let path = &link.path;
         let Some(project) = self.state.active() else {
             return;
         };
@@ -2034,7 +2036,7 @@ impl Tessel {
             })
             .map_or_else(|| project.path.clone(), |wt| wt.path.clone());
         match crate::chat::citations::destination(&root, &session.cwd, path) {
-            Ok(file) => self.open_document_at(root, file),
+            Ok(file) => self.open_document_at_position(root, file, true, link.position),
             Err(error) => self.error = error,
         }
     }
@@ -2048,6 +2050,15 @@ impl Tessel {
         self.open_document_at_mode(root, path, true);
     }
     fn open_document_at_mode(&mut self, root: PathBuf, path: PathBuf, pinned: bool) {
+        self.open_document_at_position(root, path, pinned, None);
+    }
+    fn open_document_at_position(
+        &mut self,
+        root: PathBuf,
+        path: PathBuf,
+        pinned: bool,
+        position: Option<crate::files::FilePosition>,
+    ) {
         let key = dunce::simplified(&path);
         if let Some(i) = self
             .documents
@@ -2057,12 +2068,16 @@ impl Tessel {
             if pinned {
                 self.documents[i].unpinned_preview = false;
             }
+            self.documents[i].reveal_location(position);
             self.active_document = i;
             self.view = View::Files;
             return;
         }
         if let Some(pending) = self.document_pending.get_mut(key) {
             pending.pinned |= pinned;
+            if position.is_some() {
+                pending.position = position;
+            }
             return;
         }
         let replaceable = !pinned
@@ -2078,6 +2093,7 @@ impl Tessel {
         self.document_pending.insert(
             key.to_owned(),
             PendingDocument {
+                position,
                 request: request.clone(),
                 pinned,
             },
@@ -2681,7 +2697,8 @@ impl Tessel {
                     if !std::sync::Arc::ptr_eq(&entry.get().request, &request) {
                         continue;
                     }
-                    let pinned = entry.remove().pinned;
+                    let pending = entry.remove();
+                    let pinned = pending.pinned;
                     match result {
                         Ok(mut d) => {
                             d.unpinned_preview = !pinned;
@@ -2711,6 +2728,7 @@ impl Tessel {
                                 self.documents.push(d);
                                 self.active_document = self.documents.len() - 1;
                             }
+                            self.documents[self.active_document].reveal_location(pending.position);
                             self.view = View::Files;
                         }
                         Err(e) => self.error = e,

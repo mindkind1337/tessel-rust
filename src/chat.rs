@@ -1038,7 +1038,7 @@ impl Chat {
         }
         changed
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<crate::chat::citations::FileLink> {
         let mut clicked = None;
         ui.heading(tr("Codex · native chat"));
         ui.small(self.cwd.display().to_string());

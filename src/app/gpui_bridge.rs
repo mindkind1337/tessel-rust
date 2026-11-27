@@ -879,7 +879,7 @@ pub(crate) enum GpuiAction {
         skip: bool,
     },
     // Document / Diff / Rich Preview actions
-    OpenChatCitation(u64, PathBuf),
+    OpenChatCitation(u64, crate::chat::citations::FileLink),
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
     #[cfg(windows)]
@@ -6495,9 +6495,13 @@ impl Tessel {
                 }
             }
             GpuiAction::ExplorerOpenContentHit { path, line } => {
-                self.open_document_preview(path);
-                if let Some(doc) = self.documents.get_mut(self.active_document) {
-                    doc.tools.pending_scroll_line = Some(line.saturating_sub(1));
+                if let Some(root) = self.state.active().map(|p| p.path.clone()) {
+                    self.open_document_at_position(
+                        root,
+                        path,
+                        !self.state.editor_prefs.preview_tabs,
+                        Some(crate::files::FilePosition { line, column: 1 }),
+                    );
                 }
             }
             GpuiAction::ExplorerNewItem { dir } => {
@@ -9239,6 +9243,52 @@ mod panel_snapshot_tests {
         let prefs = open().state.editor_prefs;
         assert_eq!(prefs.outline_sort, Sort::Kind);
         assert!(!prefs.outline_follow_cursor);
+    }
+
+    #[test]
+    fn positioned_file_links_follow_the_requested_tab_through_background_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("two.md");
+        let other = project.join("one.txt");
+        std::fs::write(&other, "previous").unwrap();
+        std::fs::write(&path, "a\r\n😀bc\r\nlast").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
+        let pane = app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+        app.documents
+            .push(crate::files::Document::open(&project, &other).unwrap());
+        app.active_document = 0;
+        app.apply_gpui_action(GpuiAction::ExplorerOpenContentHit {
+            path: path.clone(),
+            line: 3,
+        });
+        assert!(app.documents[0].tools.pending_scroll_line.is_none());
+        let cite = |source| {
+            let mut links = crate::chat::citations::parse("Codex", source)
+                .unwrap()
+                .links;
+            GpuiAction::OpenChatCitation(pane, links.pop().unwrap().1)
+        };
+        app.apply_gpui_action(cite("[doc](two.md:2:4)"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.document_pending.is_empty() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(app.documents.len(), 2);
+        let doc = &app.documents[app.active_document];
+        assert!(!doc.preview_mode && !doc.unpinned_preview);
+        assert_eq!(doc.tools.pending_char_range, Some((5, 5)));
+        assert_eq!(doc.tools.pending_scroll_line, Some(1));
+        app.apply_gpui_action(cite(":codex-file-citation{path='two.md#line-3'}"));
+        let doc = &app.documents[app.active_document];
+        assert_eq!(doc.tools.pending_char_range, Some((8, 8)));
+        assert_eq!(doc.tools.pending_scroll_line, Some(2));
+        assert!(app.documents[0].tools.pending_scroll_line.is_none());
     }
 
     #[test]

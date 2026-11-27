@@ -6,9 +6,15 @@ use std::{
     sync::LazyLock,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileLink {
+    pub path: PathBuf,
+    pub position: Option<crate::files::FilePosition>,
+}
+
 pub(crate) struct Citations {
     pub text: String,
-    pub links: Vec<(Range<usize>, PathBuf)>,
+    pub links: Vec<(Range<usize>, FileLink)>,
 }
 
 pub(crate) fn copyable(role: &str, text: &str) -> bool {
@@ -68,7 +74,7 @@ pub(crate) fn show_message(
     role: &str,
     label: &str,
     text: &str,
-    clicked: &mut Option<PathBuf>,
+    clicked: &mut Option<FileLink>,
 ) {
     let top = ui.cursor().min;
     show_header(ui, role, label, text);
@@ -109,7 +115,7 @@ pub(crate) fn show_message(
     }
 }
 
-fn show_prose(ui: &mut eframe::egui::Ui, role: &str, text: &str, clicked: &mut Option<PathBuf>) {
+fn show_prose(ui: &mut eframe::egui::Ui, role: &str, text: &str, clicked: &mut Option<FileLink>) {
     if let Some(message) = parse(role, text) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -158,7 +164,7 @@ pub(crate) fn parse(role: &str, source: &str) -> Option<Citations> {
                 ..
             }) => {
                 result.append_prose(&source[end..span.start]);
-                if let Some(path) = markdown_path(&dest_url) {
+                if let Some(path) = file_link(&dest_url) {
                     let mut label = String::new();
                     for (event, _) in events.by_ref() {
                         match event {
@@ -192,21 +198,68 @@ pub(crate) fn parse(role: &str, source: &str) -> Option<Citations> {
     (!result.links.is_empty()).then_some(result)
 }
 
-fn markdown_path(raw: &str) -> Option<PathBuf> {
-    if raw
-        .get(..5)
-        .is_some_and(|s| s.eq_ignore_ascii_case("file:"))
-    {
-        return local_path(raw);
+fn file_link(raw: &str) -> Option<FileLink> {
+    if raw.contains(char::is_control) {
+        return None;
     }
-    let decoded = percent_encoding::percent_decode_str(raw)
-        .decode_utf8()
-        .ok()?;
-    local_path(&decoded)
+    let raw = raw.trim();
+    let base = raw.split(['?', '#']).next()?;
+    let fragment = raw
+        .split_once('#')
+        .map(|(_, f)| f.split('?').next().unwrap_or(""));
+    static LINE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)^(?:L|line-?)([1-9][0-9]*)\b").unwrap());
+    let fragment_line = fragment.and_then(|f| {
+        let decoded = percent_encoding::percent_decode_str(f).decode_utf8().ok()?;
+        LINE.captures(&decoded)?
+            .get(1)?
+            .as_str()
+            .parse::<usize>()
+            .ok()
+    });
+    let is_uri = base
+        .get(..5)
+        .is_some_and(|s| s.eq_ignore_ascii_case("file:"));
+    let decoded = if is_uri {
+        let url = url::Url::parse(base).ok()?;
+        if url.host_str().is_some_and(|h| h != "localhost") {
+            return None;
+        }
+        url.to_file_path().ok()?.to_str()?.to_owned()
+    } else {
+        percent_encoding::percent_decode_str(base)
+            .decode_utf8()
+            .ok()?
+            .into_owned()
+    };
+    static SUFFIX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r":([0-9]+)(?::([0-9]+))?$").unwrap());
+    let mut path_text = decoded.as_str();
+    let mut position = None;
+    if let Some(cap) = SUFFIX.captures(&decoded) {
+        path_text = &decoded[..cap.get(0)?.start()];
+        // A bare scheme or a drive prefix is not a filename.
+        if !path_text.contains(['/', '\\', '.']) {
+            return None;
+        }
+        let line = cap[1].parse::<std::num::NonZeroUsize>().ok()?.get();
+        let column = match cap.get(2) {
+            Some(n) => n.as_str().parse::<std::num::NonZeroUsize>().ok()?.get(),
+            None => 1,
+        };
+        position = Some(crate::files::FilePosition { line, column });
+    }
+    let path = local_path(path_text)?;
+    Some(FileLink {
+        path,
+        position: fragment_line
+            .map(|line| crate::files::FilePosition { line, column: 1 })
+            .or(position),
+    })
 }
 
 impl Citations {
-    fn append_link(&mut self, label: &str, path: PathBuf) {
+    fn append_link(&mut self, label: &str, path: FileLink) {
         let start = self.text.len();
         self.text.push_str(label);
         self.links.push((start..self.text.len(), path));
@@ -229,24 +282,20 @@ impl Citations {
             else {
                 continue;
             };
-            let Some(path) = value
-                .get(2)
-                .or_else(|| value.get(3))
-                .and_then(|m| local_path(m.as_str()))
-            else {
+            let Some(raw) = value.get(2).or_else(|| value.get(3)).map(|m| m.as_str()) else {
                 continue;
             };
-            let Some(name) = path
-                .to_str()
-                .and_then(|p| p.rsplit(['/', '\\']).next())
-                .filter(|n| !n.is_empty())
+            let Some(link) = file_link(raw) else { continue };
+            let Some(label) = raw
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|name| !name.is_empty())
             else {
                 continue;
             };
             let whole = captures.get(0).unwrap();
             self.text.push_str(&prose[end..whole.start()]);
-            let name = name.to_owned();
-            self.append_link(&name, path);
+            self.append_link(label, link);
             end = whole.end();
         }
         self.text.push_str(&prose[end..]);
@@ -258,18 +307,7 @@ fn local_path(raw: &str) -> Option<PathBuf> {
     if value.is_empty() || raw.contains(char::is_control) || value.starts_with(['#', '?']) {
         return None;
     }
-    let path = if value
-        .get(..5)
-        .is_some_and(|s| s.eq_ignore_ascii_case("file:"))
-    {
-        let url = url::Url::parse(value).ok()?;
-        if url.host_str().is_some_and(|h| h != "localhost") {
-            return None;
-        }
-        url.to_file_path().ok()?
-    } else {
-        PathBuf::from(value)
-    };
+    let path = PathBuf::from(value);
     let text = path.to_str()?;
     let drive = text.as_bytes().get(1) == Some(&b':')
         && text.as_bytes()[0].is_ascii_alphabetic()
@@ -328,7 +366,7 @@ purpose="source"}"#;
         assert!(out.text.contains(&format!("~~~text\n{cite}")));
         for (range, path) in out.links {
             assert_eq!(&out.text[range], "été.pdf");
-            assert_eq!(path, Path::new("C:/My reports/été.pdf"));
+            assert_eq!(path.path, Path::new("C:/My reports/été.pdf"));
         }
         assert!(parse("You", &source).is_none());
     }
@@ -340,7 +378,7 @@ purpose="source"}"#;
         let links: Vec<_> = parsed
             .links
             .iter()
-            .map(|(r, p)| (&parsed.text[r.clone()], p.as_path()))
+            .map(|(r, p)| (&parsed.text[r.clone()], p.path.as_path()))
             .collect();
         assert_eq!(
             links,
@@ -352,8 +390,35 @@ purpose="source"}"#;
         );
         assert!(parsed.text.ends_with("`[example](ignore.pdf)` ![image](ignore.png) [website](https://example.org) [network](%2F%2Fserver/share)"));
         let windows = parse("Codex", r"[report](C:\Reports\summary.pdf)").unwrap();
-        assert_eq!(windows.links[0].1, Path::new(r"C:\Reports\summary.pdf"));
+        assert_eq!(
+            windows.links[0].1.path,
+            Path::new(r"C:\Reports\summary.pdf")
+        );
     }
+    #[test]
+    fn file_link_locations_keep_encoded_filename_separators_and_validate_coordinates() {
+        use crate::files::FilePosition;
+        for (raw, path, line, column) in [
+            ("docs/a%23b.md:7:2", "docs/a#b.md", 7, 2),
+            ("docs/a.md?mode=read#L18-L20", "docs/a.md", 18, 1),
+            ("docs/a.md#%6Cine-3", "docs/a.md", 3, 1),
+            ("main.rs:4", "main.rs", 4, 1),
+        ] {
+            let link = file_link(raw).unwrap();
+            assert_eq!(link.path, Path::new(path));
+            assert_eq!(link.position, Some(FilePosition { line, column }));
+        }
+        for invalid in [
+            "a.md:0",
+            "a.md:7:0",
+            "C:1",
+            "http:80",
+            "file://server/a.md#L1",
+        ] {
+            assert!(file_link(invalid).is_none(), "{invalid}");
+        }
+    }
+
     #[test]
     fn invalid_destinations_remain_literal_and_outside_files_cannot_open() {
         for path in [

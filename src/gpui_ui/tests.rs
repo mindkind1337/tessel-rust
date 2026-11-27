@@ -801,7 +801,7 @@ fn codex_file_citation_opens_the_project_document_in_a_tab(test: &mut gpui::Test
     check_chat_file_click(
         test,
         GpuiAction::LaunchCodexChat,
-        ":codex-file-citation{path='my report.txt'}",
+        ":codex-file-citation{path='my report.txt:1:8'}",
     );
 }
 
@@ -811,7 +811,7 @@ fn markdown_file_link_opens_the_project_document_in_a_tab(test: &mut gpui::TestA
     check_chat_file_click(
         test,
         GpuiAction::LaunchCodexChat,
-        "[Read the report](<my report.txt>)",
+        "[Read the report](<my report.txt#L1>)",
     );
 }
 

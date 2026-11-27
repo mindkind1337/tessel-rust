@@ -62,7 +62,7 @@ height. The patch is recorded in `vendor/vt100/TESSEL_PATCH.md`.
 
 ## Orca
 
-The language labels in src/chat/blocks.rs follow Orca’s rich-markdown-code-block-languages.ts, as used by Tessel’s native chat. The chat scroll thresholds follow Orca’s native-chat-autoscroll.js. The compatibility composer follows the Enter and composition behavior in use-native-chat-composer-keydown.js.
+The language labels in src/chat/blocks.rs follow Orca’s rich-markdown-code-block-languages.ts, as used by Tessel’s native chat. Chat file links follow Orca’s file-link-location.js and native-chat-href-routing.js. The chat scroll thresholds follow Orca’s native-chat-autoscroll.js. The compatibility composer follows the Enter and composition behavior in use-native-chat-composer-keydown.js.
 
 `src/linear_model.rs` and its `parse`, `record`, `service`, and `panel` modules, together with
 `src/linear_dialog.rs` and `src/gpui_ui/linear_view.rs`, follow Tessel's independent Linear service and its
