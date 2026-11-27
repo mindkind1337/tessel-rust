@@ -110,7 +110,7 @@ The native per-pane picker in `src/session_option_picker_ui.rs` adapts
 `SessionOptionPicker.vue`, `TerminalPane.vue`, `PaneActionsMenu.vue` and their
 option labels and geometry under the same Tessel/Orca attribution.
 
-The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) contains UI designs,
+The native SSH Hosts settings interface (`src/ssh_hosts_panel.rs`) and shared connection profile model (`src/ssh_profile.rs`) contain UI designs,
 status conventions, and draft validation adapted from Tessel's `RemoteHostsSettings.vue`,
 `RemoteHostForm.vue`, `remoteHosts.js`, and `remoteHosts.css`, which are ported from Orca
 by Lovecast Inc. The bounded alias discovery in `src/ssh_config.rs` also adapts

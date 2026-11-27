@@ -182,6 +182,7 @@ pub mod sidebar_model;
 mod ssh_config;
 mod ssh_connection_test;
 pub mod ssh_hosts_panel;
+pub mod ssh_profile;
 mod ssh_reconnect;
 pub mod ssh_tmux;
 pub mod status_metrics;

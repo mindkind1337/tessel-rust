@@ -1,0 +1,589 @@
+{
+  "reference": "Tessel src/main/remoteHosts.js and src/renderer/src/remoteHosts.js, synthetic vectors captured 2026-11-27",
+  "profiles": [
+    {
+      "input": {
+        "host": "server"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "srv.example",
+        "port": 2222,
+        "username": "deploy",
+        "identity_file": "C:\\keys\\my key",
+        "jump_host": "bastion",
+        "proxy_command": "nc %h %p"
+      },
+      "error": null,
+      "label": "deploy@srv.example",
+      "args": [
+        "-p",
+        "2222",
+        "-l",
+        "deploy",
+        "-i",
+        "C:\\keys\\my key",
+        "-J",
+        "bastion",
+        "-o",
+        "ProxyCommand=nc %h %p",
+        "srv.example"
+      ]
+    },
+    {
+      "input": {
+        "host": "prod.example",
+        "config_host": "prod",
+        "port": 2222,
+        "username": "x",
+        "source": "ssh-config"
+      },
+      "error": null,
+      "label": "x@prod.example",
+      "args": [
+        "prod"
+      ]
+    },
+    {
+      "input": {
+        "host": "fe80::1%eth0",
+        "config_host": "lan",
+        "username": "me@corp"
+      },
+      "error": null,
+      "label": "me@corp@fe80::1%eth0",
+      "args": [
+        "-o",
+        "HostName=fe80::1%%eth0",
+        "-p",
+        "22",
+        "-l",
+        "me@corp",
+        "lan"
+      ]
+    },
+    {
+      "input": {
+        "host": "serveur",
+        "label": "  My\nserver\t  "
+      },
+      "error": null,
+      "label": "My server",
+      "args": [
+        "serveur"
+      ]
+    },
+    {
+      "input": {
+        "host": "serveur",
+        "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "error": null,
+      "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "args": [
+        "serveur"
+      ]
+    },
+    {
+      "input": {
+        "host": "équipe.example",
+        "username": "DOMAINE\\utilisateur"
+      },
+      "error": null,
+      "label": "DOMAINE\\utilisateur@équipe.example",
+      "args": [
+        "-l",
+        "DOMAINE\\utilisateur",
+        "équipe.example"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "port": 65535
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-p",
+        "65535",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "port": 1
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-p",
+        "1",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "port": 0
+      },
+      "error": "port-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": ""
+      },
+      "error": "host-required",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "-option"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "host name"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "a;b"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "a\nb"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "[::1]"
+      },
+      "error": null,
+      "label": "[::1]",
+      "args": [
+        "[::1]"
+      ]
+    },
+    {
+      "input": {
+        "host": "::1"
+      },
+      "error": null,
+      "label": "::1",
+      "args": [
+        "::1"
+      ]
+    },
+    {
+      "input": {
+        "host": "user@host"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "error": "host-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "-bad"
+      },
+      "error": "user-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "a b"
+      },
+      "error": "user-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "me@corp"
+      },
+      "error": null,
+      "label": "me@corp@server",
+      "args": [
+        "-l",
+        "me@corp",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "DOMAIN\\user"
+      },
+      "error": null,
+      "label": "DOMAIN\\user@server",
+      "args": [
+        "-l",
+        "DOMAIN\\user",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "bad;user"
+      },
+      "error": "user-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "username": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+      },
+      "error": "user-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "identity_file": "-bad"
+      },
+      "error": "identity-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "identity_file": "line\nbreak"
+      },
+      "error": "identity-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "identity_file": "C:\\keys\\path with spaces"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-i",
+        "C:\\keys\\path with spaces",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "identity_file": "~/.ssh/id_ed25519"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-i",
+        "~/.ssh/id_ed25519",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "identity_file": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "error": "identity-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "jump_host": "-bad"
+      },
+      "error": "jump-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "jump_host": "jump host"
+      },
+      "error": "jump-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "jump_host": "one,two"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-J",
+        "one,two",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "jump_host": "user@bastion:2222"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-J",
+        "user@bastion:2222",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "jump_host": "[::1]:22"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-J",
+        "[::1]:22",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "proxy_command": "line\nbreak"
+      },
+      "error": "proxy-invalid",
+      "label": null,
+      "args": null
+    },
+    {
+      "input": {
+        "host": "server",
+        "proxy_command": "cloudflared access ssh --hostname %h"
+      },
+      "error": null,
+      "label": "server",
+      "args": [
+        "-o",
+        "ProxyCommand=cloudflared access ssh --hostname %h",
+        "server"
+      ]
+    },
+    {
+      "input": {
+        "host": "server",
+        "proxy_command": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "error": "proxy-invalid",
+      "label": null,
+      "args": null
+    }
+  ],
+  "inputs": [
+    {
+      "input": "",
+      "expected": null
+    },
+    {
+      "input": "server",
+      "expected": {
+        "host": "server",
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "deploy@server:2222",
+      "expected": {
+        "host": "server",
+        "username": "deploy",
+        "port": 2222,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "ssh://deploy@server:2222",
+      "expected": {
+        "host": "server",
+        "username": "deploy",
+        "port": 2222,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "[::1]:22",
+      "expected": {
+        "host": "::1",
+        "port": 22,
+        "configHost": "::1"
+      }
+    },
+    {
+      "input": "::1",
+      "expected": {
+        "host": "::1",
+        "configHost": "::1"
+      }
+    },
+    {
+      "input": "server:0",
+      "expected": {
+        "host": "server",
+        "invalidPort": true,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "server:65536",
+      "expected": {
+        "host": "server",
+        "invalidPort": true,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "server:no",
+      "expected": {
+        "host": "server",
+        "invalidPort": true,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "ssh://server:0",
+      "expected": {
+        "host": "server",
+        "configHost": "server",
+        "invalidPort": true
+      }
+    },
+    {
+      "input": "ssh://server:65536",
+      "expected": {
+        "host": "server",
+        "configHost": "server",
+        "invalidPort": true
+      }
+    },
+    {
+      "input": "ssh://server:no",
+      "expected": {
+        "host": "server",
+        "configHost": "server",
+        "invalidPort": true
+      }
+    },
+    {
+      "input": "ssh://me%40corp@server:2222",
+      "expected": {
+        "host": "server",
+        "username": "me@corp",
+        "port": 2222,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "ssh://me%ZZ%20@server",
+      "expected": {
+        "host": "server",
+        "username": "me%ZZ%20",
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "ssh://[::1]:2222",
+      "expected": {
+        "host": "::1",
+        "port": 2222,
+        "configHost": "::1"
+      }
+    },
+    {
+      "input": "server:",
+      "expected": {
+        "host": "server",
+        "invalidPort": true,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "ssh://server",
+      "expected": {
+        "host": "server",
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "SSH://server:2222",
+      "expected": {
+        "host": "server",
+        "port": 2222,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "​ deploy@server:2222 ",
+      "expected": {
+        "host": "server",
+        "username": "deploy",
+        "port": 2222,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "server:65535",
+      "expected": {
+        "host": "server",
+        "port": 65535,
+        "configHost": "server"
+      }
+    },
+    {
+      "input": "server:1",
+      "expected": {
+        "host": "server",
+        "port": 1,
+        "configHost": "server"
+      }
+    }
+  ],
+  "reference_commit": "36f02babd0c4b948ec04caf279cc704101472418"
+}

@@ -433,3 +433,8 @@ Optional connected native reviewers are now selectable in both New Task renderer
 Both renderers now synchronize concrete OpenSSH aliases when entering SSH settings. Passive discovery preserves removed/renamed aliases across restarts (the last 200); explicit Import re-adopts them. Scanning stays in the bounded discovery worker, and successful manual metadata changes discard an older pending result. Existing manual folders remain unchanged. These behaviors have synthetic config/persistence and app-controller coverage; visual equivalence remains unverified.
 
 The current Vue `RemoteHostForm.vue` still exposes structured label, username, port, identity file, proxy command and jump host fields that Rust's alias/folder form does not yet reproduce. OpenSSH-config support is not equivalent to these editable fields. Full SSH form and connection-profile parity remain open.
+
+
+### Structured SSH profiles — model work in progress
+
+`src/ssh_profile.rs` defines the shared connection fields, edited/imported alias rules, pasted endpoint parsing, validation and separated OpenSSH argument construction. `tests/fixtures/ssh_profile_vue.json` records synthetic validation/argument/parser results produced by the Vue source at its recorded commit. The model does not read keys or execute proxy commands. It is preparatory: `workspace::Host`, the native host manager/cache keys, terminal/SFTP/test transports and both forms still need to use it before these fields are available in the application. Existing daemon defaults have not been changed as part of this work.
