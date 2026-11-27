@@ -2301,6 +2301,26 @@ impl Tessel {
             && self.share.edit_guest_file(&base.key, text)
     }
 
+    pub(crate) fn gpui_restore_maximized_pane(&mut self) -> bool {
+        if self.view != View::Work || self.gpui_has_open_modal() || self.floating.ui.is_open() {
+            return false;
+        }
+        let key = crate::terminal_layout::project_key(self.state.active_project);
+        let Some(layout) = self.state.terminal_layouts.get_mut(&key) else {
+            return false;
+        };
+        #[cfg(windows)]
+        if self.sessions.iter().any(|s| {
+            Some(s.id) == layout.maximized
+                && s.terminal
+                    .as_ref()
+                    .is_some_and(|terminal| terminal.native_owns_escape())
+        }) {
+            return false;
+        }
+        layout.maximized.take().is_some()
+    }
+
     pub(crate) fn gpui_close_document_action(&self) -> Option<GpuiAction> {
         if self.gpui_has_open_modal() || self.floating.ui.is_open() {
             return None;
@@ -5449,6 +5469,14 @@ impl Tessel {
                 self.ensure_native_chat_instances();
             }
             GpuiAction::ToggleMaximizeSession(id) => {
+                if self.view != View::Work
+                    || !self
+                        .sessions
+                        .iter()
+                        .any(|s| s.id == id && s.project == self.state.active_project)
+                {
+                    return;
+                }
                 let key = crate::terminal_layout::project_key(self.state.active_project);
                 let layout = self.state.terminal_layouts.entry(key).or_default();
                 if layout.maximized == Some(id) {

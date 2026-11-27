@@ -7,10 +7,19 @@ use std::collections::HashSet;
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalLayout {
     pub tree: Option<PaneNode>,
+    #[serde(skip_serializing, deserialize_with = "read_legacy_maximized")]
     pub maximized: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focused: Option<u64>,
     next_split: u64,
+}
+
+// Older workspace files stored this transient view setting alongside the split tree.
+fn read_legacy_maximized<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    Option::<u64>::deserialize(deserializer)?;
+    Ok(None)
 }
 
 impl Default for TerminalLayout {
@@ -335,6 +344,21 @@ mod tests {
         assert_eq!(layout, saved);
         assert!(!layout.split_with_order(2, 1, SplitDir::Row, true));
         assert_eq!(layout, saved);
+    }
+
+    #[test]
+    fn maximization_is_transient_for_current_and_legacy_layouts() {
+        let mut layout = TerminalLayout::default();
+        layout.sync(&[1, 2], [800., 600.]);
+        layout.focused = Some(2);
+        layout.maximized = Some(2);
+        let mut saved = serde_json::to_value(&layout).unwrap();
+        assert!(saved.get("maximized").is_none());
+        saved["maximized"] = 2.into();
+        let restored: TerminalLayout = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.maximized, None);
+        assert_eq!(restored.focused, Some(2));
+        assert_eq!(restored.tree, layout.tree);
     }
 
     #[test]

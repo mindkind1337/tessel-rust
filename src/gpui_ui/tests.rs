@@ -18,6 +18,54 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn maximized_grid_restores_on_escape_and_project_switch(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut terminals = Vec::new();
+    let view = cx.add_window(|window, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        for name in ["first", "second"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            root.dispatch(GpuiAction::AddProjectPath(path), cx);
+            for _ in 0..2 {
+                terminals.push(root.app.install_terminal_find_fixture());
+            }
+        }
+        root.dispatch(GpuiAction::ToggleMaximizeSession(terminals[3].0), cx);
+        root.focus_handle.focus(window, cx);
+        root
+    });
+    cx.refresh().unwrap();
+    let check = |count: usize, cx: &mut gpui::TestAppContext| {
+        view.update(cx, |root, _, _| {
+            let snap = root.app.gpui_snapshot(960., 640., 4.);
+            assert_eq!(snap.tiles.len(), count);
+            assert_eq!(snap.tiles.iter().any(|t| t.maximized), count == 1);
+        })
+        .unwrap()
+    };
+    check(1, cx);
+    cx.simulate_keystrokes(view.into(), "escape");
+    check(2, cx);
+    assert!(terminals[3].1.try_recv().is_err());
+    cx.simulate_keystrokes(view.into(), "escape");
+    assert_eq!(terminals[3].1.try_recv().unwrap(), [27]);
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::ToggleMaximizeSession(terminals[3].0), cx)
+    })
+    .unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-pageup");
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::ToggleMaximizeSession(terminals[3].0), cx)
+    })
+    .unwrap();
+    check(2, cx);
+    cx.simulate_keystrokes(view.into(), "ctrl-pagedown");
+    check(2, cx);
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn ctrl_page_keys_cycle_workspaces_and_route_terminal_input(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let mut panes = Vec::new();

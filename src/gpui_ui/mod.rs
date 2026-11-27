@@ -833,6 +833,17 @@ impl TesselGpuiRoot {
                 );
                 return;
             }
+            if !ctrl
+                && !shift
+                && !alt
+                && native_target.is_none()
+                && self.app.gpui_restore_maximized_pane()
+            {
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
         }
 
         if ctrl

@@ -1749,6 +1749,12 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        let visible = crate::terminal_layout::project_key(self.state.active_project);
+        for (key, layout) in &mut self.state.terminal_layouts {
+            if key != &visible {
+                layout.maximized = None;
+            }
+        }
         self.remember_active_work_pane();
         self.active_session = self.active_project_work_pane();
         if self.tasks_board_project != self.state.active_project {
