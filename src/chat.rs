@@ -1136,7 +1136,8 @@ impl Chat {
             self.history_page();
         }
         let available = (ui.available_height() - 130.0).max(80.0);
-        egui::ScrollArea::vertical()
+        let jump_id = ui.make_persistent_id(("jump-latest", self.composer_id));
+        let scroll = egui::ScrollArea::vertical()
             .max_height(available)
             .stick_to_bottom(true)
             .show(ui, |ui| {
@@ -1144,7 +1145,9 @@ impl Chat {
                     citations::show_message(ui, role, role, text, &mut clicked);
                     ui.separator();
                 }
+                crate::chat::citations::apply_latest(ui, jump_id);
             });
+        crate::chat::citations::latest_control(ui, &scroll, jump_id);
         ui.horizontal_wrapped(|ui| {
             ui.label(tr("Model (empty = configured)"));
             if ui

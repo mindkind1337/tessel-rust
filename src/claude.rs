@@ -955,7 +955,8 @@ impl Chat {
                 }
             }
         }
-        egui::ScrollArea::vertical()
+        let jump_id = ui.make_persistent_id(("jump-latest", self.composer_id));
+        let scroll = egui::ScrollArea::vertical()
             .id_salt(("claude-chat", self.project))
             .stick_to_bottom(true)
             .max_height((ui.available_height() - 100.0).max(80.0))
@@ -964,7 +965,9 @@ impl Chat {
                     crate::chat::citations::show_message(ui, role, tr(role), text, &mut clicked);
                     ui.separator();
                 }
+                crate::chat::citations::apply_latest(ui, jump_id);
             });
+        crate::chat::citations::latest_control(ui, &scroll, jump_id);
         ui.add_enabled_ui(self.ready && !self.active, |ui| {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer)

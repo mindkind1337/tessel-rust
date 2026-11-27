@@ -866,6 +866,50 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
     });
     cx.refresh().unwrap();
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let viewport = visual.debug_bounds("chat-transcript").unwrap();
+    let append_output = |cx: &mut gpui::TestAppContext, id: &str| {
+        view.update(cx, |root, _, cx| {
+            let app = &mut root.app;
+            let pane = app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+            let text = "Streamed output\n".repeat(30);
+            if claude {
+                app.inject_claude_frame_for_test(pane,json!({"type":"assistant","message":{"id":id,"content":[{"type":"text","text":text}]}}));
+            } else {
+                app.inject_codex_frame_for_test(pane,json!({"method":"item/agentMessage/delta","params":{"threadId":"synthetic-thread","turnId":"turn-1","itemId":id,"delta":text}}));
+            }
+            cx.notify();
+        }).unwrap();
+        cx.refresh().unwrap();
+    };
+    let wheel_up = gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(10000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    };
+    assert!(visual.debug_bounds("chat-row-1").unwrap().origin.y < viewport.origin.y);
+    visual.simulate_event(wheel_up.clone());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let reading_position = visual.debug_bounds("chat-row-1").unwrap().origin.y;
+    append_output(cx, "older-reading");
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert_eq!(
+        visual.debug_bounds("chat-row-1").unwrap().origin.y,
+        reading_position
+    );
+    let latest = visual.debug_bounds("jump-latest").unwrap().center();
+    visual.simulate_click(latest, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("chat-row-1").unwrap().origin.y < viewport.origin.y);
+    let initial_position = visual.debug_bounds("chat-row-1").unwrap().origin.y;
+    append_output(cx, "following-latest");
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("chat-row-1").unwrap().origin.y < initial_position);
+    visual.simulate_event(wheel_up);
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
     for (selector, expected) in [
         ("copy-chat-message-0", "begin"),
         ("copy-chat-message-1", reply.as_str()),

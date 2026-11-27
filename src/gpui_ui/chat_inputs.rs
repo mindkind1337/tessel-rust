@@ -7,8 +7,62 @@ use std::collections::HashMap;
 
 gpui::actions!(tessel_chat_composer, [Submit]);
 
+pub(super) struct Transcript {
+    pub handle: gpui::ScrollHandle,
+    following: std::cell::Cell<bool>,
+    previous: std::cell::Cell<(gpui::Pixels, gpui::Pixels)>,
+}
+
+impl Default for Transcript {
+    fn default() -> Self {
+        Self {
+            handle: Default::default(),
+            following: true.into(),
+            previous: Default::default(),
+        }
+    }
+}
+
+impl Transcript {
+    fn geometry(&self) -> (gpui::Pixels, gpui::Pixels) {
+        (self.handle.max_offset().y, self.handle.offset().y)
+    }
+    pub fn jump(&self) {
+        self.following.set(true);
+        self.previous.set(self.geometry());
+        self.handle.scroll_to_bottom();
+    }
+    pub fn align_reply(&self, index: usize) {
+        self.following.set(false);
+        self.previous.set(self.geometry());
+        self.handle.scroll_to_top_of_item(index);
+    }
+    pub fn wheel(&self, delta: gpui::Pixels) {
+        let current = self.geometry();
+        self.previous.set(current);
+        if delta > gpui::px(0.) && current.0 > gpui::px(0.) {
+            self.following.set(false);
+        }
+    }
+    pub fn prepare(&self) -> bool {
+        let current = self.geometry();
+        let prior = self.previous.replace(current);
+        let distance = current.0 + current.1;
+        // An offset change at the same content size comes from scrolling.
+        // Extra streamed lines or a resize change the extent instead.
+        if current.0 == prior.0 && current.1 != prior.1 {
+            self.following
+                .set(distance <= gpui::px(4.) && (self.following.get() || current.1 < prior.1));
+        }
+        if self.following.get() {
+            self.handle.scroll_to_bottom();
+        }
+        !self.following.get() && distance > gpui::px(48.)
+    }
+}
+
 struct Binding {
-    transcript: gpui::ScrollHandle,
+    transcript: std::rc::Rc<Transcript>,
     id: u64,
     state: Entity<EditableTextState>,
     synced: String,
@@ -45,7 +99,7 @@ impl Inputs {
         }
     }
 
-    pub fn transcript(&self, pane: u64) -> Option<&gpui::ScrollHandle> {
+    pub(super) fn transcript(&self, pane: u64) -> Option<&std::rc::Rc<Transcript>> {
         self.bindings.get(&pane).map(|b| &b.transcript)
     }
 

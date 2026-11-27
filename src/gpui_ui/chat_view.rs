@@ -73,7 +73,7 @@ fn copy_message_button(
 }
 
 fn scroll_reply_button(
-    handle: gpui::ScrollHandle,
+    handle: std::rc::Rc<super::chat_inputs::Transcript>,
     index: usize,
     french: bool,
     cx: &mut Context<TesselGpuiRoot>,
@@ -96,13 +96,13 @@ fn scroll_reply_button(
         .cursor_pointer()
         .on_click(cx.listener(move |_, _, _, cx| {
             cx.stop_propagation();
-            handle.scroll_to_top_of_item(index);
+            handle.align_reply(index);
             cx.notify();
         }))
         .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
             if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
                 cx.stop_propagation();
-                keyboard.scroll_to_top_of_item(index);
+                keyboard.align_reply(index);
                 cx.notify();
             }
         }))
@@ -283,11 +283,24 @@ pub(crate) fn render_native_chat_pane_body(
         );
     }
 
+    let transcript = chat_inputs.transcript(pane_id);
+    let show_jump = transcript.is_some_and(|state| state.prepare());
     let mut transcript_list = div()
         .id(("chat-transcript", pane_id))
         .debug_selector(|| "chat-transcript".into())
+        .on_scroll_wheel(
+            cx.listener(move |root, event: &gpui::ScrollWheelEvent, window, cx| {
+                if let Some(state) = root.chat_inputs.transcript(pane_id) {
+                    state.wheel(event.delta.pixel_delta(px(1.)).y);
+                }
+                let owner = cx.weak_entity();
+                window.on_next_frame(move |_, cx| {
+                    let _ = owner.update(cx, |_, cx| cx.notify());
+                });
+            }),
+        )
         .when_some(chat_inputs.transcript(pane_id), |list, handle| {
-            list.track_scroll(handle)
+            list.track_scroll(&handle.handle)
         })
         .flex_1()
         .min_h_0()
@@ -631,7 +644,57 @@ pub(crate) fn render_native_chat_pane_body(
                     .child(SharedString::from(chat.error.clone())),
             )
         })
-        .child(transcript_list)
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(transcript_list)
+                .when(show_jump, |panel| {
+                    let handle = transcript.expect("visible jump has transcript").clone();
+                    let keyboard = handle.clone();
+                    let label = if french {
+                        "Aller au dernier message"
+                    } else {
+                        "Jump to latest"
+                    };
+                    panel.child(
+                        div()
+                            .id(("jump-latest", pane_id))
+                            .debug_selector(|| "jump-latest".into())
+                            .focusable()
+                            .tab_stop(true)
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .absolute()
+                            .bottom(px(6.))
+                            .self_center()
+                            .bg(tokens.surface_2)
+                            .cursor_pointer()
+                            .px(px(8.))
+                            .py(px(3.))
+                            .child(label)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                handle.jump();
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(
+                                move |_, event: &gpui::KeyDownEvent, _, cx| {
+                                    if !event.is_held
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        cx.stop_propagation();
+                                        keyboard.jump();
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                    )
+                }),
+        )
         // Bottom Composer
         .child(
             div()

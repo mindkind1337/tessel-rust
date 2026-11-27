@@ -42,6 +42,27 @@ fn show_header(ui: &mut eframe::egui::Ui, role: &str, label: &str, text: &str) {
     });
 }
 
+pub(crate) fn latest_control(
+    ui: &mut eframe::egui::Ui,
+    scroll: &eframe::egui::scroll_area::ScrollAreaOutput<()>,
+    jump_id: eframe::egui::Id,
+) {
+    if scroll.content_size.y - scroll.inner_rect.height() - scroll.state.offset.y > 48.
+        && ui.small_button(crate::i18n::tr("Jump to latest")).clicked()
+    {
+        ui.data_mut(|d| d.insert_temp(jump_id, true));
+        ui.ctx().request_repaint();
+    }
+}
+pub(crate) fn apply_latest(ui: &mut eframe::egui::Ui, jump_id: eframe::egui::Id) {
+    if ui
+        .data_mut(|d| d.remove_temp::<bool>(jump_id))
+        .unwrap_or(false)
+    {
+        ui.scroll_to_cursor(Some(eframe::egui::Align::BOTTOM));
+    }
+}
+
 pub(crate) fn show_message(
     ui: &mut eframe::egui::Ui,
     role: &str,
