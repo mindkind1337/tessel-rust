@@ -441,6 +441,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub replace_open: bool,
     pub goto_open: bool,
     pub find_query: String,
+    pub match_case: bool,
     pub replace_text: String,
     pub goto_line: String,
     pub match_count: usize,
@@ -1006,6 +1007,7 @@ pub(crate) enum GpuiAction {
     ToggleEditorReplace,
     ToggleEditorGoto,
     SetEditorFindQuery(String),
+    ToggleEditorMatchCase,
     SetEditorReplaceText(String),
     StepEditorFind(isize),
     ReplaceEditorCurrent,
@@ -1554,6 +1556,7 @@ impl Tessel {
             next_session,
             active_session: None,
             documents: vec![],
+            editor_match_case: false,
             document_watch: Default::default(),
             document_pending: Default::default(),
             active_document: 0,
@@ -3942,6 +3945,7 @@ impl Tessel {
         let active_doc_idx = self.active_document;
         let active_document = if self.gpui_is_document_view() {
             self.documents.get_mut(active_doc_idx).map(|doc| {
+                doc.tools.match_case = self.editor_match_case;
                 let mut summary =
                     Self::build_document_summary(active_doc_idx, doc, self.state.editor_prefs);
                 if !doc.preview_mode && crate::json_outline_panel::supported(doc) {
@@ -4276,7 +4280,7 @@ impl Tessel {
         };
 
         let matches = if doc.tools.find_open && !doc.tools.find_query.is_empty() {
-            crate::files::find_char_matches(&doc.text, &doc.tools.find_query)
+            crate::files::find_char_matches(&doc.text, &doc.tools.find_query, doc.tools.match_case)
         } else {
             Vec::new()
         };
@@ -4381,6 +4385,7 @@ impl Tessel {
             replace_open: doc.tools.replace_open,
             goto_open: doc.tools.goto_open,
             find_query: doc.tools.find_query.clone(),
+            match_case: doc.tools.match_case,
             replace_text: doc.tools.replace_text.clone(),
             goto_line: doc.tools.goto_line.clone(),
             match_count,
@@ -6474,13 +6479,26 @@ impl Tessel {
                     doc.tools.goto_open = !doc.tools.goto_open;
                 }
             }
+            GpuiAction::ToggleEditorMatchCase => {
+                if self.gpui_editor_tool_document_id().is_some()
+                    && let Some(doc) = self.documents.get_mut(self.active_document)
+                {
+                    doc.toggle_find_case();
+                    let enabled = doc.tools.match_case;
+                    self.remember_editor_match_case(enabled);
+                }
+            }
             GpuiAction::SetEditorFindQuery(q) => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
                     doc.tools.find_query = q;
                     doc.tools.match_index = 0;
                     doc.tools.pending_char_range = None;
                     doc.tools.pending_scroll_line = None;
-                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    let hits = crate::files::find_char_matches(
+                        &doc.text,
+                        &doc.tools.find_query,
+                        doc.tools.match_case,
+                    );
                     if let Some(first) = hits.first() {
                         doc.tools.pending_char_range = Some((first.0, first.1));
                         doc.tools.pending_scroll_line = Some(first.2);
@@ -6494,7 +6512,11 @@ impl Tessel {
             }
             GpuiAction::StepEditorFind(dir) => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
-                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    let hits = crate::files::find_char_matches(
+                        &doc.text,
+                        &doc.tools.find_query,
+                        doc.tools.match_case,
+                    );
                     if !hits.is_empty() {
                         let len = hits.len();
                         doc.tools.match_index = if dir >= 0 {
@@ -6512,7 +6534,11 @@ impl Tessel {
                 if let Some(doc) = self.documents.get_mut(self.active_document)
                     && !doc.media
                 {
-                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+                    let hits = crate::files::find_char_matches(
+                        &doc.text,
+                        &doc.tools.find_query,
+                        doc.tools.match_case,
+                    );
                     match crate::files::replacement_edit(
                         &doc.text,
                         &hits,
@@ -6582,7 +6608,8 @@ impl Tessel {
                     && doc.tools.find_open
                     && doc.tools.find_query == query
                 {
-                    let hits = crate::files::find_char_matches(&doc.text, &query);
+                    let hits =
+                        crate::files::find_char_matches(&doc.text, &query, doc.tools.match_case);
                     doc.tools.match_index = hits.iter().position(|h| h.0 >= from_char).unwrap_or(0);
                     doc.tools.pending_char_range = None;
                     doc.tools.pending_scroll_line = None;

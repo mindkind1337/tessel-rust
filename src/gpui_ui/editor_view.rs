@@ -946,6 +946,7 @@ fn render_editor_tools_bar(
     let id = doc.instance_id;
     use super::editor_tool_inputs::{Command, run};
     use crate::app::gpui_bridge::EditorToolField;
+    let case_colors = *tokens;
     if doc.find_open {
         let badge = if doc.find_query.is_empty() {
             String::new()
@@ -981,6 +982,38 @@ fn render_editor_tools_bar(
                 )
             })
             .child(inputs.render(doc, EditorToolField::Find, french, tokens, cx))
+            .child(
+                div()
+                    .id("editor-match-case")
+                    .role(gpui::Role::Button)
+                    .aria_label(if french {
+                        "Respecter la casse"
+                    } else {
+                        "Match case"
+                    })
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| super::chrome::ToolbarTooltip {
+                            text: if french {
+                                "Respecter la casse"
+                            } else {
+                                "Match case"
+                            }
+                            .into(),
+                            bg: case_colors.surface,
+                            fg: case_colors.text,
+                            border: case_colors.border,
+                        })
+                        .into()
+                    })
+                    .px(px(4.))
+                    .rounded(px(3.))
+                    .when(doc.match_case, |el| el.bg(tokens.accent_soft_bg))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|root, _, _, cx| {
+                        root.dispatch(GpuiAction::ToggleEditorMatchCase, cx)
+                    }))
+                    .child("Aa"),
+            )
             .when(!badge.is_empty(), |el| {
                 el.child(
                     div()

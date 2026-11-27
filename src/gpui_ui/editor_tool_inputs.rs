@@ -514,7 +514,8 @@ fn replace(
     if doc.instance_id() != id || doc.media {
         return;
     }
-    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
+    let hits =
+        crate::files::find_char_matches(&doc.text, &doc.tools.find_query, doc.tools.match_case);
     if hits.is_empty() {
         return;
     }
@@ -570,6 +571,51 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+    #[gpui::test]
+    fn match_case_shortcut_filters_native_replace_all(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("case.txt");
+        std::fs::write(&path, "Été été ÉTÉ Été").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            let other = Document::open(dir.path(), &path).unwrap();
+            root.app.install_editor_input_fixture(vec![doc, other], 0);
+            root.app.apply_gpui_action(GpuiAction::ToggleEditorReplace);
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorFindQuery("Été".into()));
+            root.app
+                .apply_gpui_action(GpuiAction::SetEditorReplaceText("x".into()));
+            root.focus_input = FocusInputTarget::EditorFind;
+            root
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(
+            view.into(),
+            if cfg!(target_os = "macos") {
+                "cmd-alt-c"
+            } else {
+                "alt-c"
+            },
+        );
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            let summary = root
+                .app
+                .gpui_snapshot(900., 600., super::super::theme::SPLIT_DIVIDER_PX)
+                .active_document
+                .unwrap();
+            assert!(summary.match_case);
+            assert_eq!(summary.match_count, 2);
+            run(root, id, Command::Replace(true), window, cx);
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, "x été ÉTÉ x");
+            root.app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
+            assert!(root.app.gpui_editor_document().unwrap().tools.match_case);
+        })
+        .unwrap();
     }
     #[gpui::test]
     fn f3_shortcuts_select_unicode_matches_without_editing(cx: &mut TestAppContext) {
@@ -1055,7 +1101,7 @@ mod tests {
         let plan_replacement = |source: &str, query: &str, replacement: &str, index, all| {
             crate::files::replacement_edit(
                 source,
-                &crate::files::find_char_matches(source, query),
+                &crate::files::find_char_matches(source, query, false),
                 replacement,
                 index,
                 all,

@@ -173,6 +173,7 @@ pub struct EditorTools {
     pub replace_open: bool,
     pub goto_open: bool,
     pub find_query: String,
+    pub match_case: bool,
     pub replace_text: String,
     pub goto_line: String,
     pub match_index: usize,
@@ -185,9 +186,9 @@ pub struct EditorTools {
 }
 
 /// Non-overlapping literal matches in character coordinates and zero-based lines.
-pub fn find_char_matches(text: &str, query: &str) -> Vec<(usize, usize, usize)> {
+pub fn find_char_matches(text: &str, query: &str, match_case: bool) -> Vec<(usize, usize, usize)> {
     let mut matches = Vec::new();
-    visit_find_matches(text, query, |hit| {
+    visit_find_matches(text, query, match_case, |hit| {
         matches.push(hit);
         true
     });
@@ -197,9 +198,26 @@ pub fn find_char_matches(text: &str, query: &str) -> Vec<(usize, usize, usize)> 
 fn visit_find_matches(
     text: &str,
     query: &str,
+    match_case: bool,
     mut visit: impl FnMut((usize, usize, usize)) -> bool,
 ) {
     if query.is_empty() || text.is_empty() {
+        return;
+    }
+    if match_case {
+        let mut previous = 0;
+        let mut char_index = 0;
+        let mut line = 0;
+        let length = query.chars().count();
+        for (byte, _) in text.match_indices(query) {
+            let prefix = &text[previous..byte];
+            char_index += prefix.chars().count();
+            line += prefix.bytes().filter(|&b| b == b'\n').count();
+            if !visit((char_index, char_index + length, line)) {
+                break;
+            }
+            previous = byte;
+        }
         return;
     }
     let fold = |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
@@ -609,7 +627,7 @@ impl Document {
         }
         let mut preceding = 0;
         self.tools.match_index = 0;
-        visit_find_matches(&self.text, seed, |hit| {
+        visit_find_matches(&self.text, seed, self.tools.match_case, |hit| {
             if hit.0 >= char_start {
                 self.tools.match_index = preceding;
                 return false;
@@ -618,6 +636,25 @@ impl Document {
             true
         });
         true
+    }
+
+    pub(crate) fn toggle_find_case(&mut self) {
+        self.tools.match_case = !self.tools.match_case;
+        self.tools.match_index = 0;
+        self.tools.pending_char_range = None;
+        self.tools.pending_scroll_line = None;
+        if self.tools.find_open {
+            visit_find_matches(
+                &self.text,
+                &self.tools.find_query,
+                self.tools.match_case,
+                |(start, end, line)| {
+                    self.tools.pending_char_range = Some((start, end));
+                    self.tools.pending_scroll_line = Some(line);
+                    false
+                },
+            );
+        }
     }
 
     pub(crate) fn navigate_find(&mut self, selection: std::ops::Range<usize>, backwards: bool) {
@@ -631,25 +668,30 @@ impl Document {
         let mut target = None;
         let mut wrap = None;
         let mut index = 0;
-        visit_find_matches(&self.text, &self.tools.find_query, |hit| {
-            let entry = (index, hit);
-            index += 1;
-            if backwards {
-                wrap = Some(entry);
-                if hit.1 <= selection.start {
-                    target = Some(entry);
-                } else if target.is_some() {
-                    return false;
+        visit_find_matches(
+            &self.text,
+            &self.tools.find_query,
+            self.tools.match_case,
+            |hit| {
+                let entry = (index, hit);
+                index += 1;
+                if backwards {
+                    wrap = Some(entry);
+                    if hit.1 <= selection.start {
+                        target = Some(entry);
+                    } else if target.is_some() {
+                        return false;
+                    }
+                } else {
+                    wrap.get_or_insert(entry);
+                    if hit.0 >= selection.end {
+                        target = Some(entry);
+                        return false;
+                    }
                 }
-            } else {
-                wrap.get_or_insert(entry);
-                if hit.0 >= selection.end {
-                    target = Some(entry);
-                    return false;
-                }
-            }
-            true
-        });
+                true
+            },
+        );
         if let Some((index, (start, end, line))) = target.or(wrap) {
             self.tools.match_index = index;
             self.tools.pending_char_range = Some((start, end));
@@ -1598,10 +1640,19 @@ mod tests {
 
     #[test]
     fn editor_find_skips_overlaps_and_preserves_lines_across_multiline_matches() {
-        assert_eq!(find_char_matches("aaaaa", "AA"), [(0, 2, 0), (2, 4, 0)]);
-        assert_eq!(find_char_matches("x\nx\nx", "X\n"), [(0, 2, 0), (2, 4, 1)]);
-        assert_eq!(find_char_matches("😀İi\nI", "i"), [(2, 3, 0), (4, 5, 1)]);
-        assert_eq!(find_char_matches("😀İi\nI", "i\u{307}"), [(1, 2, 0)]);
+        assert_eq!(
+            find_char_matches("aaaaa", "AA", false),
+            [(0, 2, 0), (2, 4, 0)]
+        );
+        assert_eq!(
+            find_char_matches("x\nx\nx", "X\n", false),
+            [(0, 2, 0), (2, 4, 1)]
+        );
+        assert_eq!(
+            find_char_matches("😀İi\nI", "i", false),
+            [(2, 3, 0), (4, 5, 1)]
+        );
+        assert_eq!(find_char_matches("😀İi\nI", "i\u{307}", false), [(1, 2, 0)]);
     }
 
     #[test]
@@ -1630,6 +1681,22 @@ mod tests {
         assert_eq!(goto_line_char_offset("", "::1"), Some((0, 0)));
         assert_eq!(goto_line_char_offset(text, "x:3"), None);
         assert_eq!(goto_line_char_offset(text, "::"), None);
+    }
+
+    #[test]
+    fn match_case_preserves_unicode_offsets_and_line_numbers_for_literal_replacements() {
+        let text = "😀Été\nété\nÉté";
+        let exact = find_char_matches(text, "Été", true);
+        assert_eq!(exact, [(1, 4, 0), (9, 12, 2)]);
+        assert_eq!(find_char_matches(text, "Été", false).len(), 3);
+        assert_eq!(find_char_matches("a\nB\na\nb", "a\nB", true), [(0, 3, 0)]);
+        assert!(find_char_matches("İ", "i", true).is_empty());
+        let (range, insert) = replacement_edit(text, &exact, "x", 0, true)
+            .unwrap()
+            .unwrap();
+        let mut draft = text.to_owned();
+        draft.replace_range(range, &insert);
+        assert_eq!(draft, "😀x\nété\nx");
     }
 
     #[test]
@@ -1684,7 +1751,7 @@ mod tests {
     #[test]
     fn editor_find_goto_line_and_changed_hunks_handle_multibyte_utf8() {
         let text = "première ligne\nCafé résumé\ntroisième café\n";
-        let matches = find_char_matches(text, "café");
+        let matches = find_char_matches(text, "café", false);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].2, 1);
         assert_eq!(matches[1].2, 2);

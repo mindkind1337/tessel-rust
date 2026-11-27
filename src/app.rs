@@ -747,6 +747,7 @@ pub struct Tessel {
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
+    editor_match_case: bool,
     document_watch: crate::document_watch::DocumentWatch,
     document_pending: std::collections::HashMap<(Option<u64>, PathBuf), PendingDocument>,
     active_document: usize,
@@ -1002,6 +1003,7 @@ impl Tessel {
             next_session,
             active_session: None,
             documents: vec![],
+            editor_match_case: false,
             document_watch: Default::default(),
             document_pending: Default::default(),
             active_document: 0,
@@ -8233,6 +8235,18 @@ impl Tessel {
             self.save();
         }
     }
+    fn remember_editor_match_case(&mut self, enabled: bool) {
+        if self.editor_match_case != enabled {
+            self.editor_match_case = enabled;
+            for doc in &mut self.documents {
+                if doc.tools.match_case != enabled {
+                    doc.tools.match_case = enabled;
+                    doc.tools.match_index = 0;
+                }
+            }
+        }
+    }
+
     fn editor(&mut self, ui: &mut egui::Ui) {
         if self.file_action_pending {
             ui.spinner();
@@ -8245,6 +8259,7 @@ impl Tessel {
             ui.label(tr("Choose a UTF-8 file in the explorer."));
             return;
         };
+        d.tools.match_case = self.editor_match_case;
         let extension = d
             .path
             .extension()
@@ -8286,6 +8301,14 @@ impl Tessel {
             && let Some(selection) = egui::text_edit::TextEditState::load(ui.ctx(), source_id)
                 .and_then(|s| s.cursor.char_range())
         {
+            let case_mods = if cfg!(target_os = "macos") {
+                egui::Modifiers::MAC_CMD | egui::Modifiers::ALT
+            } else {
+                egui::Modifiers::ALT
+            };
+            if take_fresh_shortcut(ui.ctx(), true, case_mods, egui::Key::C) {
+                d.toggle_find_case();
+            }
             let backwards = ui.input_mut(|input| {
                 let (index, shift) =
                     input.events.iter().enumerate().find_map(|(index, event)| {
@@ -8659,6 +8682,8 @@ impl Tessel {
             crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
         });
         let external_id = open_external.then(|| d.instance_id());
+        let match_case = d.tools.match_case;
+        self.remember_editor_match_case(match_case);
         if let Some(tab) = requested_tool {
             self.toggle_right_tool(tab);
             self.save();
@@ -16282,7 +16307,8 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
         });
     }
     if d.tools.find_open {
-        let mut matches = crate::files::find_char_matches(&d.text, &d.tools.find_query);
+        let mut matches =
+            crate::files::find_char_matches(&d.text, &d.tools.find_query, d.tools.match_case);
         if matches.is_empty() {
             d.tools.match_index = 0;
         } else {
@@ -16313,9 +16339,20 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
                 focus_editor_field(&find_input, &d.tools.find_query);
                 d.tools.focus_find = false;
             }
-            if find_input.changed() {
+            let case_clicked = ui
+                .selectable_label(d.tools.match_case, "Aa")
+                .on_hover_text(tr("Match case"))
+                .clicked();
+            if case_clicked {
+                d.toggle_find_case();
+            }
+            if case_clicked || find_input.changed() {
                 d.tools.match_index = 0;
-                matches = crate::files::find_char_matches(&d.text, &d.tools.find_query);
+                matches = crate::files::find_char_matches(
+                    &d.text,
+                    &d.tools.find_query,
+                    d.tools.match_case,
+                );
                 if let Some(&(sc, ec, line)) = matches.first() {
                     d.tools.pending_char_range = Some((sc, ec));
                     d.tools.pending_scroll_line = Some(line);
@@ -17324,6 +17361,22 @@ $lock.Dispose()
             "local-replace",
             app.documents[0].instance_id()
         )))));
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::C,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: if cfg!(target_os = "macos") {
+                    egui::Modifiers::MAC_CMD | egui::Modifiers::ALT
+                } else {
+                    egui::Modifiers::ALT
+                },
+            }],
+        );
+        assert!(app.documents[0].tools.match_case);
+        assert_eq!(app.documents[0].text, "alpha\nbeta ph");
     }
 
     #[test]

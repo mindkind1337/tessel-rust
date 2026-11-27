@@ -818,6 +818,27 @@ impl TesselGpuiRoot {
         {
             return;
         }
+        if key == "c"
+            && alt
+            && !shift
+            && !event.keystroke.modifiers.control
+            && event.keystroke.modifiers.platform == cfg!(target_os = "macos")
+            && matches!(
+                native_target,
+                Some(
+                    FocusInputTarget::EditorBody
+                        | FocusInputTarget::EditorFind
+                        | FocusInputTarget::EditorReplace
+                )
+            )
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            if !event.is_held {
+                self.dispatch(GpuiAction::ToggleEditorMatchCase, cx);
+            }
+            return;
+        }
         if key == "f3"
             && !ctrl
             && !alt
