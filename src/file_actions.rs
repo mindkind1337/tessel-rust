@@ -22,7 +22,7 @@ pub struct Change {
     pub before: Option<PathBuf>,
     pub after: Option<PathBuf>,
 }
-fn name_ok(name: &str) -> bool {
+pub(crate) fn name_ok(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
     let reserved = matches!(
         stem.as_str(),

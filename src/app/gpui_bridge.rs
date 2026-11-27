@@ -879,6 +879,7 @@ pub(crate) enum GpuiAction {
         skip: bool,
     },
     // Document / Diff / Rich Preview actions
+    OpenChatCitation(u64, PathBuf),
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
     #[cfg(windows)]
@@ -5720,6 +5721,7 @@ impl Tessel {
                     c.gpui_submit_questions(skip);
                 }
             }
+            GpuiAction::OpenChatCitation(pane, path) => self.open_chat_citation(pane, &path),
             GpuiAction::OpenDocumentPath(path) => {
                 if let Some(pid) = self.state.active_project
                     && let Some(root) = self

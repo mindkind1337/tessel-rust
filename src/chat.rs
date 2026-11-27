@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) mod citations;
 mod questions;
 pub use questions::QuestionView;
 
@@ -1019,7 +1020,8 @@ impl Chat {
         }
         changed
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+        let mut clicked = None;
         ui.heading(tr("Codex · native chat"));
         ui.small(self.cwd.display().to_string());
         if let Some(id) = &self.thread_id {
@@ -1139,7 +1141,26 @@ impl Chat {
             .show(ui, |ui| {
                 for (role, text) in self.history.iter().chain(self.transcript.iter()) {
                     ui.strong(role);
-                    ui.add(egui::Label::new(text).selectable(true));
+                    if let Some(message) = citations::parse(role, text) {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let mut end = 0;
+                            for (range, path) in message.links {
+                                if end < range.start {
+                                    ui.label(&message.text[end..range.start]);
+                                }
+                                if ui.link(&message.text[range.clone()]).clicked() {
+                                    clicked = Some(path);
+                                }
+                                end = range.end;
+                            }
+                            if end < message.text.len() {
+                                ui.label(&message.text[end..]);
+                            }
+                        });
+                    } else {
+                        ui.add(egui::Label::new(text).selectable(true));
+                    }
                     ui.separator();
                 }
             });
@@ -1196,6 +1217,7 @@ impl Chat {
         {
             self.send_message();
         }
+        clicked
     }
     pub fn set_resume(&mut self, id: String) {
         self.resume = id;

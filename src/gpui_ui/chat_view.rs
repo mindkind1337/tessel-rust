@@ -169,6 +169,7 @@ pub(crate) fn render_native_chat_pane_body(
         );
     } else {
         for (msg_idx, (role, body)) in chat.messages.iter().enumerate() {
+            let citations = crate::chat::citations::parse(role, body);
             let is_user = role == "You";
             let is_tool = role.contains("Tool");
             let bubble_bg = if is_user {
@@ -210,11 +211,45 @@ pub(crate) fn render_native_chat_pane_body(
                     )
                     .child(
                         div()
+                            .when(citations.is_some(), |el| {
+                                el.debug_selector(|| "codex-citation-body".into())
+                            })
                             .text_size(px(font_size - 0.5))
                             .line_height(px((font_size * 1.42).round()))
                             .when(is_tool, |el| el.font_family(mono_font_family()))
                             .text_color(tokens.text)
-                            .child(SharedString::from(body.clone())),
+                            .child(if let Some(cited) = citations {
+                                let (ranges, paths): (Vec<_>, Vec<_>) =
+                                    cited.links.into_iter().unzip();
+                                let styled = gpui::StyledText::new(cited.text).with_highlights(
+                                    ranges.iter().cloned().map(|range| {
+                                        (
+                                            range,
+                                            gpui::HighlightStyle {
+                                                color: Some(gpui::rgb_to_hsla(tokens.accent)),
+                                                ..Default::default()
+                                            },
+                                        )
+                                    }),
+                                );
+                                let owner = cx.weak_entity();
+                                gpui::InteractiveText::new(("chat-citation", msg_idx), styled)
+                                    .on_click(ranges, move |index, _, cx| {
+                                        cx.stop_propagation();
+                                        let _ = owner.update(cx, |root, cx| {
+                                            root.dispatch(
+                                                GpuiAction::OpenChatCitation(
+                                                    pane_id,
+                                                    paths[index].clone(),
+                                                ),
+                                                cx,
+                                            )
+                                        });
+                                    })
+                                    .into_any_element()
+                            } else {
+                                SharedString::from(body.clone()).into_any_element()
+                            }),
                     ),
             );
         }

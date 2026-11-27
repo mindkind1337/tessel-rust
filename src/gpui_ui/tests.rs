@@ -795,6 +795,60 @@ fn gpui_vt_styled_lines_and_key_encoder_preserve_ansi_unicode_and_modes() {
     );
 }
 
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
+fn codex_file_citation_opens_the_project_document_in_a_tab(test: &mut gpui::TestAppContext) {
+    let cx = &mut gpui::TestAppContext::build_with_text_system(
+        test.dispatcher.clone(),
+        None,
+        gpui_platform::current_platform(true).text_system(),
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("my report.txt"), "original contents").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+        let app = &mut root.app;
+        app.synthetic_native_profiles(temp.path());
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
+        let pane = app.gpui_snapshot(960.,640.,4.).tiles[0].session_id;
+        let _receiver = app.gpui_chat_sender_for_test(pane);
+        let composer = app.gpui_chat_composer(pane).unwrap().0;
+        app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {pane_id:pane,instance_id:composer,base:String::new(),text:"begin".into()});
+        app.apply_gpui_action(GpuiAction::NativeChatSend {pane_id:pane,instance_id:composer,text:"begin".into()});
+        app.inject_codex_frame_for_test(pane,json!({"method":"turn/started","params":{"threadId":"synthetic-thread","turn":{"id":"turn-1"}}}));
+        app.inject_codex_frame_for_test(pane,json!({"method":"item/agentMessage/delta","params":{"threadId":"synthetic-thread","turnId":"turn-1","itemId":"reply","delta":":codex-file-citation{path='my report.txt'}"}}));
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let bounds = visual.debug_bounds("codex-citation-body").unwrap();
+    let click = gpui::point(bounds.origin.x + gpui::px(5.), bounds.center().y);
+    visual.simulate_mouse_move(click, None, Default::default());
+    visual.simulate_click(click, Default::default());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let opened = view
+            .update(cx, |root, _, _| {
+                root.app.poll_for_gpui();
+                root.app.gpui_snapshot(960., 640., 4.).active_document
+            })
+            .unwrap();
+        if let Some(doc) = opened {
+            assert!(doc.title.ends_with("my report.txt"));
+            assert_eq!(doc.text, "original contents");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "citation did not open"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
     let temp = tempfile::tempdir().expect("tempdir");

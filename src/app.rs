@@ -2017,6 +2017,27 @@ impl Tessel {
         };
         self.open_document_at_mode(root, path, pinned);
     }
+    fn open_chat_citation(&mut self, pane: u64, path: &std::path::Path) {
+        let Some(project) = self.state.active() else {
+            return;
+        };
+        let Some(session) = self.sessions.iter().find(|s| {
+            s.id == pane && s.project == Some(project.id) && matches!(s.launch, Launch::CodexChat)
+        }) else {
+            return;
+        };
+        let root = session
+            .worktree
+            .as_ref()
+            .filter(|wt| {
+                session.cwd.starts_with(&wt.path) && session.cwd.join(path).starts_with(&wt.path)
+            })
+            .map_or_else(|| project.path.clone(), |wt| wt.path.clone());
+        match crate::chat::citations::destination(&root, &session.cwd, path) {
+            Ok(file) => self.open_document_at(root, file),
+            Err(error) => self.error = error,
+        }
+    }
     fn open_linked_document(&mut self, root: PathBuf, path: PathBuf) {
         if let Some(source) = self.documents.get_mut(self.active_document) {
             source.unpinned_preview = false;
@@ -5958,6 +5979,7 @@ impl Tessel {
             )
             .collect();
         let mut team_membership_changed = false;
+        let mut chat_citation = None;
         let mut deferred_teams_action: Option<crate::teams_ui::TeamsUiAction> = None;
         let ctx_menu_was_just_opened = std::mem::take(&mut self.pane_context_menu_just_opened);
         for tile in &geometry.tiles {
@@ -6496,7 +6518,7 @@ impl Tessel {
                                                     self.chats.iter_mut().find(|c| c.pane == id)
                                                 {
                                                     chat.defaults = self.state.agent_model_defaults.get("codex").and_then(crate::agent_model_defaults::Defaults::values);
-                                                    chat.show(ui);
+                                                    if let Some(path) = chat.show(ui) { chat_citation = Some((id, path)); }
                                                     if std::mem::take(&mut chat.options_commit) && chat.options.value() != session.session_options {
                                                         session.session_options = chat.options.value();
                                                         native_options_changed = true;
@@ -6751,6 +6773,9 @@ impl Tessel {
         }
         if team_membership_changed {
             self.save();
+        }
+        if let Some((pane, path)) = chat_citation {
+            self.open_chat_citation(pane, &path);
         }
         if let Some(t_act) = deferred_teams_action {
             self.handle_teams_ui_action(t_act);
