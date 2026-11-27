@@ -7862,9 +7862,7 @@ impl Tessel {
                 }
             }
             GpuiAction::RemoveSshHost(index, expected) => {
-                match self.change_hosts(|hosts| {
-                    crate::host_actions::remove(hosts, index, &expected).map(|()| true)
-                }) {
+                match self.remove_saved_host(index, &expected) {
                     Ok(_) => self.host_notice = Some((tr("SSH target removed").into(), false)),
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }

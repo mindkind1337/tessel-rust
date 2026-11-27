@@ -10350,9 +10350,7 @@ impl Tessel {
                 }
             }
             Some(SshHostsAction::Remove { index, expected }) => {
-                match self.change_hosts(|hosts| {
-                    crate::host_actions::remove(hosts, index, &to_host(expected)).map(|()| true)
-                }) {
+                match self.remove_saved_host(index, &to_host(expected)) {
                     Ok(_) => self.host_notice = Some((tr("SSH target removed").into(), false)),
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }
@@ -10465,6 +10463,15 @@ impl Tessel {
             }
             Err(error) => self.host_notice = Some((tr(error).into(), true)),
         }
+    }
+
+    fn remove_saved_host(&mut self, index: usize, expected: &Host) -> Result<(), String> {
+        self.change_hosts(|hosts| {
+            crate::host_actions::remove(hosts, index, expected).map(|()| true)
+        })?;
+        self.remote
+            .saved_target_removed(index, expected, self.state.hosts.len());
+        Ok(())
     }
 
     fn change_hosts(

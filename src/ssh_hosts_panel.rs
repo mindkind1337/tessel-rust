@@ -3289,9 +3289,9 @@ const fn remove_title_label(french: bool) -> &'static str {
 
 const fn remove_desc_label(french: bool) -> &'static str {
     if french {
-        "Ceci supprimera cette cible de vos hôtes SSH enregistrés."
+        "La cible sera supprimée et sa vue Fichiers sera fermée. Les modifications non enregistrées dans cette vue seront perdues."
     } else {
-        "This will remove this target from your saved SSH hosts."
+        "This will remove the target and close its Files view. Unsaved changes in that view will be lost."
     }
 }
 

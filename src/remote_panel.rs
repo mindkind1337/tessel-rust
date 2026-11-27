@@ -170,6 +170,24 @@ impl RemotePanel {
         }
     }
 
+    pub(crate) fn saved_target_removed(&mut self, index: usize, target: &Host, remaining: usize) {
+        let selected = if self.selected > index {
+            self.selected - 1
+        } else {
+            self.selected.min(remaining.saturating_sub(1))
+        };
+        if self
+            .host
+            .as_ref()
+            .is_some_and(|host| host.alias == target.alias && host.folder == target.folder)
+        {
+            // Drop the watch and response receiver along with the document. A late
+            // reply from this target must never populate a later Files connection.
+            *self = Self::with_profile(self.profile.take());
+        }
+        self.selected = selected;
+    }
+
     #[cfg(windows)]
     pub(crate) fn html_page_id(&self) -> Option<u64> {
         Some(self.document.as_ref()?.html_page.as_ref()?.0)
@@ -1065,6 +1083,40 @@ impl RemotePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removing_a_saved_target_only_drops_its_own_files_connection() {
+        let host = Host {
+            alias: "lab".into(),
+            folder: "/work".into(),
+            ..Host::default()
+        };
+        let profile = std::path::PathBuf::from("isolated-profile");
+        let mut panel = RemotePanel::with_profile(Some(profile.clone()));
+        panel.host = Some(host.clone());
+        panel.selected = 1;
+        panel.path = "/work/notes".into();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        panel.pending = Some(receiver);
+        let other = Host {
+            folder: "/other".into(),
+            ..host.clone()
+        };
+        panel.saved_target_removed(0, &other, 1);
+        assert_eq!(panel.selected, 0);
+        assert!(panel.pending.is_some());
+        assert_eq!(panel.path, "/work/notes");
+        // Changing terminal preferences never changes which Files connection belongs to the row.
+        let updated = Host {
+            host_daemon: !host.host_daemon,
+            ..host
+        };
+        panel.saved_target_removed(0, &updated, 0);
+        assert!(panel.host.is_none());
+        assert!(panel.path.is_empty());
+        assert!(panel.pending.is_none());
+        assert!(sender.send(Err("late reply".into())).is_err());
+        assert_eq!(panel.profile, Some(profile));
+    }
     #[cfg(feature = "visual-test")]
     #[test]
     fn remote_image_right_click_opens_compatibility_popup() {
