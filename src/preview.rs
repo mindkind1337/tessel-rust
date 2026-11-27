@@ -229,10 +229,26 @@ pub enum Link {
     Web(String),
 }
 pub fn resolve(root: &Path, source: &Path, href: &str) -> Result<Link, String> {
-    if href.trim().starts_with('#') {
+    let href = href.trim();
+    if href.is_empty() || href.starts_with('?') {
+        return Err("The link has no document path".into());
+    }
+    if href.starts_with('#') {
         return Err("Anchor navigation is not implemented yet".into());
     }
     let base = url::Url::from_file_path(source).map_err(|_| "Invalid document location")?;
+    // The readable renderer receives raw hrefs, like Vue's resolveFrom.
+    // WebView2 has already resolved its project-origin links before dispatch.
+    let relative;
+    let href = if let Some(rest) = href.strip_prefix(['/', '\\']) {
+        if rest.starts_with(['/', '\\']) {
+            return Err("Network paths are not allowed in document previews".into());
+        }
+        relative = format!("./{rest}");
+        relative.as_str()
+    } else {
+        href
+    };
     let mut url = base.join(href).map_err(|_| "Invalid document link")?;
     match url.scheme() {
         "https" | "http" if url.username().is_empty() && url.password().is_none() => {
@@ -267,6 +283,33 @@ mod tests {
         assert_eq!(preview.plain(), "Title\n\nHello world & friends\n\nNext");
         let md = Preview::parse("# Title\n\n[Next](next.html)", true);
         assert_eq!(md.plain(), "Title\n\nNext");
+    }
+    #[test]
+    fn readable_preview_resolves_single_slash_links_from_the_document_folder() {
+        let project = tempfile::tempdir().unwrap();
+        let folder = project.path().join("reports");
+        std::fs::create_dir(&folder).unwrap();
+        let index = folder.join("index.html");
+        let target = folder.join("result 1.pdf");
+        std::fs::write(&index, "").unwrap();
+        std::fs::write(&target, "").unwrap();
+        std::fs::write(project.path().join("result 1.pdf"), "different file").unwrap();
+        for href in ["/result%201.pdf?download=1#page=2", r"\result%201.pdf"] {
+            let Ok(Link::File(found)) = resolve(project.path(), &index, href) else {
+                panic!("expected a local document for {href}");
+            };
+            assert_eq!(found, target.canonicalize().unwrap());
+        }
+        for href in [
+            "",
+            " ",
+            "?download=1",
+            "//server/share",
+            r"/\server/share",
+            r"\/server/share",
+        ] {
+            assert!(resolve(project.path(), &index, href).is_err(), "{href}");
+        }
     }
     #[test]
     fn links_stay_in_project_and_deny_native_or_network_paths() {

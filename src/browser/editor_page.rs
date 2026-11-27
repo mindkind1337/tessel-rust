@@ -652,9 +652,12 @@ mod tests {
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn native_editor_page_styles_and_routes_link_messages_without_leaving_index() {
         let root = tempfile::tempdir().unwrap();
-        let index = root.path().join("index.html");
-        std::fs::write(&index,r#"<style>a{display:block;position:absolute;inset:0;color:rgb(1,2,3)}</style><a href="report.txt">Report</a><script>document.title='executed'</script>"#).unwrap();
+        let nested = root.path().join("docs");
+        std::fs::create_dir(&nested).unwrap();
+        let index = nested.join("index.html");
+        std::fs::write(&index,r#"<style>a{display:block;position:absolute;inset:0;color:rgb(1,2,3)}</style><a href="/report.txt">Report</a><script>document.title='executed'</script>"#).unwrap();
         std::fs::write(root.path().join("report.txt"), "fixture").unwrap();
+        std::fs::write(nested.join("report.txt"), "different target").unwrap();
         let doc = Document::open(root.path(), &index).unwrap();
         let parent = hidden_parent();
         let mut editor = EditorPage::default();
@@ -688,16 +691,16 @@ mod tests {
             match action {
                 GpuiAction::FollowDocumentLink(id, path) if button == "left" => {
                     assert_eq!(id, doc.instance_id());
-                    assert_eq!(path, "report.txt")
+                    assert_eq!(path, "../report.txt")
                 }
                 GpuiAction::HtmlLinkMenu(id, path, _) if button == "right" => {
                     assert_eq!(id, doc.instance_id());
-                    assert_eq!(path, "report.txt");
+                    assert_eq!(path, "../report.txt");
                 }
                 _ => panic!("unexpected link action"),
             }
         }
-        wait_for(view, "location.pathname.endsWith('/index.html')");
+        wait_for(view, "location.pathname.endsWith('/docs/index.html')");
         editor.retain(Some(doc.instance_id()), true);
         assert!(editor.hidden);
         editor.sync(&parent, &doc, bounds, 1.);
