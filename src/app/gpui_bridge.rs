@@ -867,6 +867,14 @@ pub(crate) enum AddressCommand {
     HardReload,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SshRowCommand {
+    Test,
+    OpenTerminal,
+    TogglePersistence,
+    ToggleDaemon,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) enum GpuiAction {
@@ -1292,14 +1300,11 @@ pub(crate) enum GpuiAction {
         folder: String,
     },
     ImportSshConfig,
-    TestSshHost(String),
+    SshRow(usize, crate::workspace::Host, SshRowCommand),
     BeginSshEdit(usize, crate::workspace::Host),
     CancelSshEdit,
     SaveSshHostFromDraft,
     RemoveSshHost(usize, crate::workspace::Host),
-    LaunchSshHost(usize),
-    ToggleSshHostPersistentSessions(usize),
-    ToggleSshHostDaemon(usize),
     ToggleAgentFolderTrust,
     SetCustomAgentDraft {
         name: String,
@@ -7862,7 +7867,6 @@ impl Tessel {
                 self.gpui_extra.new_ssh_folder = folder;
             }
             GpuiAction::ImportSshConfig => self.import_ssh_config(),
-            GpuiAction::TestSshHost(alias) => self.test_ssh_host(alias),
             GpuiAction::BeginSshEdit(index, expected) => {
                 if self.state.hosts.get(index) == Some(&expected) {
                     self.gpui_extra.new_ssh_alias.clone_from(&expected.alias);
@@ -7904,26 +7908,37 @@ impl Tessel {
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }
             }
-            GpuiAction::LaunchSshHost(idx) => {
-                if let Some(host) = self.state.hosts.get(idx).cloned() {
-                    self.overlay = None;
-                    self.new_session_placed(Launch::ssh(host), None);
+            GpuiAction::SshRow(index, expected, command) => {
+                if self.state.hosts.get(index) != Some(&expected) {
+                    self.host_notice = Some((
+                        tr("This SSH host changed; reopen its settings.").into(),
+                        true,
+                    ));
+                    return;
                 }
-            }
-            GpuiAction::ToggleSshHostPersistentSessions(idx) => {
-                if let Some(host) = self.state.hosts.get_mut(idx) {
-                    host.persistent_sessions = if host.persistent_sessions_enabled() {
-                        Some(false)
-                    } else {
-                        None
-                    };
-                    self.save();
-                }
-            }
-            GpuiAction::ToggleSshHostDaemon(idx) => {
-                if let Some(host) = self.state.hosts.get_mut(idx) {
-                    host.host_daemon = !host.host_daemon;
-                    self.save();
+                match command {
+                    SshRowCommand::Test => self.test_ssh_host(expected.alias),
+                    SshRowCommand::OpenTerminal => {
+                        self.overlay = None;
+                        self.new_session_placed(Launch::ssh(expected), None);
+                    }
+                    SshRowCommand::TogglePersistence | SshRowCommand::ToggleDaemon => {
+                        let mut updated = expected.clone();
+                        if matches!(command, SshRowCommand::TogglePersistence) {
+                            updated.persistent_sessions =
+                                expected.persistent_sessions_enabled().then_some(false);
+                        } else {
+                            updated.host_daemon = !expected.host_daemon;
+                        }
+                        self.host_notice = Some(
+                            match self.change_hosts(|hosts| {
+                                crate::host_actions::save(hosts, Some((index, &expected)), updated)
+                            }) {
+                                Ok(_) => (tr("SSH target saved").into(), false),
+                                Err(error) => (tr(&error).into(), true),
+                            },
+                        );
+                    }
                 }
             }
             GpuiAction::ToggleAgentFolderTrust => {
@@ -11595,6 +11610,41 @@ mod panel_snapshot_tests {
         for (i, id) in ids.iter().enumerate() {
             assert_eq!(app.sessions.iter().any(|s| s.id == *id), i >= 2);
         }
+    }
+
+    #[test]
+    fn ssh_settings_row_commands_validate_the_displayed_row_and_persist_options() {
+        use SshRowCommand::*;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "lab".into(),
+            folder: "/first".into(),
+        });
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        let original = app.state.hosts[0].clone();
+        app.apply_gpui_action(GpuiAction::SshRow(0, original.clone(), TogglePersistence));
+        let changed = app.state.hosts[0].clone();
+        assert_eq!(changed.persistent_sessions, Some(false));
+        let pane_count = app.sessions.len();
+        for cmd in [Test, OpenTerminal, TogglePersistence, ToggleDaemon] {
+            app.apply_gpui_action(GpuiAction::SshRow(0, original.clone(), cmd));
+            assert!(matches!(app.host_notice, Some((_, true))));
+            assert_eq!(app.sessions.len(), pane_count);
+            assert!(app.host_tests.is_empty());
+            assert_eq!(app.state.hosts[0], changed);
+        }
+        app.apply_gpui_action(GpuiAction::SshRow(0, changed, ToggleDaemon));
+        let saved = app.state.hosts[0].clone();
+        assert!(!saved.host_daemon);
+        app.store = None;
+        app.apply_gpui_action(GpuiAction::SshRow(0, saved.clone(), TogglePersistence));
+        assert!(matches!(app.host_notice, Some((_, true))));
+        assert_eq!(app.state.hosts[0], saved);
+        drop(app);
+        let reopened = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(reopened.state.hosts[0], saved);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::settings_model::{
     SettingsLang, SettingsPageId, SettingsSearchRow, search_count_label, search_settings,
 };
 use crate::{
-    app::gpui_bridge::{GpuiAction, GpuiSettingsSnapshot, GpuiWorkspaceSnapshot},
+    app::gpui_bridge::{GpuiAction, GpuiSettingsSnapshot, GpuiWorkspaceSnapshot, SshRowCommand},
     settings_extra_model::{
         AlertSound, ContextModelFamily, DEVTOOLS_CATALOG, MCP_CATALOG, TEAM_TOOLS_REFERENCE,
         TESSEL_CONNECTORS, WorkerMode, supported_voice_languages, winget_install_command,
@@ -3177,7 +3177,7 @@ fn render_ssh_page(
                                 if french { "Tester" } else { "Test" }.into(),
                                 false,
                                 tokens,
-                                GpuiAction::TestSshHost(host.alias.clone()),
+                                GpuiAction::SshRow(idx, host.clone(), SshRowCommand::Test),
                                 cx,
                             )
                             .into_any_element()
@@ -3188,10 +3188,10 @@ fn render_ssh_page(
                         ))
                         .child(setting_btn(
                             format!("gpui-ssh-conn-{idx}"),
-                            "Open Terminal".to_owned(),
+                            if french { "Ouvrir le terminal" } else { "Open Terminal" }.into(),
                             false,
                             tokens,
-                            GpuiAction::LaunchSshHost(idx),
+                            GpuiAction::SshRow(idx, host.clone(), SshRowCommand::OpenTerminal),
                             cx,
                         ))
                         .child(setting_btn(
@@ -3199,7 +3199,7 @@ fn render_ssh_page(
                             "tmux".to_owned(),
                             host.persistent_sessions_enabled(),
                             tokens,
-                            GpuiAction::ToggleSshHostPersistentSessions(idx),
+                            GpuiAction::SshRow(idx, host.clone(), SshRowCommand::TogglePersistence),
                             cx,
                         ))
                         .child(setting_btn(
@@ -3211,7 +3211,7 @@ fn render_ssh_page(
                             },
                             host.host_daemon,
                             tokens,
-                            GpuiAction::ToggleSshHostDaemon(idx),
+                            GpuiAction::SshRow(idx, host.clone(), SshRowCommand::ToggleDaemon),
                             cx,
                         ))
                         .child({
