@@ -3340,6 +3340,8 @@ impl Tessel {
             .map(|store| store.directory().to_owned());
         s.start_with_trust(prefs, preferred_shell, trust_home);
         if let Some((target, dir)) = split {
+            let members =
+                self.worktree_members(project_id, s.worktree.as_ref().map(|wt| wt.path.as_path()));
             let siblings: Vec<_> = self
                 .sessions
                 .iter()
@@ -3352,10 +3354,11 @@ impl Tessel {
                 .entry(crate::terminal_layout::project_key(project_id))
                 .or_default();
             layout.sync(&siblings, self.grid_room);
-            if before {
-                layout.split_with_order(target, id, dir, true);
-            } else {
-                layout.split(target, id, dir);
+            if layout.split_with_order(target, id, dir, before)
+                && let Some(mut members) = members
+            {
+                members.insert(id);
+                layout.mark_view_manual(&members);
             }
         }
         self.sessions.push(s);
@@ -3405,6 +3408,24 @@ impl Tessel {
         let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
             return;
         };
+        let closing = &self.sessions[index];
+        let members = self.worktree_members(
+            closing.project,
+            closing.worktree.as_ref().map(|wt| wt.path.as_path()),
+        );
+        if let Some(ids) = &members
+            && let Some(layout) = self
+                .state
+                .terminal_layouts
+                .get_mut(&crate::terminal_layout::project_key(closing.project))
+        {
+            layout.remove_from_view(
+                id,
+                ids,
+                self.grid_room,
+                self.state.terminal_prefs.tile_new_panes,
+            );
+        }
         let session = self.sessions.remove(index);
         #[cfg(windows)]
         self.agent_browsers.cancel_pane(id);
@@ -3417,7 +3438,8 @@ impl Tessel {
             self.active_session = self
                 .sessions
                 .iter()
-                .find(|s| s.project == session.project)
+                .filter(|s| s.project == session.project)
+                .min_by_key(|s| members.as_ref().is_some_and(|ids| !ids.contains(&s.id)))
                 .map(|s| s.id);
         }
         self.save();
@@ -6411,6 +6433,15 @@ impl Tessel {
         } else {
             scope
         };
+        self.worktree_members(project, scope)
+    }
+
+    fn worktree_members(
+        &self,
+        project: Option<u64>,
+        scope: Option<&std::path::Path>,
+    ) -> Option<std::collections::HashSet<u64>> {
+        let panes = || self.sessions.iter().filter(|s| s.project == project);
         let scope =
             scope.map(|path| crate::sidebar_model::norm_sidebar_path(&path.to_string_lossy()));
         let matches = |pane: &Session| match (&scope, &pane.worktree) {

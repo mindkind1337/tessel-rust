@@ -5746,6 +5746,9 @@ impl Tessel {
                     && layout.maximized.is_none()
                     && layout.move_pane(from, to, zone)
                 {
+                    if let Some(members) = &visible {
+                        layout.mark_view_manual(members);
+                    }
                     self.active_session = Some(from);
                     self.save();
                 }
@@ -8307,6 +8310,79 @@ mod panel_snapshot_tests {
                 .rect_px,
             smaller.rect_px
         );
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn opening_and_closing_panes_preserves_each_checkouts_layout_mode_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        let path = dir.path().join("feature");
+        for p in [&main, &path] {
+            std::fs::create_dir(p).unwrap();
+        }
+        let start = || Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut app = start();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(main));
+        let feature = crate::workspace::SavedWorktree {
+            path,
+            branch: "feature".into(),
+            base_branch: None,
+        };
+        let add = |app: &mut Tessel, wt| {
+            app.new_session_in_worktree(
+                app.state.active_project,
+                Launch::ClaudeChat,
+                None,
+                false,
+                wt,
+            );
+            app.active_session.unwrap()
+        };
+        let bounds = |app: &mut Tessel, id| {
+            app.apply_gpui_action(GpuiAction::FocusSession(id));
+            app.gpui_snapshot(1200., 640., 4.)
+                .tiles
+                .into_iter()
+                .map(|tile| (tile.session_id, tile.rect_px))
+                .collect::<Vec<_>>()
+        };
+        let left = add(&mut app, None);
+        let right = add(&mut app, None);
+        let first = add(&mut app, Some(feature.clone()));
+        let second = add(&mut app, Some(feature.clone()));
+        app.arrange_visible_grid();
+        app.apply_gpui_action(GpuiAction::FocusSession(left));
+        let grid = app.gpui_snapshot(1200., 640., 4.);
+        let div = &grid.dividers[0];
+        app.apply_gpui_action(GpuiAction::ResizeSplitDivider {
+            split_id: div.split_id.clone(),
+            dir: div.dir,
+            index: div.index,
+            split_side_px: div.split_side_px,
+            delta_px: 120.,
+        });
+        let original = bounds(&mut app, right);
+        assert!(original[0].1.width > original[1].1.width);
+        drop(app);
+        let mut app = start();
+        let third = add(&mut app, Some(feature.clone()));
+        assert_eq!(bounds(&mut app, first).len(), 3);
+        let unchanged = bounds(&mut app, left);
+        for ((id, a), (other, b)) in original.iter().zip(&unchanged) {
+            assert_eq!(id, other);
+            assert!((a.width - b.width).abs() < 1e-6);
+        }
+        app.remove_session(third);
+        let pair = bounds(&mut app, second);
+        assert_eq!(pair.len(), 2);
+        assert!((pair[0].1.width - pair[1].1.width).abs() < 1e-6);
+        let new = add(&mut app, None);
+        let reshaped = bounds(&mut app, new);
+        assert_eq!(reshaped.len(), 3);
+        let small = reshaped.iter().find(|(id, _)| *id == right).unwrap().1;
+        assert!((small.width - original[1].1.width).abs() < 1e-6);
+        assert_eq!(bounds(&mut app, first), pair);
     }
 
     #[cfg(all(windows, feature = "visual-test"))]

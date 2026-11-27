@@ -800,12 +800,19 @@ impl Workspace {
         }
     }
     pub fn sync_terminal_layouts(&mut self, room: [f64; 2]) {
-        let mut groups: std::collections::HashMap<String, Vec<u64>> = Default::default();
+        let mut groups: std::collections::HashMap<String, Vec<(u64, String)>> = Default::default();
         for session in &self.sessions {
             groups
                 .entry(crate::terminal_layout::project_key(session.project))
                 .or_default()
-                .push(session.id);
+                .push((
+                    session.id,
+                    session
+                        .worktree
+                        .as_ref()
+                        .map(|wt| crate::pane_grid::norm_path(&wt.path.to_string_lossy()))
+                        .unwrap_or_default(),
+                ));
         }
         self.terminal_layouts
             .retain(|key, _| groups.contains_key(key));
@@ -813,7 +820,7 @@ impl Workspace {
             self.terminal_layouts
                 .entry(key)
                 .or_default()
-                .sync_with_tiling(&ids, room, self.terminal_prefs.tile_new_panes);
+                .sync_worktrees(&ids, room, self.terminal_prefs.tile_new_panes);
         }
     }
     pub fn validate(&self) -> Result<()> {

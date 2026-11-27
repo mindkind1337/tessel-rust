@@ -1,7 +1,7 @@
 //! Persisted terminal split trees. This metadata never starts or owns a process.
 use crate::pane_grid::{self, LeafKind, PaneLeaf, PaneNode, SplitDir};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -20,6 +20,8 @@ pub struct TerminalLayout {
     pub focused: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     grid_mode: Option<GridMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pane_modes: BTreeMap<u64, GridMode>,
     next_split: u64,
 }
 
@@ -38,6 +40,7 @@ impl Default for TerminalLayout {
             maximized: None,
             focused: None,
             grid_mode: None,
+            pane_modes: BTreeMap::new(),
             next_split: 1,
         }
     }
@@ -101,7 +104,9 @@ impl TerminalLayout {
                 }
             }
         }
-        if self.next_split == 0
+        if self.pane_modes.len() > 100
+            || self.pane_modes.keys().any(|id| !allowed.contains(id))
+            || self.next_split == 0
             || self.next_split > u64::MAX - 1_000
             || self.focused.is_some_and(|id| !allowed.contains(&id))
             || self.maximized.is_some_and(|id| !allowed.contains(&id))
@@ -126,6 +131,7 @@ impl TerminalLayout {
     }
 
     pub fn sync_with_tiling(&mut self, ids: &[u64], room: [f64; 2], auto_tile: bool) -> bool {
+        self.pane_modes.retain(|id, _| ids.contains(id));
         let focused = self.focused.filter(|id| ids.contains(id));
         let maximized = self.maximized.filter(|id| ids.contains(id));
         let selection_changed = self.focused != focused || self.maximized != maximized;
@@ -187,8 +193,17 @@ impl TerminalLayout {
     }
 
     fn split_largest(&mut self, id: u64, room: [f64; 2]) -> bool {
+        self.split_largest_in(None, id, room)
+    }
+
+    fn split_largest_in(
+        &mut self,
+        visible: Option<&HashSet<u64>>,
+        id: u64,
+        room: [f64; 2],
+    ) -> bool {
         let mut best = None;
-        for tile in pane_grid::grid_layout(self.tree.as_ref()).tiles {
+        for tile in self.view_geometry(visible).tiles {
             let rect = tile.rect.to_px(room[0], room[1], 0.);
             let area = rect.width * rect.height;
             if best.is_none_or(|(largest, _, _)| area > largest) {
@@ -204,6 +219,7 @@ impl TerminalLayout {
     }
 
     fn rebuild(&mut self, leaves: Vec<PaneLeaf>, counts: &[usize]) {
+        self.pane_modes.clear();
         self.next_split = 1;
         let next = &mut self.next_split;
         self.tree = pane_grid::build_grid_tree(leaves, counts, || {
@@ -229,6 +245,123 @@ impl TerminalLayout {
         self.grid_mode = Some(GridMode::Tiled);
     }
 
+    pub fn mark_view_manual(&mut self, ids: &HashSet<u64>) {
+        for id in ids {
+            self.pane_modes.insert(*id, GridMode::Manual);
+        }
+    }
+
+    pub fn sync_worktrees(&mut self, panes: &[(u64, String)], room: [f64; 2], auto: bool) {
+        let ids: Vec<_> = panes.iter().map(|(id, _)| *id).collect();
+        let mut groups = BTreeMap::<&str, HashSet<u64>>::new();
+        for (id, key) in panes {
+            groups.entry(key).or_default().insert(*id);
+        }
+        if groups.len() < 2 {
+            if let Some(mode) = ids.iter().find_map(|id| self.pane_modes.get(id)).copied() {
+                self.grid_mode = Some(mode);
+            }
+            self.pane_modes.clear();
+            self.sync_with_tiling(&ids, room, auto);
+            return;
+        }
+        let present: HashSet<u64> = pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+            .iter()
+            .filter_map(|leaf| leaf.id.parse().ok())
+            .collect();
+        if let Some(mode) = self.grid_mode
+            && self.pane_modes.is_empty()
+            && let Some(group) = groups
+                .values()
+                .find(|group| !present.is_empty() && present.is_subset(group))
+        {
+            for id in present.intersection(group) {
+                self.pane_modes.insert(*id, mode);
+            }
+        }
+        let retained: Vec<_> = ids
+            .iter()
+            .copied()
+            .filter(|id| present.contains(id))
+            .collect();
+        // Remove stale leaves without tiling across the other checkouts.
+        self.sync_with_tiling(&retained, room, false);
+        for (id, key) in panes.iter().filter(|(id, _)| !present.contains(id)) {
+            let members = &groups[key.as_str()];
+            let existing: HashSet<_> = pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+                .iter()
+                .filter_map(|leaf| leaf.id.parse::<u64>().ok())
+                .filter(|id| members.contains(id))
+                .collect();
+            let mode = self
+                .pane_modes
+                .iter()
+                .find_map(|(id, mode)| existing.contains(id).then_some(*mode));
+            let tiled = auto
+                && (existing.len() <= 1
+                    || mode.map_or_else(
+                        || pane_grid::is_near_grid(self.project_view(&existing).0.as_ref()),
+                        |mode| mode == GridMode::Tiled,
+                    ));
+            if existing.is_empty() || tiled {
+                if self.tile_view_with(&existing, Some(*id), room) {
+                    continue;
+                }
+            } else if !auto {
+                let anchor = self.focused.filter(|id| existing.contains(id)).or_else(|| {
+                    pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+                        .iter()
+                        .filter_map(|leaf| leaf.id.parse::<u64>().ok())
+                        .find(|id| existing.contains(id))
+                });
+                let previous = self.grid_mode;
+                if anchor.is_some_and(|target| self.split(target, *id, SplitDir::Row)) {
+                    self.grid_mode = previous;
+                    if let Some(mode) = mode {
+                        self.pane_modes.insert(*id, mode);
+                    }
+                    continue;
+                }
+            } else if self.split_largest_in(Some(&existing), *id, room) {
+                self.mark_view_manual(&existing);
+                self.pane_modes.insert(*id, GridMode::Manual);
+                continue;
+            }
+            // Keep every live pane reachable if the split tree hits its depth limit.
+            self.sync_with_tiling(&ids, room, auto);
+            break;
+        }
+    }
+
+    pub fn remove_from_view(
+        &mut self,
+        id: u64,
+        members: &HashSet<u64>,
+        room: [f64; 2],
+        auto: bool,
+    ) {
+        let retile = auto
+            && self.pane_modes.get(&id).map_or_else(
+                || pane_grid::is_near_grid(self.project_view(members).0.as_ref()),
+                |mode| *mode == GridMode::Tiled,
+            );
+        let remaining: Vec<_> = pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
+            .iter()
+            .filter_map(|leaf| leaf.id.parse::<u64>().ok())
+            .filter(|n| *n != id)
+            .collect();
+        self.sync_with_tiling(&remaining, room, false);
+        if retile {
+            let siblings = remaining
+                .into_iter()
+                .filter(|id| members.contains(id))
+                .collect::<HashSet<_>>();
+            if siblings.len() >= 2 {
+                self.tile_view_with(&siblings, None, room);
+            }
+        }
+    }
+
     pub fn arrange_view(&mut self, visible: Option<&HashSet<u64>>, room: [f64; 2]) -> bool {
         let Some(ids) = visible else {
             if pane_grid::tree_leaves(self.tree.as_ref(), |_| true).len() < 2 {
@@ -237,14 +370,18 @@ impl TerminalLayout {
             self.tile(room, None);
             return true;
         };
-        if ids.len() < 2 || self.next_split >= u64::MAX - 1_000 {
+        ids.len() >= 2 && self.tile_view_with(ids, None, room)
+    }
+
+    fn tile_view_with(&mut self, ids: &HashSet<u64>, extra: Option<u64>, room: [f64; 2]) -> bool {
+        if self.next_split >= u64::MAX - 1_000 {
             return false;
         }
         let mut next = self.next_split;
         let tree = pane_grid::tile_tree(
             self.tree.as_ref(),
             |leaf| leaf.id.parse::<u64>().is_ok_and(|id| ids.contains(&id)),
-            None,
+            extra.map(|id| PaneLeaf::new(id.to_string(), LeafKind::Shell)),
             room[0],
             room[1],
             || {
@@ -256,14 +393,19 @@ impl TerminalLayout {
         let allowed = pane_grid::tree_leaves(self.tree.as_ref(), |_| true)
             .into_iter()
             .filter_map(|leaf| leaf.id.parse().ok())
+            .chain(extra)
             .collect();
-        let candidate = Self {
+        let mut candidate = Self {
             tree,
             next_split: next,
             maximized: None,
             focused: self.focused,
             grid_mode: self.grid_mode,
+            pane_modes: self.pane_modes.clone(),
         };
+        for id in ids.iter().copied().chain(extra) {
+            candidate.pane_modes.insert(id, GridMode::Tiled);
+        }
         if candidate.validate(&allowed).is_err() {
             return false;
         }
@@ -326,6 +468,7 @@ impl TerminalLayout {
             maximized: None,
             focused: self.focused,
             grid_mode: Some(GridMode::Manual),
+            pane_modes: self.pane_modes.clone(),
             next_split: self.next_split + 1,
         };
         if next.validate(&allowed).is_err() {
@@ -361,6 +504,7 @@ impl TerminalLayout {
             } else {
                 Some(GridMode::Manual)
             },
+            pane_modes: self.pane_modes.clone(),
             next_split: self
                 .next_split
                 .saturating_add(u64::from(zone != pane_grid::DropZone::Center)),
@@ -422,12 +566,16 @@ impl TerminalLayout {
                 .as_mut()
                 .is_some_and(|tree| pane_grid::write_view_sizes(tree, meta, sizes))
             {
-                self.grid_mode = Some(GridMode::Manual);
+                self.mark_view_manual(ids);
                 return true;
             }
             false
         } else {
-            self.resize(split, index, pixels, delta, key)
+            let changed = self.resize(split, index, pixels, delta, key);
+            if changed {
+                self.mark_view_manual(ids);
+            }
+            changed
         }
     }
 
@@ -494,6 +642,48 @@ impl TerminalLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equally_sized_manual_worktree_loads_with_its_explicit_mode() {
+        let room = [1500., 500.];
+        let mut layout = TerminalLayout::default();
+        let mut panes = vec![(1, String::new()), (2, String::new())];
+        layout.sync_worktrees(&panes, room, true);
+        panes.push((3, "other".into()));
+        layout.sync_worktrees(&panes, room, true);
+        let main = HashSet::from([1, 2]);
+        layout.mark_view_manual(&main);
+        assert!(pane_grid::is_near_grid(
+            layout.project_view(&main).0.as_ref()
+        ));
+        let before = layout.view_geometry(Some(&main)).tiles[1]
+            .rect
+            .to_px(room[0], room[1], 4.);
+        let json = serde_json::to_string(&layout).unwrap();
+        assert!(!json.contains("other"));
+        let mut manual: TerminalLayout = serde_json::from_str(&json).unwrap();
+        let mut tiled = manual.clone();
+        assert!(tiled.arrange_view(Some(&main), room));
+        panes.push((4, String::new()));
+        let expanded = HashSet::from([1, 2, 4]);
+        let rect = |layout: &TerminalLayout| {
+            layout
+                .view_geometry(Some(&expanded))
+                .tiles
+                .into_iter()
+                .find(|tile| tile.leaf.id == "2")
+                .unwrap()
+                .rect
+                .to_px(room[0], room[1], 4.)
+        };
+        manual.sync_worktrees(&panes, room, true);
+        tiled.sync_worktrees(&panes, room, true);
+        assert_eq!(rect(&manual), before);
+        assert_ne!(rect(&tiled), before);
+        let mut malformed = manual;
+        malformed.pane_modes.insert(999, GridMode::Tiled);
+        assert!(malformed.validate(&HashSet::from([1, 2, 3, 4])).is_err());
+    }
 
     #[test]
     fn pane_drop_persists_layout_and_preserves_auto_tiling_for_a_swap() {
