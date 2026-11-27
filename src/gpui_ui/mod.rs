@@ -242,6 +242,26 @@ impl TesselGpuiRoot {
                 Some("TesselBrowserAddress"),
             ),
             gpui::KeyBinding::new(
+                "alt-left",
+                browser_input::Back,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new(
+                "alt-right",
+                browser_input::Forward,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-r"
+                } else {
+                    "ctrl-r"
+                },
+                browser_input::Reload,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new("f5", browser_input::Reload, Some("TesselBrowserAddress")),
+            gpui::KeyBinding::new(
                 "enter",
                 terminal_find_inputs::Next,
                 Some("TesselTerminalFind"),

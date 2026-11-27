@@ -16129,7 +16129,7 @@ fn take_close_pane_shortcut(ctx: &egui::Context, allowed: bool) -> bool {
 fn take_close_shortcut(ctx: &egui::Context, allowed: bool, modifiers: egui::Modifiers) -> bool {
     take_fresh_shortcut(ctx, allowed, modifiers, egui::Key::W)
 }
-fn take_fresh_shortcut(
+pub(crate) fn take_fresh_shortcut(
     ctx: &egui::Context,
     allowed: bool,
     modifiers: egui::Modifiers,

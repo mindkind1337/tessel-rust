@@ -1,6 +1,6 @@
 //! Native address editing; never an IPC or navigation-policy bypass.
 use super::{FocusInputTarget, TesselGpuiRoot};
-use crate::app::gpui_bridge::GpuiAction;
+use crate::app::gpui_bridge::{AddressCommand, GpuiAction};
 use gpui::{App, AppContext, Context, Entity, EntityInputHandler, Focusable, Subscription, Window};
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
 type Scope = (u64, Option<u64>);
@@ -18,7 +18,10 @@ pub(crate) struct Input {
     side: bool,
     pub select_all: bool,
 }
-gpui::actions!(tessel_browser_address, [Navigate, Dismiss]);
+gpui::actions!(
+    tessel_browser_address,
+    [Navigate, Dismiss, Back, Forward, Reload]
+);
 fn input(root: &TesselGpuiRoot, side: bool) -> &Input {
     if side {
         &root.side_browser_input
@@ -143,7 +146,31 @@ impl Input {
         .py(px(3.))
         .text_size(px(11.5))
         .text_color(tokens.text_strong);
+        let scope = b.scope;
+        let state = b.state.clone();
+        let command = move |root: &mut TesselGpuiRoot,
+                            command,
+                            window: &mut Window,
+                            cx: &mut Context<TesselGpuiRoot>| {
+            if input(root, side).state() == Some(&state)
+                && !state.update(cx, |s, cx| s.marked_text_range(window, cx).is_some())
+            {
+                root.dispatch(GpuiAction::BrowserAddressCommand { scope, command }, cx);
+            }
+            cx.stop_propagation();
+        };
+        let back = command.clone();
+        let forward = command.clone();
         div()
+            .on_action(cx.listener(move |root, _: &Back, window, cx| {
+                back(root, AddressCommand::Back, window, cx)
+            }))
+            .on_action(cx.listener(move |root, _: &Forward, window, cx| {
+                forward(root, AddressCommand::Forward, window, cx)
+            }))
+            .on_action(cx.listener(move |root, _: &Reload, window, cx| {
+                command(root, AddressCommand::Reload, window, cx)
+            }))
             .flex_1()
             .min_w_0()
             .bg(tokens.term)

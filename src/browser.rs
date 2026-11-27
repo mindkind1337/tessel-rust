@@ -1155,6 +1155,24 @@ impl Browser {
         let address_id = egui::Id::new(("browser-address", self.tab_id));
         let shortcuts = ui.is_enabled()
             && (only_browser || self.has_page_focus() || ui.memory(|m| m.has_focus(address_id)));
+        if ui.is_enabled() && ui.memory(|m| m.has_focus(address_id)) {
+            if crate::app::take_fresh_shortcut(
+                ui.ctx(),
+                true,
+                egui::Modifiers::ALT,
+                egui::Key::ArrowLeft,
+            ) {
+                self.go_back_now();
+            }
+            if crate::app::take_fresh_shortcut(
+                ui.ctx(),
+                true,
+                egui::Modifiers::ALT,
+                egui::Key::ArrowRight,
+            ) {
+                self.go_forward_now();
+            }
+        }
         let focus_url =
             shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
         let reload_shortcut = shortcuts
@@ -1331,6 +1349,65 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "visual-test")]
+    #[gpui::test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn focused_address_keystrokes_control_real_page_history(cx: &mut gpui::TestAppContext) {
+        use crate::app::gpui_bridge::GpuiAction;
+        use crate::gpui_ui::TesselGpuiRoot;
+        use crate::webview_test_support::{hidden_parent, wait_for};
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("history.html");
+        std::fs::write(&file, "<title>History fixture</title><input id='draft'>").unwrap();
+        let parent = hidden_parent();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.dispatch(GpuiAction::SelectBrowserTab, cx);
+            let browser = &mut root.app.browser;
+            browser
+                .create_with_profile(&parent, dir.path().join("profile"))
+                .unwrap();
+            browser
+                .open_project_page(
+                    &crate::files::Document::open(dir.path(), &file).unwrap(),
+                    false,
+                )
+                .unwrap();
+            wait_for(
+                browser.view.as_ref().unwrap(),
+                "document.title === 'History fixture'",
+            );
+            wait_for(
+                browser.view.as_ref().unwrap(),
+                "(history.pushState({ step: 1 }, '', '#one'), true)",
+            );
+            root.app.poll_for_gpui();
+            root
+        });
+        cx.refresh().unwrap();
+        for (key, check) in [
+            ("alt-left", "!history.state"),
+            ("alt-right", "history.state?.step === 1"),
+            ("f5", "document.querySelector('#draft')?.value === ''"),
+            ("ctrl-r", "document.querySelector('#draft')?.value === ''"),
+        ] {
+            if matches!(key, "f5" | "ctrl-r") {
+                view.update(cx, |root, _, _| wait_for(root.app.browser.view.as_ref().unwrap(),
+                    "(document.querySelector('#draft').value = 'before reload') === 'before reload'")).unwrap();
+            }
+            view.update(cx, |root, w, cx| w.focus(&root.focus_handle, cx))
+                .unwrap();
+            cx.simulate_keystrokes(view.into(), "ctrl-l");
+            cx.refresh().unwrap();
+            cx.simulate_keystrokes(view.into(), key);
+            view.update(cx, |root, _, _| {
+                wait_for(root.app.browser.view.as_ref().unwrap(), check)
+            })
+            .unwrap();
+        }
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn stop_button_interrupts_only_the_current_webview_navigation() {
@@ -1872,7 +1949,11 @@ mod tests {
         app.apply_gpui_action(GpuiAction::BrowserBack(ids[0]));
         wait_for(app.browser.view.as_ref().unwrap(), "!history.state");
         assert!(app.gpui_snapshot(960., 640., 4.).browser.history.1);
-        app.apply_gpui_action(GpuiAction::BrowserForward(ids[0]));
+        let scope = app.browser_address_for(false).unwrap().0;
+        app.apply_gpui_action(GpuiAction::BrowserAddressCommand {
+            scope,
+            command: crate::app::gpui_bridge::AddressCommand::Forward,
+        });
         wait_for(
             app.browser.view.as_ref().unwrap(),
             "history.state?.old === true",
@@ -1917,7 +1998,11 @@ mod tests {
                 .history
                 .1
         );
-        app.apply_gpui_action(GpuiAction::SideBrowserForward(side));
+        let scope = app.browser_address_for(true).unwrap().0;
+        app.apply_gpui_action(GpuiAction::BrowserAddressCommand {
+            scope,
+            command: crate::app::gpui_bridge::AddressCommand::Forward,
+        });
         wait_for(
             app.side_browsers[&side].view.as_ref().unwrap(),
             "history.state?.side === true",

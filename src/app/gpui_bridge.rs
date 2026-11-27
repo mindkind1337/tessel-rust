@@ -843,6 +843,13 @@ pub(crate) enum HtmlViewMode {
     Plain,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AddressCommand {
+    Back,
+    Forward,
+    Reload,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) enum GpuiAction {
@@ -1076,6 +1083,10 @@ pub(crate) enum GpuiAction {
     BrowserSetAddress(String),
     BeginNativeBrowserAddress((u64, Option<u64>)),
     CancelNativeBrowserAddress((u64, Option<u64>)),
+    BrowserAddressCommand {
+        scope: (u64, Option<u64>),
+        command: AddressCommand,
+    },
     NativeBrowserAddress {
         scope: (u64, Option<u64>),
         base: String,
@@ -6839,6 +6850,18 @@ impl Tessel {
                 }
                 #[cfg(not(windows))]
                 let _ = scope;
+            }
+            GpuiAction::BrowserAddressCommand { scope, command } => {
+                #[cfg(windows)]
+                if let Some(page) = self.address_page_mut(scope) {
+                    match command {
+                        AddressCommand::Back => page.go_back_now(),
+                        AddressCommand::Forward => page.go_forward_now(),
+                        AddressCommand::Reload => page.reload_now(),
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = (scope, command);
             }
             GpuiAction::NativeBrowserAddress {
                 scope,
