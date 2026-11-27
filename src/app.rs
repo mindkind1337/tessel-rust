@@ -20,6 +20,7 @@ mod new_task;
 mod task_launch;
 #[path = "app/task_review.rs"]
 mod task_review;
+use crate::view_tabs_browser_model::{DiffTabArea, TabsLang, diff_label};
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -541,7 +542,7 @@ enum Message {
         source_doc: Option<TimelineOrigin>,
         root: PathBuf,
         path: PathBuf,
-        title: String,
+        area: DiffTabArea,
         pinned: bool,
         result: Result<String, String>,
     },
@@ -2067,12 +2068,11 @@ impl Tessel {
                     return;
                 };
                 let source_doc = Some(origin);
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let saved = commit
                     .as_deref()
                     .and_then(|id| id.strip_prefix("local:"))
                     .and_then(|id| history.saves.iter().find(|e| e.id == id));
-                let title = if let Some(saved) = saved {
+                let area = if let Some(saved) = saved {
                     let date = chrono::DateTime::from_timestamp_millis(saved.timestamp)
                         .map(|d| {
                             d.with_timezone(&chrono::Local)
@@ -2080,20 +2080,16 @@ impl Tessel {
                                 .to_string()
                         })
                         .unwrap_or_default();
-                    let label = if crate::i18n::is_french() {
-                        "Fichier enregistré"
-                    } else {
-                        "File Saved"
-                    };
-                    format!("{name} ({label} • {date}) ↔ {name}")
+                    DiffTabArea::Local {
+                        id: saved.id.clone(),
+                        formatted_date: date,
+                    }
+                } else if let Some(commit) = &commit {
+                    DiffTabArea::Commit {
+                        commit: commit.clone(),
+                    }
                 } else {
-                    format!(
-                        "{name} ({})",
-                        commit
-                            .as_deref()
-                            .and_then(|c| c.get(..7))
-                            .unwrap_or(tr("Working tree"))
-                    )
+                    DiffTabArea::Unstaged
                 };
                 let profile = self.timeline.profile.clone();
                 let sender = self.sender.clone();
@@ -2112,7 +2108,7 @@ impl Tessel {
                         source_doc,
                         root,
                         path,
-                        title,
+                        area,
                         pinned,
                         result,
                     });
@@ -2141,20 +2137,14 @@ impl Tessel {
                 }
             };
         let full_path = root.join(&entry_path);
-        let short_name = std::path::Path::new(&entry_path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&entry_path);
-        let area_label = match area {
-            ScmArea::Staged => tr("Staged"),
-            ScmArea::Unstaged => tr("Working tree"),
-            ScmArea::Untracked => tr("Untracked"),
+        let area = match area {
+            ScmArea::Staged => DiffTabArea::Staged,
+            ScmArea::Unstaged | ScmArea::Untracked => DiffTabArea::Unstaged,
         };
-        let title = format!("{short_name} ({area_label})");
         let existing = self
             .documents
             .iter()
-            .any(|d| d.diff_title.as_deref() == Some(title.as_str()) && d.path == full_path);
+            .any(|d| d.path == full_path && d.diff_area.as_ref() == Some(&area));
         let replaceable = !pinned
             && self
                 .documents
@@ -2173,7 +2163,7 @@ impl Tessel {
                 source_doc: None,
                 root,
                 path: full_path,
-                title,
+                area,
                 pinned,
                 result,
             });
@@ -2607,22 +2597,23 @@ impl Tessel {
                     source_doc: _,
                     root,
                     path,
-                    title,
+                    area,
                     pinned,
                     result,
                 } => match result {
                     Ok(diff_text) => {
                         native_changed = true;
-                        let doc = Document::from_diff(
-                            &root,
-                            path.clone(),
-                            title.clone(),
-                            diff_text,
-                            !pinned,
-                        );
-                        if let Some(i) = self.documents.iter().position(|old| {
-                            old.diff_title.as_deref() == Some(title.as_str()) && old.path == path
-                        }) {
+                        let locale = self.tab_language();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        let title = diff_label(&name, &area, locale);
+                        let mut doc =
+                            Document::from_diff(&root, path.clone(), title, diff_text, !pinned);
+                        doc.diff_area = Some(area);
+                        if let Some(i) = self
+                            .documents
+                            .iter()
+                            .position(|old| old.path == path && old.diff_area == doc.diff_area)
+                        {
                             let keep_pinned = !self.documents[i].unpinned_preview || pinned;
                             self.documents[i] = doc;
                             if keep_pinned {
@@ -3154,6 +3145,23 @@ impl Tessel {
             }
         }
     }
+    fn refresh_language(&mut self) {
+        crate::i18n::set_language(self.state.language);
+        let lang = self.tab_language();
+        for doc in &mut self.documents {
+            if let Some(area) = &doc.diff_area {
+                let name = doc.path.file_name().unwrap_or_default().to_string_lossy();
+                doc.diff_title = Some(diff_label(&name, area, lang));
+            }
+        }
+    }
+    fn tab_language(&self) -> TabsLang {
+        if self.state.language == crate::i18n::Language::French {
+            TabsLang::Fr
+        } else {
+            TabsLang::En
+        }
+    }
     fn document_tab_labels(&self, paths: &[String]) -> Vec<String> {
         use crate::view_tabs_browser_model::{file_name_of, qualified_tab_name};
         let keys: Vec<_> = paths
@@ -3171,6 +3179,9 @@ impl Tessel {
             .zip(&keys)
             .map(|((path, doc), key)| {
                 let label = qualified_tab_name(path, counts[key] > 1);
+                if let Some(area) = &doc.diff_area {
+                    return diff_label(&label, area, self.tab_language());
+                }
                 match &doc.diff_title {
                     Some(title) => match title.strip_prefix(file_name_of(path)) {
                         Some(suffix) if suffix.starts_with(" (") => format!("{label}{suffix}"),
@@ -7670,7 +7681,7 @@ impl Tessel {
             .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
         self.scm_panel
             .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
-        crate::i18n::set_language(self.state.language);
+        self.refresh_language();
         crate::theme::apply(ctx, self.state.dark, self.state.theme);
         self.worktree_cleanup = None;
         self.pending_delete_worktree = None;
@@ -7834,7 +7845,7 @@ impl Tessel {
                     .set_group_order(self.state.git_prefs.scm_group_order.into_panel());
                 self.scm_panel
                     .set_view_mode(self.state.git_prefs.scm_view_mode.into_panel());
-                crate::i18n::set_language(self.state.language);
+                self.refresh_language();
                 crate::theme::apply(ctx, self.state.dark, self.state.theme);
                 self.refresh_launch_status();
                 self.save();
@@ -8117,7 +8128,7 @@ impl Tessel {
                 };
                 let changed = self.state.language != language;
                 self.state.language = language;
-                crate::i18n::set_language(language);
+                self.refresh_language();
                 changed
             }
             Some(AppearanceAction::TerminalFontSize(size)) if size.is_finite() => {
@@ -11518,11 +11529,7 @@ impl Tessel {
             && let Ok(rel) = doc.path.strip_prefix(&project.path)
         {
             let rel_norm = rel.to_string_lossy().replace('\\', "/");
-            let area = if doc
-                .diff_title
-                .as_deref()
-                .is_some_and(|t| t.contains(tr("Staged")))
-            {
+            let area = if doc.diff_area == Some(DiffTabArea::Staged) {
                 ScmArea::Staged
             } else if status.is_some_and(|st| {
                 st.entries
@@ -12248,12 +12255,6 @@ impl Tessel {
                 pinned,
             } => {
                 if let Some(proj) = self.state.active().cloned() {
-                    let short = &commit_hash[..commit_hash.len().min(7)];
-                    let short_file = std::path::Path::new(&path)
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(&path);
-                    let title = format!("{short_file} ({short})");
                     let full_path = proj.path.join(&path);
                     let root = proj.path.clone();
                     let sender = self.sender.clone();
@@ -12267,7 +12268,9 @@ impl Tessel {
                             source_doc: None,
                             root,
                             path: full_path,
-                            title,
+                            area: DiffTabArea::Commit {
+                                commit: commit_hash,
+                            },
                             pinned,
                             result,
                         });
@@ -12359,21 +12362,24 @@ impl Tessel {
                     self.side_panels_ui.review_snapshot.clone(),
                 ) {
                     let full_path = proj.path.join(&rel_path);
-                    let title = format!("{rel_path} ({})", snap.head_branch);
+                    let area = DiffTabArea::Branch {
+                        base: snap.merge_base.clone(),
+                        commit: snap.head_oid.clone(),
+                    };
                     let root = proj.path;
                     let sender = self.sender.clone();
                     thread::spawn(move || {
                         let result = crate::side_panels_model::load_review_file_diff(
                             &root,
                             &snap.merge_base,
-                            &snap.head_branch,
+                            &snap.head_oid,
                             &rel_path,
                         );
                         let _ = sender.send(Message::DiffDocument {
                             source_doc: None,
                             root,
                             path: full_path,
-                            title,
+                            area,
                             pinned: true,
                             result,
                         });

@@ -321,7 +321,11 @@ pub fn editor_tab_label(
     let Some(diff) = target.diff else {
         return base;
     };
-    match (&diff.area, lang) {
+    diff_label(&base, &diff.area, lang)
+}
+
+pub fn diff_label(base: &str, area: &DiffTabArea, lang: TabsLang) -> String {
+    match (area, lang) {
         (DiffTabArea::Branch { base: b, commit: c }, _) => {
             format!("{base} ({}..{})", short_commit(b), short_commit(c))
         }

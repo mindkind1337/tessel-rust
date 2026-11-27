@@ -7605,7 +7605,7 @@ impl Tessel {
                 };
                 if self.state.language != lang {
                     self.state.language = lang;
-                    crate::i18n::set_language(lang);
+                    self.refresh_language();
                     self.save();
                 }
             }
@@ -7638,6 +7638,66 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn git_diff_tabs_use_full_identity_and_refresh_localized_titles() {
+        use crate::view_tabs_browser_model::DiffTabArea;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let deliver = |app: &mut Tessel, area, text: &str| {
+            app.sender
+                .send(super::super::Message::DiffDocument {
+                    source_doc: None,
+                    root: dir.path().into(),
+                    path: path.clone(),
+                    area,
+                    pinned: true,
+                    result: Ok(text.into()),
+                })
+                .unwrap();
+            app.poll();
+        };
+        app.apply_gpui_action(GpuiAction::SetLanguage { french: false });
+        deliver(&mut app, DiffTabArea::Staged, "index");
+        deliver(&mut app, DiffTabArea::Unstaged, "worktree");
+        for commit in ["1234567abc", "1234567def"] {
+            deliver(
+                &mut app,
+                DiffTabArea::Commit {
+                    commit: commit.into(),
+                },
+                commit,
+            );
+        }
+        assert_eq!(app.documents.len(), 4);
+        assert_eq!(
+            app.documents[0].diff_title.as_deref(),
+            Some("example.txt (staged diff)")
+        );
+        assert_eq!(app.documents[2].diff_title, app.documents[3].diff_title);
+        app.apply_gpui_action(GpuiAction::SetLanguage { french: true });
+        assert_eq!(
+            app.documents[0].diff_title.as_deref(),
+            Some("example.txt (diff indexé)")
+        );
+        deliver(&mut app, DiffTabArea::Staged, "updated");
+        deliver(
+            &mut app,
+            DiffTabArea::Commit {
+                commit: "1234567abc".into(),
+            },
+            "updated commit",
+        );
+        assert_eq!(app.documents.len(), 4);
+        assert_eq!(app.documents[0].text, "updated");
+        assert_eq!(app.documents[1].text, "worktree");
+        assert_eq!(app.documents[2].text, "updated commit");
+        assert_eq!(app.documents[3].text, "1234567def");
+        let tabs = app.gpui_snapshot(960., 640., 4.).view_tabs;
+        assert!(tabs.iter().any(|t| t.title.ends_with("(diff indexé)")));
+        assert!(tabs.iter().any(|t| t.title.ends_with("(diff)")));
+        app.apply_gpui_action(GpuiAction::SetLanguage { french: false });
+    }
     #[test]
     fn auto_save_delay_respects_last_edit_and_reports_completion_and_conflicts() {
         let dir = tempfile::tempdir().unwrap();
