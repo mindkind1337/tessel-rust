@@ -523,6 +523,10 @@ impl Session {
         changed
     }
 }
+struct PendingDocument {
+    request: std::sync::Arc<()>,
+    pinned: bool,
+}
 enum Message {
     TranscriptTrash(
         crate::side_panels_model::SessionHistoryEntry,
@@ -535,7 +539,7 @@ enum Message {
     InitParentPicked(Option<PathBuf>),
     Document {
         path: PathBuf,
-        pinned: bool,
+        request: std::sync::Arc<()>,
         result: Result<Box<Document>, String>,
     },
     DiffDocument {
@@ -622,7 +626,7 @@ pub struct Tessel {
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
-    document_pending: std::collections::HashSet<PathBuf>,
+    document_pending: std::collections::HashMap<PathBuf, PendingDocument>,
     active_document: usize,
     view: View,
     overlay: Option<Overlay>,
@@ -1934,10 +1938,11 @@ impl Tessel {
         self.open_document_at_mode(root, path, true);
     }
     fn open_document_at_mode(&mut self, root: PathBuf, path: PathBuf, pinned: bool) {
+        let key = dunce::simplified(&path);
         if let Some(i) = self
             .documents
             .iter()
-            .position(|d| d.diff_title.is_none() && d.path == path)
+            .position(|d| d.diff_title.is_none() && dunce::simplified(&d.path) == key)
         {
             if pinned {
                 self.documents[i].unpinned_preview = false;
@@ -1946,7 +1951,8 @@ impl Tessel {
             self.view = View::Files;
             return;
         }
-        if self.document_pending.contains(&path) {
+        if let Some(pending) = self.document_pending.get_mut(key) {
+            pending.pinned |= pinned;
             return;
         }
         let replaceable = !pinned
@@ -1958,13 +1964,20 @@ impl Tessel {
             self.error = "Close a document before opening more (24-tab limit)".into();
             return;
         }
-        self.document_pending.insert(path.clone());
+        let request = std::sync::Arc::new(());
+        self.document_pending.insert(
+            key.to_owned(),
+            PendingDocument {
+                request: request.clone(),
+                pinned,
+            },
+        );
         let sender = self.sender.clone();
         thread::spawn(move || {
             let result = Document::open(&root, &path).map(Box::new);
             let _ = sender.send(Message::Document {
                 path,
-                pinned,
+                request,
                 result,
             });
         });
@@ -2546,10 +2559,19 @@ impl Tessel {
                 Message::InitParentPicked(None) => {}
                 Message::Document {
                     path,
-                    pinned,
+                    request,
                     result,
                 } => {
-                    self.document_pending.remove(&path);
+                    let std::collections::hash_map::Entry::Occupied(entry) = self
+                        .document_pending
+                        .entry(dunce::simplified(&path).to_owned())
+                    else {
+                        continue;
+                    };
+                    if !std::sync::Arc::ptr_eq(&entry.get().request, &request) {
+                        continue;
+                    }
+                    let pinned = entry.remove().pinned;
                     match result {
                         Ok(mut d) => {
                             d.unpinned_preview = !pinned;
@@ -2571,6 +2593,10 @@ impl Tessel {
                             {
                                 self.documents[i] = d;
                                 self.active_document = i;
+                            } else if self.documents.len() >= 24 {
+                                self.error =
+                                    "Close a document before opening more (24-tab limit)".into();
+                                continue;
                             } else {
                                 self.documents.push(d);
                                 self.active_document = self.documents.len() - 1;

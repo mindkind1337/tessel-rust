@@ -7774,6 +7774,39 @@ mod panel_snapshot_tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "four");
     }
     #[test]
+    fn preview_link_pins_target_while_explorer_is_still_loading_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(root.join("state")), false, || {});
+        let index = root.join("index.html");
+        let target = root.join("report.pdf");
+        std::fs::write(&index, "<a href='report.pdf'>Report</a>").unwrap();
+        std::fs::write(&target, crate::pdf::fixture()).unwrap();
+        let mut source = crate::files::Document::open(&root, &index).unwrap();
+        source.unpinned_preview = true;
+        let id = source.instance_id();
+        app.documents.push(source);
+        app.view = View::Files;
+        app.open_document_at_mode(root.clone(), target.clone(), false);
+        app.apply_gpui_action(GpuiAction::FollowDocumentLink(id, "report.pdf".into()));
+        app.open_document_at_mode(root, target, false);
+        assert_eq!(app.document_pending.len(), 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.document_pending.is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll_for_gpui();
+            std::thread::yield_now();
+        }
+        assert_eq!(app.documents.len(), 2);
+        assert!(
+            app.documents[app.active_document]
+                .path
+                .ends_with("report.pdf")
+        );
+        assert!(app.documents.iter().all(|doc| !doc.unpinned_preview));
+    }
+
+    #[test]
     fn preview_link_reuses_and_pins_open_target_preserving_source() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
