@@ -319,6 +319,7 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
     for selector in [
         "guest-tab-files",
         "guest-entry-0",
+        "viewer-copy-path",
         "guest-image-preview",
         "guest-image-download",
     ] {
@@ -343,6 +344,13 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
                         rect.center(),
                         gpui::MouseButton::Right,
                         Default::default(),
+                    );
+                } else if selector == "viewer-copy-path" {
+                    visual.simulate_click(rect.center(), Default::default());
+                    assert_eq!(
+                        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                            .as_deref(),
+                        Some("poster.PNG")
                     );
                 } else if selector != "guest-image-download" {
                     visual.simulate_click(rect.center(), Default::default());
@@ -502,7 +510,8 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
                 && (0..patch.line_count())
                     .any(|i| patch.line(i) == "+changed on host after opening")
         );
-        assert_eq!(files.document.unwrap().text.as_str(), "guest preview");
+        let doc = files.document.unwrap();
+        assert_eq!(doc.text.as_str(), "guest preview");
         assert_eq!(
             files.history.unwrap().items[0].message,
             "GPUI history fixture"
@@ -514,6 +523,14 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
                 project: 2,
             }),
             cx,
+        );
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("keep".into()));
+        root.dispatch(GpuiAction::CopyGuestFileText(doc.key), cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("keep")
         );
         let other = root
             .app
@@ -527,4 +544,35 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
         );
     })
     .unwrap();
+}
+
+#[gpui::test]
+fn native_guest_copy_text_includes_the_part_beyond_preview(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, _) = joined_guest(cx);
+    let full_text = "guest preview line\n".repeat(3800) + "end of document";
+    std::fs::write(dir.path().join("project-1/notes.txt"), &full_text).unwrap();
+    for selector in ["guest-tab-files", "guest-entry-0", "guest-copy-text"] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(rect) = visual.debug_bounds(selector) {
+                visual.simulate_click(rect.center(), Default::default());
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some(full_text.as_str())
+    );
 }

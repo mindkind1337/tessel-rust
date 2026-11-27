@@ -484,6 +484,14 @@ mod tests {
         });
         cx.refresh().unwrap();
         cx.run_until_parked();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let button = visual.debug_bounds("viewer-copy-path").unwrap().center();
+        visual.simulate_click(button, Default::default());
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("/demo/notes.txt")
+        );
         let input = view
             .update(cx, |root, _, _| {
                 root.remote_inputs

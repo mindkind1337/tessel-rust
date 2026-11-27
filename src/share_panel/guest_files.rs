@@ -86,6 +86,18 @@ impl SharePanel {
                 && self.guest_history.next_limit(false) < 200,
         })
     }
+    pub(crate) fn current_guest_file_text(&mut self, key: &FileKey) -> Option<String> {
+        self.poll_guest_scope();
+        if self.guest_files_scope != Some(key.scope) || self.guest_sub_view != GuestSubView::Files {
+            return None;
+        }
+        self.guest_file_editor
+            .document
+            .as_ref()
+            .filter(|doc| &doc.key == key)
+            .map(|doc| doc.text.as_ref().clone())
+    }
+
     pub fn guest_file_document(&self) -> Option<crate::guest_file_editor::Document> {
         self.guest_file_editor.document.clone()
     }

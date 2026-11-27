@@ -1313,16 +1313,35 @@ fn render_share_modal(
                     }
                     if let Some(doc) = &files.document {
                         let (preview, partial) = doc.preview();
-                        content = content.child(super::chrome::copy_path_button(
-                            doc.key.path.clone(),
-                            french,
-                            *tokens,
-                        ));
                         content = content
                             .child(
                                 div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(doc.key.path.clone()),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(doc.key.path.clone()),
+                                    )
+                                    .child(super::chrome::copy_path_button(
+                                        doc.key.path.clone(),
+                                        french,
+                                        *tokens,
+                                    ))
+                                    .child(modal_btn(
+                                        "guest-copy-text",
+                                        if french {
+                                            "Copier le texte"
+                                        } else {
+                                            "Copy text"
+                                        }
+                                        .into(),
+                                        false,
+                                        tokens,
+                                        GpuiAction::CopyGuestFileText(doc.key.clone()),
+                                        cx,
+                                    )),
                             )
                             .child(
                                 div()

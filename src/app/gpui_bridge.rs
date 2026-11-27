@@ -908,6 +908,7 @@ pub(crate) enum GpuiAction {
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
     OpenEditorExternally(u64),
+    CopyGuestFileText(crate::guest_file_editor::Key),
     #[cfg(windows)]
     OpenHtmlInBrowser(u64),
     #[cfg(windows)]
@@ -5811,6 +5812,13 @@ impl Tessel {
                         }
                         Err(e) => self.error = e,
                     }
+                }
+            }
+            GpuiAction::CopyGuestFileText(key) => {
+                if matches!(self.overlay, Some(Overlay::Share))
+                    && self.share.tab == crate::share_panel::DialogTab::Join
+                {
+                    self.gpui_extra.copied_clipboard = self.share.current_guest_file_text(&key);
                 }
             }
             GpuiAction::OpenEditorExternally(id) => self.open_active_file_externally(id),
