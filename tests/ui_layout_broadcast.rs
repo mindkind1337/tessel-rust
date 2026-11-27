@@ -162,6 +162,7 @@ fn layout_menu_290px_geometry_and_conditional_arrange_grid_en_fr() {
             LayoutMenuInput {
                 french,
                 has_active_pane: true,
+                can_split_shell: true,
                 pane_count: 1,
                 can_apply_grid: true,
             },
@@ -210,6 +211,7 @@ fn layout_menu_290px_geometry_and_conditional_arrange_grid_en_fr() {
             LayoutMenuInput {
                 french,
                 has_active_pane: true,
+                can_split_shell: true,
                 pane_count: 2,
                 can_apply_grid: true,
             },
@@ -225,6 +227,7 @@ fn layout_menu_290px_geometry_and_conditional_arrange_grid_en_fr() {
             LayoutMenuInput {
                 french,
                 has_active_pane: true,
+                can_split_shell: true,
                 pane_count: 2,
                 can_apply_grid: true,
             },
@@ -239,6 +242,7 @@ fn layout_menu_clicks_emit_split_preset_and_close_actions_and_respect_disabled()
     let input = LayoutMenuInput {
         french: false,
         has_active_pane: true,
+        can_split_shell: true,
         pane_count: 3,
         can_apply_grid: true,
     };
@@ -273,6 +277,7 @@ fn layout_menu_clicks_emit_split_preset_and_close_actions_and_respect_disabled()
     let empty_input = LayoutMenuInput {
         french: false,
         has_active_pane: false,
+        can_split_shell: false,
         pane_count: 0,
         can_apply_grid: true,
     };

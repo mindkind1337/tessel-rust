@@ -18,6 +18,57 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn split_shortcuts_follow_the_local_document_and_selected_terminal(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.txt");
+    std::fs::write(&path, "unchanged").unwrap();
+    let view = cx.add_window(|window, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+        root.focus_handle.focus(window, cx);
+        root
+    });
+    let snap = |cx: &mut gpui::TestAppContext| {
+        view.update(cx, |root, _, _| root.app.gpui_snapshot(1000., 700., 4.))
+            .unwrap()
+    };
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-shift-e");
+    assert!(snap(cx).tiles.is_empty());
+    view.update(cx, |root, _, cx| {
+        root.app.install_editor_input_fixture(
+            vec![crate::files::Document::open(dir.path(), &path).unwrap()],
+            0,
+        );
+        cx.notify();
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    assert_eq!(snap(cx).center_mode, GpuiCenterMode::DocumentEditor);
+    cx.simulate_keystrokes(view.into(), "ctrl-shift-o");
+    let first = snap(cx);
+    assert_eq!(first.center_mode, GpuiCenterMode::WorkGrid);
+    assert_eq!(first.tiles.len(), 1);
+    let original = first.tiles[0].session_id;
+    cx.simulate_keystrokes(view.into(), "ctrl-shift-e");
+    let two = snap(cx).tiles;
+    assert_eq!(two.len(), 2);
+    assert_eq!(two[0].session_id, original);
+    assert!(two[1].rect_px.left > two[0].rect_px.left);
+    assert_eq!(two[0].rect_px.top, two[1].rect_px.top);
+    let right = two[1].session_id;
+    cx.simulate_keystrokes(view.into(), "ctrl-shift-o");
+    let three = snap(cx).tiles;
+    assert_eq!(three.len(), 3);
+    let upper = three.iter().find(|p| p.session_id == right).unwrap();
+    let lower = three.iter().find(|p| p.active).unwrap();
+    assert!(lower.rect_px.top > upper.rect_px.top);
+    assert_eq!(lower.rect_px.left, upper.rect_px.left);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "unchanged");
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn broadcast_shortcut_and_write_checkbox_route_only_selected_terminals(
     cx: &mut gpui::TestAppContext,
 ) {

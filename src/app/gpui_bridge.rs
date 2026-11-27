@@ -251,6 +251,7 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub layout_menu_right: Option<f32>,
     pub issues_menu_open: bool,
     pub has_layout_pane: bool,
+    pub can_split_shell: bool,
     pub can_apply_grid: bool,
     pub can_arrange_panes: bool,
     pub waiting_agents_count: usize,
@@ -795,6 +796,7 @@ pub(crate) enum GpuiAction {
     OpenAddProjectDialog,
     NewShell,
     NewShellSplit(u64, SplitDir),
+    SplitActiveShell(SplitDir),
     LaunchDefaultOrShell,
     LaunchAgent(String),
     LaunchCodexChat,
@@ -2324,6 +2326,12 @@ impl Tessel {
             return false;
         }
         layout.maximized.take().is_some()
+    }
+
+    pub(crate) fn gpui_can_split_shortcut(&self) -> bool {
+        !self.gpui_has_open_modal()
+            && !self.floating.ui.is_open()
+            && !matches!(self.view, View::GuestFiles | View::Remote)
     }
 
     pub(crate) fn gpui_close_document_action(&self) -> Option<GpuiAction> {
@@ -3894,6 +3902,7 @@ impl Tessel {
                 share_pill_dot_live: share_snap.pill_dot_live,
                 layout_menu_right: self.gpui_extra.layout_menu_right,
                 has_layout_pane: !project_session_ids.is_empty(),
+                can_split_shell: self.can_split_shell(!project_session_ids.is_empty()),
                 can_apply_grid: !project_session_ids.is_empty() || self.sessions.len() < 100,
                 more_menu_open: self.gpui_extra.toolbar_more_open,
                 issues_menu_open: self.gpui_extra.issues_menu_open,
@@ -5380,8 +5389,9 @@ impl Tessel {
                 self.new_session_placed(Launch::Shell, None);
             }
             GpuiAction::NewShellSplit(target_id, dir) => {
-                self.new_session_placed(Launch::Shell, Some((target_id, dir)));
+                self.split_shell_beside(target_id, dir);
             }
+            GpuiAction::SplitActiveShell(dir) => self.split_active_shell(dir),
             GpuiAction::LaunchDefaultOrShell => {
                 let launch = self.default_new_launch();
                 self.new_session_placed(launch, None);
@@ -7992,6 +8002,40 @@ mod panel_snapshot_tests {
         app.active_session = None;
         app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
         assert!(input.try_recv().is_err());
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn split_shell_inherits_its_worktree_and_rejects_a_hidden_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let project = dir.path().join("project");
+        let checkout = dir.path().join("feature");
+        let other = dir.path().join("other");
+        for path in [&project, &checkout, &other] {
+            std::fs::create_dir(path).unwrap();
+        }
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let source = app.active_session.unwrap();
+        let worktree = crate::workspace::SavedWorktree {
+            path: checkout.clone(),
+            branch: "feature".into(),
+            base_branch: Some("main".into()),
+        };
+        app.sessions.last_mut().unwrap().worktree = Some(worktree.clone());
+        app.apply_gpui_action(GpuiAction::NewShellSplit(source, SplitDir::Col));
+        let shell = app.sessions.last().unwrap();
+        assert_ne!(shell.id, source);
+        assert_eq!(shell.cwd, checkout);
+        assert_eq!(shell.worktree.as_ref(), Some(&worktree));
+        let tiles = app.gpui_snapshot(1000., 700., 4.).tiles;
+        assert_eq!(tiles[0].rect_px.left, tiles[1].rect_px.left);
+        assert!(tiles[1].rect_px.top > tiles[0].rect_px.top);
+        app.apply_gpui_action(GpuiAction::AddProjectPath(other));
+        app.apply_gpui_action(GpuiAction::NewShellSplit(source, SplitDir::Col));
+        assert_eq!(app.sessions.len(), 2);
+        assert!(app.active_project_work_pane().is_none());
     }
 
     #[cfg(all(windows, feature = "visual-test"))]

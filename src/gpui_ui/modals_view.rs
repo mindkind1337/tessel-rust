@@ -3495,7 +3495,7 @@ fn render_layout_menu(
             layout::split_right_label(fr),
             "Ctrl+Shift+E",
             Action::SplitRight,
-            active,
+            snapshot.toolbar.can_split_shell,
             cx,
         ))
         .child(row(
@@ -3503,7 +3503,7 @@ fn render_layout_menu(
             layout::split_down_label(fr),
             "Ctrl+Shift+O",
             Action::SplitDown,
-            active,
+            snapshot.toolbar.can_split_shell,
             cx,
         ))
         .when(snapshot.toolbar.can_arrange_panes, |el| {

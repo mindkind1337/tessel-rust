@@ -3245,19 +3245,28 @@ impl Tessel {
             .as_ref()
             .map(|store| store.directory().to_owned());
         s.start_with_trust(prefs, preferred_shell, trust_home);
-        self.sessions.push(s);
         if let Some((target, dir)) = split {
+            let siblings: Vec<_> = self
+                .sessions
+                .iter()
+                .filter(|session| session.project == project_id)
+                .map(|session| session.id)
+                .collect();
             let layout = self
                 .state
                 .terminal_layouts
                 .entry(crate::terminal_layout::project_key(project_id))
                 .or_default();
+            layout.sync(&siblings, self.grid_room);
             if before {
                 layout.split_with_order(target, id, dir, true);
             } else {
                 layout.split(target, id, dir);
             }
-        } else if self.state.terminal_prefs.tile_new_panes
+        }
+        self.sessions.push(s);
+        if split.is_none()
+            && self.state.terminal_prefs.tile_new_panes
             && self
                 .sessions
                 .iter()
@@ -6027,25 +6036,56 @@ impl Tessel {
                     .map(|s| s.id)
             })
     }
+    fn split_shell_beside(&mut self, target: u64, dir: crate::pane_grid::SplitDir) {
+        let Some(session) = self
+            .sessions
+            .iter()
+            .find(|s| s.id == target && s.project == self.state.active_project)
+        else {
+            return;
+        };
+        let worktree = session.worktree.clone();
+        self.new_session_in_worktree(
+            self.state.active_project,
+            Launch::Shell,
+            Some((target, dir)),
+            false,
+            worktree,
+        );
+    }
+
+    fn tab_can_start_grid(&self) -> bool {
+        match self.view {
+            View::Files => self.documents.get(self.active_document).is_some(),
+            #[cfg(windows)]
+            View::Browser => true,
+            _ => false,
+        }
+    }
+
+    fn can_split_shell(&self, has_pane: bool) -> bool {
+        !matches!(self.view, View::GuestFiles | View::Remote)
+            && (has_pane || self.tab_can_start_grid())
+    }
+
+    fn split_active_shell(&mut self, dir: crate::pane_grid::SplitDir) {
+        if matches!(self.view, View::GuestFiles | View::Remote) {
+            return;
+        }
+        if let Some(target) = self.active_project_work_pane() {
+            self.split_shell_beside(target, dir);
+        } else if self.tab_can_start_grid() {
+            self.new_session_placed(Launch::Shell, None);
+        }
+    }
+
     fn apply_layout_action(&mut self, action: crate::layout_broadcast_ui::LayoutMenuAction) {
         use crate::layout_broadcast_ui::LayoutMenuAction;
         match action {
             LayoutMenuAction::SplitRight => {
-                if let Some(target) = self.active_project_work_pane() {
-                    self.new_session_placed(
-                        Launch::Shell,
-                        Some((target, crate::pane_grid::SplitDir::Row)),
-                    );
-                }
+                self.split_active_shell(crate::pane_grid::SplitDir::Row)
             }
-            LayoutMenuAction::SplitDown => {
-                if let Some(target) = self.active_project_work_pane() {
-                    self.new_session_placed(
-                        Launch::Shell,
-                        Some((target, crate::pane_grid::SplitDir::Col)),
-                    );
-                }
-            }
+            LayoutMenuAction::SplitDown => self.split_active_shell(crate::pane_grid::SplitDir::Col),
             LayoutMenuAction::ArrangeGrid => {
                 self.view = View::Work;
                 self.tile_sessions(None);
@@ -7421,7 +7461,7 @@ impl Tessel {
             }
         }
         if let Some(placement) = split {
-            self.new_session_placed(Launch::Shell, Some(placement));
+            self.split_shell_beside(placement.0, placement.1);
         }
         if self.grid_dirty && !ui.input(|i| i.pointer.any_down()) {
             self.grid_dirty = false;
@@ -14062,9 +14102,8 @@ impl eframe::App for Tessel {
                     ] {
                         if ctx.input_mut(|i| {
                             i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
-                        }) && let Some(target) = self.active_session
-                        {
-                            self.new_session_placed(Launch::Shell, Some((target, dir)));
+                        }) {
+                            self.split_active_shell(dir);
                         }
                     }
                 }
@@ -14352,6 +14391,7 @@ impl eframe::App for Tessel {
                     let layout_input = crate::layout_broadcast_ui::LayoutMenuInput {
                         french: toolbar_french,
                         has_active_pane: self.active_project_work_pane().is_some(),
+                        can_split_shell: self.can_split_shell(pane_count > 0),
                         pane_count,
                         can_apply_grid: pane_count > 0 || self.sessions.len() < 100,
                     };

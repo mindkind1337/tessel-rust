@@ -526,6 +526,26 @@ impl TesselGpuiRoot {
         cx: &mut Context<Self>,
     ) -> bool {
         let modifiers = event.keystroke.modifiers;
+        if modifiers.control
+            && modifiers.shift
+            && !modifiers.platform
+            && !modifiers.alt
+            && matches!(event.keystroke.key.as_str(), "e" | "o")
+            && self.app.gpui_can_split_shortcut()
+        {
+            let dir = if event.keystroke.key == "e" {
+                crate::pane_grid::SplitDir::Row
+            } else {
+                crate::pane_grid::SplitDir::Col
+            };
+            window.prevent_default();
+            cx.stop_propagation();
+            if !event.is_held {
+                self.dispatch(GpuiAction::SplitActiveShell(dir), cx);
+                self.focus_input = FocusInputTarget::None;
+            }
+            return true;
+        }
         if event.keystroke.key == "s"
             && modifiers.control
             && !modifiers.platform
@@ -916,6 +936,11 @@ impl TesselGpuiRoot {
                 "p" if shift => {
                     self.dispatch(GpuiAction::ToggleCommandPalette, cx);
                     return;
+                }
+                "e" | "o" if shift => {
+                    if self.workspace_document_shortcut(event, window, cx) {
+                        return;
+                    }
                 }
                 "b" if shift && !self.app.gpui_has_open_modal() => {
                     if !event.is_held {

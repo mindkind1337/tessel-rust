@@ -359,6 +359,7 @@ pub fn layout_menu_frame(palette: &UiPalette) -> Frame {
 pub struct LayoutMenuInput {
     pub french: bool,
     pub has_active_pane: bool,
+    pub can_split_shell: bool,
     pub pane_count: usize,
     pub can_apply_grid: bool,
 }
@@ -559,7 +560,7 @@ pub fn show_layout_menu_contents(
             id_salt: "layout_split_right",
             label: split_right_label(input.french),
             shortcut: Some("Ctrl+Shift+E"),
-            enabled: input.has_active_pane,
+            enabled: input.can_split_shell,
             danger: false,
             tooltip: None,
         },
@@ -574,7 +575,7 @@ pub fn show_layout_menu_contents(
             id_salt: "layout_split_down",
             label: split_down_label(input.french),
             shortcut: Some("Ctrl+Shift+O"),
-            enabled: input.has_active_pane,
+            enabled: input.can_split_shell,
             danger: false,
             tooltip: None,
         },
