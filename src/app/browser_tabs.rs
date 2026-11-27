@@ -46,6 +46,27 @@ impl Tessel {
         self.view = View::Browser;
     }
 
+    pub(super) fn browser_speaker(&self, id: u64) -> Option<bool> {
+        if id == self.browser.tab_id {
+            self.browser.speaker_state()
+        } else {
+            self.other_browser_pages
+                .get(&(self.state.active_project, id))?
+                .speaker_state()
+        }
+    }
+
+    pub(super) fn toggle_browser_sound(&mut self, id: u64) {
+        if id == self.browser.tab_id {
+            self.browser.toggle_mute();
+        } else if let Some(page) = self
+            .other_browser_pages
+            .get_mut(&(self.state.active_project, id))
+        {
+            page.toggle_mute();
+        }
+    }
+
     pub(super) fn select_browser_page(&mut self, id: u64) {
         if id != self.browser.tab_id {
             let Some(next) = self

@@ -303,6 +303,10 @@ fn render_view_tabs_bar(
                 .or_else(|| doc_index.map(GpuiAction::CloseDocumentTab)),
         }
         .filter(|_| closable);
+        #[cfg(windows)]
+        let speaker = tab.browser_id.zip(tab.sound);
+        #[cfg(not(windows))]
+        let speaker: Option<(u64, bool)> = None;
         let mut hint = tab.hint.clone();
         if tab.preview {
             hint.push_str(if snapshot.french {
@@ -441,6 +445,39 @@ fn render_view_tabs_bar(
                             } else {
                                 tokens.text_dim
                             }),
+                    )
+                })
+                .when_some(speaker, |el, (id, muted)| {
+                    let label = crate::i18n::tr(if muted { "Unmute tab" } else { "Mute tab" });
+                    el.child(
+                        div()
+                            .id(("tab-sound", idx))
+                            .debug_selector(move || format!("view-tab-sound-{idx}"))
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .cursor_pointer()
+                            .flex_shrink_0()
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::chrome::ToolbarTooltip {
+                                    text: label.into(),
+                                    bg,
+                                    fg,
+                                    border,
+                                })
+                                .into()
+                            })
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                cx.stop_propagation();
+                                root.dispatch(GpuiAction::ToggleBrowserSound(id), cx);
+                            }))
+                            .child(
+                                (if muted {
+                                    GpuiIcon::VolumeX
+                                } else {
+                                    GpuiIcon::Volume2
+                                })
+                                .render(13., if muted { tokens.text_dim } else { tokens.text }),
+                            ),
                     )
                 })
                 .when_some(close, |el, action| {

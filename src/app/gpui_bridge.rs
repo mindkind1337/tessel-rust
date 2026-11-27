@@ -328,6 +328,7 @@ pub(crate) struct GpuiSidebarSnapshot {
 pub(crate) struct GpuiViewTabItem {
     #[cfg(windows)]
     pub browser_id: Option<u64>,
+    pub sound: Option<bool>,
     pub id: String,
     pub title: String,
     pub hint: String,
@@ -829,6 +830,7 @@ pub(crate) enum GpuiAction {
     SelectBrowserPage(u64),
     #[cfg(windows)]
     CloseBrowserPage(u64),
+    ToggleBrowserSound(u64),
     CloseBrowserTab,
     ToggleFloatingTerminal,
     RestartFloatingTerminal,
@@ -3679,6 +3681,7 @@ impl Tessel {
         view_tabs.push(GpuiViewTabItem {
             #[cfg(windows)]
             browser_id: None,
+            sound: None,
             id: "work".into(),
             title: tr("Terminal").into(),
             hint: tr("Terminal").into(),
@@ -3696,6 +3699,7 @@ impl Tessel {
             view_tabs.push(GpuiViewTabItem {
                 #[cfg(windows)]
                 browser_id: Some(id),
+                sound: self.browser_speaker(id),
                 id: format!("browser:{id}"),
                 title,
                 hint,
@@ -3724,6 +3728,7 @@ impl Tessel {
             view_tabs.push(GpuiViewTabItem {
                 #[cfg(windows)]
                 browser_id: None,
+                sound: None,
                 id: format!("doc:{i}"),
                 title,
                 hint: paths[i].clone(),
@@ -3742,6 +3747,7 @@ impl Tessel {
             view_tabs.push(GpuiViewTabItem {
                 #[cfg(windows)]
                 browser_id: None,
+                sound: None,
                 id: format!(
                     "guest:{}:{}:{}",
                     key.scope.session, key.scope.project, key.path
@@ -5619,6 +5625,12 @@ impl Tessel {
             GpuiAction::SelectBrowserPage(id) => self.select_browser_page(id),
             #[cfg(windows)]
             GpuiAction::CloseBrowserPage(id) => self.close_browser_page(id),
+            GpuiAction::ToggleBrowserSound(id) => {
+                #[cfg(windows)]
+                self.toggle_browser_sound(id);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
             GpuiAction::CloseBrowserTab => {
                 #[cfg(windows)]
                 self.close_browser_page(self.browser.tab_id);

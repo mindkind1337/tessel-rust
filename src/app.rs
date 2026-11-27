@@ -3705,6 +3705,11 @@ impl Tessel {
                                 has_file_menu: false,
                             },
                         );
+                        if let Some(muted) = self.browser_speaker(id)
+                            && crate::view_tabs::speaker(ui, muted).clicked()
+                        {
+                            self.toggle_browser_sound(id);
+                        }
                         if browser.close {
                             browser_click = Some((id, true));
                         } else if browser.body.clicked() {
@@ -4654,6 +4659,15 @@ impl Tessel {
         }
         #[cfg(windows)]
         if self.view == View::Browser {
+            commands.push(PaletteCommand::new(
+                "browser:mute",
+                tr("Browser"),
+                tr(if self.browser.speaker_state() == Some(true) {
+                    "Unmute tab"
+                } else {
+                    "Mute tab"
+                }),
+            ));
             for (id, label) in [
                 ("browser:zoom-in", "Zoom in"),
                 ("browser:zoom-out", "Zoom out"),
@@ -4856,6 +4870,8 @@ impl Tessel {
             }
             #[cfg(windows)]
             "browser" => self.new_browser_page(),
+            #[cfg(windows)]
+            "browser:mute" if self.view == View::Browser => self.browser.toggle_mute(),
             #[cfg(windows)]
             "browser:zoom-in" | "browser:zoom-out" | "browser:zoom-reset"
                 if self.view == View::Browser =>

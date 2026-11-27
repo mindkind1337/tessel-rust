@@ -1,4 +1,6 @@
 {
+  "Mute tab": "Couper le son de l’onglet",
+  "Unmute tab": "Rétablir le son de l’onglet",
   "Reset zoom": "Réinitialiser le zoom",
   "Open in VS Code at the cursor position": "Ouvrir dans VS Code à la position du curseur",
   "Open in VS Code": "Ouvrir dans VS Code",

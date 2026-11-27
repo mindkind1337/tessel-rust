@@ -13,6 +13,41 @@ pub enum Kind {
     Browser,
 }
 
+#[cfg(windows)]
+pub fn speaker(ui: &mut egui::Ui, muted: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+    let pen = Stroke::new(1.3_f32, ui.style().interact(&response).fg_stroke.color);
+    let point = |x, y| rect.min + egui::vec2(x, y);
+    let painter = ui.painter();
+    painter.add(egui::Shape::closed_line(
+        vec![
+            point(2., 7.),
+            point(5., 7.),
+            point(8., 4.),
+            point(8., 14.),
+            point(5., 11.),
+            point(2., 11.),
+        ],
+        pen,
+    ));
+    if muted {
+        painter.line_segment([point(11., 7.), point(15., 11.)], pen);
+        painter.line_segment([point(15., 7.), point(11., 11.)], pen);
+    } else {
+        for offset in [0., 3.] {
+            painter.add(egui::Shape::line(
+                vec![
+                    point(10. + offset, 6. - offset / 2.),
+                    point(12. + offset, 9.),
+                    point(10. + offset, 12. + offset / 2.),
+                ],
+                pen,
+            ));
+        }
+    }
+    response.on_hover_text(tr(if muted { "Unmute tab" } else { "Mute tab" }))
+}
+
 pub struct Tab<'a> {
     pub title: &'a str,
     pub file_path: Option<&'a str>,

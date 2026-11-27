@@ -1,5 +1,6 @@
 //! Native WebView2 child window. Websites receive no native IPC capability.
 use crate::i18n::tr;
+mod audio;
 mod capture;
 mod control;
 mod cookie_import;
@@ -27,6 +28,7 @@ use wry::{WebContext, WebView, WebViewBuilder};
 enum Event {
     Title(String),
     Zoom(i8),
+    PlayingAudio(bool),
     Popup(String),
     Error(String),
     Navigation(String),
@@ -49,6 +51,8 @@ pub struct Browser {
     title: String,
     pub(crate) zoom_override: Option<i8>,
     default_zoom: i8,
+    muted: bool,
+    playing_audio: bool,
     project_pages: project_page::Pages,
     trusted_preview_folders: std::collections::HashSet<html_trust::Folder>,
     address_generation: u64,
@@ -90,6 +94,8 @@ impl Default for Browser {
             tab_id: next_address_generation(),
             title: String::new(),
             zoom_override: None,
+            muted: false,
+            playing_audio: false,
             default_zoom: crate::workspace::BrowserPreferences::default().zoom_half_steps,
             project_pages: Default::default(),
             trusted_preview_folders: Default::default(),
@@ -123,6 +129,20 @@ impl Default for Browser {
 }
 
 impl Browser {
+    pub(crate) fn speaker_state(&self) -> Option<bool> {
+        (self.playing_audio || self.muted).then_some(self.muted)
+    }
+
+    pub(crate) fn toggle_mute(&mut self) {
+        if let Some(view) = &self.view
+            && let Err(error) = audio::set_muted(view, !self.muted)
+        {
+            self.error = error.to_string();
+            return;
+        }
+        self.muted = !self.muted;
+    }
+
     pub(crate) fn zoom_steps(&self) -> i8 {
         self.zoom_override.unwrap_or(self.default_zoom)
     }
@@ -745,6 +765,9 @@ impl Browser {
         self.webview_had_focus = false;
         if !agent {
             zoom_keys::attach(&view, self.sender.clone())?;
+            if let Err(error) = audio::attach(&view, self.muted, self.sender.clone()) {
+                self.error = error.to_string();
+            }
         }
         self.view = Some(view);
         if !agent {
@@ -786,6 +809,7 @@ impl Browser {
         while let Ok(event) = self.receiver.try_recv() {
             changed = true;
             match event {
+                Event::PlayingAudio(playing) => self.playing_audio = playing,
                 Event::Zoom(direction) => self.change_zoom(direction),
                 Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
                 Event::Popup(address) => self.popup = Some(address),
@@ -848,6 +872,7 @@ impl Browser {
                 .unwrap_or_else(|| self.committed_address.clone());
             self.popups.close_all();
             self.popup = None;
+            self.playing_audio = false;
             (self.sender, self.receiver) = mpsc::channel();
             drop(view);
             self.context.take();
@@ -1048,6 +1073,100 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn tab_sound_targets_the_background_webview_without_switching_pages() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::hidden_parent;
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+        use windows::core::{BOOL, Interface};
+        use wry::WebViewExtWindows;
+        let temp = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        let ctx = eframe::egui::Context::default();
+        app.execute_palette_command(&ctx, "browser");
+        app.execute_palette_command(&ctx, "browser:mute");
+        let first = app.browser.tab_id;
+        app.browser
+            .create_with_profile(&parent, temp.path().join("profile"))
+            .unwrap();
+        let audio: ICoreWebView2_8 = unsafe {
+            app.browser
+                .view
+                .as_ref()
+                .unwrap()
+                .controller()
+                .CoreWebView2()
+                .unwrap()
+                .cast()
+                .unwrap()
+        };
+        let muted = || {
+            let mut value = BOOL::default();
+            unsafe { audio.IsMuted(&mut value) }.unwrap();
+            value.as_bool()
+        };
+        assert!(muted());
+        // Exercise Chromium's playback notifications with the output muted throughout.
+        let view = app.browser.view.as_ref().unwrap();
+        crate::webview_test_support::wait_for(view, "document.readyState === 'complete'");
+        let core = unsafe { view.controller().CoreWebView2().unwrap() };
+        let params = serde_json::json!({
+            "expression": "window.fixtureAudio = new AudioContext(); const osc = fixtureAudio.createOscillator(); osc.connect(fixtureAudio.destination); osc.start(); fixtureAudio.resume()",
+            "userGesture": true
+        });
+        unsafe {
+            core.CallDevToolsProtocolMethod(
+                &windows::core::HSTRING::from("Runtime.evaluate"),
+                &windows::core::HSTRING::from(params.to_string()),
+                &webview2_com::CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                    |_, _| Ok(()),
+                )),
+            )
+            .unwrap();
+        }
+        let wait_audio = |page: &mut Browser, playing| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+            while page.playing_audio != playing {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "playback notification {playing} timed out"
+                );
+                crate::webview_test_support::pump();
+                page.poll();
+            }
+        };
+        wait_audio(&mut app.browser, true);
+        app.browser
+            .view
+            .as_ref()
+            .unwrap()
+            .evaluate_script("fixtureAudio.close()")
+            .unwrap();
+        wait_audio(&mut app.browser, false);
+
+        app.execute_palette_command(&ctx, "browser");
+        let second = app.browser.tab_id;
+        let first_speaker = |app: &mut Tessel| {
+            app.gpui_snapshot(960., 640., 4.)
+                .view_tabs
+                .into_iter()
+                .find(|tab| tab.browser_id == Some(first))
+                .unwrap()
+                .sound
+        };
+        assert_eq!(first_speaker(&mut app), Some(true));
+        app.apply_gpui_action(GpuiAction::ToggleBrowserSound(first));
+        assert!(!muted());
+        assert_eq!(app.browser.tab_id, second);
+        assert_eq!(app.browser.speaker_state(), None);
+        assert_eq!(first_speaker(&mut app), None);
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn owner_zoom_changes_native_controller_and_resets_to_current_default() {

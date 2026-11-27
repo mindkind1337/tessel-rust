@@ -751,6 +751,36 @@ fn view_tab_layout_keeps_long_unicode_titles_and_controls_separate(
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn tab_sound_click_unmutes_without_selecting_browser(cx: &mut gpui::TestAppContext) {
+    use crate::app::gpui_bridge::GpuiAction;
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+        for command in ["browser", "browser:mute"] {
+            root.app
+                .execute_palette_command(&eframe::egui::Context::default(), command);
+        }
+        root.app.apply_gpui_action(GpuiAction::SelectWorkTab);
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let sound = visual.debug_bounds("view-tab-sound-1").unwrap();
+    visual.simulate_click(sound.center(), Default::default());
+    let tabs = view
+        .update(cx, |root, _, _| {
+            root.app.gpui_snapshot(960., 640., 4.).view_tabs
+        })
+        .unwrap();
+    assert!(tabs[0].selected);
+    assert!(!tabs[1].selected);
+    assert_eq!(tabs[1].sound, None);
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn view_tab_mouse_gestures_keep_preview_and_confirm_dirty_close(cx: &mut gpui::TestAppContext) {
     use crate::files::Document;
     use gpui::MouseButton::{Left, Middle, Right};
@@ -1415,7 +1445,7 @@ fn gpui_theme_tokens_and_svg_icons_cover_all_palettes_and_glyphs() {
     assert!((mixed.color.red - 0.25).abs() < 1e-4);
     assert!((mixed.color.blue - 0.75).abs() < 1e-4);
 
-    assert_eq!(GpuiIcon::ALL.len(), 50);
+    assert_eq!(GpuiIcon::ALL.len(), 52);
     for icon in GpuiIcon::ALL {
         let svg_text = std::str::from_utf8(icon.svg_bytes()).expect("valid utf8 svg");
         assert!(svg_text.starts_with("<svg "));
