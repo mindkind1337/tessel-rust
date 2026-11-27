@@ -1801,69 +1801,101 @@ pub(crate) fn render_office_summary(
             .text_color(tokens.text_dim)
             .child(label)
     };
-    if let Some(slides) = &summary.slides {
+    if !summary.error.is_empty() {
+        let label = match (workbook, french) {
+            (true, true) => "Ce classeur n'a pas pu être lu.",
+            (true, false) => "This workbook could not be read.",
+            (false, true) => "Ce document n'a pas pu être lu.",
+            (false, false) => "This document could not be read.",
+        };
+        return note(label)
+            .debug_selector(|| "office-read-error".into())
+            .text_color(tokens.danger);
+    }
+    if summary.busy {
+        return note(if french { "Lecture…" } else { "Reading…" })
+            .debug_selector(|| "office-reading".into());
+    }
+    if !workbook {
+        let paragraph = |heading: bool, text: &String| {
+            div()
+                .mb(px(8.))
+                .text_size(px(if heading { 16. } else { 13. }))
+                .font_weight(if heading {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if heading {
+                    tokens.text_strong
+                } else {
+                    tokens.text
+                })
+                .child(text.clone())
+        };
+        let column = || div().mx_auto().w_full().max_w(px(820.));
         let mut list = div()
-            .id("office-slides")
-            .debug_selector(|| "office-slides".into())
+            .id("office-reading-view")
             .size_full()
             .min_h_0()
             .overflow_y_scroll()
             .px(px(24.))
             .pt(px(16.))
-            .pb(px(40.));
-        list = list.child(
-            div()
-                .mx_auto()
-                .max_w(px(820.))
-                .text_right()
-                .mb(px(8.))
-                .text_size(px(12.))
-                .text_color(tokens.text_dim)
-                .child(if french { "Lecture seule" } else { "Read-only" }),
-        );
-        if slides.is_empty() {
-            return div().size_full().child(list.child(note(if french {
-                "Cette présentation ne contient aucune diapositive."
-            } else {
-                "This presentation has no slide."
-            })));
-        }
-        for (index, paragraphs) in slides.iter().enumerate() {
-            let number = index + 1;
-            let label = if french {
-                format!("Diapositive {number}")
-            } else {
-                format!("Slide {number}")
-            };
-            let mut page = div()
-                .debug_selector(move || format!("office-slide-{number}"))
-                .mx_auto()
-                .max_w(px(820.))
-                .border_1()
-                .border_color(tokens.border)
-                .rounded(px(8.))
-                .px(px(20.))
-                .py(px(14.))
-                .mb(px(16.))
-                .child(
-                    div()
-                        .mb(px(6.))
-                        .text_color(tokens.text_dim)
-                        .text_size(px(12.))
-                        .child(label),
-                );
-            for (heading, text) in paragraphs {
+            .pb(px(40.))
+            .child(
+                column()
+                    .text_right()
+                    .mb(px(8.))
+                    .text_size(px(12.))
+                    .text_color(tokens.text_dim)
+                    .child(if french { "Lecture seule" } else { "Read-only" }),
+            );
+        if let Some(slides) = &summary.slides {
+            list = list.debug_selector(|| "office-slides".into());
+            if slides.is_empty() {
+                list = list.child(note(if french {
+                    "Cette présentation n'a aucune diapositive."
+                } else {
+                    "This presentation has no slide."
+                }));
+            }
+            for (index, paragraphs) in slides.iter().enumerate() {
+                let number = index + 1;
+                let label = if french {
+                    format!("Diapositive {number}")
+                } else {
+                    format!("Slide {number}")
+                };
+                let page = column()
+                    .debug_selector(move || format!("office-slide-{number}"))
+                    .border_1()
+                    .border_color(tokens.border)
+                    .rounded(px(8.))
+                    .px(px(20.))
+                    .py(px(14.))
+                    .mb(px(16.))
+                    .child(
+                        div()
+                            .mb(px(6.))
+                            .text_color(tokens.text_dim)
+                            .text_size(px(12.))
+                            .child(label),
+                    );
+                list = list.child(page.children(paragraphs.iter().map(|(h, t)| paragraph(*h, t))));
+            }
+        } else {
+            let mut page = column().debug_selector(|| "office-document-page".into());
+            if summary.paragraphs.is_empty() {
                 page = page.child(
-                    div()
-                        .mb(px(8.))
-                        .text_size(px(if *heading { 16. } else { 13. }))
-                        .font_weight(if *heading {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                        .child(text.clone()),
+                    note(if french {
+                        "Ce document ne contient aucun texte."
+                    } else {
+                        "This document has no text."
+                    })
+                    .debug_selector(|| "office-document-empty".into()),
                 );
+            } else {
+                page = page.children(summary.paragraphs.iter().map(|(h, t)| paragraph(*h, t)));
             }
             list = list.child(page);
         }
@@ -1875,41 +1907,27 @@ pub(crate) fn render_office_summary(
             }))
         }));
     }
-    if workbook {
-        if !summary.error.is_empty() {
-            return note(if french {
-                "Ce classeur n'a pas pu être lu."
-            } else {
-                "This workbook could not be read."
-            })
-            .text_color(tokens.danger);
-        }
-        if summary.busy {
-            return note(if french { "Lecture…" } else { "Reading…" });
-        }
-        if summary.section_titles.is_empty() {
-            return note(if french {
-                "Ce classeur n'a aucune feuille."
-            } else {
-                "This workbook has no sheet."
-            });
-        }
+    if summary.section_titles.is_empty() {
+        return note(if french {
+            "Ce classeur n'a aucune feuille."
+        } else {
+            "This workbook has no sheet."
+        });
     }
     let mut tabs = div()
         .id("office-section-tabs")
         .role(gpui::Role::TabList)
         .debug_selector(|| "office-section-tabs".into())
-        .px(px(if workbook { 8. } else { 10. }))
-        .py(px(if workbook { 4. } else { 5. }))
+        .px(px(8.))
+        .py(px(4.))
         .bg(tokens.chrome)
-        .when(workbook, |el| el.border_t_1())
-        .when(!workbook, |el| el.border_b_1())
+        .border_t_1()
         .border_color(tokens.border)
         .flex_shrink_0()
         .flex()
         .items_center()
         .overflow_x_scroll()
-        .gap(px(if workbook { 2. } else { 6. }));
+        .gap(px(2.));
 
     for (idx, title) in summary.section_titles.iter().enumerate() {
         let active = idx == summary.selected;
@@ -1952,89 +1970,47 @@ pub(crate) fn render_office_summary(
         );
     }
 
-    if workbook {
-        tabs = tabs.child(
-            div()
-                .ml_auto()
-                .pl(px(12.))
-                .flex_shrink_0()
-                .text_size(px(12.))
-                .text_color(tokens.text_dim)
-                .child(if french { "Lecture seule" } else { "Read-only" }),
-        );
-        let body = match &summary.sheet {
-            Some(sheet) => super::sheet_view::render(sheet.clone(), french, tokens, cx),
-            None if summary.omitted_rows > 0 || summary.omitted_cols > 0 => div(),
-            None => note(if french {
-                "Cette feuille est vide."
-            } else {
-                "This sheet is empty."
-            })
-            .debug_selector(|| "office-empty-sheet".into()),
-        };
-        return div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(div().flex_1().min_h_0().child(body))
-            .when(summary.omitted_rows > 0 || summary.omitted_cols > 0, |el| {
-                let (rows, cols) = (summary.omitted_rows, summary.omitted_cols);
-                let label = if french {
-                    format!("Hors de la zone affichée : {rows} ligne(s), {cols} colonne(s).")
-                } else {
-                    format!("Outside the displayed range: {rows} row(s), {cols} column(s).")
-                };
-                el.child(div().px(px(8.)).text_color(tokens.text_dim).child(label))
-            })
-            .when(summary.truncated, |el| {
-                el.child(note(if french {
-                    "Aperçu limité aux données prises en charge."
-                } else {
-                    "Preview limited to supported data."
-                }))
-            })
-            .child(tabs);
-    }
-    let body = {
-        let mut p_col = div()
-            .id("office-paragraphs")
-            .flex_1()
-            .min_h_0()
-            .p(px(18.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(px(8.0));
-        for (heading, text) in &summary.paragraphs {
-            p_col = p_col.child(
-                div()
-                    .text_size(px(if *heading { 16.0 } else { 13.0 }))
-                    .font_weight(if *heading {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if *heading {
-                        tokens.text_strong
-                    } else {
-                        tokens.text
-                    })
-                    .child(SharedString::from(text.clone())),
-            );
-        }
-        p_col.into_any_element()
-    };
-
-    div().size_full().flex().flex_col()
-        .child(if french {
-            "Aperçu en lecture seule · macros et formules non exécutées · mise en forme approximative"
+    tabs = tabs.child(
+        div()
+            .ml_auto()
+            .pl(px(12.))
+            .flex_shrink_0()
+            .text_size(px(12.))
+            .text_color(tokens.text_dim)
+            .child(if french { "Lecture seule" } else { "Read-only" }),
+    );
+    let body = match &summary.sheet {
+        Some(sheet) => super::sheet_view::render(sheet.clone(), french, tokens, cx),
+        None if summary.omitted_rows > 0 || summary.omitted_cols > 0 => div(),
+        None => note(if french {
+            "Cette feuille est vide."
         } else {
-            "Read-only preview · macros and formulas are not executed · formatting may differ"
+            "This sheet is empty."
         })
-        .when(summary.busy, |el| el.child(if french { "Chargement du document…" } else { "Loading document…" }))
-        .when(!summary.error.is_empty(), |el| el.child(SharedString::from(summary.error.clone())))
-        .when(summary.truncated, |el| el.child(if french { "Aperçu tronqué aux limites du document." } else { "Preview truncated at the document limits." }))
-        .child(tabs).child(body)
+        .debug_selector(|| "office-empty-sheet".into()),
+    };
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(div().flex_1().min_h_0().child(body))
+        .when(summary.omitted_rows > 0 || summary.omitted_cols > 0, |el| {
+            let (rows, cols) = (summary.omitted_rows, summary.omitted_cols);
+            let label = if french {
+                format!("Hors de la zone affichée : {rows} ligne(s), {cols} colonne(s).")
+            } else {
+                format!("Outside the displayed range: {rows} row(s), {cols} column(s).")
+            };
+            el.child(div().px(px(8.)).text_color(tokens.text_dim).child(label))
+        })
+        .when(summary.truncated, |el| {
+            el.child(note(if french {
+                "Aperçu limité aux données prises en charge."
+            } else {
+                "Preview limited to supported data."
+            }))
+        })
+        .child(tabs)
 }
 
 pub(super) fn render_playback(

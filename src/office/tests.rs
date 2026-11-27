@@ -298,3 +298,57 @@ fn office_presentation_truncates_only_when_another_slide_exists() {
         assert_eq!(book.truncated, expected);
     }
 }
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn office_text_document_loading_empty_and_failed_states_render_separately(
+    cx: &mut gpui::TestAppContext,
+) {
+    for failed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.odt");
+        let bytes = archive(&[("content.xml", "<office:document xmlns:office='urn:o'/>")]);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+        let (sender, rx) = mpsc::channel();
+        doc.office.as_mut().unwrap().pending = Some(rx);
+        let window = cx.add_window(|_, cx| {
+            let mut root = crate::gpui_ui::TesselGpuiRoot::new_in_dir(
+                Some(dir.path().join("state")),
+                false,
+                cx,
+            );
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("office-reading").is_some());
+        assert!(visual.debug_bounds("office-section-tabs").is_none());
+        sender
+            .send(if failed {
+                Err("cannot decode".into())
+            } else {
+                parse::parse(&bytes, "odt")
+            })
+            .unwrap();
+        window
+            .update(cx, |root, _, cx| {
+                assert!(root.app.poll_for_gpui());
+                cx.notify();
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("office-reading").is_none());
+        assert_eq!(visual.debug_bounds("office-read-error").is_some(), failed);
+        assert_eq!(
+            visual.debug_bounds("office-document-empty").is_some(),
+            !failed
+        );
+        if !failed {
+            let page = visual.debug_bounds("office-document-page").unwrap();
+            assert!(f32::from(page.size.width) > 0. && f32::from(page.size.width) <= 820.);
+        }
+    }
+}
