@@ -330,6 +330,65 @@ impl TerminalLayout {
         true
     }
 
+    fn project_view(
+        &self,
+        ids: &HashSet<u64>,
+    ) -> (
+        Option<PaneNode>,
+        std::collections::BTreeMap<String, pane_grid::PrunedSplitMeta>,
+    ) {
+        let mut sources = Default::default();
+        let tree = self.tree.as_ref().and_then(|node| {
+            pane_grid::prune_tree(
+                node,
+                &mut |leaf| leaf.id.parse::<u64>().is_ok_and(|id| ids.contains(&id)),
+                &mut sources,
+            )
+        });
+        (tree, sources)
+    }
+
+    pub fn view_geometry(&self, visible: Option<&HashSet<u64>>) -> pane_grid::GridLayout {
+        match visible {
+            Some(ids) => pane_grid::grid_layout(self.project_view(ids).0.as_ref()),
+            None => pane_grid::grid_layout(self.tree.as_ref()),
+        }
+    }
+
+    pub fn resize_view(
+        &mut self,
+        visible: Option<&HashSet<u64>>,
+        split: &str,
+        index: usize,
+        pixels: f64,
+        delta: f64,
+        key: Option<bool>,
+    ) -> bool {
+        let Some(ids) = visible else {
+            return self.resize(split, index, pixels, delta, key);
+        };
+        let (mut view, sources) = self.project_view(ids);
+        let Some(sizes) = view
+            .as_mut()
+            .and_then(|tree| Self::resize_tree(tree, split, index, pixels, delta, key))
+        else {
+            return false;
+        };
+        if let Some(meta) = sources.get(split) {
+            if self
+                .tree
+                .as_mut()
+                .is_some_and(|tree| pane_grid::write_view_sizes(tree, meta, sizes))
+            {
+                self.grid_mode = Some(GridMode::Manual);
+                return true;
+            }
+            false
+        } else {
+            self.resize(split, index, pixels, delta, key)
+        }
+    }
+
     pub fn resize(
         &mut self,
         split: &str,
@@ -338,56 +397,55 @@ impl TerminalLayout {
         delta: f64,
         key: Option<bool>,
     ) -> bool {
-        fn apply(
-            node: &mut PaneNode,
-            split: &str,
-            index: usize,
-            pixels: f64,
-            delta: f64,
-            key: Option<bool>,
-        ) -> bool {
-            let PaneNode::Split {
-                id,
-                dir,
-                children,
-                sizes,
-            } = node
-            else {
-                return false;
-            };
-            if id == split {
-                let next = if let Some(forward) = key {
-                    pane_grid::resize_divider_key(children.len(), sizes, index, forward)
-                } else {
-                    pane_grid::resize_divider_drag(
-                        children.len(),
-                        sizes,
-                        index,
-                        *dir,
-                        pixels - 4.0 * (children.len() - 1) as f64,
-                        delta,
-                    )
-                };
-                if let Some(next) = next
-                    && next != *sizes
-                {
-                    *sizes = next;
-                    return true;
-                }
-                return false;
-            }
-            children
-                .iter_mut()
-                .any(|child| apply(child, split, index, pixels, delta, key))
-        }
-        let changed = self
-            .tree
-            .as_mut()
-            .is_some_and(|tree| apply(tree, split, index, pixels, delta, key));
+        let changed = self.tree.as_mut().is_some_and(|tree| {
+            Self::resize_tree(tree, split, index, pixels, delta, key).is_some()
+        });
         if changed {
             self.grid_mode = Some(GridMode::Manual);
         }
         changed
+    }
+    fn resize_tree<'a>(
+        node: &'a mut PaneNode,
+        split: &str,
+        index: usize,
+        pixels: f64,
+        delta: f64,
+        key: Option<bool>,
+    ) -> Option<&'a [f64]> {
+        let PaneNode::Split {
+            id,
+            dir,
+            children,
+            sizes,
+        } = node
+        else {
+            return None;
+        };
+        if id == split {
+            let next = if let Some(forward) = key {
+                pane_grid::resize_divider_key(children.len(), sizes, index, forward)
+            } else {
+                pane_grid::resize_divider_drag(
+                    children.len(),
+                    sizes,
+                    index,
+                    *dir,
+                    pixels - 4.0 * (children.len() - 1) as f64,
+                    delta,
+                )
+            };
+            if let Some(next) = next
+                && next != *sizes
+            {
+                *sizes = next;
+                return Some(sizes);
+            }
+            return None;
+        }
+        children
+            .iter_mut()
+            .find_map(|child| Self::resize_tree(child, split, index, pixels, delta, key))
     }
 }
 

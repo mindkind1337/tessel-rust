@@ -6398,6 +6398,26 @@ impl Tessel {
         }
     }
 
+    fn grid_worktree_ids(&self) -> Option<std::collections::HashSet<u64>> {
+        let project = self.state.active_project;
+        let panes = || self.sessions.iter().filter(|s| s.project == project);
+        let active = panes().find(|s| Some(s.id) == self.active_session)?;
+        let scope = active
+            .worktree
+            .as_ref()
+            .map(|wt| crate::sidebar_model::norm_sidebar_path(&wt.path.to_string_lossy()));
+        let matches = |pane: &Session| match (&scope, &pane.worktree) {
+            (None, None) => true,
+            (Some(scope), Some(wt)) => {
+                *scope == crate::sidebar_model::norm_sidebar_path(&wt.path.to_string_lossy())
+            }
+            _ => false,
+        };
+        panes()
+            .any(|s| !matches(s))
+            .then(|| panes().filter(|s| matches(s)).map(|s| s.id).collect())
+    }
+
     fn active_project_work_pane(&self) -> Option<u64> {
         self.active_session
             .filter(|id| {
@@ -6781,6 +6801,7 @@ impl Tessel {
             self.active_session = self.active_project_work_pane();
         }
         let key = crate::terminal_layout::project_key(self.state.active_project);
+        let visible = self.grid_worktree_ids();
         let room = ui.available_rect_before_wrap();
         self.grid_room = [room.width() as f64, room.height() as f64];
         let layout = self.state.terminal_layouts.entry(key.clone()).or_default();
@@ -6789,8 +6810,10 @@ impl Tessel {
             self.grid_room,
             self.state.terminal_prefs.tile_new_panes,
         );
-        let maximized = layout.maximized;
-        let geometry = pane_grid::grid_layout(layout.tree.as_ref());
+        let maximized = layout
+            .maximized
+            .filter(|id| visible.as_ref().is_none_or(|ids| ids.contains(id)));
+        let geometry = layout.view_geometry(visible.as_ref());
         if maximized.is_none()
             && ui.is_enabled()
             && !self.floating.ui.has_keyboard()
@@ -7838,7 +7861,14 @@ impl Tessel {
                         .terminal_layouts
                         .get_mut(&key)
                         .expect("layout")
-                        .resize(&divider.split_id, divider.index, pixels, delta, direction);
+                        .resize_view(
+                            visible.as_ref(),
+                            &divider.split_id,
+                            divider.index,
+                            pixels,
+                            delta,
+                            direction,
+                        );
                 }
             }
         }

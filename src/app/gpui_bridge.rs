@@ -2374,10 +2374,15 @@ impl Tessel {
             .get(&crate::terminal_layout::project_key(
                 self.state.active_project,
             ))?;
-        if layout.maximized.is_some() {
+        let visible = self.grid_worktree_ids();
+        if layout
+            .maximized
+            .is_some_and(|id| visible.as_ref().is_none_or(|ids| ids.contains(&id)))
+        {
             return None;
         }
-        let panes = crate::pane_grid::grid_layout(layout.tree.as_ref())
+        let panes = layout
+            .view_geometry(visible.as_ref())
             .tiles
             .into_iter()
             .map(|tile| {
@@ -3454,6 +3459,7 @@ impl Tessel {
             self.active_session = project_session_ids.first().copied();
         }
         let layout_key = crate::terminal_layout::project_key(self.state.active_project);
+        let visible = self.grid_worktree_ids();
         let maximized_id = if project_session_ids.is_empty() {
             None
         } else {
@@ -3467,7 +3473,9 @@ impl Tessel {
                 room,
                 self.state.terminal_prefs.tile_new_panes,
             );
-            layout.maximized
+            layout
+                .maximized
+                .filter(|id| visible.as_ref().is_none_or(|ids| ids.contains(id)))
         };
 
         if self.right_tool_visible(SideTab::Changes)
@@ -3551,7 +3559,7 @@ impl Tessel {
                 },
             ));
         } else if let Some(layout) = self.state.terminal_layouts.get(&layout_key) {
-            let geom = crate::pane_grid::grid_layout(layout.tree.as_ref());
+            let geom = layout.view_geometry(visible.as_ref());
             let div_px = f64::from(divider_px);
             for tile in &geom.tiles {
                 if let Ok(sid) = tile.leaf.id.parse::<u64>() {
@@ -5724,10 +5732,14 @@ impl Tessel {
                 }
             }
             GpuiAction::MovePane { from, to, zone } => {
+                let visible = self.grid_worktree_ids();
                 let key = crate::terminal_layout::project_key(self.state.active_project);
                 if self.view == View::Work
                     && !self.gpui_has_open_modal()
                     && let Some(layout) = self.state.terminal_layouts.get_mut(&key)
+                    && visible.as_ref().is_none_or(|ids| {
+                        ids.contains(&from) && to.is_none_or(|id| ids.contains(&id))
+                    })
                     && layout.maximized.is_none()
                     && layout.move_pane(from, to, zone)
                 {
@@ -5743,8 +5755,16 @@ impl Tessel {
                 delta_px,
             } => {
                 let key = crate::terminal_layout::project_key(self.state.active_project);
+                let visible = self.grid_worktree_ids();
                 if let Some(layout) = self.state.terminal_layouts.get_mut(&key)
-                    && layout.resize(&split_id, index, split_side_px, delta_px, None)
+                    && layout.resize_view(
+                        visible.as_ref(),
+                        &split_id,
+                        index,
+                        split_side_px,
+                        delta_px,
+                        None,
+                    )
                 {
                     self.save();
                 }
@@ -8284,6 +8304,91 @@ mod panel_snapshot_tests {
                 .rect_px,
             smaller.rect_px
         );
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn worktree_grid_resize_focus_and_restore_preserve_hidden_pane_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = || Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut app = start();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+        let [first, main, last] = [0; 3].map(|_| {
+            app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            app.active_session.unwrap()
+        });
+        for id in [first, last] {
+            app.sessions
+                .iter_mut()
+                .find(|s| s.id == id)
+                .unwrap()
+                .worktree = Some(crate::workspace::SavedWorktree {
+                path: dir.path().join("feature"),
+                branch: "feature".into(),
+                base_branch: None,
+            });
+        }
+        let key = crate::terminal_layout::project_key(app.state.active_project);
+        app.state
+            .terminal_layouts
+            .get_mut(&key)
+            .unwrap()
+            .rebuild_ordered(&[first, main, last], &[3]);
+        let main_width = |app: &Tessel| {
+            app.state.terminal_layouts[&key]
+                .view_geometry(None)
+                .tiles
+                .into_iter()
+                .find(|t| t.leaf.id == main.to_string())
+                .unwrap()
+                .rect
+                .to_px(1200., 640., 4.)
+                .width
+        };
+        let initial = main_width(&app);
+        let snap = app.gpui_snapshot(1200., 640., 4.);
+        assert_eq!(
+            snap.tiles.iter().map(|t| t.session_id).collect::<Vec<_>>(),
+            [first, last]
+        );
+        assert_eq!(app.gpui_neighbor(FocusDir::Left), Some(first));
+        let div = &snap.dividers[0];
+        app.apply_gpui_action(GpuiAction::ResizeSplitDivider {
+            split_id: div.split_id.clone(),
+            dir: div.dir,
+            index: div.index,
+            split_side_px: div.split_side_px,
+            delta_px: 100.,
+        });
+        let updated = app.gpui_snapshot(1200., 640., 4.);
+        assert!(updated.tiles[0].rect_px.width > snap.tiles[0].rect_px.width + 90.);
+        assert!((main_width(&app) - initial).abs() < 0.001);
+        app.apply_gpui_action(GpuiAction::FocusSession(main));
+        let root = app.gpui_snapshot(1200., 640., 4.);
+        assert_eq!(root.tiles.len(), 1);
+        assert_eq!(root.tiles[0].session_id, main);
+        assert_eq!(root.tiles[0].rect_px.width, 1200.);
+        assert!(root.dividers.is_empty());
+        assert!(app.gpui_neighbor(FocusDir::Left).is_none());
+        drop(app);
+        let mut app = start();
+        assert_eq!(app.gpui_snapshot(1200., 640., 4.).tiles.len(), 1);
+        app.apply_gpui_action(GpuiAction::FocusSession(last));
+        let restored = app.gpui_snapshot(1200., 640., 4.);
+        assert_eq!(restored.tiles.len(), 2);
+        for (saved, loaded) in updated.tiles.iter().zip(&restored.tiles) {
+            assert_eq!(saved.session_id, loaded.session_id);
+            let a = saved.rect_px;
+            let b = loaded.rect_px;
+            for (x, y) in [
+                (a.left, b.left),
+                (a.top, b.top),
+                (a.width, b.width),
+                (a.height, b.height),
+            ] {
+                assert!((x - y).abs() < 1e-6, "restored bounds {a:?} and {b:?}");
+            }
+        }
     }
 
     #[cfg(all(windows, feature = "visual-test"))]
