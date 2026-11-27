@@ -1,3 +1,5 @@
+#[cfg(windows)]
+mod browser_tabs;
 mod notification_inbox;
 use crate::i18n::tr;
 use crate::{
@@ -858,6 +860,10 @@ pub struct Tessel {
     #[cfg(windows)]
     background_browsers: std::collections::HashMap<Option<u64>, (crate::browser::Browser, bool)>,
     #[cfg(windows)]
+    other_browser_pages: std::collections::BTreeMap<(Option<u64>, u64), crate::browser::Browser>,
+    #[cfg(windows)]
+    finishing_browser_pages: Vec<(Option<u64>, crate::browser::Browser)>,
+    #[cfg(windows)]
     pub(crate) browser: crate::browser::Browser,
     #[cfg(windows)]
     pub(crate) media_player: crate::files::playback::native::Player,
@@ -1117,6 +1123,10 @@ impl Tessel {
             browser_project,
             #[cfg(windows)]
             background_browsers: Default::default(),
+            #[cfg(windows)]
+            other_browser_pages: Default::default(),
+            #[cfg(windows)]
+            finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
             browser,
             #[cfg(windows)]
@@ -1771,11 +1781,8 @@ impl Tessel {
         if self.browser_project == target {
             return;
         }
-        self.browser.visible(false);
-        self.browser.close_popups();
-        self.browser.cancel_native_address_edit();
         let (next, open) = self.background_browsers.remove(&target).unwrap_or_default();
-        let previous = std::mem::replace(&mut self.browser, next);
+        let previous = self.replace_browser_page(next);
         let was_open = std::mem::replace(&mut self.browser_tab_open, open);
         if (was_open || previous.is_started())
             && self
@@ -1786,9 +1793,6 @@ impl Tessel {
                 .insert(self.browser_project, (previous, was_open));
         }
         self.browser_project = target;
-        self.browser.invalidate_address_input();
-        self.editor_page = crate::browser::editor_page::EditorPage::new(&self.browser);
-        self.show_agent_browser = false;
         if self.view == View::Browser && !open {
             self.view = View::Work;
         }
@@ -2602,10 +2606,17 @@ impl Tessel {
         self.finder.poll();
         #[cfg(windows)]
         {
-            self.browser.poll();
+            native_changed |= self.browser.poll();
             for (browser, _) in self.background_browsers.values_mut() {
                 browser.poll();
             }
+            for page in self.other_browser_pages.values_mut() {
+                native_changed |= page.poll();
+            }
+            self.finishing_browser_pages.retain_mut(|(_, page)| {
+                page.poll();
+                page.downloading()
+            });
             self.account.poll();
             if let Some(ws) = self.account.take_restored_workspace() {
                 self.restore_preview = Some(ws);
@@ -3647,7 +3658,7 @@ impl Tessel {
         let mut close_others = None;
         let mut close_all = false;
         #[cfg(windows)]
-        let mut close_browser = false;
+        let mut browser_click = None;
         egui::ScrollArea::horizontal()
             .id_salt("center-tabs")
             .show(ui, |ui| {
@@ -3672,15 +3683,15 @@ impl Tessel {
                         self.view = View::Work;
                     }
                     #[cfg(windows)]
-                    if self.browser_tab_open || self.view == View::Browser {
+                    for (id, title, hint) in self.browser_labels() {
                         let browser = crate::view_tabs::show(
                             ui,
                             crate::view_tabs::Tab {
-                                title: tr("Browser"),
+                                title: &title,
                                 file_path: None,
-                                hint: tr("Browser"),
+                                hint: &hint,
                                 kind: crate::view_tabs::Kind::Browser,
-                                selected: self.view == View::Browser,
+                                selected: self.view == View::Browser && id == self.browser.tab_id,
                                 dirty: false,
                                 closable: true,
                                 preview: false,
@@ -3689,9 +3700,9 @@ impl Tessel {
                             },
                         );
                         if browser.close {
-                            close_browser = true;
+                            browser_click = Some((id, true));
                         } else if browser.body.clicked() {
-                            self.view = View::Browser;
+                            browser_click = Some((id, false));
                         }
                     }
                     for (i, document) in self
@@ -3772,12 +3783,11 @@ impl Tessel {
                 });
             });
         #[cfg(windows)]
-        if close_browser {
-            self.browser_tab_open = false;
-            self.browser.close_popups();
-            if self.view == View::Browser {
-                self.view = View::Files;
-                self.reconcile_editor_selection();
+        if let Some((id, close)) = browser_click {
+            if close {
+                self.close_browser_page(id);
+            } else {
+                self.select_browser_page(id);
             }
         }
         if let Some(index) = keep_open
@@ -4638,11 +4648,10 @@ impl Tessel {
         }
         // Browser tabs.
         #[cfg(windows)]
-        if self.browser_tab_open {
-            let url = self.browser.active_url().unwrap_or_default().to_owned();
+        for (id, title, hint) in self.browser_labels() {
             commands.push(
-                PaletteCommand::new("view:browser", tr("Browser tabs"), tr("Browser"))
-                    .with_hint(url),
+                PaletteCommand::new(format!("view:browser:{id}"), tr("Browser tabs"), title)
+                    .with_hint(hint),
             );
         }
 
@@ -4823,7 +4832,7 @@ impl Tessel {
                 }
             }
             #[cfg(windows)]
-            "browser" => self.view = View::Browser,
+            "browser" => self.new_browser_page(),
             #[cfg(windows)]
             "vault" => {
                 self.overlay = Some(Overlay::Settings);
@@ -4897,6 +4906,14 @@ impl Tessel {
                     .and_then(|(pid, path)| pid.parse::<u64>().ok().map(|pid| (pid, path)))
                 {
                     self.open_worktree_from_palette(pid, path);
+                } else if let Some(page) = id
+                    .strip_prefix("view:browser:")
+                    .and_then(|id| id.parse::<u64>().ok())
+                {
+                    #[cfg(windows)]
+                    self.select_browser_page(page);
+                    #[cfg(not(windows))]
+                    let _ = page;
                 } else if id == "view:browser" {
                     #[cfg(windows)]
                     {
@@ -5552,7 +5569,13 @@ impl Tessel {
         };
         self.state.projects.remove(pos);
         #[cfg(windows)]
-        self.background_browsers.remove(&Some(id));
+        {
+            self.background_browsers.remove(&Some(id));
+            self.other_browser_pages
+                .retain(|(owner, _), _| *owner != Some(id));
+            self.finishing_browser_pages
+                .retain(|(owner, _)| *owner != Some(id));
+        }
         self.state.project_worktrees.remove(&id);
         self.state.project_groups.remove(&id);
         self.worktree_state.retain_projects(&self.state.projects);
@@ -6416,10 +6439,7 @@ impl Tessel {
                 self.new_session(Launch::ClaudeChat);
             }
             #[cfg(windows)]
-            "browser" => {
-                self.browser_tab_open = true;
-                self.view = View::Browser;
-            }
+            "browser" => self.new_browser_page(),
             other => {
                 if let Some(name) = other.strip_prefix("agent:")
                     && self
@@ -8537,6 +8557,8 @@ impl Tessel {
             let _ = self.agent_browsers.sync_presentation(None, None, false);
             self.agent_browsers = Default::default();
             self.background_browsers.clear();
+            self.other_browser_pages.clear();
+            self.finishing_browser_pages.clear();
             self.browser.visible(false);
             self.browser.close_popups();
             self.browser = Default::default();

@@ -24,6 +24,7 @@ use std::{
 use wry::{WebContext, WebView, WebViewBuilder};
 
 enum Event {
+    Title(String),
     Popup(String),
     Error(String),
     Navigation(String),
@@ -42,6 +43,8 @@ fn next_address_generation() -> u64 {
 }
 
 pub struct Browser {
+    pub(crate) tab_id: u64,
+    title: String,
     project_pages: project_page::Pages,
     trusted_preview_folders: std::collections::HashSet<html_trust::Folder>,
     address_generation: u64,
@@ -80,6 +83,8 @@ impl Default for Browser {
             .and_then(|d| d.download_dir().map(|p| p.join("Tessel Rust")))
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
         Self {
+            tab_id: next_address_generation(),
+            title: String::new(),
             project_pages: Default::default(),
             trusted_preview_folders: Default::default(),
             address_generation: next_address_generation(),
@@ -112,6 +117,30 @@ impl Default for Browser {
 }
 
 impl Browser {
+    pub(crate) fn tab_label(&self) -> (String, String) {
+        let pending = (self.view.is_none() && self.auto_start_pending && !self.address_editing)
+            .then(|| crate::view_tabs_browser_model::allowed_browser_url(&self.address, true))
+            .flatten();
+        let url = crate::view_tabs_browser_model::display_url(
+            pending.as_deref().unwrap_or(&self.committed_address),
+        );
+        let title = if !self.title.is_empty() {
+            self.title.clone()
+        } else if url.is_empty() {
+            crate::i18n::tr("Browser").to_owned()
+        } else {
+            crate::view_tabs_browser_model::host_of(&url)
+        };
+        let hint = if url.is_empty() { title.clone() } else { url };
+        (title, hint)
+    }
+
+    pub(crate) fn downloading(&self) -> bool {
+        self.downloads
+            .iter()
+            .any(|item| item.status == "Downloading")
+    }
+
     pub fn close_popups(&mut self) {
         self.popups.close_all();
     }
@@ -510,6 +539,7 @@ impl Browser {
         let start = self.sender.clone();
         let popup = self.sender.clone();
         let navigation = self.sender.clone();
+        let titles = self.sender.clone();
         let destination = self.destination.clone();
         let agent_root = self.agent_root.clone();
         let agent = agent_root.is_some();
@@ -531,6 +561,9 @@ impl Browser {
         let view = view
             .with_url("about:blank")
             .with_visible(false)
+            .with_document_title_changed_handler(move |title| {
+                let _ = titles.send(Event::Title(title));
+            })
             .with_devtools(false)
             .with_general_autofill_enabled(false)
             .with_navigation_handler(move |address| {
@@ -668,16 +701,20 @@ impl Browser {
                 .unwrap_or_default();
         }
     }
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
         self.popups.prune_closed();
         self.downloads = self.download_tracker.poll();
         while let Ok(event) = self.receiver.try_recv() {
+            changed = true;
             match event {
+                Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
                 Event::Navigation(address) => self.observe_navigation(address),
             }
         }
+        changed
     }
     pub(crate) fn open_remote_page(
         &mut self,
@@ -745,6 +782,8 @@ impl Browser {
         self.address_editing = false;
         self.address_generation = next_address_generation();
         self.address = url.to_owned();
+
+        self.title.clear();
         if self.view.is_some() {
             self.navigate();
         } else {
@@ -1091,6 +1130,64 @@ mod tests {
                 "owner did not receive the completed record"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn browser_tabs_in_one_project_keep_live_pages_and_titles() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::{hidden_parent, pump, wait_for};
+        let dir = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let site = dir.path().join("site");
+        std::fs::create_dir(&site).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(site.clone()));
+        let mut ids = Vec::new();
+        for name in ["first", "second", "third"] {
+            app.execute_palette_command(&eframe::egui::Context::default(), "browser");
+            ids.push(app.browser.tab_id);
+            assert_eq!(app.browser.tab_label().0, crate::i18n::tr("Browser"));
+            let path = site.join(format!("{name}.html"));
+            std::fs::write(&path, format!("<title>{name}</title><input id='draft'>")).unwrap();
+            let doc = crate::files::Document::open(&site, &path).unwrap();
+            app.browser
+                .create_with_profile(&parent, dir.path().join("owner-profile"))
+                .unwrap();
+            app.browser.open_project_page(&doc, false).unwrap();
+            wait_for(
+                app.browser.view.as_ref().unwrap(),
+                &format!(
+                    "document.title === '{name}' && (document.querySelector('#draft').value = '{name}!') === '{name}!'"
+                ),
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while app.browser.tab_label().0 != name {
+                assert!(std::time::Instant::now() < deadline);
+                pump();
+                app.poll_for_gpui();
+            }
+        }
+        let tabs = app.gpui_snapshot(960., 640., 4.).view_tabs;
+        assert_eq!(
+            tabs.iter()
+                .filter_map(|tab| tab.browser_id.map(|id| (id, tab.title.as_str())))
+                .collect::<Vec<_>>(),
+            [(ids[0], "first"), (ids[1], "second"), (ids[2], "third")]
+        );
+        app.apply_gpui_action(GpuiAction::SelectBrowserPage(ids[0]));
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.querySelector('#draft').value === 'first!'",
+        );
+        app.apply_gpui_action(GpuiAction::CloseBrowserPage(ids[2]));
+        assert_eq!(app.browser.tab_id, ids[0]);
+        app.apply_gpui_action(GpuiAction::CloseBrowserPage(ids[0]));
+        assert_eq!(app.browser.tab_id, ids[1]);
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.querySelector('#draft').value === 'second!'",
+        );
     }
 
     #[test]

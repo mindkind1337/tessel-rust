@@ -286,7 +286,7 @@ fn render_view_tabs_bar(
         let select = match kind {
             crate::view_tabs::Kind::Terminal => Some(GpuiAction::SelectWorkTab),
             #[cfg(windows)]
-            crate::view_tabs::Kind::Browser => Some(GpuiAction::SelectBrowserTab),
+            crate::view_tabs::Kind::Browser => tab.browser_id.map(GpuiAction::SelectBrowserPage),
             crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => guest_key
                 .clone()
                 .map(GpuiAction::SelectGuestDocument)
@@ -294,7 +294,7 @@ fn render_view_tabs_bar(
         };
         let close = match kind {
             #[cfg(windows)]
-            crate::view_tabs::Kind::Browser => Some(GpuiAction::CloseBrowserTab),
+            crate::view_tabs::Kind::Browser => tab.browser_id.map(GpuiAction::CloseBrowserPage),
             _ => guest_key
                 .clone()
                 .map(|key| {

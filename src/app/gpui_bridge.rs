@@ -326,6 +326,8 @@ pub(crate) struct GpuiSidebarSnapshot {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiViewTabItem {
+    #[cfg(windows)]
+    pub browser_id: Option<u64>,
     pub id: String,
     pub title: String,
     pub hint: String,
@@ -823,6 +825,10 @@ pub(crate) enum GpuiAction {
     KeepDocumentTab(usize),
     CloseDocumentTab(usize),
     SelectBrowserTab,
+    #[cfg(windows)]
+    SelectBrowserPage(u64),
+    #[cfg(windows)]
+    CloseBrowserPage(u64),
     CloseBrowserTab,
     ToggleFloatingTerminal,
     RestartFloatingTerminal,
@@ -1637,6 +1643,10 @@ impl Tessel {
             browser_project,
             #[cfg(windows)]
             background_browsers: Default::default(),
+            #[cfg(windows)]
+            other_browser_pages: Default::default(),
+            #[cfg(windows)]
+            finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
             browser,
             #[cfg(windows)]
@@ -3665,6 +3675,8 @@ impl Tessel {
         let (labels, guest_labels) = self.document_tab_labels(&paths);
         let mut view_tabs = Vec::with_capacity(self.documents.len() + 2);
         view_tabs.push(GpuiViewTabItem {
+            #[cfg(windows)]
+            browser_id: None,
             id: "work".into(),
             title: tr("Terminal").into(),
             hint: tr("Terminal").into(),
@@ -3678,15 +3690,17 @@ impl Tessel {
             deleted: false,
         });
         #[cfg(windows)]
-        if self.browser_tab_open || self.view == View::Browser {
+        for (id, title, hint) in self.browser_labels() {
             view_tabs.push(GpuiViewTabItem {
-                id: "browser".into(),
-                title: tr("Browser").into(),
-                hint: tr("Browser").into(),
+                #[cfg(windows)]
+                browser_id: Some(id),
+                id: format!("browser:{id}"),
+                title,
+                hint,
                 kind: crate::view_tabs::Kind::Browser,
                 doc_index: None,
                 guest_key: None,
-                selected: self.view == View::Browser,
+                selected: self.view == View::Browser && self.browser.tab_id == id,
                 dirty: false,
                 closable: true,
                 preview: false,
@@ -3706,6 +3720,8 @@ impl Tessel {
                 crate::view_tabs::Kind::Editor
             };
             view_tabs.push(GpuiViewTabItem {
+                #[cfg(windows)]
+                browser_id: None,
                 id: format!("doc:{i}"),
                 title,
                 hint: paths[i].clone(),
@@ -3722,6 +3738,8 @@ impl Tessel {
 
         for (key, (title, hint)) in self.share.workspace_tabs().iter().zip(guest_labels) {
             view_tabs.push(GpuiViewTabItem {
+                #[cfg(windows)]
+                browser_id: None,
                 id: format!(
                     "guest:{}:{}:{}",
                     key.scope.session, key.scope.project, key.path
@@ -5595,19 +5613,13 @@ impl Tessel {
                     self.view = View::Browser;
                 }
             }
+            #[cfg(windows)]
+            GpuiAction::SelectBrowserPage(id) => self.select_browser_page(id),
+            #[cfg(windows)]
+            GpuiAction::CloseBrowserPage(id) => self.close_browser_page(id),
             GpuiAction::CloseBrowserTab => {
                 #[cfg(windows)]
-                {
-                    self.browser.cancel_native_address_edit();
-                    self.browser.invalidate_address_input();
-                    self.browser_tab_open = false;
-                    self.browser.close_popups();
-                    self.browser.visible(false);
-                    if self.view == View::Browser {
-                        self.view = View::Files;
-                        self.reconcile_editor_selection();
-                    }
-                }
+                self.close_browser_page(self.browser.tab_id);
             }
             GpuiAction::ToggleFloatingTerminal => {
                 self.toggle_floating_headless();
@@ -6317,6 +6329,12 @@ impl Tessel {
                 {
                     if !trusted {
                         self.browser.revoke_preview_scripts(&folder);
+                        for page in self.other_browser_pages.values_mut() {
+                            page.revoke_preview_scripts(&folder);
+                        }
+                        for (_, page) in &mut self.finishing_browser_pages {
+                            page.revoke_preview_scripts(&folder);
+                        }
                         for (browser, _) in self.background_browsers.values_mut() {
                             browser.revoke_preview_scripts(&folder);
                         }
