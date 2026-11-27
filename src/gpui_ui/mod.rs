@@ -2089,6 +2089,7 @@ impl Render for TesselGpuiRoot {
                 |el, banner| el.child(banner),
             )
             .child(shell::render_workspace_body(
+                &self.image_menu_item,
                 &snapshot,
                 &self.view_tabs_focus,
                 &self.remote_inputs,
@@ -2117,6 +2118,7 @@ impl Render for TesselGpuiRoot {
                 |el, bar| el.child(bar),
             )
             .children(modals_view::render_active_modals_and_popovers(
+                &self.image_menu_item,
                 &snapshot,
                 &self.search_inputs,
                 &self.modal_query_input,

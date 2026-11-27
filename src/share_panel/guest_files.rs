@@ -3,7 +3,7 @@ use crate::guest_file_editor::Key as FileKey;
 #[derive(Clone, Debug)]
 pub(crate) struct GuestFilesView {
     pub image: Option<(FileKey, std::sync::Arc<gpui::RenderImage>)>,
-    pub image_menu: bool,
+    pub image_menu: Option<(f32, f32, f32)>,
     pub download_menu: Option<FileKey>,
     pub directory: String,
     pub tabs: Vec<FileKey>,

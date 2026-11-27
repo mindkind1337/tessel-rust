@@ -15,7 +15,7 @@ pub(super) struct ImagePreview {
     image: Option<Arc<egui::ColorImage>>,
     native: OnceLock<Arc<gpui::RenderImage>>,
     pub texture: Option<egui::TextureHandle>,
-    pub menu: bool,
+    pub menu: Option<(f32, f32, f32)>, // Pointer x/y and window height at opening.
     pub failed: bool,
 }
 impl ImagePreview {

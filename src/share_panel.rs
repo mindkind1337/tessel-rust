@@ -3441,7 +3441,7 @@ pub(crate) enum ShareGpuiAction {
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
     GuestFileMenu(crate::guest_file_editor::Key),
-    GuestImageMenu(crate::guest_file_editor::Key),
+    GuestImageMenu(crate::guest_file_editor::Key, Option<(f32, f32, f32)>),
     GuestDownload(crate::guest_file_editor::Key),
     GuestOpenFile(crate::guest_file_editor::Key),
     GuestSelectTab(crate::guest_file_editor::Key),
@@ -3716,14 +3716,14 @@ impl SharePanel {
                         (self.guest_download.menu.as_ref() != Some(&key)).then_some(key);
                 }
             }
-            ShareGpuiAction::GuestImageMenu(key) => {
+            ShareGpuiAction::GuestImageMenu(key, position) => {
                 self.poll_guest_scope();
                 if self.guest_image.key.as_ref() == Some(&key) {
-                    self.guest_image.menu = true;
+                    self.guest_image.menu = position;
                 }
             }
             ShareGpuiAction::GuestDownload(key) => {
-                self.guest_image.menu = false;
+                self.guest_image.menu = None;
                 self.choose_guest_download(&key);
             }
 

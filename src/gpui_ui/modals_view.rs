@@ -37,6 +37,7 @@ fn rgb_tuple((r, g, b): (u8, u8, u8)) -> Rgba {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_active_modals_and_popovers(
+    image_focus: &gpui::FocusHandle,
     snapshot: &GpuiWorkspaceSnapshot,
     search_inputs: &super::search_inputs::Inputs,
     modal_query: &super::modal_query_input::Input,
@@ -82,6 +83,7 @@ pub(crate) fn render_active_modals_and_popovers(
     }
     if m.share_modal_open {
         layers.push(render_share_modal(
+            image_focus,
             snapshot,
             modal_query,
             focus_input,
@@ -865,6 +867,7 @@ fn render_help_modal(
 // ---------------------------------------------------------------------------
 
 fn render_share_modal(
+    image_focus: &gpui::FocusHandle,
     snapshot: &GpuiWorkspaceSnapshot,
     modal_query: &super::modal_query_input::Input,
     focus_input: FocusInputTarget,
@@ -1274,7 +1277,16 @@ fn render_share_modal(
                             }
                         }
                     }
-                    content = render_guest_document(content, files, french, tokens, None, None, cx);
+                    content = render_guest_document(
+                        image_focus,
+                        content,
+                        files,
+                        french,
+                        tokens,
+                        None,
+                        None,
+                        cx,
+                    );
                     return el.child(content);
                 }
                 content = content.child(projects).child(
@@ -3771,7 +3783,9 @@ fn modal_header(
         .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_guest_document(
+    image_focus: &gpui::FocusHandle,
     mut content: gpui::Stateful<gpui::Div>,
     files: &crate::share_panel::guest_files::GuestFilesView,
     french: bool,
@@ -3865,7 +3879,7 @@ pub(super) fn render_guest_document(
         let scale = (width / size.width.0 as f32)
             .min(height / size.height.0 as f32)
             .min(1.);
-        let action = GpuiAction::Share(ShareGpuiAction::GuestImageMenu(key.clone()));
+        let image_key = key.clone();
         content = content
             .child(key.path.clone())
             .child(
@@ -3885,27 +3899,27 @@ pub(super) fn render_guest_document(
                     .h(px(scale * size.height.0 as f32))
                     .on_mouse_down(
                         gpui::MouseButton::Right,
-                        cx.listener(move |root, _, _, cx| {
+                        cx.listener(move |root, event: &gpui::MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            root.dispatch_action(action.clone(), cx);
+                            root.dispatch_action(
+                                GpuiAction::Share(ShareGpuiAction::GuestImageMenu(
+                                    image_key.clone(),
+                                    Some((
+                                        event.position.x.into(),
+                                        event.position.y.into(),
+                                        window.viewport_size().height.into(),
+                                    )),
+                                )),
+                                cx,
+                            );
+                            window.focus(&root.image_menu_item, cx);
                         }),
                     )
                     .child(gpui::img(pixels.clone()).size_full()),
             );
-        if files.image_menu {
-            content = content.child(modal_btn(
-                "guest-image-download",
-                if french {
-                    "Télécharger l’original…"
-                } else {
-                    "Download original…"
-                }
-                .into(),
-                false,
-                tokens,
-                GpuiAction::Share(ShareGpuiAction::GuestDownload(key.clone())),
-                cx,
-            ));
+        if let Some((x, y, height)) = files.image_menu {
+            let menu = super::image_menu::Menu::guest(key, (x, y), french);
+            content = menu.attach(content, image_focus, height, tokens, cx);
         }
     }
     if let Some(doc) = &files.document {

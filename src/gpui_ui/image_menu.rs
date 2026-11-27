@@ -21,6 +21,23 @@ pub(super) struct Menu {
 }
 
 impl Menu {
+    pub fn guest(key: &crate::guest_file_editor::Key, position: (f32, f32), french: bool) -> Self {
+        use crate::share_panel::ShareGpuiAction;
+        Self {
+            position,
+            menu_id: "guest-image-menu",
+            item_id: "guest-image-download",
+            enabled: true,
+            label: if french {
+                "Télécharger l’original…"
+            } else {
+                "Download original…"
+            },
+            close: GpuiAction::Share(ShareGpuiAction::GuestImageMenu(key.clone(), None)),
+            activate: GpuiAction::Share(ShareGpuiAction::GuestDownload(key.clone())),
+        }
+    }
+
     pub fn current(s: &GpuiWorkspaceSnapshot, modal: bool) -> Option<Self> {
         if modal || s.floating.open {
             return None;

@@ -365,8 +365,10 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
                     if selector == "guest-image-download" {
                         crate::download_name::TEST_DOWNLOAD_DESTINATION
                             .with(|next| next.set(Some(saved.clone())));
+                        cx.simulate_keystrokes(view.into(), "down enter");
+                    } else {
+                        visual.simulate_click(rect.center(), Default::default());
                     }
-                    visual.simulate_click(rect.center(), Default::default());
                 }
                 break;
             }

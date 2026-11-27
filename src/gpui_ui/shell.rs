@@ -28,6 +28,7 @@ use gpui::{
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_workspace_body(
+    image_focus: &gpui::FocusHandle,
     snapshot: &GpuiWorkspaceSnapshot,
     tabs_focus: &gpui::FocusHandle,
     remote_inputs: &super::remote_inputs::Inputs,
@@ -68,6 +69,7 @@ pub(crate) fn render_workspace_body(
         })
         .when(!hide_center, |el| {
             el.child(render_center_column(
+                image_focus,
                 snapshot,
                 tabs_focus,
                 remote_inputs,
@@ -114,6 +116,7 @@ pub(crate) fn render_workspace_body(
 
 #[allow(clippy::too_many_arguments)]
 fn render_center_column(
+    image_focus: &gpui::FocusHandle,
     snapshot: &GpuiWorkspaceSnapshot,
     tabs_focus: &gpui::FocusHandle,
     remote_inputs: &super::remote_inputs::Inputs,
@@ -245,6 +248,7 @@ fn render_center_column(
                             .overflow_y_scroll();
                         if let Some(files) = &snapshot.modals.share.guest_files {
                             super::modals_view::render_guest_document(
+                                image_focus,
                                 body,
                                 files,
                                 snapshot.french,
