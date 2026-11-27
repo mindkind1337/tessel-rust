@@ -3037,49 +3037,76 @@ fn render_ssh_page(
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .child(section_title(
-            if french {
-                "Hôtes SSH distants"
-            } else {
-                "Remote SSH Hosts"
-            },
-            tokens,
-        ))
-        .child(
-            div()
-                .flex()
-                .gap(px(6.0))
-                .child(div().flex_1().child(render_focus_input_box(
-                    "gpui-ssh-alias",
-                    FocusInputTarget::SshAlias,
-                    focus_input == FocusInputTarget::SshAlias,
-                    &s.new_ssh_alias,
-                    "user@host or SSH config alias…",
+    let mut col = div().flex().flex_col().gap(px(8.0)).child(section_title(
+        if french {
+            "Hôtes SSH distants"
+        } else {
+            "Remote SSH Hosts"
+        },
+        tokens,
+    ));
+    let mut form = Some(
+        div()
+            .flex()
+            .gap(px(6.0))
+            .child(div().flex_1().child(render_focus_input_box(
+                "gpui-ssh-alias",
+                FocusInputTarget::SshAlias,
+                focus_input == FocusInputTarget::SshAlias,
+                &s.new_ssh_alias,
+                if french {
+                    "utilisateur@hôte ou alias SSH…"
+                } else {
+                    "user@host or SSH config alias…"
+                },
+                tokens,
+                cx,
+            )))
+            .child(div().flex_1().child(render_focus_input_box(
+                "gpui-ssh-folder",
+                FocusInputTarget::SshFolder,
+                focus_input == FocusInputTarget::SshFolder,
+                &s.new_ssh_folder,
+                if french {
+                    "Dossier distant (~)…"
+                } else {
+                    "Remote folder (~)…"
+                },
+                tokens,
+                cx,
+            )))
+            .child(setting_btn(
+                "gpui-ssh-add",
+                match (s.editing_ssh.is_some(), french) {
+                    (true, true) => "Enregistrer",
+                    (true, false) => "Save",
+                    (false, true) => "Ajouter",
+                    (false, false) => "Add Host",
+                }
+                .to_owned(),
+                true,
+                tokens,
+                GpuiAction::SaveSshHostFromDraft,
+                cx,
+            ))
+            .when(s.editing_ssh.is_some(), |row| {
+                row.child(setting_btn(
+                    "gpui-ssh-cancel",
+                    if french { "Annuler" } else { "Cancel" }.into(),
+                    false,
                     tokens,
+                    GpuiAction::CancelSshEdit,
                     cx,
-                )))
-                .child(div().flex_1().child(render_focus_input_box(
-                    "gpui-ssh-folder",
-                    FocusInputTarget::SshFolder,
-                    focus_input == FocusInputTarget::SshFolder,
-                    &s.new_ssh_folder,
-                    "Remote folder (~)…",
-                    tokens,
-                    cx,
-                )))
-                .child(setting_btn(
-                    "gpui-ssh-add",
-                    "Add Host".to_owned(),
-                    true,
-                    tokens,
-                    GpuiAction::AddSshHostFromDraft,
-                    cx,
-                )),
-        );
+                ))
+            }),
+    );
+
+    let edited_row = s.editing_ssh.as_ref().and_then(|(index, expected)| {
+        (s.ssh_hosts.get(*index) == Some(expected)).then_some(*index)
+    });
+    if edited_row.is_none() {
+        col = col.children(form.take());
+    }
 
     if s.importing_ssh {
         col = col.child(div().child(if french {
@@ -3155,6 +3182,10 @@ fn render_ssh_page(
                             )
                             .into_any_element()
                         })
+                        .child(setting_btn(
+                            format!("gpui-ssh-edit-{idx}"),
+                            if french { "Modifier" } else { "Edit" }.into(), false, tokens, GpuiAction::BeginSshEdit(idx, host.clone()), cx,
+                        ))
                         .child(setting_btn(
                             format!("gpui-ssh-conn-{idx}"),
                             "Open Terminal".to_owned(),
@@ -3236,6 +3267,9 @@ fn render_ssh_page(
                         }),
                 ),
         );
+        if edited_row == Some(idx) {
+            col = col.children(form.take());
+        }
     }
 
     col.into_any_element()
@@ -3950,7 +3984,10 @@ fn setting_btn(
 ) -> AnyElement {
     let shared_id: SharedString = id.into();
     div()
-        .id(shared_id)
+        .id(shared_id.clone())
+        .debug_selector(move || shared_id.to_string())
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
         .px(px(9.0))
         .py(px(4.5))
         .rounded(px(tokens.radius_px))

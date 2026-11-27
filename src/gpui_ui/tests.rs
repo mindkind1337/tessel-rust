@@ -1426,6 +1426,34 @@ fn settings_search_edits_matching_rows_across_pages(cx: &mut gpui::TestAppContex
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn ssh_settings_mouse_edit_and_cancel_restore_add_form(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().into()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::OpenSettingsPage("ssh".into()));
+        root.app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "test-box".into(),
+            folder: "/srv".into(),
+        });
+        root.app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        root
+    });
+    cx.simulate_window_resize(view.into(), gpui::size(gpui::px(1280.), gpui::px(800.)));
+    cx.refresh().unwrap();
+    for selector in ["gpui-ssh-edit-0", "gpui-ssh-cancel"] {
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(point, Default::default());
+        cx.refresh().unwrap();
+    }
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("gpui-ssh-add").is_some());
+    assert!(visual.debug_bounds("gpui-ssh-cancel").is_none());
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn settings_workspace_resizes_below_toolbar_and_returns_to_app(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let view = cx.add_window(|_, cx| {
@@ -2660,7 +2688,7 @@ fn gpui_settings_twenty_two_pages_and_preferences_roundtrip() {
         alias: "prod-box".into(),
         folder: "/srv/app".into(),
     });
-    app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+    app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
 
     app.apply_gpui_action(GpuiAction::SetCustomAgentDraft {
         name: "My Bot".into(),

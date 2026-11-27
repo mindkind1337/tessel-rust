@@ -1034,7 +1034,7 @@ impl TesselGpuiRoot {
             return; // The scoped native Dismiss action handles IME and closing.
         }
         if key == "escape" {
-            if self.app.gpui_escape_clears_modal_search() {
+            if self.app.gpui_dismiss_inner_overlay() {
                 cx.notify();
                 return;
             }

@@ -97,6 +97,7 @@ pub(crate) struct GpuiExtraUiState {
     pub task_board: crate::native_task_board::State,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
+    editing_ssh: Option<(usize, crate::workspace::Host)>,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
     pub new_custom_agent_accent: usize,
@@ -146,6 +147,7 @@ impl Default for GpuiExtraUiState {
             task_board: Default::default(),
             new_ssh_alias: String::new(),
             new_ssh_folder: String::new(),
+            editing_ssh: None,
             new_custom_agent_name: String::new(),
             new_custom_agent_cmd: String::new(),
             new_custom_agent_accent: 0,
@@ -649,6 +651,7 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub ssh_hosts: Vec<crate::workspace::Host>,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
+    pub editing_ssh: Option<(usize, crate::workspace::Host)>,
     pub builtin_agents: Vec<BuiltinAgentSettingRow>,
     pub builtin_agent_details: Vec<GpuiBuiltinAgentDetail>,
     pub agent_folder_trust: bool,
@@ -1290,7 +1293,9 @@ pub(crate) enum GpuiAction {
     },
     ImportSshConfig,
     TestSshHost(String),
-    AddSshHostFromDraft,
+    BeginSshEdit(usize, crate::workspace::Host),
+    CancelSshEdit,
+    SaveSshHostFromDraft,
     RemoveSshHost(usize, crate::workspace::Host),
     LaunchSshHost(usize),
     ToggleSshHostPersistentSessions(usize),
@@ -2212,7 +2217,14 @@ impl Tessel {
         Some(((self.gpui_extra.modal_input_generation, target), text))
     }
 
-    pub(crate) fn gpui_escape_clears_modal_search(&mut self) -> bool {
+    pub(crate) fn gpui_dismiss_inner_overlay(&mut self) -> bool {
+        if self.overlay == Some(Overlay::Settings)
+            && self.current_settings_page_id() == "ssh"
+            && self.gpui_extra.editing_ssh.is_some()
+        {
+            self.apply_gpui_action(GpuiAction::CancelSshEdit);
+            return true;
+        }
         if self.overlay == Some(Overlay::Help) && !self.gpui_extra.help_query.is_empty() {
             self.gpui_extra.help_query.clear();
             return true;
@@ -3351,6 +3363,10 @@ impl Tessel {
                 }
             }
             GpuiFocusTarget::SshAlias => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+                    return true;
+                }
                 let mut cur = self.gpui_extra.new_ssh_alias.clone();
                 if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
                     let folder = self.gpui_extra.new_ssh_folder.clone();
@@ -3362,7 +3378,7 @@ impl Tessel {
             }
             GpuiFocusTarget::SshFolder => {
                 if lower == "enter" {
-                    self.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+                    self.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
                     return true;
                 }
                 let mut cur = self.gpui_extra.new_ssh_folder.clone();
@@ -5241,6 +5257,7 @@ impl Tessel {
             ssh_hosts: self.state.hosts.clone(),
             new_ssh_alias: self.gpui_extra.new_ssh_alias.clone(),
             new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
+            editing_ssh: self.gpui_extra.editing_ssh.clone(),
             builtin_agents,
             builtin_agent_details,
             agent_folder_trust: self.state.agent_folder_trust,
@@ -7846,16 +7863,36 @@ impl Tessel {
             }
             GpuiAction::ImportSshConfig => self.import_ssh_config(),
             GpuiAction::TestSshHost(alias) => self.test_ssh_host(alias),
-            GpuiAction::AddSshHostFromDraft => {
+            GpuiAction::BeginSshEdit(index, expected) => {
+                if self.state.hosts.get(index) == Some(&expected) {
+                    self.gpui_extra.new_ssh_alias.clone_from(&expected.alias);
+                    self.gpui_extra.new_ssh_folder.clone_from(&expected.folder);
+                    self.gpui_extra.editing_ssh = Some((index, expected));
+                    self.host_notice = None;
+                } else {
+                    self.host_notice = Some((
+                        tr("This SSH host changed; reopen its settings.").into(),
+                        true,
+                    ));
+                }
+            }
+            GpuiAction::CancelSshEdit => {
+                self.gpui_extra.editing_ssh = None;
+                self.gpui_extra.new_ssh_alias.clear();
+                self.gpui_extra.new_ssh_folder.clear();
+                self.host_notice = None;
+            }
+            GpuiAction::SaveSshHostFromDraft => {
+                let original = self.gpui_extra.editing_ssh.clone();
+                let expected = original.as_ref().map(|(index, host)| (*index, host));
                 let host = crate::workspace::Host {
                     alias: self.gpui_extra.new_ssh_alias.trim().to_owned(),
                     folder: self.gpui_extra.new_ssh_folder.trim().to_owned(),
-                    ..Default::default()
+                    ..expected.map(|(_, host)| host.clone()).unwrap_or_default()
                 };
-                match self.change_hosts(|hosts| crate::host_actions::save(hosts, None, host)) {
+                match self.change_hosts(|hosts| crate::host_actions::save(hosts, expected, host)) {
                     Ok(_) => {
-                        self.gpui_extra.new_ssh_alias.clear();
-                        self.gpui_extra.new_ssh_folder.clear();
+                        self.apply_gpui_action(GpuiAction::CancelSshEdit);
                         self.host_notice = Some((tr("SSH target saved").into(), false));
                     }
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
@@ -11561,6 +11598,68 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn ssh_settings_edit_preserves_options_and_handles_cancel_and_stale_rows() {
+        use crate::workspace::Host;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        let original = Host {
+            alias: "old".into(),
+            folder: "/old".into(),
+            persistent_sessions: Some(false),
+            host_daemon: false,
+            ..Default::default()
+        };
+        app.change_hosts(|hosts| crate::host_actions::save(hosts, None, original))
+            .unwrap();
+        let original = app.state.hosts[0].clone();
+        let edit = || GpuiAction::BeginSshEdit(0, original.clone());
+        let draft = || GpuiAction::SetSshDraft {
+            alias: "new".into(),
+            folder: "/new".into(),
+        };
+        app.apply_gpui_action(edit());
+        assert_eq!(app.gpui_extra.new_ssh_alias, "old");
+        assert_eq!(app.gpui_extra.new_ssh_folder, "/old");
+        app.apply_gpui_action(draft());
+        app.apply_gpui_action(GpuiAction::CancelSshEdit);
+        assert!(app.gpui_extra.editing_ssh.is_none());
+        assert_eq!(app.state.hosts[0], original);
+        app.apply_gpui_action(edit());
+        app.apply_gpui_action(draft());
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        let updated = app.state.hosts[0].clone();
+        assert_eq!(updated.alias, "new");
+        assert_eq!(updated.folder, "/new");
+        assert_eq!(updated.target_id, original.target_id);
+        assert_eq!(updated.persistent_sessions, Some(false));
+        assert!(!updated.host_daemon);
+        app.apply_gpui_action(GpuiAction::BeginSshEdit(0, updated.clone()));
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "unsaved".into(),
+            folder: String::new(),
+        });
+        app.change_hosts(|hosts| {
+            crate::host_actions::save(
+                hosts,
+                Some((0, &updated)),
+                Host {
+                    alias: "external".into(),
+                    ..updated.clone()
+                },
+            )
+        })
+        .unwrap();
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        assert!(matches!(app.host_notice, Some((_, true))));
+        assert_eq!(app.gpui_extra.new_ssh_alias, "unsaved");
+        drop(app);
+        let reopened = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(reopened.state.hosts.len(), 1);
+        assert_eq!(reopened.state.hosts[0].alias, "external");
+    }
+
+    #[test]
     fn ssh_settings_confirmed_removal_checks_the_displayed_target_before_saving() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
@@ -11570,7 +11669,7 @@ mod panel_snapshot_tests {
                 alias: alias.into(),
                 folder: String::new(),
             });
-            app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+            app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
         }
         let first = app.state.hosts[0].clone();
         app.apply_gpui_action(GpuiAction::RemoveSshHost(1, first.clone()));
@@ -11597,13 +11696,13 @@ mod panel_snapshot_tests {
             folder: folder.into(),
         };
         app.apply_gpui_action(set("lab", ""));
-        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
         assert_eq!(app.state.hosts.len(), 1);
         assert!(app.state.hosts[0].folder.is_empty());
         assert!(app.gpui_extra.new_ssh_alias.is_empty());
         for (alias, folder) in [("lab", ""), ("other", "../outside")] {
             app.apply_gpui_action(set(alias, folder));
-            app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+            app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
             assert_eq!(app.state.hosts.len(), 1);
             assert_eq!(app.gpui_extra.new_ssh_folder, folder);
             assert_eq!(app.gpui_extra.new_ssh_alias, alias);
@@ -11611,7 +11710,7 @@ mod panel_snapshot_tests {
         }
         app.store = None;
         app.apply_gpui_action(set("second", "/srv"));
-        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
         assert_eq!(app.state.hosts.len(), 1);
         assert_eq!(app.gpui_extra.new_ssh_alias, "second");
         drop(app);
@@ -11638,7 +11737,7 @@ mod panel_snapshot_tests {
             alias: "lab".into(),
             folder: "/srv/app".into(),
         });
-        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
         app.start_ssh_import(dir.path().into());
         // A second click must not start a scan of the real user's home.
         app.apply_gpui_action(GpuiAction::ImportSshConfig);
