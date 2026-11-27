@@ -1389,7 +1389,7 @@ impl ExplorerTree {
         } else {
             None
         };
-        let mut clicked_row: Option<(usize, PathBuf, bool)> = None;
+        let mut clicked_row: Option<(String, bool)> = None;
         let row_count = visible_indices.len();
 
         let mut tree_scroll = egui::ScrollArea::vertical();
@@ -1508,13 +1508,42 @@ impl ExplorerTree {
                     } else {
                         ui.visuals().text_color()
                     };
-                    painter.text(
-                        egui::pos2(pad_x + EXPLORER_TWISTIE + 2.0, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        &display_name,
-                        font_id.clone(),
-                        text_color,
-                    );
+                    let mut label_pos = egui::pos2(pad_x + EXPLORER_TWISTIE + 2.0, rect.center().y);
+                    let mut clicked_key = &row.path;
+                    for (i, part) in row.chain.iter().enumerate() {
+                        if i > 0 {
+                            label_pos.x = painter
+                                .text(
+                                    label_pos,
+                                    egui::Align2::LEFT_CENTER,
+                                    "/",
+                                    font_id.clone(),
+                                    text_color,
+                                )
+                                .right();
+                        }
+                        let color = if row.chain.len() > 1
+                            && self.selected_key.as_ref() == Some(&part.path)
+                        {
+                            ui.visuals().hyperlink_color
+                        } else {
+                            text_color
+                        };
+                        let bounds = painter.text(
+                            label_pos,
+                            egui::Align2::LEFT_CENTER,
+                            &part.name,
+                            font_id.clone(),
+                            color,
+                        );
+                        if response
+                            .interact_pointer_pos()
+                            .is_some_and(|pos| bounds.contains(pos))
+                        {
+                            clicked_key = &part.path;
+                        }
+                        label_pos.x = bounds.right();
+                    }
 
                     if let Some(ch) = git_badge {
                         let badge_col = git_badge_color(ch);
@@ -1581,63 +1610,16 @@ impl ExplorerTree {
                         }
                     });
 
-                    if response.double_clicked() && !row.dir {
-                        clicked_row = Some((idx, row_path, true));
-                    } else if response.clicked() {
-                        clicked_row = Some((idx, row_path, false));
+                    if response.clicked() {
+                        clicked_row =
+                            Some((clicked_key.clone(), response.double_clicked() && !row.dir));
                     }
                 }
             });
 
-        if let Some((idx, row_path, pinned)) = clicked_row {
-            let row = self.cached_tree.rows[idx].clone();
-            self.selected_hit = None;
-            self.selected_key = Some(row.path.clone());
-            if row.dir {
-                let paths = toggled_paths(&row);
-                let new_open_count = paths
-                    .iter()
-                    .filter(|p| !self.open_dirs.contains(p.as_str()))
-                    .count();
-                let needs_fetch =
-                    !self.dirs.contains_key(&row.path) && !self.queued_keys.contains(&row.path);
-                let can_fetch = !needs_fetch
-                    || (self.dirs.len()
-                        + self.queued_keys.len()
-                        + usize::from(self.in_flight.is_some())
-                        < self.limits.max_cached_dirs);
-                if row.open {
-                    for p in paths {
-                        self.open_dirs.remove(&p);
-                        self.restore_open.remove(&p);
-                    }
-                    self.rows_dirty = true;
-                    self.save_current_expanded();
-                } else if row.depth.saturating_add(row.chain.len()) <= self.limits.max_depth
-                    && self.open_dirs.len().saturating_add(new_open_count)
-                        <= self.limits.max_cached_dirs
-                    && can_fetch
-                {
-                    let next_depth = row.depth.saturating_add(row.chain.len());
-                    for p in paths {
-                        self.open_dirs.insert(p);
-                    }
-                    self.rows_dirty = true;
-                    self.save_current_expanded();
-                    if !self.dirs.contains_key(&row.path) {
-                        self.enqueue_dir(row_path, next_depth);
-                        self.pump_worker();
-                    }
-                } else {
-                    self.truncated = true;
-                }
-            } else if pinned {
-                emitted = Some(TreeAction::OpenPinnedFile(row_path));
-            } else {
-                emitted = Some(TreeAction::OpenFile(row_path));
-            }
+        if let Some((key, pinned)) = clicked_row {
+            emitted = self.activate_tree_path(&key, pinned);
         }
-
         emitted
     }
 
@@ -1780,7 +1762,7 @@ impl ExplorerTree {
                     {
                         let key = row.path.clone();
                         let selected = self.selected_key.clone();
-                        let action = self.gpui_click_row(&key, false);
+                        let action = self.activate_tree_path(&key, false);
                         self.selected_key = selected;
                         return action;
                     }
@@ -1812,7 +1794,11 @@ impl ExplorerTree {
                 .clone();
             return self.choose_name_result(hit, pinned);
         }
-        let idx = self.cached_tree.rows.iter().position(|r| r.path == key)?;
+        self.activate_tree_path(key, pinned)
+    }
+
+    fn activate_tree_path(&mut self, key: &str, pinned: bool) -> Option<TreeAction> {
+        let idx = *self.cached_tree.index.get(key)?;
         let row = self.cached_tree.rows[idx].clone();
         let row_path = self
             .path_by_key
@@ -1820,7 +1806,7 @@ impl ExplorerTree {
             .cloned()
             .unwrap_or_else(|| PathBuf::from(&row.path));
         self.selected_hit = None;
-        self.selected_key = Some(row.path.clone());
+        self.selected_key = Some(key.to_owned());
         if row.dir {
             let paths = toggled_paths(&row);
             let new_open_count = paths
@@ -1964,6 +1950,7 @@ impl ExplorerTree {
                     .map(|hit| {
                         let key = norm_tree_key(&hit.path);
                         ExplorerGpuiRow {
+                            compact_segments: Vec::new(),
                             selected_segment: None,
                             selected: self.selected_key.as_ref() == Some(&key),
                             active_doc: active_key.as_ref() == Some(&key),
@@ -2038,16 +2025,18 @@ impl ExplorerTree {
                     row.name.clone()
                 };
                 ExplorerGpuiRow {
-                    selected_segment: if row.chain.len() > 1 {
-                        let mut offset = 0;
-                        row.chain.iter().find_map(|part| {
-                            let span = offset..offset + part.name.len();
-                            offset = span.end + 1;
-                            (Some(&part.path) == self.selected_key.as_ref()).then_some(span)
-                        })
+                    compact_segments: if row.chain.len() > 1 {
+                        row.chain
+                            .iter()
+                            .map(|part| (part.name.clone(), part.path.clone()))
+                            .collect()
                     } else {
-                        None
+                        Vec::new()
                     },
+                    selected_segment: row
+                        .chain
+                        .iter()
+                        .position(|part| Some(&part.path) == self.selected_key.as_ref()),
                     key: row.path.clone(),
                     path: row_path,
                     name: row.name.clone(),
@@ -2089,7 +2078,8 @@ impl ExplorerTree {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct ExplorerGpuiRow {
-    pub selected_segment: Option<std::ops::Range<usize>>,
+    pub compact_segments: Vec<(String, String)>,
+    pub selected_segment: Option<usize>,
     pub key: String,
     pub path: PathBuf,
     pub name: String,
@@ -2186,7 +2176,7 @@ mod native_filter_tests {
         );
         tree.navigate_tree(Home);
         tree.navigate_tree(ArrowLeft);
-        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(0..1));
+        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(0));
         for (key, kind) in [
             (F2, TreeContextKind::Rename),
             (Delete, TreeContextKind::Trash),
@@ -2202,13 +2192,31 @@ mod native_filter_tests {
             );
         }
         tree.navigate_tree(ArrowRight);
-        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(2..3));
+        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(1));
         tree.navigate_tree(ArrowRight);
         assert_eq!(tree.selected_key, Some(norm_tree_key(&file)));
         tree.navigate_tree(ArrowLeft);
         tree.navigate_tree(Enter);
         assert_eq!(view(&mut tree).rows.len(), 1);
         tree.navigate_tree(ArrowRight);
+        assert_eq!(view(&mut tree).rows.len(), 2);
+        tree.navigate_tree(End);
+        let segments = view(&mut tree).rows[0].compact_segments.clone();
+        assert_eq!(
+            segments,
+            vec![
+                ("a".into(), norm_tree_key(&a)),
+                ("b".into(), norm_tree_key(&b))
+            ]
+        );
+        tree.gpui_click_row(&segments[0].1, false);
+        let collapsed = view(&mut tree);
+        assert_eq!(collapsed.rows.len(), 1);
+        assert_eq!(collapsed.rows[0].selected_segment, Some(0));
+        assert!(
+            matches!(tree.navigate_tree(F2), Some(TreeAction::Context { path, .. }) if path == a)
+        );
+        tree.gpui_click_row(&segments[1].1, false);
         assert_eq!(view(&mut tree).rows.len(), 2);
         tree.navigate_tree(End);
         tree.set_filter_query("a");

@@ -597,6 +597,47 @@ fn render_explorer_tab(
                 super::file_icons::render(&row.display_name, tokens, tokens.text_dim)
                     .into_any_element()
             };
+            let label = if row.compact_segments.is_empty() {
+                div()
+                    .truncate()
+                    .child(SharedString::from(row.display_name.clone()))
+            } else {
+                let mut crumbs = div().flex().min_w_0().overflow_hidden();
+                for (segment, (name, key)) in row.compact_segments.iter().enumerate() {
+                    if segment > 0 {
+                        crumbs = crumbs.child("/");
+                    }
+                    let focus = row_focus.clone();
+                    let key = key.clone();
+                    crumbs = crumbs.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "explorer-crumb-{idx}-{segment}"
+                            )))
+                            .debug_selector(move || format!("explorer-crumb-{idx}-{segment}"))
+                            .flex_shrink_0()
+                            .when(row.selected_segment == Some(segment), |el| {
+                                el.text_color(tokens.accent)
+                            })
+                            .child(SharedString::from(name.clone()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if let Some(handle) = &focus {
+                                    this.focus_input = FocusInputTarget::ExplorerTree;
+                                    window.focus(handle, cx);
+                                }
+                                this.dispatch_action(
+                                    GpuiAction::ExplorerClickRow {
+                                        key: key.clone(),
+                                        pinned: false,
+                                    },
+                                    cx,
+                                );
+                            })),
+                    );
+                }
+                crumbs
+            };
             scroll = scroll.child(
                 div()
                     .id(("gpui-ex-row", idx as u64))
@@ -638,34 +679,11 @@ fn render_explorer_tab(
                             .items_center()
                             .gap(px(5.0))
                             .child(icon)
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .text_color(if row.active_doc {
-                                        tokens.text_strong
-                                    } else {
-                                        tokens.text
-                                    })
-                                    .truncate()
-                                    .child(
-                                        gpui::StyledText::new(SharedString::from(
-                                            row.display_name.clone(),
-                                        ))
-                                        .with_highlights(
-                                            row.selected_segment.clone().map(|span| {
-                                                (
-                                                    span,
-                                                    gpui::HighlightStyle {
-                                                        color: Some(gpui::rgb_to_hsla(
-                                                            tokens.accent,
-                                                        )),
-                                                        ..Default::default()
-                                                    },
-                                                )
-                                            }),
-                                        ),
-                                    ),
-                            ),
+                            .child(label.text_size(px(11.5)).text_color(if row.active_doc {
+                                tokens.text_strong
+                            } else {
+                                tokens.text
+                            })),
                     )
                     .child(
                         div()

@@ -18,6 +18,76 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_compact_parent_click_targets_that_folder_for_rename(test: &mut gpui::TestAppContext) {
+    let platform = gpui_platform::current_platform(true);
+    let cx = &mut gpui::TestAppContext::build_with_text_system(
+        test.dispatcher.clone(),
+        None,
+        platform.text_system(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let parent = project.join("parent");
+    std::fs::create_dir_all(parent.join("child")).unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        let snap = root.app.gpui_snapshot(960., 640., 4.);
+        if !snap.toolbar.right_open || snap.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        if !root
+            .app
+            .gpui_snapshot(960., 640., 4.)
+            .side_panels
+            .explorer
+            .compact_folders
+        {
+            root.app
+                .apply_gpui_action(GpuiAction::ExplorerToggleCompact);
+        }
+        root
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut opened_parent = false;
+    loop {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        if let Some(outer) = visual.debug_bounds("explorer-crumb-0-0") {
+            let inner = visual.debug_bounds("explorer-crumb-0-1").unwrap();
+            assert!(outer.size.width > gpui::px(0.) && outer.right() <= inner.left());
+            visual.simulate_click(outer.center(), Default::default());
+            visual.simulate_keystrokes("f2");
+            break;
+        }
+        if !opened_parent && let Some(row) = visual.debug_bounds("explorer-file-row-0") {
+            visual.simulate_click(row.center(), Default::default());
+            opened_parent = true;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "compact path did not appear"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let snap = view
+        .update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+        .unwrap();
+    let rename = snap
+        .modals
+        .prompt_modal
+        .expect("F2 on clicked compact segment");
+    assert_eq!(rename.draft, "parent");
+    assert_eq!(
+        std::fs::canonicalize(&rename.subtitle).unwrap(),
+        std::fs::canonicalize(parent).unwrap()
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_file_row_previews_then_pins_with_a_double_click(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

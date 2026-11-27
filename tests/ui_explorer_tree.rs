@@ -146,6 +146,25 @@ fn egui_tree_expands_folders_opens_files_caches_rows_and_gates_context_actions()
     }
     assert_eq!(fixture_tree.row_rebuild_count(), 1);
 
+    let (_, rendered) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, true, vec![]);
+    let parent_label = rendered
+        .shapes
+        .iter()
+        .find_map(|s| find_shape_text_center(&s.shape, "src"))
+        .expect("outer compact folder label");
+    let (action, _) = run_frame(
+        &ctx_fx,
+        &mut fixture_tree,
+        Some(root),
+        None,
+        true,
+        click_events(parent_label, egui::PointerButton::Primary),
+    );
+    assert_eq!(action, None);
+    let snapshot = fixture_tree.gpui_rows_snapshot(Some(root), None);
+    assert_eq!(snapshot.rows[0].selected_segment, Some(0));
+    assert_eq!(snapshot.new_target_dir, root.join("src"));
+
     // Real async `ExplorerTree` driven through `egui::Context` frames:
     let mut tree = ExplorerTree::default();
     let ctx = egui::Context::default();
