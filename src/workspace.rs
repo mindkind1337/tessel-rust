@@ -834,7 +834,7 @@ impl Workspace {
             self.terminal_layouts
                 .entry(key)
                 .or_default()
-                .sync(&ids, room);
+                .sync_with_tiling(&ids, room, self.terminal_prefs.tile_new_panes);
         }
     }
     pub fn validate(&self) -> Result<()> {

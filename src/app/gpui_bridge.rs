@@ -3343,7 +3343,11 @@ impl Tessel {
                 .terminal_layouts
                 .entry(layout_key.clone())
                 .or_default();
-            layout.sync(&project_session_ids, room);
+            layout.sync_with_tiling(
+                &project_session_ids,
+                room,
+                self.state.terminal_prefs.tile_new_panes,
+            );
             layout.maximized
         };
 
@@ -8002,6 +8006,47 @@ mod panel_snapshot_tests {
         app.active_session = None;
         app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
         assert!(input.try_recv().is_err());
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn manual_grid_survives_real_launch_save_and_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.gpui_snapshot(1200., 600., 4.);
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let grid = app.gpui_snapshot(1200., 600., 4.);
+        let divider = &grid.dividers[0];
+        app.apply_gpui_action(GpuiAction::ResizeSplitDivider {
+            split_id: divider.split_id.clone(),
+            dir: divider.dir,
+            index: divider.index,
+            split_side_px: divider.split_side_px,
+            delta_px: 180.,
+        });
+        let original = app.gpui_snapshot(1200., 600., 4.);
+        let smaller = &original.tiles[1];
+        assert!(original.tiles[0].rect_px.width > smaller.rect_px.width);
+        drop(app);
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        app.gpui_snapshot(1200., 600., 4.);
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let after = app.gpui_snapshot(1200., 600., 4.);
+        assert_eq!(after.tiles.len(), 3);
+        assert_eq!(
+            after
+                .tiles
+                .iter()
+                .find(|tile| tile.session_id == smaller.session_id)
+                .unwrap()
+                .rect_px,
+            smaller.rect_px
+        );
     }
 
     #[cfg(all(windows, feature = "visual-test"))]

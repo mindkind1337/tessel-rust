@@ -3265,17 +3265,6 @@ impl Tessel {
             }
         }
         self.sessions.push(s);
-        if split.is_none()
-            && self.state.terminal_prefs.tile_new_panes
-            && self
-                .sessions
-                .iter()
-                .filter(|sess| sess.project == project_id)
-                .count()
-                > 1
-        {
-            self.tile_sessions(None);
-        }
         self.active_session = Some(id);
         self.view = View::Work;
         self.save();
@@ -6355,7 +6344,11 @@ impl Tessel {
         let room = ui.available_rect_before_wrap();
         self.grid_room = [room.width() as f64, room.height() as f64];
         let layout = self.state.terminal_layouts.entry(key.clone()).or_default();
-        self.grid_dirty |= layout.sync(&ids, self.grid_room);
+        self.grid_dirty |= layout.sync_with_tiling(
+            &ids,
+            self.grid_room,
+            self.state.terminal_prefs.tile_new_panes,
+        );
         let maximized = layout.maximized;
         let geometry = pane_grid::grid_layout(layout.tree.as_ref());
         if maximized.is_none()
