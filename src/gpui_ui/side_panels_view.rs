@@ -463,6 +463,46 @@ fn render_explorer_tab(
         .flex_col()
         .gap(px(1.5));
 
+    let tree_focus = explorer_input
+        .tree_focus
+        .get_or_init(|| cx.focus_handle())
+        .clone();
+    if ex.filter_query.trim().is_empty() {
+        let owner = ex.root_path.clone();
+        let focus = tree_focus.clone();
+        scroll = scroll
+            .track_focus(&tree_focus)
+            .tab_stop(true)
+            .on_key_down(
+                cx.listener(move |root, event: &gpui::KeyDownEvent, window, cx| {
+                    let k = &event.keystroke;
+                    if !focus.is_focused(window)
+                        || k.modifiers.control
+                        || k.modifiers.platform
+                        || k.modifiers.alt
+                        || k.modifiers.shift
+                    {
+                        return;
+                    }
+                    use eframe::egui::Key;
+                    let key = match k.key.as_str() {
+                        "f2" => Key::F2,
+                        "delete" => Key::Delete,
+                        "home" => Key::Home,
+                        "end" => Key::End,
+                        "up" => Key::ArrowUp,
+                        "down" => Key::ArrowDown,
+                        "left" => Key::ArrowLeft,
+                        "right" => Key::ArrowRight,
+                        "enter" => Key::Enter,
+                        _ => return,
+                    };
+                    root.focus_input = FocusInputTarget::ExplorerTree;
+                    root.dispatch_action(GpuiAction::ExplorerNavigate(owner.clone(), key), cx);
+                    cx.stop_propagation();
+                }),
+            );
+    }
     if let Some((generation, index)) = ex.reveal {
         let token = (ex.root_path.clone(), generation, index);
         if explorer_input.last_tree_reveal.borrow().as_ref() != Some(&token) {
@@ -539,6 +579,11 @@ fn render_explorer_tab(
     } else {
         for (idx, row) in ex.rows.iter().enumerate() {
             let row_key = row.key.clone();
+            let row_focus = ex
+                .filter_query
+                .trim()
+                .is_empty()
+                .then(|| tree_focus.clone());
             let del_path = row.path.clone();
             let indent = (row.depth as f32) * 12.0;
             let icon = if row.dir {
@@ -570,15 +615,21 @@ fn render_explorer_tab(
                     .justify_between()
                     .gap(px(4.0))
                     .hover(|s| s.bg(tokens.surface_2))
-                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                        this.dispatch_action(
-                            GpuiAction::ExplorerClickRow {
-                                key: row_key.clone(),
-                                pinned: event.click_count() == 2,
-                            },
-                            cx,
-                        );
-                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if let Some(focus) = &row_focus {
+                                this.focus_input = FocusInputTarget::ExplorerTree;
+                                window.focus(focus, cx);
+                            }
+                            this.dispatch_action(
+                                GpuiAction::ExplorerClickRow {
+                                    key: row_key.clone(),
+                                    pinned: event.click_count() == 2,
+                                },
+                                cx,
+                            );
+                        }),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -596,7 +647,24 @@ fn render_explorer_tab(
                                         tokens.text
                                     })
                                     .truncate()
-                                    .child(SharedString::from(row.display_name.clone())),
+                                    .child(
+                                        gpui::StyledText::new(SharedString::from(
+                                            row.display_name.clone(),
+                                        ))
+                                        .with_highlights(
+                                            row.selected_segment.clone().map(|span| {
+                                                (
+                                                    span,
+                                                    gpui::HighlightStyle {
+                                                        color: Some(gpui::rgb_to_hsla(
+                                                            tokens.accent,
+                                                        )),
+                                                        ..Default::default()
+                                                    },
+                                                )
+                                            }),
+                                        ),
+                                    ),
                             ),
                     )
                     .child(

@@ -23,6 +23,7 @@ fn explorer_file_row_previews_then_pins_with_a_double_click(cx: &mut gpui::TestA
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("example.txt"), "example").unwrap();
+    std::fs::write(project.join("other.txt"), "second file").unwrap();
     let view = cx.add_window(|_, cx| {
         let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
         root.app
@@ -81,6 +82,43 @@ fn explorer_file_row_previews_then_pins_with_a_double_click(cx: &mut gpui::TestA
             assert!(std::time::Instant::now() < deadline, "file did not open");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    visual.simulate_keystrokes("end");
+    view.update(cx, |root, _, _| {
+        let snapshot = root.app.gpui_snapshot(960., 640., 4.);
+        assert!(
+            snapshot
+                .side_panels
+                .explorer
+                .rows
+                .iter()
+                .any(|r| r.selected && r.name == "other.txt")
+        );
+        assert!(!snapshot.view_tabs.iter().any(|t| t.title == "other.txt"));
+    })
+    .unwrap();
+    gpui::VisualTestContext::from_window(view.into(), cx).simulate_keystrokes("enter");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if view
+            .update(cx, |root, _, _| {
+                root.app.poll_for_gpui();
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .view_tabs
+                    .iter()
+                    .any(|t| t.title == "other.txt" && t.preview)
+            })
+            .unwrap()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Enter did not open the selected file"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 

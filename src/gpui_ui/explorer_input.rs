@@ -15,6 +15,7 @@ struct Binding {
 pub(crate) struct Input {
     binding: Option<Binding>,
     pub outline_focus: std::cell::OnceCell<gpui::FocusHandle>,
+    pub tree_focus: std::cell::OnceCell<gpui::FocusHandle>,
     pub tree_scroll: gpui::ScrollHandle,
     pub last_tree_reveal: std::cell::RefCell<Option<(std::path::PathBuf, u64, usize)>>,
     pub outline_scroll: gpui::ScrollHandle,

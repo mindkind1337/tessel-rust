@@ -1182,8 +1182,10 @@ impl Render for TesselGpuiRoot {
             cx,
         );
 
-        if (self.focus_input == FocusInputTarget::OutlineQuery
-            && snapshot.side_panels.outline_query.is_none())
+        if (self.focus_input == FocusInputTarget::ExplorerTree
+            && self.app.gpui_explorer_input().is_none())
+            || (self.focus_input == FocusInputTarget::OutlineQuery
+                && snapshot.side_panels.outline_query.is_none())
             || (self.focus_input == FocusInputTarget::OutlineTree
                 && snapshot.side_panels.outline.is_none())
         {

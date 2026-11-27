@@ -509,7 +509,7 @@ pub struct ExplorerTree {
     restore_open: HashSet<String>,
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
     selected_key: Option<String>,
-    reveal_folder: Option<String>,
+    reveal_key: Option<String>,
     reveal_generation: u64,
     selected_hit: Option<(PathBuf, usize)>,
     name_search: name_search::Search,
@@ -562,7 +562,7 @@ impl ExplorerTree {
             restore_open: HashSet::new(),
             expanded_by_project: VecDeque::new(),
             selected_key: None,
-            reveal_folder: None,
+            reveal_key: None,
             reveal_generation: 0,
             selected_hit: None,
             name_search: Default::default(),
@@ -839,7 +839,7 @@ impl ExplorerTree {
         self.pending_queue.clear();
         self.queued_keys.clear();
         self.selected_key = None;
-        self.reveal_folder = None;
+        self.reveal_key = None;
         self.selected_hit = None;
         self.name_search = Default::default();
         self.last_row_rects.clear();
@@ -1394,7 +1394,7 @@ impl ExplorerTree {
 
         let mut tree_scroll = egui::ScrollArea::vertical();
         if let Some(row) = self
-            .reveal_folder
+            .reveal_key
             .as_ref()
             .and_then(|key| self.cached_tree.index.get(key))
             && let Ok(idx) = visible_indices.binary_search(row)
@@ -1403,7 +1403,7 @@ impl ExplorerTree {
             tree_scroll = tree_scroll.vertical_scroll_offset(
                 (idx as f32 * stride - ui.available_height() / 2.0).max(0.0),
             );
-            self.reveal_folder = None;
+            self.reveal_key = None;
         }
         tree_scroll
             .id_salt("explorer-tree-scroll")
@@ -1700,7 +1700,7 @@ impl ExplorerTree {
         let root = self.project_root.clone()?;
         let rel = entry.path.strip_prefix(&root).ok()?;
         self.set_filter_query("");
-        self.reveal_folder.clone_from(&self.selected_key);
+        self.reveal_key.clone_from(&self.selected_key);
         self.reveal_generation = self.reveal_generation.wrapping_add(1);
         let mut parent = root;
         for (index, component) in rel.components().enumerate() {
@@ -1729,6 +1729,77 @@ impl ExplorerTree {
     pub(crate) fn select_content_hit(&mut self, path: &Path, line: usize) {
         self.selected_key = None;
         self.selected_hit = Some((path.to_owned(), line));
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn navigate_tree(&mut self, key: egui::Key) -> Option<TreeAction> {
+        use egui::Key::*;
+        if !self.filter_query.trim().is_empty() || self.cached_tree.rows.is_empty() {
+            return None;
+        }
+        let rows = &self.cached_tree.rows;
+        let current = self
+            .selected_key
+            .as_ref()
+            .and_then(|p| self.cached_tree.index.get(p))
+            .copied();
+        let last = rows.len() - 1;
+        let target = match key {
+            Home => &rows[0].path,
+            End => &rows[last].path,
+            ArrowDown => &rows[current.map_or(0, |i| (i + 1).min(last))].path,
+            ArrowUp => &rows[current.map_or(last, |i| i.saturating_sub(1))].path,
+            F2 | Delete => {
+                let selected = self.selected_key.as_ref()?;
+                let path = self.path_by_key.get(selected)?.clone();
+                let row = &rows[current?];
+                let part = row.chain.iter().find(|part| &part.path == selected)?;
+                return Some(TreeAction::Context {
+                    kind: if key == F2 {
+                        TreeContextKind::Rename
+                    } else {
+                        TreeContextKind::Trash
+                    },
+                    root: self.project_root.clone()?,
+                    path,
+                    name: part.name.clone(),
+                });
+            }
+            ArrowLeft | ArrowRight | Enter => {
+                let i = current?;
+                let row = &rows[i];
+                let segment = row
+                    .chain
+                    .iter()
+                    .position(|part| Some(&part.path) == self.selected_key.as_ref())?;
+                match key {
+                    ArrowRight if segment + 1 < row.chain.len() => &row.chain[segment + 1].path,
+                    ArrowLeft if segment > 0 => &row.chain[segment - 1].path,
+                    ArrowRight | ArrowLeft | Enter
+                        if key == Enter || (row.dir && row.open == (key == ArrowLeft)) =>
+                    {
+                        let key = row.path.clone();
+                        let selected = self.selected_key.clone();
+                        let action = self.gpui_click_row(&key, false);
+                        self.selected_key = selected;
+                        return action;
+                    }
+                    ArrowLeft if self.cached_tree.index.contains_key(&row.parent) => &row.parent,
+                    ArrowRight
+                        if row.open
+                            && rows.get(i + 1).is_some_and(|next| next.depth > row.depth) =>
+                    {
+                        &rows[i + 1].path
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        self.selected_key = Some(target.clone());
+        self.reveal_key.clone_from(&self.selected_key);
+        self.reveal_generation = self.reveal_generation.wrapping_add(1);
+        None
     }
 
     #[allow(dead_code)]
@@ -1893,6 +1964,7 @@ impl ExplorerTree {
                     .map(|hit| {
                         let key = norm_tree_key(&hit.path);
                         ExplorerGpuiRow {
+                            selected_segment: None,
                             selected: self.selected_key.as_ref() == Some(&key),
                             active_doc: active_key.as_ref() == Some(&key),
                             key,
@@ -1927,11 +1999,11 @@ impl ExplorerTree {
         }
         let filter_lc = trimmed_query.to_lowercase();
         let anchor_index = self
-            .reveal_folder
+            .reveal_key
             .as_ref()
             .filter(|_| filter_lc.is_empty())
             .and_then(|key| self.cached_tree.index.get(key).copied());
-        let reveal_index = anchor_index.filter(|_| self.selected_key == self.reveal_folder);
+        let reveal_index = anchor_index.filter(|_| self.selected_key == self.reveal_key);
         let start = anchor_index
             .filter(|index| *index >= 500)
             .map_or(0, |index| {
@@ -1966,6 +2038,16 @@ impl ExplorerTree {
                     row.name.clone()
                 };
                 ExplorerGpuiRow {
+                    selected_segment: if row.chain.len() > 1 {
+                        let mut offset = 0;
+                        row.chain.iter().find_map(|part| {
+                            let span = offset..offset + part.name.len();
+                            offset = span.end + 1;
+                            (Some(&part.path) == self.selected_key.as_ref()).then_some(span)
+                        })
+                    } else {
+                        None
+                    },
                     key: row.path.clone(),
                     path: row_path,
                     name: row.name.clone(),
@@ -2007,6 +2089,7 @@ impl ExplorerTree {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct ExplorerGpuiRow {
+    pub selected_segment: Option<std::ops::Range<usize>>,
     pub key: String,
     pub path: PathBuf,
     pub name: String,
@@ -2070,6 +2153,67 @@ mod native_filter_tests {
             )],
             vec![],
         )
+    }
+    #[test]
+    fn keyboard_navigation_visits_compact_segments_and_opens_only_on_enter() {
+        use egui::Key::*;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let a = root.join("a");
+        let b = a.join("b");
+        let file = b.join("file");
+        let entry = |path: &Path, directory| TreeDirEntry {
+            name: path.file_name().unwrap().to_str().unwrap().into(),
+            path: path.into(),
+            directory,
+        };
+        let mut tree = ExplorerTree::fixture(
+            root.into(),
+            vec![
+                (root.into(), vec![entry(&a, true)]),
+                (a.clone(), vec![entry(&b, true)]),
+                (b.clone(), vec![entry(&file, false)]),
+            ],
+            vec![a.clone(), b.clone()],
+        );
+        tree.set_compact_folders(true);
+        let view = |tree: &mut ExplorerTree| tree.gpui_rows_snapshot(Some(root), None);
+        assert_eq!(view(&mut tree).rows.len(), 2);
+        assert_eq!(tree.navigate_tree(ArrowUp), None);
+        assert_eq!(
+            tree.navigate_tree(Enter),
+            Some(TreeAction::OpenFile(file.clone()))
+        );
+        tree.navigate_tree(Home);
+        tree.navigate_tree(ArrowLeft);
+        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(0..1));
+        for (key, kind) in [
+            (F2, TreeContextKind::Rename),
+            (Delete, TreeContextKind::Trash),
+        ] {
+            assert_eq!(
+                tree.navigate_tree(key),
+                Some(TreeAction::Context {
+                    kind,
+                    root: root.to_owned(),
+                    path: a.clone(),
+                    name: "a".into(),
+                })
+            );
+        }
+        tree.navigate_tree(ArrowRight);
+        assert_eq!(view(&mut tree).rows[0].selected_segment, Some(2..3));
+        tree.navigate_tree(ArrowRight);
+        assert_eq!(tree.selected_key, Some(norm_tree_key(&file)));
+        tree.navigate_tree(ArrowLeft);
+        tree.navigate_tree(Enter);
+        assert_eq!(view(&mut tree).rows.len(), 1);
+        tree.navigate_tree(ArrowRight);
+        assert_eq!(view(&mut tree).rows.len(), 2);
+        tree.navigate_tree(End);
+        tree.set_filter_query("a");
+        assert_eq!(tree.navigate_tree(Home), None);
+        assert_eq!(tree.selected_key, Some(norm_tree_key(&file)));
     }
     #[test]
     fn filename_search_opens_files_and_reveals_folders_below_collapsed_ancestors() {
@@ -2233,7 +2377,7 @@ mod native_filter_tests {
         assert_eq!(capped.rows.len(), 500);
         assert!(capped.truncated);
         tree.selected_key = Some(norm_tree_key(&dir.path().join("entry500.txt")));
-        tree.reveal_folder.clone_from(&tree.selected_key);
+        tree.reveal_key.clone_from(&tree.selected_key);
         let revealed = tree.gpui_rows_snapshot(Some(dir.path()), None);
         let (_, index) = revealed.reveal.unwrap();
         assert_eq!(revealed.rows[index].name, "entry500.txt");

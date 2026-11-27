@@ -163,6 +163,7 @@ pub(crate) enum GpuiFocusTarget {
     FinderQuery,
     HelpQuery,
     ExplorerFilter,
+    ExplorerTree,
     OutlineTree,
     OutlineQuery,
     ScmCommitMessage,
@@ -1001,6 +1002,7 @@ pub(crate) enum GpuiAction {
         OutlineRowAction,
     ),
     ExplorerRefresh,
+    ExplorerNavigate(PathBuf, eframe::egui::Key),
     ExplorerClickRow {
         key: String,
         pinned: bool,
@@ -2755,6 +2757,7 @@ impl Tessel {
             GpuiFocusTarget::PaletteQuery | GpuiFocusTarget::FinderQuery => false,
             GpuiFocusTarget::HelpQuery => false,
             GpuiFocusTarget::ExplorerFilter
+            | GpuiFocusTarget::ExplorerTree
             | GpuiFocusTarget::OutlineTree
             | GpuiFocusTarget::OutlineQuery => false,
             GpuiFocusTarget::ScmCommitMessage => false,
@@ -6477,6 +6480,37 @@ impl Tessel {
             }
             GpuiAction::ExplorerRefresh => {
                 self.explorer_tree.refresh();
+            }
+            GpuiAction::ExplorerNavigate(root, key) => {
+                if self
+                    .gpui_explorer_owner()
+                    .is_none_or(|owner| owner.root != root)
+                {
+                    return;
+                }
+                use crate::explorer_tree::{TreeAction, TreeContextKind};
+                match self.explorer_tree.navigate_tree(key) {
+                    Some(TreeAction::OpenFile(path)) => self.open_document_preview(path),
+                    Some(TreeAction::Context {
+                        kind,
+                        root: action_root,
+                        path,
+                        name,
+                    }) if action_root == root && self.file_actions_ready() => {
+                        let kind = match kind {
+                            TreeContextKind::Rename => crate::file_actions::Kind::Rename,
+                            TreeContextKind::Trash => crate::file_actions::Kind::Trash,
+                            _ => return,
+                        };
+                        self.file_action = Some(crate::file_actions::Action {
+                            kind,
+                            root,
+                            path,
+                            name,
+                        });
+                    }
+                    _ => {}
+                }
             }
             GpuiAction::ExplorerClickRow { key, pinned } => {
                 if let Some(act) = self.explorer_tree.gpui_click_row(&key, pinned) {
