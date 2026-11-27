@@ -169,6 +169,12 @@ impl SharePanel {
         true
     }
 
+    pub(crate) fn active_workspace_file(&self) -> Option<&FileKey> {
+        self.workspace_tabs()
+            .iter()
+            .find(|key| self.guest_tab_active(key))
+    }
+
     pub(crate) fn guest_tab_dirty(&self, key: &FileKey) -> bool {
         self.guest_file_editor
             .document
@@ -427,10 +433,7 @@ impl SharePanel {
         if let Some(key) = selected {
             self.select_guest_tab(key);
         }
-        if let Some(key) = self
-            .workspace_tabs()
-            .iter()
-            .find(|key| self.guest_tab_active(key))
+        if let Some(key) = self.active_workspace_file()
             && ui
                 .button(if french {
                     "Ouvrir dans l’espace de travail"

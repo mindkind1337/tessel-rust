@@ -510,6 +510,32 @@ impl TesselGpuiRoot {
         cx.notify();
     }
 
+    fn close_document_shortcut(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key != "w"
+            || !modifiers.control
+            || modifiers.platform
+            || modifiers.shift
+            || modifiers.alt
+        {
+            return false;
+        }
+        let Some(action) = self.app.gpui_close_document_action() else {
+            return false;
+        };
+        window.prevent_default();
+        cx.stop_propagation();
+        if !event.is_held {
+            self.dispatch(action, cx);
+        }
+        true
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -632,6 +658,18 @@ impl TesselGpuiRoot {
                     .focused(window, cx)
                     .then_some(FocusInputTarget::EditorBody)
             });
+        if matches!(
+            native_target,
+            None | Some(
+                FocusInputTarget::EditorBody
+                    | FocusInputTarget::EditorFind
+                    | FocusInputTarget::EditorReplace
+                    | FocusInputTarget::EditorGoto
+            )
+        ) && self.close_document_shortcut(event, window, cx)
+        {
+            return;
+        }
         if alt
             && !ctrl
             && !shift

@@ -14633,6 +14633,14 @@ impl eframe::App for Tessel {
                 View::Work => self.work(ui),
                 View::Files => self.editor(ui),
                 View::GuestFiles => {
+                    if take_close_shortcut(
+                        ctx,
+                        ui.is_enabled() && !self.floating.ui.is_open(),
+                        egui::Modifiers::CTRL,
+                    ) && let Some(key) = self.share.active_workspace_file().cloned()
+                    {
+                        self.share.close_guest_tab(&key);
+                    }
                     egui::ScrollArea::vertical()
                         .id_salt("guest-workspace-document")
                         .show(ui, |ui| {

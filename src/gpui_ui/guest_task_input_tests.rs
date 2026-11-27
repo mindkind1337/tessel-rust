@@ -653,7 +653,7 @@ fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) 
     std::fs::create_dir(&local).unwrap();
     let path = local.join("B.TXT");
     std::fs::write(&path, "local contents").unwrap();
-    view.update(cx, |root, _, cx| {
+    view.update(cx, |root, window, cx| {
         root.app.install_editor_input_fixture(
             vec![crate::files::Document::open(&local, &path).unwrap()],
             0,
@@ -679,16 +679,63 @@ fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) 
                 "Fixture’s tab: b.txt"
             }
         );
-        root.dispatch(GpuiAction::CloseDocumentTab(0), cx);
+        root.dispatch(
+            GpuiAction::SelectGuestDocument(guest_tab.guest_key.clone().unwrap()),
+            cx,
+        );
+        root.focus_handle.focus(window, cx);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    gpui::VisualTestContext::from_window(view.into(), cx).simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse("ctrl-w").unwrap(),
+        is_held: true,
+        prefer_character_input: false,
+    });
+    view.update(cx, |root, _, cx| {
+        assert!(root.app.gpui_close_document_action().is_some());
+        root.dispatch(GpuiAction::OpenHelp, cx);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-w");
+    view.update(cx, |root, window, cx| {
+        assert!(root.app.gpui_close_document_action().is_none());
+        assert!(
+            root.app
+                .gpui_snapshot(1100., 850., 4.)
+                .view_tabs
+                .iter()
+                .any(|tab| tab.guest_key.is_some())
+        );
+        root.dispatch(GpuiAction::CloseOverlays, cx);
+        root.focus_handle.focus(window, cx);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-w");
+    view.update(cx, |root, window, cx| {
         let snapshot = root.app.gpui_snapshot(1100., 850., 4.);
-        assert_eq!(
+        assert!(snapshot.view_tabs.iter().all(|tab| tab.guest_key.is_none()));
+        assert!(
             snapshot
                 .view_tabs
                 .iter()
-                .find(|t| t.guest_key.is_some())
-                .unwrap()
-                .title,
-            "b.txt"
+                .any(|tab| tab.doc_index == Some(0) && tab.title == "B.TXT")
+        );
+        root.dispatch(GpuiAction::SelectDocumentTab(0), cx);
+        root.focus_handle.focus(window, cx);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-w");
+    view.update(cx, |root, _, _| {
+        let snapshot = root.app.gpui_snapshot(1100., 850., 4.);
+        assert!(
+            snapshot
+                .view_tabs
+                .iter()
+                .all(|tab| tab.doc_index.is_none() && tab.guest_key.is_none())
         );
     })
     .unwrap();

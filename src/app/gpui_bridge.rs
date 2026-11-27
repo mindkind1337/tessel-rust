@@ -2290,6 +2290,21 @@ impl Tessel {
             || self.dev_update_dialog_open
     }
 
+    pub(crate) fn gpui_close_document_action(&self) -> Option<GpuiAction> {
+        if self.gpui_has_open_modal() || self.floating.ui.is_open() {
+            return None;
+        }
+        match self.view {
+            View::Files if self.active_document < self.documents.len() => {
+                Some(GpuiAction::CloseDocumentTab(self.active_document))
+            }
+            View::GuestFiles => self.share.active_workspace_file().cloned().map(|key| {
+                GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestCloseTab(key))
+            }),
+            _ => None,
+        }
+    }
+
     pub(crate) fn gpui_is_document_view(&self) -> bool {
         self.view == View::Files && !self.documents.is_empty()
     }
