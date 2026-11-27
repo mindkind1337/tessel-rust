@@ -178,6 +178,7 @@ pub struct EditorTools {
     pub match_index: usize,
     pub diff_hunk_index: usize,
     pub focus_find: bool,
+    pub focus_replace: bool,
     pub focus_goto: bool,
     pub pending_char_range: Option<(usize, usize)>,
     pub pending_scroll_line: Option<usize>,
@@ -572,10 +573,17 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
-    pub(crate) fn seed_find_from_selection(&mut self, selection: std::ops::Range<usize>) {
+    pub(crate) fn seed_find_from_selection(
+        &mut self,
+        selection: std::ops::Range<usize>,
+        allow_word: bool,
+    ) -> bool {
         let (mut start, mut end) =
             char_range_to_byte_range(&self.text, selection.start, selection.end);
         if start == end {
+            if !allow_word {
+                return false;
+            }
             // Monaco's default word separators, plus line boundaries and horizontal whitespace.
             let delimiter = |ch: char| {
                 matches!(ch, ' ' | '\t' | '\r' | '\n')
@@ -587,17 +595,17 @@ impl Document {
                 .unwrap_or(self.text.len() - end);
         }
         let seed = &self.text[start..end];
-        if seed.is_empty()
-            || seed.contains(['\r', '\n'])
-            || seed.encode_utf16().take(524_288).count() == 524_288
-        {
-            return;
+        if seed.is_empty() || seed.contains(['\r', '\n']) {
+            return false;
+        }
+        if seed.encode_utf16().take(524_288).count() == 524_288 {
+            return true;
         }
         self.tools.find_query = seed.to_owned();
         let char_start = self.text[..start].chars().count();
         if char_start == 0 {
             self.tools.match_index = 0;
-            return;
+            return true;
         }
         let mut preceding = 0;
         self.tools.match_index = 0;
@@ -609,6 +617,7 @@ impl Document {
             preceding += 1;
             true
         });
+        true
     }
 
     pub(crate) fn display_text(&mut self) -> DisplayText {
@@ -1601,12 +1610,12 @@ mod tests {
             (12..21, "++", 0),
             (4..8, " ++ ", 0),
         ] {
-            doc.seed_find_from_selection(selection);
+            doc.seed_find_from_selection(selection, true);
             assert_eq!(doc.tools.find_query, expected);
             assert_eq!(doc.tools.match_index, index);
         }
         doc.text = "😀".repeat(262144);
-        doc.seed_find_from_selection(0..262144);
+        doc.seed_find_from_selection(0..262144, true);
         assert_eq!(doc.tools.find_query, " ++ ");
     }
 

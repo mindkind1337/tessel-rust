@@ -68,7 +68,9 @@ impl Inputs {
                     d.instance_id != *id
                         || match f {
                             EditorToolField::Find => d.find_open,
-                            EditorToolField::Replace => d.find_open && !d.media && !d.preview_mode,
+                            EditorToolField::Replace => {
+                                d.find_open && d.replace_open && !d.media && !d.preview_mode
+                            }
                             EditorToolField::Goto => d.goto_open,
                         }
                 })
@@ -79,7 +81,7 @@ impl Inputs {
             (
                 EditorToolField::Replace,
                 &doc.replace_text,
-                doc.find_open && !doc.media && !doc.preview_mode,
+                doc.find_open && doc.replace_open && !doc.media && !doc.preview_mode,
             ),
             (EditorToolField::Goto, &doc.goto_line, doc.goto_open),
         ] {
@@ -269,8 +271,14 @@ pub(crate) fn open(
     {
         return;
     }
-    if f == EditorToolField::Find
-        && root.editor_input.focused(window, cx)
+    let find_focused = root
+        .editor_input
+        .tools
+        .get(id, EditorToolField::Find)
+        .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+    let from_selection = if f != EditorToolField::Goto
+        && !find_focused
+        && (root.editor_input.focused(window, cx) || f == EditorToolField::Replace)
         && let Some(source) = root.editor_input.get(id).cloned()
         && root
             .app
@@ -282,10 +290,12 @@ pub(crate) fn open(
             }
             let range = s.selected_text_range(false, window, cx)?.range;
             Some(utf16_to_char(s.as_str(), range.start)..utf16_to_char(s.as_str(), range.end))
-        })
-    {
-        root.app.seed_editor_find(id, selected);
-    }
+        }) {
+        root.app
+            .seed_editor_find(id, selected, f == EditorToolField::Find)
+    } else {
+        false
+    };
     if root.app.gpui_editor_tool_value(id, f).is_none() {
         root.dispatch(
             match f {
@@ -297,6 +307,11 @@ pub(crate) fn open(
         );
     }
     if root.app.gpui_editor_tool_value(id, f).is_some() {
+        let f = if f == EditorToolField::Replace && !(find_focused || from_selection) {
+            EditorToolField::Find
+        } else {
+            f
+        };
         root.focus_input = target(f);
         root.editor_input.tools.select_on_focus = Some((id, f));
         cx.notify();
@@ -506,6 +521,45 @@ mod tests {
         });
     }
     #[gpui::test]
+    fn ctrl_h_routes_selection_and_focus_like_the_local_editor(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("replace.txt");
+        std::fs::write(&path, "one\ntwo").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        for (range, expected_field, query) in [
+            (1..1, EditorToolField::Find, ""),
+            (4..7, EditorToolField::Replace, "two"),
+            (2..6, EditorToolField::Find, "two"),
+        ] {
+            view.update(cx, |root, window, cx| {
+                root.focus_input = FocusInputTarget::EditorBody;
+                let input = root.editor_input.get(id).unwrap().clone();
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+                input.update(cx, |s, cx| s.set_selected_text_range(range, window, cx));
+            })
+            .unwrap();
+            cx.simulate_keystrokes(view.into(), "ctrl-h");
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                assert_eq!(
+                    root.app.gpui_editor_tool_value(id, EditorToolField::Find),
+                    Some(query)
+                );
+                let input = root.editor_input.tools.get(id, expected_field).unwrap();
+                assert!(input.read(cx).focus_handle(cx).is_focused(window));
+            })
+            .unwrap();
+        }
+    }
+    #[gpui::test]
     fn native_editor_tools_flush_unicode_replace_and_source_undo(cx: &mut TestAppContext) {
         bindings(cx);
         let dir = tempfile::tempdir().unwrap();
@@ -536,6 +590,12 @@ mod tests {
                     .get(id, EditorToolField::Find)
                     .unwrap()
                     .clone();
+                assert!(
+                    root.editor_input
+                        .tools
+                        .get(id, EditorToolField::Replace)
+                        .is_none()
+                );
                 assert_eq!(input.read(cx).as_str(), "é😀");
                 assert!(input.read(cx).focus_handle(cx).is_focused(window));
                 input.update(cx, |s, cx| {
@@ -572,6 +632,8 @@ mod tests {
             );
         })
         .unwrap();
+        cx.simulate_keystrokes(view.into(), "ctrl-h");
+        cx.refresh().unwrap();
         view.update(cx, |root, window, cx| {
             assert_eq!(
                 root.app.gpui_editor_tool_value(id, EditorToolField::Find),
@@ -738,7 +800,7 @@ mod tests {
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
             root.app.install_editor_input_fixture(vec![doc], 0);
-            root.app.apply_gpui_action(GpuiAction::ToggleEditorFind);
+            root.app.apply_gpui_action(GpuiAction::ToggleEditorReplace);
             root.app
                 .apply_gpui_action(GpuiAction::SetEditorFindQuery("a".into()));
             root.app
@@ -823,7 +885,7 @@ mod tests {
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
             root.app.install_editor_input_fixture(vec![doc], 0);
-            root.app.apply_gpui_action(GpuiAction::ToggleEditorFind);
+            root.app.apply_gpui_action(GpuiAction::ToggleEditorReplace);
             root.app
                 .apply_gpui_action(GpuiAction::SetEditorFindQuery("😀a".into()));
             root.app

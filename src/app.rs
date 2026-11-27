@@ -16195,6 +16195,19 @@ fn copy_selected_editor_lines(ui: &egui::Ui, id: egui::Id, text: &mut String) ->
     true
 }
 
+fn focus_editor_field(input: &egui::Response, text: &str) {
+    input.request_focus();
+    if let Some(mut state) = egui::text_edit::TextEditState::load(&input.ctx, input.id) {
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(text.chars().count()),
+            )));
+        state.store(&input.ctx, input.id);
+    }
+}
+
 fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
     if d.tools.goto_open {
         ui.horizontal(|ui| {
@@ -16238,13 +16251,24 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
         let mut do_replace_all = false;
         let mut close_find = false;
         ui.horizontal_wrapped(|ui| {
+            if !d.media
+                && !d.preview_mode
+                && ui
+                    .small_button(if d.tools.replace_open { "▾" } else { "▸" })
+                    .on_hover_text(tr("Replace"))
+                    .clicked()
+            {
+                d.tools.replace_open = !d.tools.replace_open;
+            }
+            let find_id = egui::Id::new(("local-find", d.instance_id()));
             let find_input = ui.add(
                 egui::TextEdit::singleline(&mut d.tools.find_query)
+                    .id(find_id)
                     .desired_width(180.0)
                     .hint_text(tr("Find in file…")),
             );
             if d.tools.focus_find {
-                find_input.request_focus();
+                focus_editor_field(&find_input, &d.tools.find_query);
                 d.tools.focus_find = false;
             }
             if find_input.changed() {
@@ -16287,11 +16311,16 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
                 }
             }
             if d.tools.replace_open {
+                let replace_id = egui::Id::new(("local-replace", d.instance_id()));
                 let rep_input = ui.add(
                     egui::TextEdit::singleline(&mut d.tools.replace_text)
+                        .id(replace_id)
                         .desired_width(160.0)
                         .hint_text(tr("Replace with…")),
                 );
+                if std::mem::take(&mut d.tools.focus_replace) {
+                    focus_editor_field(&rep_input, &d.tools.replace_text);
+                }
                 if (rep_input.has_focus() || rep_input.lost_focus())
                     && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
                 {
@@ -16451,15 +16480,24 @@ fn document_toolbar(
                 && let Some(state) = egui::text_edit::TextEditState::load(ui.ctx(), source_id)
                 && let Some(selection) = state.cursor.char_range()
             {
-                d.seed_find_from_selection(selection.as_sorted_char_range());
+                d.seed_find_from_selection(selection.as_sorted_char_range(), true);
             }
             d.tools.find_open = true;
             d.tools.focus_find = true;
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::H)) {
+            let source = egui::Id::new(("local-source", d.instance_id()));
+            let find = egui::Id::new(("local-find", d.instance_id()));
+            let focus_replace = ui.memory(|m| m.has_focus(find))
+                || egui::text_edit::TextEditState::load(ui.ctx(), source)
+                    .and_then(|state| state.cursor.char_range())
+                    .is_some_and(|range| {
+                        d.seed_find_from_selection(range.as_sorted_char_range(), false)
+                    });
             d.tools.find_open = true;
             d.tools.replace_open = true;
-            d.tools.focus_find = true;
+            d.tools.focus_find = !focus_replace;
+            d.tools.focus_replace = focus_replace;
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::G)) {
             d.tools.goto_open = true;
@@ -17204,6 +17242,24 @@ $lock.Dispose()
                 modifiers: egui::Modifiers::CTRL,
             }],
         );
+        assert_eq!(app.documents[0].tools.find_query, "ph");
+        let find_id = egui::Id::new(("local-find", app.documents[0].instance_id()));
+        assert!(ctx.memory(|m| m.has_focus(find_id)));
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::H,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+        );
+        assert!(app.documents[0].tools.replace_open);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new((
+            "local-replace",
+            app.documents[0].instance_id()
+        )))));
         assert_eq!(app.documents[0].tools.find_query, "ph");
     }
 

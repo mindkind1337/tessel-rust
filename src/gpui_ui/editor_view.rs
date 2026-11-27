@@ -955,6 +955,31 @@ fn render_editor_tools_bar(
             format!("{}/{}", doc.match_index + 1, doc.match_count)
         };
         bar = bar
+            .when(!doc.media && !doc.preview_mode, |bar| {
+                let colors = *tokens;
+                let title = if french { "Remplacer" } else { "Replace" };
+                bar.child(
+                    div()
+                        .id("editor-replace-disclosure")
+                        .role(gpui::Role::Button)
+                        .aria_label(title)
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| super::chrome::ToolbarTooltip {
+                                text: title.into(),
+                                bg: colors.surface,
+                                fg: colors.text,
+                                border: colors.border,
+                            })
+                            .into()
+                        })
+                        .cursor_pointer()
+                        .px(px(4.0))
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.dispatch(GpuiAction::ToggleEditorReplace, cx)
+                        }))
+                        .child(if doc.replace_open { "▾" } else { "▸" }),
+                )
+            })
             .child(inputs.render(doc, EditorToolField::Find, french, tokens, cx))
             .when(!badge.is_empty(), |el| {
                 el.child(
@@ -989,7 +1014,7 @@ fn render_editor_tools_bar(
                     }))
                     .child("↓"),
             )
-            .when(!doc.media && !doc.preview_mode, |el| {
+            .when(doc.replace_open && !doc.media && !doc.preview_mode, |el| {
                 el.child(inputs.render(doc, EditorToolField::Replace, french, tokens, cx))
                     .child(
                         div()

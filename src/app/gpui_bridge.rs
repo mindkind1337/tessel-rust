@@ -2813,7 +2813,12 @@ impl Tessel {
         }
         match field {
             EditorToolField::Find if doc.tools.find_open => Some(&doc.tools.find_query),
-            EditorToolField::Replace if doc.tools.find_open && !doc.media && !doc.preview_mode => {
+            EditorToolField::Replace
+                if doc.tools.find_open
+                    && doc.tools.replace_open
+                    && !doc.media
+                    && !doc.preview_mode =>
+            {
                 Some(&doc.tools.replace_text)
             }
             EditorToolField::Goto if doc.tools.goto_open => Some(&doc.tools.goto_line),
@@ -2839,12 +2844,18 @@ impl Tessel {
         self.view == View::Remote && self.remote.set_pdf_viewport(id, viewport)
     }
 
-    pub(crate) fn seed_editor_find(&mut self, id: u64, selected: std::ops::Range<usize>) {
+    pub(crate) fn seed_editor_find(
+        &mut self,
+        id: u64,
+        selected: std::ops::Range<usize>,
+        allow_word: bool,
+    ) -> bool {
         if self.gpui_editor_tool_document_id() == Some(id)
             && let Some(doc) = self.documents.get_mut(self.active_document)
         {
-            doc.seed_find_from_selection(selected);
+            return doc.seed_find_from_selection(selected, allow_word);
         }
+        false
     }
 
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
