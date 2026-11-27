@@ -346,6 +346,48 @@ mod tests {
     }
 
     #[gpui::test]
+    fn arrow_navigation_moves_keyboard_focus_between_chat_and_shell(cx: &mut TestAppContext) {
+        register(cx);
+        let temp = tempfile::tempdir().unwrap();
+        let mut shell = None;
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(temp.path().to_owned()), cx);
+            shell = Some(root.app.install_terminal_find_fixture());
+            root.dispatch(GpuiAction::LaunchClaudeChat, cx);
+            root
+        });
+        let (id, input) = shell.unwrap();
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(matches!(
+                root.chat_inputs.focused(window, cx),
+                Some(FocusInputTarget::ChatComposer(_))
+            ))
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "alt-left x");
+        assert_eq!(input.try_recv().unwrap(), b"x");
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app.gpui_default_focus_target(),
+                FocusInputTarget::Terminal(Some(id))
+            )
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "alt-right");
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(matches!(
+                root.chat_inputs.focused(window, cx),
+                Some(FocusInputTarget::ChatComposer(_))
+            ))
+        })
+        .unwrap();
+        assert!(input.try_recv().is_err());
+    }
+
+    #[gpui::test]
     fn native_chat_cursor_selection_newline_offline_and_ime(cx: &mut TestAppContext) {
         register(cx);
         let dir = tempfile::tempdir().unwrap();

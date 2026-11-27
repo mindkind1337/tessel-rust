@@ -519,6 +519,39 @@ impl TesselGpuiRoot {
         cx.notify();
     }
 
+    fn workspace_pane_navigation(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = &event.keystroke;
+        let modifiers = key.modifiers;
+        if !modifiers.alt
+            || modifiers.control
+            || modifiers.shift
+            || modifiers.platform
+            || !self.app.gpui_grid_receives_navigation()
+        {
+            return false;
+        }
+        let dir = match key.key.as_str() {
+            "left" => FocusDir::Left,
+            "right" => FocusDir::Right,
+            "up" => FocusDir::Up,
+            "down" => FocusDir::Down,
+            _ => return false,
+        };
+        if let Some(id) = self.app.gpui_neighbor(dir) {
+            self.dispatch(GpuiAction::FocusSession(id), cx);
+            self.focus_input = FocusInputTarget::None;
+            self.focus_handle.focus(window, cx);
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        true
+    }
+
     fn workspace_document_shortcut(
         &mut self,
         event: &KeyDownEvent,
@@ -1062,37 +1095,12 @@ impl TesselGpuiRoot {
             }
         }
 
-        if alt
-            && !ctrl
-            && !shift
-            && !matches!(
-                native_target,
-                Some(FocusInputTarget::TaskCard(_) | FocusInputTarget::TaskBoardControls)
-            )
+        if matches!(
+            native_target,
+            None | Some(FocusInputTarget::ChatComposer(_))
+        ) && self.workspace_pane_navigation(event, window, cx)
         {
-            match key {
-                "left" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Left), cx);
-                    return;
-                }
-                "right" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Right), cx);
-                    return;
-                }
-                "up" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Up), cx);
-                    return;
-                }
-                "down" => {
-                    self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::FocusPaneDirection(FocusDir::Down), cx);
-                    return;
-                }
-                _ => {}
-            }
+            return;
         }
 
         if let Some((scope, _)) = self.app.gpui_native_search_input() {

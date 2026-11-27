@@ -18,6 +18,47 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn arrow_navigation_routes_input_only_to_visible_panes_and_saves_focus(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let mut panes = Vec::new();
+    let view = cx.add_window(|window, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(state.clone()), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(temp.path().to_owned()), cx);
+        panes.push(root.app.install_terminal_find_fixture());
+        panes.push(root.app.install_terminal_find_fixture());
+        root.focus_input = GpuiFocusTarget::Terminal(Some(panes[1].0));
+        root.focus_handle.focus(window, cx);
+        root
+    });
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "alt-left a");
+    assert_eq!(panes[0].1.try_recv().unwrap(), b"a");
+    assert!(panes[1].1.try_recv().is_err());
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::ToggleMaximizeSession(panes[0].0), cx)
+    })
+    .unwrap();
+    cx.simulate_keystrokes(view.into(), "alt-right b");
+    assert_eq!(panes[0].1.try_recv().unwrap(), b"b");
+    assert!(panes[1].1.try_recv().is_err());
+    cx.simulate_keystrokes(view.into(), "escape alt-right c");
+    assert_eq!(panes[1].1.try_recv().unwrap(), b"c");
+    assert!(panes[0].1.try_recv().is_err());
+    view.update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    let reopened = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+    assert_eq!(
+        reopened.gpui_default_focus_target(),
+        GpuiFocusTarget::Terminal(Some(panes[1].0))
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn split_shortcuts_follow_the_local_document_and_selected_terminal(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("source.txt");

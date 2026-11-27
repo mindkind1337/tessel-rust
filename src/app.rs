@@ -6386,6 +6386,7 @@ impl Tessel {
                         .and_then(|id| id.parse::<u64>().ok())
                 {
                     self.active_session = Some(next);
+                    self.grid_dirty = true;
                     if let Some(terminal) = self
                         .sessions
                         .iter()

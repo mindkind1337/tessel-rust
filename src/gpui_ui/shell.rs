@@ -141,6 +141,13 @@ fn render_center_column(
             div()
                 .id("gpui-center-stage")
                 .capture_key_down(cx.listener(|root, event, window, cx| {
+                    if matches!(
+                        root.chat_inputs.focused(window, cx),
+                        Some(FocusInputTarget::ChatComposer(_))
+                    ) && root.workspace_pane_navigation(event, window, cx)
+                    {
+                        return;
+                    }
                     root.workspace_document_shortcut(event, window, cx);
                 }))
                 .relative()

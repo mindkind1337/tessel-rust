@@ -818,7 +818,6 @@ pub(crate) enum GpuiAction {
         split_side_px: f64,
         delta_px: f64,
     },
-    FocusPaneDirection(FocusDir),
     SelectWorkTab,
     SelectDocumentTab(usize),
     KeepDocumentTab(usize),
@@ -2308,8 +2307,40 @@ impl Tessel {
             && self.share.edit_guest_file(&base.key, text)
     }
 
+    pub(crate) fn gpui_grid_receives_navigation(&self) -> bool {
+        self.view == View::Work && !self.gpui_has_open_modal() && !self.floating.ui.is_open()
+    }
+
+    pub(crate) fn gpui_neighbor(&self, dir: FocusDir) -> Option<u64> {
+        if !self.gpui_grid_receives_navigation() {
+            return None;
+        }
+        let layout = self
+            .state
+            .terminal_layouts
+            .get(&crate::terminal_layout::project_key(
+                self.state.active_project,
+            ))?;
+        if layout.maximized.is_some() {
+            return None;
+        }
+        let panes = crate::pane_grid::grid_layout(layout.tree.as_ref())
+            .tiles
+            .into_iter()
+            .map(|tile| {
+                (
+                    tile.leaf.id,
+                    tile.rect.to_px(self.grid_room[0], self.grid_room[1], 4.),
+                )
+            })
+            .collect::<Vec<_>>();
+        crate::pane_grid::move_focus(&panes, &self.active_session?.to_string(), dir)?
+            .parse()
+            .ok()
+    }
+
     pub(crate) fn gpui_restore_maximized_pane(&mut self) -> bool {
-        if self.view != View::Work || self.gpui_has_open_modal() || self.floating.ui.is_open() {
+        if !self.gpui_grid_receives_navigation() {
             return false;
         }
         let key = crate::terminal_layout::project_key(self.state.active_project);
@@ -5533,31 +5564,6 @@ impl Tessel {
                     && layout.resize(&split_id, index, split_side_px, delta_px, None)
                 {
                     self.save();
-                }
-            }
-            GpuiAction::FocusPaneDirection(dir) => {
-                let key = crate::terminal_layout::project_key(self.state.active_project);
-                let Some(active_id) = self.active_session else {
-                    return;
-                };
-                if let Some(layout) = self.state.terminal_layouts.get(&key) {
-                    let geom = crate::pane_grid::grid_layout(layout.tree.as_ref());
-                    let panes: Vec<(String, PxRect)> = geom
-                        .tiles
-                        .iter()
-                        .map(|t| {
-                            (
-                                t.leaf.id.clone(),
-                                t.rect.to_px(self.grid_room[0], self.grid_room[1], 4.0),
-                            )
-                        })
-                        .collect();
-                    if let Some(next_str) =
-                        crate::pane_grid::move_focus(&panes, &active_id.to_string(), dir)
-                        && let Ok(next_id) = next_str.parse::<u64>()
-                    {
-                        self.active_session = Some(next_id);
-                    }
                 }
             }
             GpuiAction::SelectWorkTab => {
