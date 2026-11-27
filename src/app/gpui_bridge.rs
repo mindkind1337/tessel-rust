@@ -1437,6 +1437,7 @@ impl Tessel {
             .as_ref()
             .map(|s| crate::automations::AutomationsFile::load(s.directory()))
             .unwrap_or_default();
+        let notifications = super::notification_inbox::load(store.as_ref());
         let activity_store = store
             .as_ref()
             .map(|s| crate::side_panels_model::ActivityStore::load(s.directory()))
@@ -1620,7 +1621,7 @@ impl Tessel {
             teams_hub: Default::default(),
             team_mcp: Default::default(),
             teams_ui: Default::default(),
-            notifications: Default::default(),
+            notifications,
             notified_waiting_panes: Default::default(),
             activity_store,
             past_sessions_cache: Vec::new(),
@@ -8183,6 +8184,106 @@ mod panel_snapshot_tests {
         let app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
         assert_eq!(app.state.active_project, project);
         assert_eq!(app.active_session, Some(agent));
+        assert_eq!(app.notifications.items.len(), 3);
+        assert_eq!(app.notifications.unread_count(), 1);
+        assert_eq!(
+            app.notifications.items.last().unwrap().pane_id,
+            Some(other_shell)
+        );
+    }
+
+    #[test]
+    fn notification_history_restores_read_status_ids_and_clear_after_restart() {
+        use crate::dialogs_toolbar_model::NotificationKind;
+        use crate::dialogs_toolbar_ui::DialogsToolbarAction;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("state");
+        let open = || Tessel::new_for_gpui_in_dir(Some(dir.clone()), false, || {});
+        let mut app = open();
+        app.push_notification(NotificationKind::SystemNotice, "First", "", None);
+        app.push_notification(NotificationKind::ApprovalNeeded, "Second", "", None);
+        let first = app.notifications.items[0].id;
+        app.apply_gpui_action(GpuiAction::DialogsToolbar(
+            DialogsToolbarAction::OpenNotification(first),
+        ));
+        drop(app);
+        let mut app = open();
+        assert_eq!(app.notifications.items.len(), 2);
+        assert_eq!(app.notifications.items[0].id, first);
+        assert!(!app.notifications.items[0].unread);
+        assert!(app.notifications.items[1].unread);
+        let second = app.notifications.items[1].id;
+        app.apply_gpui_action(GpuiAction::DialogsToolbar(
+            DialogsToolbarAction::SetNotificationUnread(first, true),
+        ));
+        drop(app);
+        let mut app = open();
+        assert_eq!(app.notifications.unread_count(), 2);
+        app.apply_gpui_action(GpuiAction::DialogsToolbar(
+            DialogsToolbarAction::MarkAllNotificationsRead,
+        ));
+        drop(app);
+        let mut app = open();
+        assert_eq!(app.notifications.unread_count(), 0);
+        app.apply_gpui_action(GpuiAction::DialogsToolbar(
+            DialogsToolbarAction::ClearNotifications,
+        ));
+        drop(app);
+        let mut app = open();
+        assert!(app.notifications.items.is_empty());
+        app.push_notification(NotificationKind::SystemNotice, "New", "", None);
+        assert!(app.notifications.items[0].id > second);
+    }
+
+    #[test]
+    fn restored_notification_history_keeps_the_newest_hundred_entries() {
+        use crate::dialogs_toolbar_model::{
+            MAX_NOTIFICATIONS, NotificationCenter, NotificationItem, NotificationKind,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let items = (1..=102)
+            .map(|id| NotificationItem {
+                id,
+                kind: NotificationKind::SystemNotice,
+                title: id.to_string(),
+                detail: String::new(),
+                pane_id: None,
+                timestamp_ms: 0,
+                unread: true,
+                count: 1,
+            })
+            .collect();
+        let inbox = NotificationCenter { next_id: 1, items };
+        std::fs::write(
+            dir.path().join("notifications.json"),
+            serde_json::to_vec(&inbox).unwrap(),
+        )
+        .unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().to_owned()), false, || {});
+        assert_eq!(app.notifications.items.len(), MAX_NOTIFICATIONS);
+        assert_eq!(app.notifications.items[0].id, 3);
+        app.push_notification(NotificationKind::SystemNotice, "Latest", "", None);
+        assert_eq!(app.notifications.items.len(), MAX_NOTIFICATIONS);
+        assert_eq!(app.notifications.items.last().unwrap().id, 103);
+    }
+
+    #[test]
+    fn damaged_notification_history_does_not_block_the_workspace_or_new_alerts() {
+        use crate::dialogs_toolbar_model::NotificationKind;
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("notifications.json");
+        std::fs::write(&file, b"{incomplete").unwrap();
+        let open = || Tessel::new_for_gpui_in_dir(Some(temp.path().to_owned()), false, || {});
+        let mut app = open();
+        assert!(app.store.is_some());
+        assert!(app.notifications.items.is_empty());
+        app.push_notification(NotificationKind::SystemNotice, "Recovered", "", None);
+        let mut contender = open();
+        assert!(contender.store.is_none());
+        contender.push_notification(NotificationKind::SystemNotice, "Temporary", "", None);
+        drop(contender);
+        drop(app);
+        assert_eq!(open().notifications.items[0].title, "Recovered");
     }
 
     #[test]

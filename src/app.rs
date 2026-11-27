@@ -1,3 +1,4 @@
+mod notification_inbox;
 use crate::i18n::tr;
 use crate::{
     files::Document,
@@ -928,6 +929,7 @@ impl Tessel {
             .as_ref()
             .map(|s| crate::automations::AutomationsFile::load(s.directory()))
             .unwrap_or_default();
+        let notifications = notification_inbox::load(store.as_ref());
         let activity_store = store
             .as_ref()
             .map(|s| crate::side_panels_model::ActivityStore::load(s.directory()))
@@ -1092,7 +1094,7 @@ impl Tessel {
             teams_hub: Default::default(),
             team_mcp: Default::default(),
             teams_ui: Default::default(),
-            notifications: Default::default(),
+            notifications,
             notified_waiting_panes: Default::default(),
             activity_store,
             past_sessions_cache: Vec::new(),
@@ -3720,7 +3722,7 @@ impl Tessel {
                 && self.state.notification_prefs.notifications_enabled
                 && self.state.notification_prefs.in_app_alerts
             {
-                self.notifications.push_coalesced(
+                self.push_notification(
                     crate::dialogs_toolbar_model::NotificationKind::ApprovalNeeded,
                     "Agent waiting for response",
                     *detail,
@@ -3755,11 +3757,7 @@ impl Tessel {
         {
             layout.maximized = Some(id);
         }
-        for notification in &mut self.notifications.items {
-            if notification.pane_id == Some(id) {
-                notification.unread = false;
-            }
-        }
+        self.read_pane_notifications(id);
         self.active_session = Some(id);
         self.view = View::Work;
         self.save();
@@ -4532,7 +4530,7 @@ impl Tessel {
             "project:add" => self.open_add_project_modal(),
             "github" => self.open_github_modal(self.state.active_project),
             "linear" => self.open_linear_modal(),
-            "notifications:clear" => self.notifications.clear(),
+            "notifications:clear" => self.clear_notifications(),
             "worktree:new" => {
                 if let Some(pid) = self.state.active_project {
                     self.start_new_worktree_pane(
@@ -11363,7 +11361,7 @@ impl Tessel {
         if self.state.notification_prefs.notifications_enabled
             && self.state.notification_prefs.in_app_alerts
         {
-            self.notifications.push_coalesced(
+            self.push_notification(
                 crate::dialogs_toolbar_model::NotificationKind::AutomationRan,
                 format!("Automation started: {}", auto.name),
                 project.name.clone(),
@@ -13458,33 +13456,26 @@ impl Tessel {
             }
             DialogsToolbarAction::OpenNotification(id) => {
                 self.gpui_extra.notifications_popover_open = false;
-                if let Some(item) = self
+                let pane = self
                     .notifications
                     .items
-                    .iter_mut()
-                    .find(|item| item.id == id)
-                {
-                    item.unread = false;
-                    if let Some(pane) = item.pane_id {
-                        self.reveal_workspace_pane(pane);
-                    }
+                    .iter()
+                    .find(|n| n.id == id)
+                    .and_then(|n| n.pane_id);
+                self.set_notification_unread(id, false);
+                if let Some(pane) = pane {
+                    self.reveal_workspace_pane(pane);
                 }
             }
             DialogsToolbarAction::SetNotificationUnread(id, unread) => {
-                if let Some(item) = self
-                    .notifications
-                    .items
-                    .iter_mut()
-                    .find(|item| item.id == id)
-                {
-                    item.unread = unread;
-                }
+                self.set_notification_unread(id, unread);
             }
             DialogsToolbarAction::MarkAllNotificationsRead => {
                 self.notifications.mark_all_read();
+                self.persist_notifications();
             }
             DialogsToolbarAction::ClearNotifications => {
-                self.notifications.clear();
+                self.clear_notifications();
             }
         }
     }
