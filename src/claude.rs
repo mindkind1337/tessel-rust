@@ -288,7 +288,7 @@ impl Chat {
         {
             return Err("Invalid agent model or effort.".into());
         }
-        self.begin_text_as(prompt, prompt, "Tessel")?;
+        self.begin_text_as(prompt, "Tessel")?;
         Ok(Phase::Submitted)
     }
 
@@ -445,7 +445,12 @@ impl Chat {
         self.frame(value);
     }
     fn push(&mut self, role: &str, text: &str) {
-        self.transcript.push_back((role.into(), bounded(text)));
+        let displayed = if role == "Claude" {
+            bounded(text)
+        } else {
+            text.to_owned()
+        };
+        self.transcript.push_back((role.into(), displayed));
         while self.transcript.len() > 500
             || self.transcript.iter().map(|r| r.1.len()).sum::<usize>() > 2 * 1024 * 1024
         {
@@ -564,7 +569,7 @@ impl Chat {
     }
     fn begin(&mut self) -> Result<(), String> {
         let text = std::mem::take(&mut self.composer);
-        match self.begin_text(text.trim(), &text) {
+        match self.begin_text_as(&text, "You") {
             Ok(()) => Ok(()),
             Err(error) => {
                 self.composer = text;
@@ -572,19 +577,19 @@ impl Chat {
             }
         }
     }
-    fn begin_text(&mut self, text: &str, displayed: &str) -> Result<(), String> {
-        self.begin_text_as(text, displayed, "You")
-    }
-    fn begin_text_as(&mut self, text: &str, displayed: &str, role: &str) -> Result<(), String> {
+    fn begin_text_as(&mut self, text: &str, role: &str) -> Result<(), String> {
         if !self.ready || self.active {
             return Err("Claude is not ready for another message".into());
         }
-        if text.trim().is_empty() || text.len() > 65536 {
-            return Err("Message must be 1 to 65536 bytes".into());
+        if crate::chat::message_is_blank(text) {
+            return Err(tr("Message is empty.").into());
+        }
+        if !crate::chat::message_fits(text) {
+            return Err(tr(crate::chat::MESSAGE_TOO_LONG).into());
         }
         self.send(json!({"type":"user","uuid":uuid()?,"session_id":self.session,"parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"text","text":text}]}}))?;
         self.task_completion.cancel();
-        self.push(role, displayed);
+        self.push(role, text);
         self.active = true;
         self.interrupting = false;
         self.stream_row = None;
@@ -1044,7 +1049,7 @@ impl crate::initial_turn::Native for Chat {
         {
             return Err("Invalid model or effort for the task's first turn.".into());
         }
-        self.begin_text(prompt, prompt)?;
+        self.begin_text_as(prompt, "You")?;
         self.task_completion.arm();
         Ok(Phase::Submitted)
     }

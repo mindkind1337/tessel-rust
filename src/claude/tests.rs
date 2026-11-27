@@ -167,13 +167,13 @@ fn native_task_first_turn_claude_rejects_stale_accounts_resumes_and_transport_fa
 }
 
 #[test]
-fn native_task_first_turn_refactor_preserves_normal_claude_composer_behavior() {
+fn owner_message_preserves_whitespace_on_send_and_the_draft_on_failure() {
     let mut c = Chat::new(1, "synthetic".into(), None);
     let outgoing = c.ready_sender_for_test();
     c.gpui_set_composer("  Owner message\n".into());
     c.gpui_send_message();
     let frame = outgoing.try_recv().unwrap();
-    assert_eq!(frame["message"]["content"][0]["text"], "Owner message");
+    assert_eq!(frame["message"]["content"][0]["text"], "  Owner message\n");
     assert_eq!(c.transcript.back().unwrap().1, "  Owner message\n");
     assert!(c.composer_state().1.is_empty());
     let mut failed = Chat::new(1, "synthetic".into(), None);

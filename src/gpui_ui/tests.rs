@@ -1563,6 +1563,56 @@ fn gpui_modals_palette_finder_launch_notes_teams_and_popovers_roundtrip() {
 }
 
 #[test]
+fn native_chat_message_limit_matches_vue_and_preserves_original_text() {
+    // Each emoji occupies two JavaScript string units. This input exceeds
+    // both former Rust byte limits while fitting the reference exactly.
+    let text = format!(" {}\n", "😀".repeat(49_999));
+    assert!(crate::chat::message_is_blank(" \u{feff}\n"));
+    assert!(!crate::chat::message_is_blank("\u{85}"));
+    assert_eq!(text.encode_utf16().count(), 100_000);
+    assert!(crate::chat::message_fits(&"界".repeat(100_000)));
+    assert!(!crate::chat::message_fits(&format!("{text}x")));
+    for launch in [GpuiAction::LaunchCodexChat, GpuiAction::LaunchClaudeChat] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.synthetic_native_profiles(dir.path());
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+        app.apply_gpui_action(launch);
+        let pane = app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+        let outgoing = app.gpui_chat_sender_for_test(pane);
+        let id = app.gpui_chat_composer(pane).unwrap().0;
+        app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
+            pane_id: pane,
+            instance_id: id,
+            base: String::new(),
+            text: text.clone(),
+        });
+        assert_eq!(app.gpui_chat_composer(pane), Some((id, text.as_str())));
+        app.apply_gpui_action(GpuiAction::NativeChatSend {
+            pane_id: pane,
+            instance_id: id,
+            text: text.clone(),
+        });
+        let frame = outgoing.try_recv().unwrap();
+        assert_eq!(
+            frame
+                .pointer("/params/input/0/text")
+                .or_else(|| frame.pointer("/message/content/0/text"))
+                .and_then(|v| v.as_str()),
+            Some(text.as_str())
+        );
+        let snapshot = app.gpui_snapshot(960., 640., 4.);
+        let chat = snapshot.tiles[0].native_chat.as_ref().unwrap();
+        assert!(
+            chat.messages
+                .iter()
+                .any(|(role, body)| role == "You" && body == &text)
+        );
+        assert!(chat.composer.is_empty());
+    }
+}
+
+#[test]
 fn gpui_native_chat_draft_guards_scope_size_and_stale_events() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
@@ -1581,7 +1631,7 @@ fn gpui_native_chat_draft_guards_scope_size_and_stale_events() {
     for (instance_id, base, text) in [
         (id, "", "stale".into()),
         (id + 1, "draft", "other instance".into()),
-        (id, "draft", "x".repeat(128 * 1024 + 1)),
+        (id, "draft", "x".repeat(crate::chat::MESSAGE_UNITS + 1)),
     ] {
         app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {
             pane_id: pane,

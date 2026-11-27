@@ -723,18 +723,22 @@ pub(crate) fn render_native_chat_pane_body(
                         .px(px(12.0))
                         .py(px(8.0))
                         .rounded(px(tokens.radius_px))
-                        .bg(if chat.ready && !chat.composer.trim().is_empty() {
-                            tokens.accent
-                        } else {
-                            tokens.surface_3
-                        })
+                        .bg(
+                            if chat.ready && !crate::chat::message_is_blank(&chat.composer) {
+                                tokens.accent
+                            } else {
+                                tokens.surface_3
+                            },
+                        )
                         .text_size(px(12.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(if chat.ready && !chat.composer.trim().is_empty() {
-                            gpui::rgb(0xFF_FF_FF)
-                        } else {
-                            tokens.text_dim
-                        })
+                        .text_color(
+                            if chat.ready && !crate::chat::message_is_blank(&chat.composer) {
+                                gpui::rgb(0xFF_FF_FF)
+                            } else {
+                                tokens.text_dim
+                            },
+                        )
                         .cursor_pointer()
                         .on_click(cx.listener(move |root, _, window, cx| {
                             super::chat_inputs::submit(root, pane_id, composer_id, window, cx);

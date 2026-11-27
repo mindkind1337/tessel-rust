@@ -5607,7 +5607,7 @@ impl Tessel {
                 text,
             } => {
                 if self.gpui_chat_input_allowed(pane_id)
-                    && text.len() <= 128 * 1024
+                    && crate::chat::message_fits(&text)
                     && self.gpui_chat_composer(pane_id) == Some((instance_id, base.as_str()))
                 {
                     if let Some(c) = self

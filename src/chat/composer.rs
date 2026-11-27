@@ -70,7 +70,7 @@ pub(crate) fn edit(
             .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
             .desired_width(f32::INFINITY),
     );
-    keys.submit &= !draft.trim().is_empty();
+    keys.submit &= !crate::chat::message_is_blank(draft);
     keys
 }
 

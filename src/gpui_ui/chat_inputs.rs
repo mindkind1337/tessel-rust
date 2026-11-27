@@ -145,7 +145,7 @@ impl Inputs {
                     return;
                 }
                 let base = b.synced.clone();
-                let too_long = state.read(cx).as_str().len() > 128 * 1024;
+                let too_long = !crate::chat::message_fits(state.read(cx).as_str());
                 if let Some(b) = root.chat_inputs.bindings.get_mut(&pane) {
                     b.too_long = too_long;
                 }
@@ -264,9 +264,9 @@ impl Inputs {
                         .text_size(px(11.))
                         .text_color(tokens.warn)
                         .child(if french {
-                            "Message trop long (128 Kio maximum). Raccourcissez le brouillon."
+                            "Le message dépasse 100 000 unités UTF-16. Raccourcissez le brouillon."
                         } else {
-                            "Message too long (128 KiB maximum). Shorten the draft."
+                            crate::chat::MESSAGE_TOO_LONG
                         }),
                 )
             })
@@ -297,7 +297,7 @@ pub(crate) fn submit(
     if state.update(cx, |s, cx| s.marked_text_range(window, cx).is_some()) {
         return;
     }
-    if state.read(cx).as_str().len() > 128 * 1024 {
+    if !crate::chat::message_fits(state.read(cx).as_str()) {
         if let Some(b) = root.chat_inputs.bindings.get_mut(&pane) {
             b.too_long = true;
         }
@@ -599,7 +599,12 @@ mod tests {
                 let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
                 let input = root.chat_inputs.get(pane).unwrap().clone();
                 input.update(cx, |s, cx| {
-                    s.replace_text_in_range(None, &"x".repeat(128 * 1024 + 1), window, cx)
+                    s.replace_text_in_range(
+                        None,
+                        &"x".repeat(crate::chat::MESSAGE_UNITS + 1),
+                        window,
+                        cx,
+                    )
                 });
                 (pane, input)
             })
@@ -609,10 +614,18 @@ mod tests {
         view.update(cx, |root, window, cx| {
             assert_eq!(root.chat_inputs.get(pane), Some(&input));
             assert!(root.chat_inputs.bindings[&pane].too_long);
-            assert_eq!(input.read(cx).as_str().len(), 128 * 1024 + 1);
+            assert_eq!(
+                input.read(cx).as_str().len(),
+                crate::chat::MESSAGE_UNITS + 1
+            );
             assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "");
             input.update(cx, |s, cx| {
-                s.replace_text_in_range(Some(0..128 * 1024 + 1), "shortened", window, cx)
+                s.replace_text_in_range(
+                    Some(0..crate::chat::MESSAGE_UNITS + 1),
+                    "shortened",
+                    window,
+                    cx,
+                )
             });
         })
         .unwrap();

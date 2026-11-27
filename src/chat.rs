@@ -49,6 +49,21 @@ pub struct NativeChatViewSnapshot {
     pub questions_can_submit: bool,
 }
 
+// Vue's chat:send validates JavaScript String.length, measured in UTF-16 units.
+pub(crate) const MESSAGE_UNITS: usize = 100_000;
+pub(crate) const MESSAGE_TOO_LONG: &str =
+    "Message exceeds 100,000 UTF-16 units. Shorten the draft.";
+pub(crate) fn message_fits(text: &str) -> bool {
+    text.len() <= MESSAGE_UNITS
+        || (text.len() <= 3 * MESSAGE_UNITS && text.encode_utf16().count() <= MESSAGE_UNITS)
+}
+
+// ECMAScript trim includes the byte-order mark and excludes NEXT LINE.
+pub(crate) fn message_is_blank(text: &str) -> bool {
+    text.chars()
+        .all(|c| c == '\u{feff}' || (c != '\u{85}' && c.is_whitespace()))
+}
+
 pub(crate) fn next_input_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -597,11 +612,11 @@ impl Chat {
     }
 
     fn send_message(&mut self) {
-        if !self.ready || self.composer.trim().is_empty() || self.starting_turn {
+        if !self.ready || message_is_blank(&self.composer) || self.starting_turn {
             return;
         }
-        if self.composer.len() > 128 * 1024 {
-            self.error = "Message exceeds 128 KiB.".into();
+        if !message_fits(&self.composer) {
+            self.error = tr(MESSAGE_TOO_LONG).into();
             return;
         }
         let text = self.composer.clone();
@@ -1517,6 +1532,27 @@ impl crate::initial_turn::Native for Chat {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_chat_rejected_sends_retain_the_exact_draft_for_both_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = format!("{} ", "😀".repeat(50_000));
+        let mut codex = super::Chat::new(1, dir.path().to_owned());
+        let codex_out = codex.ready_sender_for_test();
+        codex.gpui_set_composer(text.clone());
+        let id = codex.composer_state().0;
+        codex.gpui_send_message();
+        assert_eq!(codex.composer_state(), (id, text.as_str()));
+        assert!(codex_out.try_recv().is_err());
+
+        let mut claude = crate::claude::Chat::new(1, dir.path().to_owned(), None);
+        let claude_out = claude.ready_sender_for_test();
+        claude.gpui_set_composer(text.clone());
+        let id = claude.composer_state().0;
+        claude.gpui_send_message();
+        assert_eq!(claude.composer_state(), (id, text.as_str()));
+        assert!(claude_out.try_recv().is_err());
+    }
+
     #[test]
     fn native_review_codex_waits_for_draft_approval_question_and_keeps_owner_posture() {
         use super::*;
