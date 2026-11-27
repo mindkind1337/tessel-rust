@@ -262,6 +262,20 @@ impl TesselGpuiRoot {
             ),
             gpui::KeyBinding::new("f5", browser_input::Reload, Some("TesselBrowserAddress")),
             gpui::KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-shift-r"
+                } else {
+                    "ctrl-shift-r"
+                },
+                browser_input::HardReload,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new(
+                "ctrl-f5",
+                browser_input::HardReload,
+                Some("TesselBrowserAddress"),
+            ),
+            gpui::KeyBinding::new(
                 "enter",
                 terminal_find_inputs::Next,
                 Some("TesselTerminalFind"),

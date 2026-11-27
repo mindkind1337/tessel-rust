@@ -20,7 +20,7 @@ pub(crate) struct Input {
 }
 gpui::actions!(
     tessel_browser_address,
-    [Navigate, Dismiss, Back, Forward, Reload]
+    [Navigate, Dismiss, Back, Forward, Reload, HardReload]
 );
 fn input(root: &TesselGpuiRoot, side: bool) -> &Input {
     if side {
@@ -161,6 +161,7 @@ impl Input {
         };
         let back = command.clone();
         let forward = command.clone();
+        let reload = command.clone();
         div()
             .on_action(cx.listener(move |root, _: &Back, window, cx| {
                 back(root, AddressCommand::Back, window, cx)
@@ -169,7 +170,10 @@ impl Input {
                 forward(root, AddressCommand::Forward, window, cx)
             }))
             .on_action(cx.listener(move |root, _: &Reload, window, cx| {
-                command(root, AddressCommand::Reload, window, cx)
+                reload(root, AddressCommand::Reload, window, cx)
+            }))
+            .on_action(cx.listener(move |root, _: &HardReload, window, cx| {
+                command(root, AddressCommand::HardReload, window, cx)
             }))
             .flex_1()
             .min_w_0()

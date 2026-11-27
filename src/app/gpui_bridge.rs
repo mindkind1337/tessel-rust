@@ -848,6 +848,7 @@ pub(crate) enum AddressCommand {
     Back,
     Forward,
     Reload,
+    HardReload,
 }
 
 #[allow(dead_code)]
@@ -6858,6 +6859,7 @@ impl Tessel {
                         AddressCommand::Back => page.go_back_now(),
                         AddressCommand::Forward => page.go_forward_now(),
                         AddressCommand::Reload => page.reload_now(),
+                        AddressCommand::HardReload => page.hard_reload(),
                     }
                 }
                 #[cfg(not(windows))]

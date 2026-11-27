@@ -171,6 +171,7 @@
   "Private browser profile for this Rust app. No cookies or passwords are imported from Tessel.": "Profil privé pour cette application Rust. Aucun témoin ni mot de passe n’est importé de Tessel.",
   "Start browser": "Démarrer le navigateur",
   "Stop": "Arrêter",
+  "Could not reload the page without its cache": "Impossible de recharger la page sans utiliser son cache",
   "Reload": "Recharger",
   "Go": "Ouvrir",
   "Downloads": "Téléchargements",

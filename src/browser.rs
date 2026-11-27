@@ -450,6 +450,33 @@ impl Browser {
         }
     }
 
+    pub fn hard_reload(&self) {
+        use windows::core::HSTRING;
+        use wry::WebViewExtWindows as _;
+        let Some(view) = &self.view else { return };
+        let sender = self.sender.clone();
+        let failure = "Could not reload the page without its cache";
+        let done = webview2_com::CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+            move |status, _| {
+                if status.is_err() {
+                    let _ = sender.send(Event::Error(tr(failure).to_owned()));
+                }
+                Ok(())
+            },
+        ));
+        if unsafe {
+            view.webview().CallDevToolsProtocolMethod(
+                &HSTRING::from("Page.reload"),
+                &HSTRING::from(r#"{"ignoreCache":true}"#),
+                &done,
+            )
+        }
+        .is_err()
+        {
+            let _ = self.sender.send(Event::Error(tr(failure).to_owned()));
+        }
+    }
+
     pub fn reload_now(&self) {
         if let Some(view) = &self.view {
             let _ = view.reload();
@@ -1175,6 +1202,20 @@ impl Browser {
         }
         let focus_url =
             shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
+        let hard_reload = crate::app::take_fresh_shortcut(
+            ui.ctx(),
+            shortcuts,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::R,
+        ) || crate::app::take_fresh_shortcut(
+            ui.ctx(),
+            shortcuts,
+            egui::Modifiers::CTRL,
+            egui::Key::F5,
+        );
+        if hard_reload {
+            self.hard_reload();
+        }
         let reload_shortcut = shortcuts
             && ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
@@ -1391,8 +1432,13 @@ mod tests {
             ("alt-right", "history.state?.step === 1"),
             ("f5", "document.querySelector('#draft')?.value === ''"),
             ("ctrl-r", "document.querySelector('#draft')?.value === ''"),
+            (
+                "ctrl-shift-r",
+                "document.querySelector('#draft')?.value === ''",
+            ),
+            ("ctrl-f5", "document.querySelector('#draft')?.value === ''"),
         ] {
-            if matches!(key, "f5" | "ctrl-r") {
+            if matches!(key, "f5" | "ctrl-r" | "ctrl-f5" | "ctrl-shift-r") {
                 view.update(cx, |root, _, _| wait_for(root.app.browser.view.as_ref().unwrap(),
                     "(document.querySelector('#draft').value = 'before reload') === 'before reload'")).unwrap();
             }
@@ -1406,6 +1452,76 @@ mod tests {
             })
             .unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn hard_reload_refetches_a_fresh_cached_subresource() {
+        use crate::webview_test_support::{hidden_parent, wait_for};
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let mut version = 0;
+            while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut line = String::new();
+                if BufReader::new(&socket).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let (mime, cache, body) = if line.starts_with("GET /asset.js ") {
+                    version += 1;
+                    (
+                        "text/javascript",
+                        "public, max-age=3600",
+                        format!("window.version={version};"),
+                    )
+                } else {
+                    (
+                        "text/html",
+                        "no-store",
+                        "<script src='/asset.js'></script>".into(),
+                    )
+                };
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nCache-Control: {cache}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut browser = Browser::default();
+        browser
+            .create_with_profile(&parent, dir.path().join("profile"))
+            .unwrap();
+        browser.open_url(&format!("{base}/one"));
+        let view = browser.view.as_ref().unwrap();
+        wait_for(view, "window.version === 1");
+        browser.open_url(&format!("{base}/two"));
+        let view = browser.view.as_ref().unwrap();
+        wait_for(view, "location.pathname === '/two' && window.version === 1");
+        browser.hard_reload();
+        wait_for(view, "location.pathname === '/two' && window.version === 2");
+        drop(stop);
+        server.join().unwrap();
     }
 
     #[test]
