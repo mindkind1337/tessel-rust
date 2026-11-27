@@ -9,7 +9,7 @@ use webview2_com::{
 };
 use windows::core::{HSTRING, Interface, PWSTR};
 use wry::WebViewExtWindows;
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, PartialEq, Eq)]
 pub(super) struct Record {
     pub id: u64,
     pub path: PathBuf,

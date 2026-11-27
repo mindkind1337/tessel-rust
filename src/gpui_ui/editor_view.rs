@@ -2630,6 +2630,62 @@ pub(crate) fn render_browser_stage(
                 )
                 .child(SharedString::from(b.cookie_import_status.clone())),
         )
+        .when(b.downloads_open && !b.downloads.is_empty(), |el| {
+            let tab = b.tab_id;
+            let mut rows = div()
+                .id("browser-download-list")
+                .max_h(px(160.))
+                .overflow_y_scroll();
+            for (id, status, received, total, path, error) in &b.downloads {
+                let id = *id;
+                let total = total.map_or_else(|| "?".into(), |n| n.to_string());
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let status_label = crate::i18n::tr(status);
+                let mut actions = div().flex().gap(px(10.));
+                if status == "Downloading" {
+                    actions = actions.child(
+                        div()
+                            .id(("browser-download-cancel", id))
+                            .cursor_pointer()
+                            .text_color(tokens.accent)
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                root.dispatch(GpuiAction::BrowserCancelDownload { tab, id }, cx)
+                            }))
+                            .child(crate::i18n::tr("Cancel")),
+                    );
+                }
+                if status == "Completed" {
+                    actions = actions.child(
+                        div()
+                            .id(("browser-download-reveal", id))
+                            .cursor_pointer()
+                            .text_color(tokens.accent)
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                root.dispatch(GpuiAction::BrowserRevealDownload { tab, id }, cx)
+                            }))
+                            .child(crate::i18n::tr("Show in folder")),
+                    );
+                }
+                rows = rows.child(
+                    div()
+                        .px(px(10.))
+                        .py(px(4.))
+                        .text_size(px(12.))
+                        .border_b_1()
+                        .border_color(tokens.border)
+                        .child(format!("{name} — {status_label}   {received} / {total} B"))
+                        .child(path.clone())
+                        .when_some(error.as_ref(), |row, error| {
+                            row.child(div().text_color(tokens.danger).child(error.clone()))
+                        })
+                        .child(actions),
+                );
+            }
+            el.child(rows)
+        })
         .when_some(b.popup_url.as_ref(), |el, _popup| {
             el.child(
                 div()

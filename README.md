@@ -202,6 +202,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Windows browser
 
+- Open Downloads in a browser tab to see file names, transfer progress, status and saved paths. Cancel an active transfer or use **Show in folder** to select a downloaded file in Windows Explorer.
+
 - Embedded WebView2, back/forward/reload (`Ctrl+R` / `F5`), address bar (`Ctrl+L`), separate persistent Rust-app profile and no website-to-native IPC bridge.
 - The address bar accepts bare domains, local development addresses such as `localhost:5173`, and Google search terms. Navigation rejects URLs containing usernames/passwords and native schemes; agent navigation still requires an explicit URL.
 - The owner browser in both renderers can import an explicitly selected UTF-8 JSON or Netscape cookie export (up to 32 MiB). The result reports cookies actually accepted by WebView2 and skipped entries; host-only/domain scope, Secure, HttpOnly and session expiry are preserved. Google cookies are excluded. Import has no agent tool or Live Share endpoint, and owner cookies never copy into project-agent profiles. Direct browser-database detection/decryption and the full import dialog remain unported.

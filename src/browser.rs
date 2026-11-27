@@ -470,6 +470,25 @@ impl Browser {
             .collect()
     }
 
+    pub fn reveal_download(&self, id: u64) {
+        let Some(row) = self
+            .downloads
+            .iter()
+            .find(|row| row.id == id && row.status == "Completed")
+        else {
+            return;
+        };
+        let path = row.path.clone();
+        let errors = self.sender.clone();
+        std::thread::spawn(move || {
+            if let Some(folder) = path.parent()
+                && let Err(error) = crate::native_reveal::reveal(folder, &path)
+            {
+                let _ = errors.send(Event::Error(error));
+            }
+        });
+    }
+
     pub fn cancel_download_now(&mut self, id: u64) {
         if let Err(e) = self.download_tracker.cancel(id) {
             self.error = e;
@@ -917,9 +936,10 @@ impl Browser {
         }
     }
     pub fn poll(&mut self) -> bool {
-        let mut changed = false;
         self.popups.prune_closed();
-        self.downloads = self.download_tracker.poll();
+        let downloads = self.download_tracker.poll();
+        let mut changed = self.downloads != downloads;
+        self.downloads = downloads;
         self.finishing_views.retain(|view| {
             self.downloads
                 .iter()
@@ -1139,6 +1159,7 @@ impl Browser {
                     *folder = path;
                 }
             }
+            let mut reveal = None;
             egui::ScrollArea::vertical()
                 .max_height(160.0)
                 .show(ui, |ui| {
@@ -1161,12 +1182,20 @@ impl Browser {
                                 ui.colored_label(egui::Color32::LIGHT_RED, error);
                             }
                             ui.label(path.display().to_string());
+                            if status == "Completed"
+                                && ui.small_button(tr("Show in folder")).clicked()
+                            {
+                                reveal = Some(download.id);
+                            }
                             if ui.small_button(tr("Copy path")).clicked() {
                                 ui.ctx().copy_text(path.display().to_string());
                             }
                         });
                     }
                 });
+            if let Some(id) = reveal {
+                self.reveal_download(id);
+            }
         }
         if self.downloads.iter().any(|d| d.status == "Downloading") {
             ui.ctx()

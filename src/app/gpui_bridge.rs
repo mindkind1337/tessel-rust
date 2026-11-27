@@ -470,6 +470,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpuiBrowserSnapshot {
+    pub tab_id: u64,
     pub started: bool,
     pub address: String,
     pub popup_url: Option<String>,
@@ -1071,7 +1072,14 @@ pub(crate) enum GpuiAction {
     BrowserAcceptPopup,
     BrowserDismissPopup,
     BrowserToggleDownloads,
-    BrowserCancelDownload(u64),
+    BrowserCancelDownload {
+        tab: u64,
+        id: u64,
+    },
+    BrowserRevealDownload {
+        tab: u64,
+        id: u64,
+    },
     // Sidebar (`ProjectAction`) & Options
     Project(crate::project_panel::ProjectAction),
     SetSidebarPrefs(crate::workspace::SidebarPreferences),
@@ -3970,6 +3978,7 @@ impl Tessel {
 
         #[cfg(windows)]
         let browser = GpuiBrowserSnapshot {
+            tab_id: self.browser.tab_id,
             started: self.browser.is_started(),
             address: self.browser.address_str().to_owned(),
             popup_url: self.browser.popup_url().map(str::to_owned),
@@ -6894,11 +6903,21 @@ impl Tessel {
                 #[cfg(windows)]
                 self.browser.toggle_downloads_open();
             }
-            GpuiAction::BrowserCancelDownload(id) => {
+            GpuiAction::BrowserCancelDownload { tab, id } => {
                 #[cfg(windows)]
-                self.browser.cancel_download_now(id);
+                if self.browser.tab_id == tab {
+                    self.browser.cancel_download_now(id);
+                }
                 #[cfg(not(windows))]
-                let _ = id;
+                let _ = (tab, id);
+            }
+            GpuiAction::BrowserRevealDownload { tab, id } => {
+                #[cfg(windows)]
+                if self.browser.tab_id == tab {
+                    self.browser.reveal_download(id);
+                }
+                #[cfg(not(windows))]
+                let _ = (tab, id);
             }
             GpuiAction::Project(pa) => {
                 let ctx = self.gpui_extra.dummy_egui_ctx.clone();
@@ -9579,6 +9598,17 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::CloseBrowserTab);
         app.apply_gpui_action(GpuiAction::SelectProject(ids[1]));
         assert_eq!(app.browser.address_str(), "https://two.example/");
+        let current_tab = app.browser.tab_id;
+        app.apply_gpui_action(GpuiAction::BrowserCancelDownload {
+            tab: current_tab.wrapping_sub(1),
+            id: 1,
+        });
+        assert!(app.browser.error_str().is_empty());
+        app.apply_gpui_action(GpuiAction::BrowserCancelDownload {
+            tab: current_tab,
+            id: 1,
+        });
+        assert_eq!(app.browser.error_str(), "Unknown download ID");
         assert!(!app.browser.downloads_open());
         app.apply_gpui_action(GpuiAction::SelectProject(ids[0]));
         assert!(
