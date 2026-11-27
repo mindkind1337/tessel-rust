@@ -599,6 +599,51 @@ fn status_bar_resource_sparklines_and_header_badges_match_reference() {
 }
 
 #[test]
+fn finder_scores_and_result_order_match_vue_for_unicode_and_path_boundaries() {
+    // Outputs of src/shared/fuzzy.js in the Vue application.
+    for (query, path, expected) in [
+        ("app", "app.rs", 59.94),
+        ("app", "src/App.rs", 50.90),
+        ("app", "apps/App.rs", 53.89),
+        (".env", ".env", 67.96),
+        ("😀x", "src/😀X.txt", 41.89),
+        ("i\u{307}", "İ.txt", 47.94),
+        ("ος", "ΟΣ.txt", -1.),
+        ("\u{feff} a", "a.txt", 38.95),
+        ("a\u{85}b", "ab.rs", -1.),
+        ("a\u{85}b", "a\u{85}b.rs", 59.94),
+        ("ab", "a\u{feff}B.rs", 14.94),
+        ("fb", "src/fastBuffer.js", 11.83),
+        ("💾", "a💾.rs", 22.94),
+    ] {
+        assert!(
+            (fuzzy_score(query, path) - expected).abs() < 1e-9,
+            "{query:?}, {path:?}"
+        );
+    }
+    let paths = [
+        "src/App.rs",
+        "app.rs",
+        "apps/App.rs",
+        "app-old.rs",
+        "UI/app.rs",
+    ]
+    .map(String::from);
+    assert_eq!(
+        fuzzy_filter("app", &paths, 60),
+        [
+            "app.rs",
+            "apps/App.rs",
+            "UI/app.rs",
+            "src/App.rs",
+            "app-old.rs"
+        ]
+    );
+    let tied = ["x/a.rs", "y/a.rs", "z/a.rs"].map(String::from);
+    assert_eq!(fuzzy_filter("a", &tied, 2), tied[..2]);
+}
+
+#[test]
 fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
     assert_eq!(FILE_FINDER_LIMIT, 60);
     assert_eq!(MAX_LISTED_FILES, 20_000);

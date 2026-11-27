@@ -29,83 +29,71 @@ pub fn clamp_finder_query(query: &str) -> String {
     query.chars().take(MAX_FINDER_QUERY_CHARS).collect()
 }
 
+// ECMAScript whitespace includes the byte-order mark and excludes NEXT LINE.
+fn finder_space(ch: char) -> bool {
+    ch == '\u{feff}' || (ch != '\u{0085}' && ch.is_whitespace())
+}
+
+fn finder_query(query: &str) -> String {
+    query
+        .to_lowercase()
+        .chars()
+        .filter(|&c| !finder_space(c))
+        .collect()
+}
+
 #[must_use]
 pub fn fuzzy_score(query: &str, path: &str) -> f64 {
-    let q_chars: Vec<char> = query
-        .chars()
-        .take(MAX_FINDER_QUERY_CHARS)
-        .flat_map(char::to_lowercase)
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    if q_chars.is_empty() {
-        return 0.0;
+    score_normalized_query(&finder_query(query), path)
+}
+
+fn score_normalized_query(query: &str, path: &str) -> f64 {
+    if query.is_empty() {
+        return 0.;
     }
-
-    let p_chars: Vec<char> = path.chars().collect();
-    let lower_chars: Vec<char> = p_chars
-        .iter()
-        .map(|&c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
-
-    let name_start = lower_chars
-        .iter()
-        .rposition(|&c| c == '/' || c == '\\')
-        .map_or(0, |idx| idx + 1);
-
-    let mut qi = 0usize;
-    let mut score = 0.0f64;
-    let mut run = 0usize;
-    let mut last: Option<usize> = None;
-
-    for i in 0..lower_chars.len() {
-        if qi >= q_chars.len() {
-            break;
-        }
-        if lower_chars[i] != q_chars[qi] {
-            continue;
-        }
-        run = if qi > 0 && last == Some(i - 1) {
-            run + 1
-        } else {
-            0
+    let folded = path.to_lowercase();
+    let name = folded.rsplit(['/', '\\']).next().unwrap_or_default();
+    // Vue iterates query code points but indexes both path strings in UTF-16 units.
+    // Lowercasing can change length, so keep the original positions for word boundaries.
+    let lower: Vec<u16> = folded.encode_utf16().collect();
+    let original: Vec<u16> = path.encode_utf16().collect();
+    let name_start = lower.len() - name.encode_utf16().count();
+    let mut from = 0;
+    let mut run = 0.0;
+    let mut score = 0.0;
+    for ch in query.chars() {
+        let mut buffer = [0; 2];
+        let needle = ch.encode_utf16(&mut buffer);
+        let Some(offset) = lower[from..]
+            .windows(needle.len())
+            .position(|w| w == needle)
+        else {
+            return -1.;
         };
-        score += (1 + run * 3) as f64;
+        let i = from + offset;
+        run = if offset == 0 { run + 1.0 } else { 0.0 };
+        score += 1.0 + run * 3.0;
         if i >= name_start {
             score += 2.0;
         }
-        let prev = i.checked_sub(1).map(|idx| lower_chars[idx]);
-        let camel_boundary = i
-            .checked_sub(1)
-            .is_some_and(|idx| p_chars[i] != lower_chars[i] && p_chars[idx] == lower_chars[idx]);
         let boundary = i == 0
-            || prev
-                .is_some_and(|ch| matches!(ch, '/' | '\\' | '.' | '_' | '-') || ch.is_whitespace())
-            || camel_boundary;
+            || original
+                .get(i - 1)
+                .and_then(|&c| char::from_u32(c.into()))
+                .is_some_and(|c| matches!(c, '/' | '\\' | '.' | '_' | '-') || finder_space(c))
+            || (original.get(i) != lower.get(i) && original.get(i - 1) == lower.get(i - 1));
         if boundary {
             score += 3.0;
         }
-        last = Some(i);
-        qi += 1;
+        from = i + 1;
     }
-
-    if qi < q_chars.len() {
-        return -1.0;
-    }
-
-    let q_str: String = q_chars.iter().collect();
-    let name: String = lower_chars[name_start..].iter().collect();
-    if name.contains(&q_str) {
+    if name.contains(query) {
         score += 20.0;
     }
-    let stem = match name.rfind('.') {
-        Some(dot) if dot > 0 => &name[..dot],
-        _ => name.as_str(),
-    };
-    if stem == q_str {
+    if name.rsplit_once('.').map_or(name, |(stem, _)| stem) == query {
         score += 10.0;
     }
-
-    score - (lower_chars.len() as f64) * 0.01
+    score - lower.len() as f64 * 0.01
 }
 
 #[must_use]
@@ -113,8 +101,8 @@ pub fn fuzzy_filter(query: &str, paths: &[String], limit: usize) -> Vec<String> 
     if limit == 0 {
         return Vec::new();
     }
-    let has_non_ws = query.chars().any(|c| !c.is_whitespace());
-    if !has_non_ws {
+    let query = finder_query(query);
+    if query.is_empty() {
         return paths.iter().take(limit).cloned().collect();
     }
 
@@ -122,7 +110,7 @@ pub fn fuzzy_filter(query: &str, paths: &[String], limit: usize) -> Vec<String> 
         .iter()
         .enumerate()
         .filter_map(|(idx, p)| {
-            let s = fuzzy_score(query, p);
+            let s = score_normalized_query(&query, p);
             (s >= 0.0).then_some((idx, s, p))
         })
         .collect();
