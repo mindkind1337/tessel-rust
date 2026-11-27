@@ -1070,7 +1070,8 @@ fn render_code_or_diff_surface(
             cx.notify();
         }));
 
-    for (line_no, raw_line) in doc.preview_lines.iter().enumerate() {
+    for (line_no, raw_line) in doc.text.lines().take(500).enumerate() {
+        let raw_line = raw_line.replace('\t', "    ");
         let is_modified = doc.hunk_lines.contains(&line_no);
         let is_match = doc.match_lines.contains(&line_no);
 
@@ -1115,7 +1116,7 @@ fn render_code_or_diff_surface(
                     .child(SharedString::from(raw_line.clone())),
             );
         } else {
-            let spans = tokenize_spans(raw_line, doc.lang);
+            let spans = tokenize_spans(&raw_line, doc.lang);
             if spans.is_empty() {
                 line_content = line_content.child(
                     div()

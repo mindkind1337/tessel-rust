@@ -446,11 +446,10 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub match_count: usize,
     pub match_index: usize,
     pub match_lines: Vec<usize>,
-    pub hunk_lines: Vec<usize>,
+    pub hunk_lines: std::sync::Arc<[usize]>,
     pub scroll_to_line: Option<usize>,
     pub line_count: usize,
-    pub text: String,
-    pub preview_lines: Vec<String>,
+    pub text: std::sync::Arc<String>,
     pub force_large_markdown_render: bool,
     pub sheet: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
     pub json_preview: Option<crate::rich_previews::JsonDocumentPreview>,
@@ -4230,17 +4229,12 @@ impl Tessel {
                     | "jsonl"
                     | "ndjson"
             );
+        let display = doc.display_text();
         let line_count = if doc.pdf.is_some() || doc.office.is_some() || doc.image.is_some() {
             0
         } else {
-            doc.text.lines().count().max(1)
+            display.line_count
         };
-        let preview_lines: Vec<String> = doc
-            .text
-            .lines()
-            .take(500)
-            .map(|l| l.replace('\t', "    "))
-            .collect();
 
         let matches = if doc.tools.find_open && !doc.tools.find_query.is_empty() {
             crate::files::find_char_matches(&doc.text, &doc.tools.find_query)
@@ -4254,16 +4248,6 @@ impl Tessel {
             doc.tools.match_index.min(match_count - 1)
         };
         let match_lines: Vec<usize> = matches.iter().map(|m| m.2).collect();
-        let hunk_lines: Vec<usize> = if !doc.media
-            && let Some(orig) = doc.original_text()
-        {
-            crate::files::changed_line_hunks(orig, &doc.text)
-                .into_iter()
-                .map(|(_, line)| line)
-                .collect()
-        } else {
-            Vec::new()
-        };
         let scroll_to_line = doc.tools.pending_scroll_line;
 
         let sheet = if doc.preview_mode && matches!(extension.as_str(), "csv" | "tsv") {
@@ -4345,7 +4329,7 @@ impl Tessel {
             extension,
             lang,
             is_diff,
-            dirty: doc.dirty(),
+            dirty: display.dirty,
             preview_mode: doc.preview_mode,
             can_toggle_preview,
             media: doc.media,
@@ -4363,11 +4347,10 @@ impl Tessel {
             match_count,
             match_index,
             match_lines,
-            hunk_lines,
+            hunk_lines: display.hunk_lines,
             scroll_to_line,
             line_count,
-            text: doc.text.clone(),
-            preview_lines,
+            text: display.text,
             force_large_markdown_render: doc.force_large_markdown_render,
             sheet,
             json_preview,
@@ -11510,5 +11493,39 @@ mod panel_snapshot_tests {
         app.state.panels.right_open = true;
         app.build_side_panels_snapshot(false);
         assert!(app.gpui_extra.conversation_loader.requested());
+    }
+}
+
+#[cfg(test)]
+mod document_display_tests {
+    use super::Tessel;
+    use std::{fs, sync::Arc};
+
+    #[test]
+    fn large_editor_snapshots_share_text_and_hunks_until_the_draft_or_baseline_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.txt");
+        fs::write(&path, vec![b'x'; crate::files::MAX_LOCAL_EDIT_BYTES]).unwrap();
+        let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+        let snapshot = |doc: &mut _| Tessel::build_document_summary(0, doc, Default::default());
+        let first = snapshot(&mut doc);
+        let idle = snapshot(&mut doc);
+        assert!(Arc::ptr_eq(&first.text, &idle.text));
+        assert!(!idle.dirty);
+        doc.text.replace_range(1..2, "\n");
+        let changed = snapshot(&mut doc);
+        let again = snapshot(&mut doc);
+        assert!(Arc::ptr_eq(&changed.text, &again.text));
+        assert!(Arc::ptr_eq(&changed.hunk_lines, &again.hunk_lines));
+        assert_eq!(changed.line_count, 2);
+        assert_eq!(first.line_count, 1);
+        assert_eq!(first.text.as_bytes()[1], b'x');
+        assert!(!changed.hunk_lines.is_empty());
+        assert!(changed.dirty);
+        doc.save(None).unwrap();
+        let saved = snapshot(&mut doc);
+        assert!(!saved.dirty);
+        assert!(saved.hunk_lines.is_empty());
+        assert_eq!(saved.text.len(), crate::files::MAX_LOCAL_EDIT_BYTES);
     }
 }

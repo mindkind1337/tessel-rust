@@ -1802,7 +1802,7 @@ impl Input {
                 binding.indentation = editor_indent::Options::detect(&doc.text);
             }
             binding.disk_reload = doc.disk_reload;
-            if binding.state.read(cx).as_str() == doc.text {
+            if binding.state.read(cx).as_str() == doc.text.as_str() {
                 if restore_focus {
                     window.focus(&binding.state.read(cx).focus_handle(cx), cx);
                 }
@@ -1864,7 +1864,7 @@ impl Input {
             id,
             Binding {
                 state,
-                synced: doc.text.clone(),
+                synced: doc.text.as_ref().clone(),
                 disk_reload: doc.disk_reload,
                 _changed: changed,
                 _caret: caret,

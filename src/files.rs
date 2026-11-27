@@ -143,8 +143,17 @@ pub(crate) struct DiskComparison {
     pub(crate) patch: std::sync::OnceLock<crate::saved_version_diff::Patch>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct DisplayText {
+    pub text: std::sync::Arc<String>,
+    pub line_count: usize,
+    pub dirty: bool,
+    pub hunk_lines: std::sync::Arc<[usize]>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    display_text: Option<DisplayText>,
     pub(crate) disk_revision: u64,
     pub(crate) disk_reload: u64,
     pub(crate) conflict_disk: Option<std::sync::Arc<str>>,
@@ -506,6 +515,31 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
+    pub(crate) fn display_text(&mut self) -> DisplayText {
+        if let Some(cached) = &self.tools.display_text
+            && cached.text.as_str() == self.text
+        {
+            return cached.clone();
+        }
+        let dirty = self.dirty();
+        let hunk_lines = if dirty && let Some(original) = self.original_text() {
+            changed_line_hunks(original, &self.text)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        } else {
+            Default::default()
+        };
+        let display = DisplayText {
+            text: std::sync::Arc::new(self.text.clone()),
+            line_count: self.text.lines().count().max(1),
+            dirty,
+            hunk_lines,
+        };
+        self.tools.display_text = Some(display.clone());
+        display
+    }
+
     pub(crate) fn external_available(&self) -> bool {
         self.diff_title.is_none()
             && !self.deleted_on_disk
@@ -897,6 +931,7 @@ impl Document {
 
     fn replace_from_disk(&mut self, text: String) {
         self.tools.disk_reload = self.tools.disk_reload.wrapping_add(1);
+        self.tools.display_text = None;
         self.original = text.as_bytes().to_vec();
         self.text = text;
         self.preview = None;
@@ -970,6 +1005,7 @@ impl Document {
         if matches!(action, ConflictAction::Reload) {
             self.replace_from_disk(expected.to_string());
         } else {
+            self.tools.display_text = None;
             self.original = disk.into_bytes();
             self.last_edited_at = self.dirty().then(std::time::Instant::now);
             self.tools.conflict_disk = None;
@@ -1086,6 +1122,7 @@ impl Document {
         if self.utf8_bom {
             bytes.drain(..UTF8_BOM.len_utf8());
         }
+        self.tools.display_text = None;
         self.original = bytes;
         self.last_edited_at = None;
         Ok(())

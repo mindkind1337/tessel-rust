@@ -2195,7 +2195,7 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
             .unwrap();
         if let Some(doc) = opened {
             assert!(doc.title.ends_with("my report.txt"));
-            assert_eq!(doc.text, "original contents");
+            assert_eq!(doc.text.as_str(), "original contents");
             break;
         }
         assert!(
