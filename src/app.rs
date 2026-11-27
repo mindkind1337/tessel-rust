@@ -10261,6 +10261,12 @@ impl Tessel {
             .hosts
             .iter()
             .map(|host| SshHostRow {
+                has_sessions: self.remote.has_target(host)
+                    || self.floating.has_target(host)
+                    || self
+                        .sessions
+                        .iter()
+                        .any(|session| session.launch.belongs_to_ssh_target(host)),
                 host: SshHostSpec {
                     target_id: host.target_id.clone(),
                     alias: host.alias.clone(),
@@ -10275,6 +10281,7 @@ impl Tessel {
             })
             .collect();
         let mut capabilities = SshHostsCapabilities::native_openssh();
+        capabilities.can_disconnect = true;
         capabilities.can_import_config = self.store.is_some() && self.host_import.is_none();
         if self.store.is_none() {
             capabilities.can_add = false;
@@ -10361,6 +10368,16 @@ impl Tessel {
                 match self.remove_saved_host(index, &to_host(expected)) {
                     Ok(_) => self.host_notice = Some((tr("SSH target removed").into(), false)),
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
+                }
+            }
+            Some(SshHostsAction::Disconnect { index, host }) => {
+                let host = to_host(host);
+                if self.state.hosts.get(index) == Some(&host) {
+                    self.disconnect_host_sessions(&host);
+                    self.host_notice = Some((tr("SSH connections closed").into(), false));
+                } else {
+                    self.host_notice =
+                        Some((tr("SSH target changed; reopen its settings.").into(), true));
                 }
             }
             Some(SshHostsAction::Connect { index, host }) => {

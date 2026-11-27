@@ -220,6 +220,13 @@ impl State {
     pub fn busy(&self) -> bool {
         self.runtime.phase() != Phase::Closed
     }
+    pub(super) fn has_target(&self, target: &workspace::Host) -> bool {
+        self.pending_launch
+            .as_ref()
+            .or(self.active_launch.as_ref())
+            .is_some_and(|plan| plan.launch.belongs_to_ssh_target(target))
+    }
+
     pub(super) fn close_for_target(&mut self, target: &workspace::Host) {
         if self
             .pending_launch

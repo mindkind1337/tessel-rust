@@ -298,12 +298,14 @@ fn plain_render_across_all_seven_themes_and_legacy_light_is_idempotent_in_en_and
 
     let rows = [
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("deploy@prod.example.com", "/srv/afterlife"),
             status: None,
             error: None,
             busy: false,
         },
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("dev-box", ""),
             status: None,
             error: Some("Host key verification failed"),
@@ -524,6 +526,30 @@ fn strict_capability_gating_and_unobserved_status_honesty() {
     assert!(has_painted_text(&shapes_native, "Test"));
     assert!(!has_painted_text(&shapes_native, "Disconnect"));
 
+    // Active local resources allow closing a target without claiming authenticated SSH status.
+    let mut active_rows = unobserved_rows.clone();
+    active_rows[0].has_sessions = true;
+    let mut disconnect_caps = SshHostsCapabilities::native_openssh();
+    disconnect_caps.can_disconnect = true;
+    let (_, active_shapes) = run_panel_frame(
+        &ctx,
+        Vec2::new(840.0, 560.0),
+        vec![],
+        &mut panel,
+        SshHostsInput {
+            hosts: &active_rows,
+            loaded: true,
+            loading: false,
+            load_error: None,
+            notice: None,
+            french: false,
+            capabilities: disconnect_caps,
+        },
+    );
+    assert!(has_painted_text(&active_shapes, "Disconnect"));
+    assert!(!has_painted_text(&active_shapes, "Connected"));
+    assert_eq!(count_status_dots(&active_shapes), 0);
+
     // 3. Full capabilities + observed statuses render exact semantic dots & emit Import/Test/Disconnect.
     let full_caps = SshHostsCapabilities {
         can_add: true,
@@ -536,30 +562,35 @@ fn strict_capability_gating_and_unobserved_status_honesty() {
     };
     let observed_rows = [
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("connected-host", "/srv/live"),
             status: Some(SshHostStatus::Connected),
             error: None,
             busy: false,
         },
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("connecting-host", ""),
             status: Some(SshHostStatus::Connecting),
             error: None,
             busy: false,
         },
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("error-host", ""),
             status: Some(SshHostStatus::Error),
             error: Some("Timed out"),
             busy: false,
         },
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("sleeping-host", ""),
             status: Some(SshHostStatus::Sleeping),
             error: None,
             busy: false,
         },
         SshHostRow {
+            has_sessions: false,
             host: SshHostSpec::new("offline-host", ""),
             status: Some(SshHostStatus::Disconnected),
             error: None,
@@ -635,15 +666,37 @@ fn strict_capability_gating_and_unobserved_status_honesty() {
             capabilities: full_caps,
         },
     );
+    assert!(act_disc.is_none());
+    assert!(panel.is_confirm_remove_open());
+    let input = || SshHostsInput {
+        hosts: &observed_rows,
+        loaded: true,
+        loading: false,
+        load_error: None,
+        notice: None,
+        french: false,
+        capabilities: full_caps,
+    };
+    let (_, dialog) = run_panel_frame(&ctx, Vec2::new(860., 640.), vec![], &mut panel, input());
+    let confirm = find_painted_text_rect(&dialog, "Disconnect").unwrap();
+    let (confirmed, _) = run_panel_frame(
+        &ctx,
+        Vec2::new(860., 640.),
+        click_events(confirm.center()),
+        &mut panel,
+        input(),
+    );
     assert_eq!(
-        act_disc,
+        confirmed,
         Some(SshHostsAction::Disconnect {
             index: 0,
-            host: SshHostSpec::new("connected-host", "/srv/live"),
+            host: SshHostSpec::new("connected-host", "/srv/live")
         })
     );
 
-    let test_rect = find_painted_text_rect(&shapes_full, "Test").expect("Test button");
+    // Restore row widget geometry after closing the inline confirmation.
+    let (_, restored) = run_panel_frame(&ctx, Vec2::new(860., 640.), vec![], &mut panel, input());
+    let test_rect = find_painted_text_rect(&restored, "Test").expect("Test button");
     let (act_test, _) = run_panel_frame(
         &ctx,
         Vec2::new(860.0, 640.0),
@@ -1329,6 +1382,7 @@ fn focus_scoped_keyboard_nav_external_focus_isolation_and_narrow_300px_bounds() 
 
     // 3. Narrow 300px viewport truncation & bounds check with very long alias + folder.
     let long_rows = [SshHostRow {
+        has_sessions: false,
         host: SshHostSpec::new(
             format!(
                 "deploy@{}.internal.example.com",

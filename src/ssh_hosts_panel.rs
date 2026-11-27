@@ -86,6 +86,7 @@ pub enum SshHostStatus {
 /// Single row supplied to [`SshHostsPanel::show`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshHostRow<'a> {
+    pub has_sessions: bool,
     pub host: SshHostSpec,
     /// `None` hides status dot/text completely (e.g. OpenSSH PTY mode where auth isn't tracked).
     pub status: Option<SshHostStatus>,
@@ -99,6 +100,7 @@ impl<'a> SshHostRow<'a> {
     pub fn new(host: SshHostSpec) -> Self {
         Self {
             host,
+            has_sessions: false,
             status: None,
             error: None,
             busy: false,
@@ -426,6 +428,7 @@ struct ConfirmRemoveState {
     index: usize,
     expected: SshHostSpec,
     focus_cancel_on_open: bool,
+    disconnect: bool,
 }
 
 /// Stateful pure-UI SSH Hosts Settings panel (`Settings > SSH Hosts`).
@@ -551,7 +554,11 @@ impl SshHostsPanel {
         }
 
         if let Some(rem) = &mut self.pending_remove {
-            if !input.capabilities.can_remove {
+            if !(if rem.disconnect {
+                input.capabilities.can_disconnect
+            } else {
+                input.capabilities.can_remove
+            }) {
                 self.pending_remove = None;
             } else if input
                 .hosts
@@ -758,6 +765,7 @@ impl SshHostsPanel {
                             index: idx,
                             expected: row.host.clone(),
                             focus_cancel_on_open: true,
+                            disconnect: false,
                         });
                     }
                     Key::F2 if input.capabilities.can_edit => {
@@ -1546,7 +1554,7 @@ impl SshHostsPanel {
                         let title_g = layout_wrapped_galley(
                             ui,
                             inner_w,
-                            remove_title_label(input.french),
+                            if rem_snapshot.disconnect { if input.french { "Déconnecter la cible SSH" } else { "Disconnect SSH target" } } else { remove_title_label(input.french) },
                             FontId::proportional(15.0_f32),
                             strong,
                             2,
@@ -1554,7 +1562,7 @@ impl SshHostsPanel {
                         let desc_g = layout_wrapped_galley(
                             ui,
                             inner_w,
-                            remove_desc_label(input.french),
+                            if rem_snapshot.disconnect { if input.french { "Les terminaux et fichiers ouverts de cette cible seront fermés. Les modifications non enregistrées seront perdues." } else { "This target’s terminals and open files will close. Unsaved changes will be lost." } } else { remove_desc_label(input.french) },
                             FontId::proportional(12.5_f32),
                             dim,
                             4,
@@ -1609,7 +1617,7 @@ impl SshHostsPanel {
                         ui.add_space(18.0_f32);
 
                         let cancel_txt = cancel_label(input.french);
-                        let remove_txt = remove_confirm_label(input.french);
+                        let remove_txt = if rem_snapshot.disconnect { disconnect_label(input.french) } else { remove_confirm_label(input.french) };
                         let cancel_w =
                             (measure_dialog_btn_width(ui, cancel_txt) + 8.0_f32).min(inner_w);
                         let remove_w =
@@ -1698,6 +1706,12 @@ impl SshHostsPanel {
         if confirmed {
             self.pending_remove = None;
             ui.ctx().request_repaint();
+            if rem_snapshot.disconnect {
+                return Some(SshHostsAction::Disconnect {
+                    index: rem_snapshot.index,
+                    host: rem_snapshot.expected,
+                });
+            }
             return Some(SshHostsAction::Remove {
                 index: rem_snapshot.index,
                 expected: rem_snapshot.expected,
@@ -1793,7 +1807,7 @@ impl SshHostsPanel {
         let show_remove = caps.can_remove;
         let is_connected = row.status == Some(SshHostStatus::Connected);
         let is_connecting = row.status == Some(SshHostStatus::Connecting);
-        let show_disconnect = is_connected && caps.can_disconnect;
+        let show_disconnect = (is_connected || row.has_sessions) && caps.can_disconnect;
         let show_connecting = is_connecting;
         let show_test = !show_disconnect && !show_connecting && caps.can_test;
         let show_connect = !show_disconnect && !show_connecting && caps.can_connect;
@@ -2074,6 +2088,7 @@ impl SshHostsPanel {
                             index: idx,
                             expected: row.host.clone(),
                             focus_cancel_on_open: true,
+                            disconnect: false,
                         });
                         ui.ctx().request_repaint();
                     }
@@ -2097,10 +2112,13 @@ impl SshHostsPanel {
                     None,
                 ) {
                     any_btn_interacted = true;
-                    emitted = Some(SshHostsAction::Disconnect {
+                    self.pending_remove = Some(ConfirmRemoveState {
                         index: idx,
-                        host: row.host.clone(),
+                        expected: row.host.clone(),
+                        focus_cancel_on_open: true,
+                        disconnect: true,
                     });
+                    ui.ctx().request_repaint();
                 }
             } else if show_connecting {
                 let w = measure_rh_btn_width(ui, connecting_txt, true)

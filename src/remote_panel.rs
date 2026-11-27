@@ -180,6 +180,12 @@ impl RemotePanel {
         self.selected = selected;
     }
 
+    pub(crate) fn has_target(&self, target: &Host) -> bool {
+        self.host
+            .as_ref()
+            .is_some_and(|host| host.same_target(target))
+    }
+
     pub(crate) fn disconnect_target(&mut self, target: &Host) {
         if self
             .host
