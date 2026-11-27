@@ -10,6 +10,7 @@ pub(crate) mod editor_page;
 pub(crate) mod html_trust;
 mod private_fill;
 mod project_page;
+mod reload_menu;
 mod zoom_keys;
 pub use private_fill::Reply as FillReply;
 pub mod smoke;
@@ -474,6 +475,20 @@ impl Browser {
         .is_err()
         {
             let _ = self.sender.send(Event::Error(tr(failure).to_owned()));
+        }
+    }
+
+    pub(crate) fn show_reload_menu(&self) {
+        let Some(view) = &self.view else { return };
+        match reload_menu::choose(view) {
+            Ok(Some(reload_menu::Choice::Reload)) => self.reload_now(),
+            Ok(Some(reload_menu::Choice::HardReload)) => self.hard_reload(),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = self
+                    .sender
+                    .send(Event::Error(tr("Could not open the reload menu").into()));
+            }
         }
     }
 
@@ -1231,9 +1246,13 @@ impl Browser {
                     self.go_forward_now();
                 }
                 let loading = self.loading_navigation();
-                let clicked = ui
+                let response = ui
                     .button(tr(if loading.is_some() { "Stop" } else { "Reload" }))
-                    .clicked();
+                    .on_hover_text(tr("Right-click for reload options"));
+                if response.secondary_clicked() {
+                    self.show_reload_menu();
+                }
+                let clicked = response.clicked();
                 if clicked && let Some(id) = loading {
                     self.stop_navigation(id);
                 } else if clicked || reload_shortcut {
@@ -1467,8 +1486,9 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
         let (stop, stopped) = mpsc::channel::<()>();
+        let version = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let served_version = Arc::clone(&version);
         let server = std::thread::spawn(move || {
-            let mut version = 0;
             while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                 let (mut socket, _) = match listener.accept() {
                     Ok(pair) => pair,
@@ -1482,11 +1502,19 @@ mod tests {
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
                 let mut line = String::new();
-                if BufReader::new(&socket).read_line(&mut line).is_err() {
+                let mut request = BufReader::new(&socket);
+                if !matches!(request.read_line(&mut line), Ok(n) if n > 0) {
+                    continue;
+                }
+                if !request
+                    .lines()
+                    .map_while(Result::ok)
+                    .any(|header| header.is_empty())
+                {
                     continue;
                 }
                 let (mime, cache, body) = if line.starts_with("GET /asset.js ") {
-                    version += 1;
+                    let version = served_version.load(std::sync::atomic::Ordering::SeqCst);
                     (
                         "text/javascript",
                         "public, max-age=3600",
@@ -1512,9 +1540,14 @@ mod tests {
         browser
             .create_with_profile(&parent, dir.path().join("profile"))
             .unwrap();
+        wait_for(
+            browser.view.as_ref().unwrap(),
+            "document.readyState === 'complete'",
+        );
         browser.open_url(&format!("{base}/one"));
         let view = browser.view.as_ref().unwrap();
         wait_for(view, "window.version === 1");
+        version.store(2, std::sync::atomic::Ordering::SeqCst);
         browser.open_url(&format!("{base}/two"));
         let view = browser.view.as_ref().unwrap();
         wait_for(view, "location.pathname === '/two' && window.version === 1");

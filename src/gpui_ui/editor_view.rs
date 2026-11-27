@@ -2501,6 +2501,7 @@ pub(crate) fn render_browser_stage(
 ) -> impl IntoElement {
     let french = snapshot.french;
     let b = &snapshot.browser;
+    let tab = b.tab_id;
     let reload = match b.loading_navigation {
         Some(navigation) => GpuiAction::BrowserStop {
             tab: b.tab_id,
@@ -2654,6 +2655,13 @@ pub(crate) fn render_browser_stage(
                 .child(
                     div()
                         .id("browser-reload")
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |root, _, _, cx| {
+                                cx.stop_propagation();
+                                root.dispatch(GpuiAction::BrowserReloadMenu(tab), cx);
+                            }),
+                        )
                         .px(px(8.0))
                         .py(px(3.0))
                         .rounded(px(4.0))

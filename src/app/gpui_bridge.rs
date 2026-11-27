@@ -1101,6 +1101,7 @@ pub(crate) enum GpuiAction {
     BrowserBack(u64),
     BrowserForward(u64),
     BrowserReload(u64),
+    BrowserReloadMenu(u64),
     BrowserStop {
         tab: u64,
         navigation: u64,
@@ -6930,6 +6931,18 @@ impl Tessel {
                 #[cfg(windows)]
                 if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
                     self.browser.go_forward_now();
+                }
+                #[cfg(not(windows))]
+                let _ = tab;
+            }
+            GpuiAction::BrowserReloadMenu(tab) => {
+                #[cfg(windows)]
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.show_reload_menu();
+                } else if self.side_browser_visible(tab)
+                    && let Some(page) = self.side_browsers.get(&tab)
+                {
+                    page.show_reload_menu();
                 }
                 #[cfg(not(windows))]
                 let _ = tab;

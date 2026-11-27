@@ -1639,6 +1639,15 @@ fn render_side_browser(
                             .id(key)
                             .aria_label(description)
                             .aria_disabled(!enabled)
+                            .when(key == "side-browser-reload", |el| {
+                                el.on_mouse_down(
+                                    gpui::MouseButton::Right,
+                                    cx.listener(move |root, _, _, cx| {
+                                        cx.stop_propagation();
+                                        root.dispatch(GpuiAction::BrowserReloadMenu(id), cx);
+                                    }),
+                                )
+                            })
                             .debug_selector(move || key.into())
                             .px(px(5.))
                             .flex_shrink_0()
