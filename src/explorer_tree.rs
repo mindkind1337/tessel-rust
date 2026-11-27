@@ -271,6 +271,10 @@ pub enum TreeAction {
         line: usize,
     },
     CopyPath(PathBuf),
+    TerminalHere {
+        root: PathBuf,
+        path: PathBuf,
+    },
     #[cfg(windows)]
     Reveal {
         root: PathBuf,
@@ -1586,6 +1590,14 @@ impl ExplorerTree {
                             ui.close();
                             return;
                         };
+                        if ui.button(tr("Open a terminal here")).clicked() {
+                            emitted = Some(TreeAction::TerminalHere {
+                                root: root_path.clone(),
+                                path: menu_path.clone(),
+                            });
+                            ui.close();
+                            return;
+                        }
                         if ui.button(tr("Copy path")).clicked() {
                             emitted = Some(TreeAction::CopyPath(menu_path.clone()));
                             ui.close();

@@ -70,7 +70,15 @@ fn choose(
     cx: &mut Context<TesselGpuiRoot>,
 ) {
     if let Some(menu) = dismiss(root, window, cx) {
+        let previous = root.app.gpui_default_focus_target();
         root.dispatch(GpuiAction::ExplorerMenu(menu.scope, menu.key, cmd), cx);
+        if cmd == ExplorerCommand::TerminalHere {
+            let target = root.app.gpui_default_focus_target();
+            if target != previous && matches!(target, FocusInputTarget::Terminal(Some(_))) {
+                root.focus_input = target;
+                root.focus_handle.focus(window, cx);
+            }
+        }
     }
 }
 
@@ -89,6 +97,10 @@ impl Menu {
         if self.key.is_some() && !self.directory {
             choices.push((Open, translate("Open", "Ouvrir")));
         }
+        choices.push((
+            TerminalHere,
+            translate("Open a terminal here", "Ouvrir un terminal ici"),
+        ));
         if editable {
             choices.push((NewFile, translate("New file", "Nouveau fichier")));
             choices.push((NewFolder, translate("New folder", "Nouveau dossier")));

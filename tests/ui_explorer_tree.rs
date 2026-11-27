@@ -200,8 +200,23 @@ fn egui_tree_expands_folders_opens_files_caches_rows_and_gates_context_actions()
         );
     }
 
-    #[cfg(windows)]
-    {
+    for (label, action) in [
+        (
+            "Open a terminal here",
+            TreeAction::TerminalHere {
+                root: root.into(),
+                path: root.join("src"),
+            },
+        ),
+        #[cfg(windows)]
+        (
+            "Reveal in File Explorer",
+            TreeAction::Reveal {
+                root: root.into(),
+                path: root.join("src"),
+            },
+        ),
+    ] {
         let (_, painted) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, false, vec![]);
         let outer = find_text_center(&painted.shapes, "src").unwrap();
         run_frame(
@@ -213,22 +228,16 @@ fn egui_tree_expands_folders_opens_files_caches_rows_and_gates_context_actions()
             click_events(outer, egui::PointerButton::Secondary),
         );
         let (_, popup) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, false, vec![]);
-        let reveal = find_text_center(&popup.shapes, "Reveal in File Explorer").unwrap();
+        let item = find_text_center(&popup.shapes, label).unwrap();
         let (result, _) = run_frame(
             &ctx_fx,
             &mut fixture_tree,
             Some(root),
             None,
             false,
-            click_events(reveal, egui::PointerButton::Primary),
+            click_events(item, egui::PointerButton::Primary),
         );
-        assert_eq!(
-            result,
-            Some(TreeAction::Reveal {
-                root: root.into(),
-                path: root.join("src")
-            })
-        );
+        assert_eq!(result, Some(action));
     }
 
     // Real async `ExplorerTree` driven through `egui::Context` frames:

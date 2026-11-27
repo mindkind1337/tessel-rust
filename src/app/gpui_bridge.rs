@@ -43,6 +43,7 @@ pub(crate) enum ExplorerCommand {
     Trash,
     CopyPath,
     CopyRelative,
+    TerminalHere,
     #[cfg(windows)]
     Reveal,
     Dotfiles,
@@ -6512,6 +6513,7 @@ impl Tessel {
                 use ExplorerCommand::*;
                 match command {
                     Select => {}
+                    TerminalHere => self.open_project_terminal_here(&root, &path),
                     Open if !directory => self.open_document_preview(path),
                     CopyPath => {
                         self.gpui_extra.copied_clipboard =
@@ -7840,6 +7842,104 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn explorer_terminal_here_runs_in_file_parent_and_restores_its_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let nested = root.join("docs & notes");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("example.txt");
+        std::fs::write(&file, "selected-folder-marker").unwrap();
+        let state = temp.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(root.clone()));
+        let owner = app.state.active().unwrap().clone();
+        app.state.launcher_prefs.preferred_shell = Some("cmd".into());
+        let snap = app.gpui_snapshot(960., 640., 4.);
+        if !snap.toolbar.right_open || snap.right_tab != SideTab::Files {
+            app.apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        app.gpui_snapshot(960., 640., 4.);
+        let (scope, _) = app.gpui_explorer_input().unwrap();
+        app.apply_gpui_action(GpuiAction::ExplorerMenu(
+            scope,
+            None,
+            ExplorerCommand::TerminalHere,
+        ));
+        let first = app
+            .active_session
+            .expect("background menu creates first project terminal");
+        let before = app.sessions.len();
+        app.open_project_terminal_here(&owner.path, temp.path());
+        assert_eq!(app.sessions.len(), before);
+        app.error.clear();
+        app.explorer_tree.set_filter_query("example.txt");
+        let timeout = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let key = loop {
+            let snap = app.gpui_snapshot(960., 640., 4.);
+            if let Some(row) = snap
+                .side_panels
+                .explorer
+                .rows
+                .iter()
+                .find(|r| r.name == "example.txt")
+            {
+                break row.key.clone();
+            }
+            assert!(std::time::Instant::now() < timeout);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let (scope, _) = app.gpui_explorer_input().unwrap();
+        app.apply_gpui_action(GpuiAction::ExplorerMenu(
+            scope,
+            Some(key),
+            ExplorerCommand::TerminalHere,
+        ));
+        assert!(app.error.is_empty(), "{}", app.error);
+        app.state.validate().unwrap();
+        let launched = app.active_session.unwrap();
+        assert_ne!(launched, first);
+        let session = app.sessions.iter_mut().find(|s| s.id == launched).unwrap();
+        assert!(session.worktree.is_none());
+        assert_eq!(session.title, "CMD");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut sent = false;
+        loop {
+            session.poll();
+            if let Some(terminal) = &mut session.terminal {
+                if !sent && terminal.screen_contains(">") {
+                    terminal
+                        .run_quick_command("type example.txt", true)
+                        .unwrap();
+                    sent = true;
+                }
+                if terminal.screen_contains("selected-folder-marker") {
+                    break;
+                }
+            }
+            assert!(session.error.is_empty(), "{}", session.error);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "CMD did not read the relative file (command sent: {sent})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let key = crate::terminal_layout::project_key(Some(owner.id));
+        let layout = &app.state.terminal_layouts[&key];
+        assert!(
+            matches!(&layout.tree, Some(crate::pane_grid::PaneNode::Split {dir: crate::pane_grid::SplitDir::Col,children,..})
+            if matches!(children.as_slice(),[crate::pane_grid::PaneNode::Leaf(a),crate::pane_grid::PaneNode::Leaf(b)] if a.id == first.to_string() && b.id == launched.to_string()))
+        );
+        drop(app);
+        let restored = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        let pane = restored.sessions.iter().find(|s| s.id == launched).unwrap();
+        assert_eq!(pane.project, Some(owner.id));
+        assert_eq!(
+            pane.cwd.canonicalize().unwrap(),
+            nested.canonicalize().unwrap()
+        );
+    }
     #[test]
     fn git_diff_tabs_use_full_identity_and_refresh_localized_titles() {
         use crate::view_tabs_browser_model::DiffTabArea;

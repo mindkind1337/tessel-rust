@@ -22,7 +22,7 @@ mod task_launch;
 mod task_review;
 use crate::view_tabs_browser_model::{DiffTabArea, TabsLang, diff_label};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
@@ -635,6 +635,11 @@ enum Message {
         pinned: bool,
         result: Result<String, String>,
     },
+}
+enum SessionStart<'a> {
+    Project,
+    Directory(PathBuf),
+    History(&'a crate::side_panels_model::SessionHistoryEntry),
 }
 enum TimelineOrigin {
     Tab(u64),
@@ -3042,6 +3047,29 @@ impl Tessel {
         worktree: Option<workspace::SavedWorktree>,
         resume: Option<&crate::side_panels_model::SessionHistoryEntry>,
     ) -> Option<u64> {
+        self.new_session_at(
+            project_id,
+            launch,
+            split,
+            before,
+            worktree,
+            resume.map_or(SessionStart::Project, SessionStart::History),
+        )
+    }
+    fn new_session_at(
+        &mut self,
+        project_id: Option<u64>,
+        launch: Launch,
+        split: Option<(u64, crate::pane_grid::SplitDir)>,
+        before: bool,
+        worktree: Option<workspace::SavedWorktree>,
+        start: SessionStart<'_>,
+    ) -> Option<u64> {
+        let (directory, resume) = match start {
+            SessionStart::Project => (None, None),
+            SessionStart::Directory(path) => (Some(path), None),
+            SessionStart::History(entry) => (Some(entry.folder.clone()), Some(entry)),
+        };
         if launch.native_chat().is_some() && project_id.is_none() {
             self.error = tr("Select a project for native chat.").into();
             return None;
@@ -3063,8 +3091,7 @@ impl Tessel {
         } else {
             None
         };
-        let cwd = resume
-            .map(|entry| entry.folder.clone())
+        let cwd = directory
             .or_else(|| worktree.as_ref().map(|wt| wt.path.clone()))
             .or_else(|| {
                 project_id.and_then(|pid| {
@@ -5398,6 +5425,9 @@ impl Tessel {
                 TreeAction::Reveal { root: owner, path } if root.as_ref() == Some(&owner) => {
                     self.reveal_project_item(owner, path)
                 }
+                TreeAction::TerminalHere { root: owner, path } => {
+                    self.open_project_terminal_here(&owner, &path)
+                }
                 TreeAction::CopyPath(path) => {
                     ui.ctx().copy_text(path.display().to_string());
                 }
@@ -5445,6 +5475,48 @@ impl Tessel {
             }
         }
     }
+    fn open_project_terminal_here(&mut self, root: &Path, path: &Path) {
+        let Some(project) = self
+            .state
+            .active()
+            .filter(|project| project.path == root)
+            .map(|project| project.id)
+        else {
+            return;
+        };
+        let target = match crate::files::confined(root, path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.error = error;
+                return;
+            }
+        };
+        let cwd = if target.is_dir() {
+            target
+        } else {
+            let Some(parent) = target.parent() else {
+                return;
+            };
+            parent.to_owned()
+        };
+        let split = self
+            .active_session
+            .filter(|id| {
+                self.sessions
+                    .iter()
+                    .any(|s| s.id == *id && s.project == Some(project))
+            })
+            .map(|id| (id, crate::pane_grid::SplitDir::Col));
+        self.new_session_at(
+            Some(project),
+            Launch::Shell,
+            split,
+            false,
+            None,
+            SessionStart::Directory(dunce::simplified(&cwd).to_owned()),
+        );
+    }
+
     #[cfg(windows)]
     fn reveal_project_item(&mut self, root: PathBuf, path: PathBuf) {
         let sender = self.sender.clone();
