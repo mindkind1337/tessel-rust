@@ -1716,7 +1716,7 @@ impl Tessel {
                     && now.saturating_duration_since(edited) >= delay
                 {
                     changed = true;
-                    match doc.save(self.store.as_ref().map(|s| s.directory())) {
+                    match doc.auto_save(self.store.as_ref().map(|s| s.directory())) {
                         Ok(()) => doc.error.clear(),
                         Err(err) => {
                             doc.last_edited_at = None;
@@ -8271,7 +8271,9 @@ impl Tessel {
             close = Some(self.active_document);
         }
         let mut save_prefs = prefs_changed;
-        if !d.error.is_empty() {
+        if d.deleted_on_disk && d.error.is_empty() {
+            ui.label(tr("Deleted on disk: saving creates it again."));
+        } else if !d.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, tr(&d.error));
         }
         if let Some(disk) = d.tools.conflict_disk.clone() {

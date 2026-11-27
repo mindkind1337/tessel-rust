@@ -517,7 +517,7 @@ pub(crate) fn render_document_editor_stage(
         .bg(tokens.term)
         .child(header)
         .when_some(tools_bar, |el, bar| el.child(bar))
-        .when(!doc.error.is_empty(), |el| {
+        .when(doc.deleted_on_disk || !doc.error.is_empty(), |el| {
             el.child(
                 div()
                     .px(px(12.0))
@@ -527,7 +527,14 @@ pub(crate) fn render_document_editor_stage(
                     .border_color(tokens.danger)
                     .text_size(px(11.5))
                     .text_color(tokens.text_strong)
-                    .child(SharedString::from(crate::i18n::tr(&doc.error).to_owned())),
+                    .child(SharedString::from(
+                        crate::i18n::tr(if doc.error.is_empty() {
+                            "Deleted on disk: saving creates it again."
+                        } else {
+                            &doc.error
+                        })
+                        .to_owned(),
+                    )),
             )
         })
         .when_some(doc.conflict_disk.as_ref(), |el, disk| {

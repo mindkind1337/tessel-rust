@@ -831,18 +831,46 @@ impl Document {
         Ok(())
     }
 
+    pub(crate) fn auto_save(&mut self, profile: Option<&Path>) -> Result<()> {
+        self.write_draft(profile, false)
+    }
+
     pub fn save(&mut self, profile: Option<&Path>) -> Result<()> {
+        self.write_draft(profile, true)
+    }
+
+    fn write_draft(&mut self, profile: Option<&Path>, recreate: bool) -> Result<()> {
         if self.media {
             return Err("This document is read-only".into());
-        }
-        let disk = self.read_current_disk()?;
-        if disk != self.original {
-            return self.remember_conflict(disk);
         }
         if self.text.len() > MAX_TEXT {
             return Err("Text editor limit is 2 MiB.".into());
         }
-        atomic_write(&self.path, self.text.as_bytes())?;
+        match fs::symlink_metadata(&self.path) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.deleted_on_disk = true;
+                self.tools.conflict_disk = None;
+                self.tools.comparison = None;
+                if !recreate {
+                    return Err("Deleted on disk: saving creates it again.".into());
+                }
+                let parent = self.path.parent().ok_or("File has no parent directory.")?;
+                if confined(&self.root, parent)? != parent {
+                    return Err("File target changed since opening.".into());
+                }
+                save_download(&self.path, self.text.as_bytes()).map_err(|err| err.to_string())?;
+            }
+            Err(err) => return Err(err.to_string()),
+            Ok(_) => {
+                let disk = self.read_current_disk()?;
+                self.deleted_on_disk = false;
+                if disk != self.original {
+                    return self.remember_conflict(disk);
+                }
+                atomic_write(&self.path, self.text.as_bytes())?;
+            }
+        }
+        self.deleted_on_disk = false;
         if let Some(profile) = profile {
             let _ = crate::local_file_history::record(profile, &self.path, &self.text);
         }
@@ -950,6 +978,42 @@ mod tests {
         assert!(doc.save(None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
     }
+    #[test]
+    fn deleted_draft_survives_auto_save_and_manual_save_recreates_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "modified\r\n".into();
+        fs::remove_file(&path).unwrap();
+        assert!(doc.auto_save(None).is_err());
+        assert!(doc.deleted_on_disk && doc.dirty());
+        assert!(!path.exists());
+        doc.save(None).unwrap();
+        assert!(!doc.deleted_on_disk && !doc.dirty());
+        assert_eq!(fs::read(&path).unwrap(), b"modified\r\n");
+    }
+
+    #[test]
+    fn deleted_draft_respects_a_replacement_and_a_missing_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("notes.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "draft".into();
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&folder).unwrap();
+        assert!(doc.save(None).is_err());
+        assert!(!folder.exists());
+        fs::create_dir(&folder).unwrap();
+        fs::write(&path, "replacement").unwrap();
+        assert!(doc.save(None).is_err());
+        assert_eq!(doc.tools.conflict_disk.as_deref(), Some("replacement"));
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+    }
+
     #[test]
     fn disk_conflict_requires_a_new_choice_after_another_external_write() {
         let dir = tempfile::tempdir().unwrap();
