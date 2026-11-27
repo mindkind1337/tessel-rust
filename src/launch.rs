@@ -313,7 +313,15 @@ pub(crate) fn pane_command(
             if host.folder.contains(['\0', '\n', '\r']) {
                 return Err("Invalid remote directory.".into());
             }
-            let mut c = CommandBuilder::new("ssh");
+            let mut c = if let Some((helper, channel)) =
+                channel.and_then(|ch| ch.direct_client.as_ref().map(|helper| (helper, ch)))
+            {
+                let mut cmd = CommandBuilder::new(helper);
+                cmd.env("TESSEL_SSH_CHANNEL", &channel.nonce);
+                cmd
+            } else {
+                CommandBuilder::new("ssh")
+            };
             c.args([
                 "-tt",
                 "-o",

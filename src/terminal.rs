@@ -1416,8 +1416,18 @@ impl Terminal {
         }
         if let Some(exit) = self.backend.exit_status() {
             self.mark_exited();
-            self.exit_code = Some(exit.exit_code() as i32);
-            self.status = if self.exit_code() == Some(255) && self.exit_code == Some(254) {
+            let raw = exit.exit_code() as i32;
+            let direct = self
+                .ssh_channel
+                .as_mut()
+                .filter(|c| c.direct_client.is_some());
+            self.exit_code = Some(if let Some(channel) = direct {
+                channel.remote_255 = raw == 255;
+                if raw == 511 { 255 } else { raw }
+            } else {
+                raw
+            });
+            self.status = if self.exit_code() == Some(255) && raw != 255 {
                 "Shell exited: 255".into()
             } else {
                 format!("Shell exited: {exit}")

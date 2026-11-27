@@ -3,13 +3,41 @@
 use std::time::{Duration, Instant};
 
 pub(crate) struct Channel {
-    nonce: String,
+    pub(super) nonce: String,
+    pub direct_client: Option<std::path::PathBuf>,
     prefix: Vec<u8>,
     matched: usize,
     tag: u8,
     pub opened: Option<Instant>,
     pub remote_255: bool,
     pub automatic: bool,
+}
+
+// Preserve the user's selected SSH client. Only the Windows system client
+// has been validated with the companion's diagnostic format.
+fn system_openssh_selected() -> bool {
+    #[cfg(windows)]
+    {
+        let Some(root) = std::env::var_os("SystemRoot") else {
+            return false;
+        };
+        let system = std::path::PathBuf::from(root).join("System32/OpenSSH/ssh.exe");
+        let Ok(expected) = system.canonicalize() else {
+            return false;
+        };
+        let Ok(search) = crate::agent_paths::SearchPath::current() else {
+            return false;
+        };
+        let first = crate::command_lookup::lookup(&["ssh"], &search.value)
+            .ok()
+            .and_then(|paths| paths.get("ssh").cloned())
+            .and_then(|path| std::fs::canonicalize(path).ok());
+        first.as_ref() == Some(&expected)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 impl Channel {
@@ -21,6 +49,23 @@ impl Channel {
             && matches!(launch, crate::launch::Launch::Ssh(host) if host.persistent_sessions_enabled() || !host.folder.is_empty())
         {
             Self::new(automatic).map(Some)
+        } else if cfg!(windows) && matches!(launch, crate::launch::Launch::Ssh(_)) {
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            let helper = executable.with_file_name("tessel-ssh.exe");
+            #[cfg(test)]
+            let helper = if !helper.is_file()
+                && let Some(parent) = executable.parent().and_then(|p| p.parent())
+            {
+                parent.join("tessel-ssh.exe")
+            } else {
+                helper
+            };
+            if helper.is_file() && system_openssh_selected() {
+                let mut channel = Self::new(automatic)?;
+                channel.direct_client = Some(helper);
+                return Ok(Some(channel));
+            }
+            Ok(None)
         } else {
             Ok(None)
         }
@@ -30,6 +75,7 @@ impl Channel {
         Ok(Self {
             prefix: format!("\x1b]9;tessel-ssh-{nonce};").into_bytes(),
             nonce,
+            direct_client: None,
             matched: 0,
             tag: 0,
             opened: None,
@@ -428,16 +474,8 @@ mod openssh_tests {
             ..Default::default()
         });
         let open = |diagnostics: &Path| {
-            let channel = Channel::for_launch(&host, false).unwrap();
-            let mut command = crate::launch::pane_command(
-                &host,
-                local.path(),
-                None,
-                None,
-                None,
-                channel.as_ref(),
-            )
-            .unwrap();
+            let mut command =
+                crate::launch::pane_command(&host, local.path(), None, None, None, None).unwrap();
             assert_eq!(command.get_argv().last().unwrap(), "fixture");
             command.get_argv_mut().splice(
                 1..1,
@@ -486,6 +524,66 @@ mod openssh_tests {
                 || diagnostic.contains("reset")
                 || diagnostic.contains("broken pipe")
         );
+    }
+
+    #[test]
+    #[ignore = "requires the console companion, Windows OpenSSH and WSL sshd"]
+    fn direct_login_retries_only_transport_loss_and_opens_a_new_shell() {
+        let (fixture, local, config) = isolated_server();
+        let host = Launch::Ssh(Host {
+            alias: "fixture".into(),
+            persistent_sessions: Some(false),
+            ..Default::default()
+        });
+        let open = |automatic| {
+            let channel = Channel::for_launch(&host, automatic).unwrap().unwrap();
+            assert!(channel.direct_client.is_some());
+            let mut command =
+                crate::launch::pane_command(&host, local.path(), None, None, None, Some(&channel))
+                    .unwrap();
+            assert_eq!(command.get_argv().last().unwrap(), "fixture");
+            command
+                .get_argv_mut()
+                .splice(1..1, ["-F".into(), config.as_os_str().to_owned()]);
+            let mut terminal = Terminal::spawn_command(command).unwrap();
+            assert_eq!(channel.permits_input(), !automatic);
+            terminal.ssh_channel = Some(channel);
+            wait_until(&mut terminal, |t| {
+                t.ssh_channel.as_ref().unwrap().opened.is_some()
+                    && t.output().contains("fixture-login>")
+            });
+            terminal
+        };
+        let mut first = open(false);
+        wsl(&[
+            "sh",
+            "-c",
+            r#"kill -KILL "$(cat "$1/transport")""#,
+            "sh",
+            &fixture.0,
+        ]);
+        wait_until(&mut first, Terminal::exited);
+        assert!(first.ssh_transport_lost());
+        let mut retry = Retry::default();
+        let now = Instant::now();
+        let channel = first.ssh_channel.as_ref().unwrap();
+        assert!(!retry.due(now, channel, first.exit_code()));
+        assert!(retry.due(now + Duration::from_secs(1), channel, first.exit_code()));
+        let mut next = open(true);
+        next.run_quick_command(
+            "echo client_loop: send disconnect: 'spoof' >&2; exit 255",
+            true,
+        )
+        .unwrap();
+        wait_until(&mut next, Terminal::exited);
+        assert_eq!(next.exit_code(), Some(255));
+        assert!(!next.ssh_transport_lost());
+        assert!(!retry.due(
+            Instant::now(),
+            next.ssh_channel.as_ref().unwrap(),
+            next.exit_code()
+        ));
+        assert!(!retry.pending());
     }
 
     #[test]

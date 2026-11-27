@@ -33,10 +33,12 @@ try {
     $stage = Join-Path $packageRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath $exe -Destination $stage
+    Copy-Item -LiteralPath (Join-Path (Split-Path $exe) 'tessel-ssh.exe') -Destination $stage
+    $sshHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage 'tessel-ssh.exe')).Hash.ToLowerInvariant()
     foreach ($name in @('README.md','MIGRATION.md','LICENSE','THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $stage }
     $binaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage 'tessel-rust.exe')).Hash.ToLowerInvariant()
     [ordered]@{ commit=$commit; build="b$build"; target='x86_64-pc-windows-msvc'; sha256=$binaryHash; configuration='release'; signed=$false } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $stage 'build.json')
-    "$binaryHash  tessel-rust.exe" | Set-Content -Encoding ascii (Join-Path $stage 'SHA256SUMS.txt')
+    @("$binaryHash  tessel-rust.exe", "$sshHash  tessel-ssh.exe") | Set-Content -Encoding ascii (Join-Path $stage 'SHA256SUMS.txt')
     $archive = Join-Path $packageRoot "tessel-rust-b$build-$($commit.Substring(0,7))-windows-x64.zip"
     if (Test-Path -LiteralPath $archive) { throw 'This package already exists; it was not overwritten.' }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
@@ -44,6 +46,7 @@ try {
     Expand-Archive -LiteralPath $archive -DestinationPath $verify
     $readback = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $verify 'tessel-rust.exe')).Hash.ToLowerInvariant()
     if ($readback -ne $binaryHash) { throw 'Package readback checksum mismatch.' }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $verify 'tessel-ssh.exe')).Hash -ne $sshHash) { throw 'SSH companion checksum mismatch.' }
     $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
     "$archiveHash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii "$archive.sha256"
     Write-Output $archive
