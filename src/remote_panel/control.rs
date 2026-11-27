@@ -35,8 +35,8 @@ pub(crate) enum Command {
     Discard,
     ImageMenu(String, Option<(f32, f32)>),
     Download(String),
-    PdfZoom(f32),
-    PdfFit(String),
+    PdfZoom(u64, f32),
+    PdfFit(u64),
     OfficeSection(usize),
 }
 
@@ -60,7 +60,7 @@ pub(crate) struct Snapshot {
     pub html_plain: Option<std::sync::Arc<str>>,
     pub image_menu: Option<(f32, f32)>,
     pub pixels: Option<std::sync::Arc<gpui::RenderImage>>,
-    pub pdf: Option<crate::pdf::PdfSummary>,
+    pub pdf: Option<(u64, crate::pdf::PdfSummary)>,
     pub playback: Option<crate::files::playback::Source>,
     pub office: Option<std::sync::Arc<crate::office::OfficeSummary>>,
     pub preview_error: String,
@@ -174,8 +174,9 @@ impl RemotePanel {
                 .office
                 .as_mut()
                 .map(crate::office::OfficeView::gpui_poll_summary);
+            let id = preview.instance_id();
             if let Some(view) = &mut preview.pdf {
-                pdf = Some(view.gpui_poll_summary());
+                pdf = Some((id, view.gpui_poll_summary()));
             } else {
                 if preview.gpui_image.is_none() {
                     preview.gpui_image = preview
@@ -243,17 +244,17 @@ impl RemotePanel {
         }
     }
 
-    fn document_pdf(&mut self, path: &str) -> Option<&mut crate::pdf::PdfView> {
+    fn document_pdf(&mut self, id: u64) -> Option<&mut crate::pdf::PdfView> {
         self.document
-            .as_mut()
-            .filter(|doc| doc.path == path)?
-            .preview
             .as_mut()?
+            .preview
+            .as_mut()
+            .filter(|doc| doc.instance_id() == id)?
             .pdf
             .as_mut()
     }
-    pub(crate) fn set_pdf_viewport(&mut self, path: &str, viewport: egui::Rect) -> bool {
-        self.document_pdf(path)
+    pub(crate) fn set_pdf_viewport(&mut self, id: u64, viewport: egui::Rect) -> bool {
+        self.document_pdf(id)
             .is_some_and(|pdf| pdf.set_native_viewport(viewport))
     }
 
@@ -289,18 +290,13 @@ impl RemotePanel {
                     office.select_section(index);
                 }
             }
-            Command::PdfFit(path) => {
-                if let Some(pdf) = self.document_pdf(&path) {
+            Command::PdfFit(id) => {
+                if let Some(pdf) = self.document_pdf(id) {
                     pdf.fit_width();
                 }
             }
-            Command::PdfZoom(delta) => {
-                if let Some(pdf) = self
-                    .document
-                    .as_mut()
-                    .and_then(|doc| doc.preview.as_mut())
-                    .and_then(|doc| doc.pdf.as_mut())
-                {
+            Command::PdfZoom(id, delta) => {
+                if let Some(pdf) = self.document_pdf(id) {
                     pdf.step_zoom(delta);
                 }
             }
@@ -590,11 +586,32 @@ mod tests {
             first.as_bytes(0).unwrap(),
             &[0, 0, 255, 255, 255, 0, 0, 255]
         );
-        panel.command(Command::PdfZoom(0.25), &[]); // no PDF, never mutates image bytes
+        panel.command(Command::PdfZoom(0, 0.25), &[]); // no PDF, never mutates image bytes
         let second = panel.snapshot(&[]).pixels.unwrap();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         assert_eq!(panel.document.as_ref().unwrap().original, original);
         assert!(!panel.snapshot(&[]).dirty);
+    }
+
+    #[cfg(feature = "visual-test")]
+    #[test]
+    fn reopened_remote_pdf_ignores_previous_zoom_fit_and_viewport() {
+        let mut panel = RemotePanel::pdf_fixture();
+        let old = panel.snapshot(&[]).pdf.unwrap().0;
+        panel = RemotePanel::pdf_fixture();
+        let (current, initial) = panel.snapshot(&[]).pdf.unwrap();
+        assert_ne!(old, current);
+        assert!(initial.layout.fit);
+        panel.command(Command::PdfZoom(old, 0.25), &[]);
+        assert!(panel.snapshot(&[]).pdf.unwrap().1.layout.fit);
+        panel.command(Command::PdfZoom(current, 0.25), &[]);
+        panel.command(Command::PdfFit(old), &[]);
+        assert!(!panel.snapshot(&[]).pdf.unwrap().1.layout.fit);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300., 200.));
+        assert!(!panel.set_pdf_viewport(old, rect));
+        assert!(panel.set_pdf_viewport(current, rect));
+        panel.command(Command::PdfFit(current), &[]);
+        assert!(panel.snapshot(&[]).pdf.unwrap().1.layout.fit);
     }
 
     fn text_panel() -> RemotePanel {

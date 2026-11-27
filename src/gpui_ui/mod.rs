@@ -1610,7 +1610,7 @@ impl Render for TesselGpuiRoot {
                 .active_document
                 .as_ref()
                 .and_then(|d| d.pdf_summary.as_ref()),
-            GpuiCenterMode::RemoteSftp => snapshot.remote.pdf.as_ref(),
+            GpuiCenterMode::RemoteSftp => snapshot.remote.pdf.as_ref().map(|(_, pdf)| pdf),
             _ => None,
         };
         let pages = pdf.into_iter().flat_map(|summary| {

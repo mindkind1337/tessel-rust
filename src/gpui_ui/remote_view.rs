@@ -706,10 +706,10 @@ pub(crate) fn render(
             body = body.child(super::editor_view::render_office_summary(
                 office, fr, tokens, cx, true,
             ));
-        } else if let Some(summary) = &remote.pdf {
+        } else if let Some((id, summary)) = &remote.pdf {
             body = body.child(super::editor_view::render_pdf_stage(
                 summary,
-                super::editor_view::PdfTarget::Remote(path.clone()),
+                super::editor_view::PdfTarget::Remote(*id),
                 fr,
                 tokens,
                 cx,

@@ -1532,7 +1532,7 @@ fn flatten_json_preview(
 #[derive(Clone)]
 pub(super) enum PdfTarget {
     Local(u64),
-    Remote(String),
+    Remote(u64),
 }
 
 pub(super) fn render_pdf_stage(
@@ -1543,6 +1543,7 @@ pub(super) fn render_pdf_stage(
     cx: &Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
     use crate::remote_panel::control::Command;
+    use gpui::AppContext;
     let crate::pdf::PdfSummary {
         visible,
         pages,
@@ -1551,35 +1552,63 @@ pub(super) fn render_pdf_stage(
         error,
         layout,
     } = summary;
-    let button = |id: &'static str, label: &'static str, enabled: bool, action: GpuiAction| {
+    let button = |id: &'static str,
+                  label: &'static str,
+                  title: &'static str,
+                  active: bool,
+                  action: GpuiAction| {
+        let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
         div()
             .id(id)
             .debug_selector(move || id.into())
+            .role(gpui::Role::Button)
+            .aria_label(title)
+            .min_w(px(26.))
+            .h(px(24.))
             .px(px(8.))
-            .py(px(2.5))
+            .flex()
+            .items_center()
+            .justify_center()
             .rounded(px(4.))
-            .bg(tokens.surface_2)
-            .opacity(if enabled { 1. } else { 0.45 })
-            .when(enabled, |el| {
-                el.cursor_pointer()
-                    .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
+            .border_1()
+            .border_color(gpui::rgba(0))
+            .text_color(fg)
+            .when(active, |el| el.bg(bg).border_color(border))
+            .hover(move |el| el.bg(bg).border_color(border))
+            .cursor_pointer()
+            .tooltip(move |_, cx| {
+                cx.new(|_| super::chrome::ToolbarTooltip {
+                    text: title.into(),
+                    bg,
+                    fg,
+                    border,
+                })
+                .into()
             })
+            .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
             .child(label)
     };
     let zoom = |delta| match target {
-        PdfTarget::Local(_) => GpuiAction::StepPdfZoom(delta),
-        PdfTarget::Remote(_) => GpuiAction::Remote(Command::PdfZoom(delta)),
+        PdfTarget::Local(id) => GpuiAction::StepPdfZoom(id, delta),
+        PdfTarget::Remote(id) => GpuiAction::Remote(Command::PdfZoom(id, delta)),
     };
     let fit = match &target {
         PdfTarget::Local(id) => GpuiAction::PdfFit(*id),
-        PdfTarget::Remote(path) => GpuiAction::Remote(Command::PdfFit(path.clone())),
+        PdfTarget::Remote(id) => GpuiAction::Remote(Command::PdfFit(*id)),
+    };
+    let fit_label = if french {
+        "Ajuster à la largeur"
+    } else {
+        "Fit width"
     };
     let toolbar = div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .px(px(12.))
-        .py(px(6.))
+        .gap(px(6.))
+        .px(px(10.))
+        .py(px(4.))
+        .text_size(px(12.))
+        .text_color(tokens.text_dim)
         .bg(tokens.chrome)
         .border_b_1()
         .border_color(tokens.border)
@@ -1590,24 +1619,32 @@ pub(super) fn render_pdf_stage(
             )))
         })
         .child(div().flex_1())
-        .child(button("pdf-zoom-out", "−", *scale > 0.25, zoom(-0.25)))
-        .child(SharedString::from(format!("{:.0} %", scale * 100.)))
-        .child(button("pdf-zoom-in", "+", *scale < 4., zoom(0.25)))
         .child(button(
-            "pdf-fit",
-            if french {
-                "Ajuster à la largeur"
-            } else {
-                "Fit width"
-            },
-            !layout.fit,
-            fit,
-        ));
+            "pdf-zoom-out",
+            "−",
+            if french { "Zoom arrière" } else { "Zoom out" },
+            false,
+            zoom(-0.25),
+        ))
+        .child(
+            div()
+                .min_w(px(48.))
+                .text_center()
+                .child(format!("{} %", (scale * 100.).round() as u32)),
+        )
+        .child(button(
+            "pdf-zoom-in",
+            "+",
+            if french { "Zoom avant" } else { "Zoom in" },
+            false,
+            zoom(0.25),
+        ))
+        .child(button("pdf-fit", fit_label, fit_label, layout.fit, fit));
     let owner = cx.weak_entity();
     let previous = layout.viewport;
     let stage_id = match &target {
         PdfTarget::Local(id) => format!("local-pdf-scroll-{id}"),
-        PdfTarget::Remote(path) => format!("remote-pdf-scroll-{path}"),
+        PdfTarget::Remote(id) => format!("remote-pdf-scroll-{id}"),
     };
     let probe = canvas(
         |_, _, _| (),
@@ -1630,8 +1667,8 @@ pub(super) fn render_pdf_stage(
                     let _ = owner.update(cx, |root, cx| {
                         let changed = match &target {
                             PdfTarget::Local(id) => root.app.set_local_pdf_viewport(*id, viewport),
-                            PdfTarget::Remote(path) => {
-                                root.app.set_remote_pdf_viewport(path, viewport)
+                            PdfTarget::Remote(id) => {
+                                root.app.set_remote_pdf_viewport(*id, viewport)
                             }
                         };
                         if changed {

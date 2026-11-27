@@ -927,7 +927,7 @@ pub(crate) enum GpuiAction {
     ImageMenu(u64, Option<(f32, f32)>),
     DownloadImage(u64),
     PdfFit(u64),
-    StepPdfZoom(f32),
+    StepPdfZoom(u64, f32),
     SelectOfficeSection(usize),
     HtmlLinkMenu(u64, String, (f32, f32)),
     CloseHtmlLinkMenu,
@@ -2544,10 +2544,10 @@ impl Tessel {
 
     pub(crate) fn set_remote_pdf_viewport(
         &mut self,
-        path: &str,
+        id: u64,
         viewport: eframe::egui::Rect,
     ) -> bool {
-        self.view == View::Remote && self.remote.set_pdf_viewport(path, viewport)
+        self.view == View::Remote && self.remote.set_pdf_viewport(id, viewport)
     }
 
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
@@ -6060,10 +6060,11 @@ impl Tessel {
                     pdf.fit_width();
                 }
             }
-            GpuiAction::StepPdfZoom(delta) => {
+            GpuiAction::StepPdfZoom(id, delta) => {
                 if let Some(pdf) = self
                     .documents
                     .get_mut(self.active_document)
+                    .filter(|doc| doc.instance_id() == id)
                     .and_then(|d| d.pdf.as_mut())
                 {
                     pdf.step_zoom(delta);

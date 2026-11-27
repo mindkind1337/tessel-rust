@@ -6,6 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Local and SSH PDF toolbars highlight Fit width and apply zoom to the document that displayed the controls.
 - Following a local document link pins the source tab and opens the target in a pinned tab. The index stays available when you preview another file.
 - Local and SSH HTML previews show the project-relative page path with controls to reload, open in the browser, and manage folder trust.
 
