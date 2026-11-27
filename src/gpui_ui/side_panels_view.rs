@@ -1137,6 +1137,8 @@ fn render_explorer_tab(
         let mut reveal_index = None;
         let mut body = div()
             .id("explorer-outline-scroll")
+            .role(gpui::Role::Tree)
+            .aria_label(if french { "Plan" } else { "Outline" })
             .track_scroll(&explorer_input.outline_scroll)
             .flex_1()
             .min_h_0()
@@ -1239,25 +1241,54 @@ fn render_explorer_tab(
                 let range = symbol.selection_range.unwrap_or(symbol.range);
                 use crate::app::gpui_bridge::OutlineRowAction;
                 let open = entry.row.open;
+                let (icon, kind) = super::outline_icons::symbol(symbol.kind, french, tokens.text);
+                let title = format!("{} ({kind})", symbol.name);
+                let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
+                let row_id = format!("outline-symbol-{}", symbol.key);
                 let mut row = div()
+                    .id(SharedString::from(row_id.clone()))
+                    .debug_selector(move || row_id.clone())
+                    .role(gpui::Role::TreeItem)
+                    .aria_label(title.clone())
+                    .aria_selected(selected)
+                    .when(!symbol.children.is_empty(), |el| el.aria_expanded(open))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| super::chrome::ToolbarTooltip {
+                            text: title.clone().into(),
+                            bg,
+                            fg,
+                            border,
+                        })
+                        .into()
+                    })
                     .when(selected, |row| row.bg(tokens.accent_soft))
-                    .pl(px(8.0 + depth as f32 * 12.0))
+                    .pl(px(crate::explorer_scm_model::row_padding(depth)))
+                    .h(px(crate::explorer_scm_model::EXPLORER_ROW_HEIGHT))
+                    .flex_shrink_0()
                     .flex()
                     .items_center();
+                let mut twistie = div().w(px(16.)).flex_shrink_0();
                 if !symbol.children.is_empty() {
-                    row = row.child(render_chip(
-                        format!("outline-fold-{}", symbol.key),
-                        if open { "▾" } else { "▸" }.into(),
-                        false,
-                        tokens,
-                        GpuiAction::OutlineRow(
-                            *id,
-                            tree.clone(),
-                            OutlineRowAction::Fold(symbol.key.clone()),
-                        ),
-                        cx,
-                    ));
+                    let action = OutlineRowAction::Fold(symbol.key.clone());
+                    let owner = *id;
+                    let tree = tree.clone();
+                    let key = format!("outline-fold-{}", symbol.key);
+                    twistie = twistie.child(
+                        div()
+                            .id(SharedString::from(key.clone()))
+                            .debug_selector(move || key.clone())
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                cx.stop_propagation();
+                                root.dispatch_action(
+                                    GpuiAction::OutlineRow(owner, tree.clone(), action.clone()),
+                                    cx,
+                                );
+                            }))
+                            .child(if open { "▾" } else { "▸" }),
+                    );
                 }
+                row = row.child(twistie).child(icon);
                 let row_key = symbol.key.clone();
                 let selection_key = row_key.clone();
                 let full_range = symbol.range;
@@ -1275,35 +1306,43 @@ fn render_explorer_tab(
                             },
                         )
                     }));
-                row = row.child(
-                    div()
-                        .id(SharedString::from(format!("outline-name-{}", symbol.key)))
-                        .debug_selector(move || format!("outline-name-{row_key}"))
-                        .cursor_pointer()
-                        .child(label)
-                        .on_click(cx.listener(
-                            move |this, event: &gpui::ClickEvent, window, cx| {
-                                let select = event.click_count() == 2;
-                                if !select {
-                                    this.focus_input = FocusInputTarget::OutlineTree;
-                                    window.focus(&row_focus, cx);
-                                }
-                                let target = if select { full_range } else { range };
-                                this.dispatch_action(
-                                    GpuiAction::OutlineRow(
-                                        id,
-                                        snapshot.clone(),
-                                        OutlineRowAction::Reveal(
-                                            selection_key.clone(),
-                                            target,
-                                            select,
-                                        ),
-                                    ),
-                                    cx,
-                                );
-                            },
-                        )),
-                );
+                row = row
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("outline-name-{}", symbol.key)))
+                            .debug_selector(move || format!("outline-name-{row_key}"))
+                            .ml(px(4.))
+                            .when(symbol.deprecated, |el| el.line_through())
+                            .child(label),
+                    )
+                    .when(!symbol.detail.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .ml(px(6.))
+                                .text_color(tokens.text_dim)
+                                .truncate()
+                                .child(symbol.detail.clone()),
+                        )
+                    })
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            let select = event.click_count() == 2;
+                            if !select {
+                                this.focus_input = FocusInputTarget::OutlineTree;
+                                window.focus(&row_focus, cx);
+                            }
+                            let target = if select { full_range } else { range };
+                            this.dispatch_action(
+                                GpuiAction::OutlineRow(
+                                    id,
+                                    snapshot.clone(),
+                                    OutlineRowAction::Reveal(selection_key.clone(), target, select),
+                                ),
+                                cx,
+                            );
+                        }),
+                    );
                 body = body.child(row);
             }
             if tree.is_empty() {

@@ -23,6 +23,7 @@ mod linear_view;
 mod modal_query_input;
 pub(crate) mod modals_view;
 mod new_task_view;
+mod outline_icons;
 mod panel_query_inputs;
 mod question_inputs;
 pub(crate) mod remote_inputs;
@@ -167,6 +168,7 @@ impl TesselGpuiRoot {
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
         file_icons::register(cx);
+        outline_icons::register(cx);
         private_key_input::register(cx);
         cx.bind_keys([
             gpui::KeyBinding::new("enter", new_task_view::Submit, Some("TesselNewTaskLine")),

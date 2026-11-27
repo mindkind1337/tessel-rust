@@ -3,6 +3,10 @@
 Tessel Rust includes or adapts the third-party material identified below. The original
 copyright and permission notices are reproduced in full.
 
+## Microsoft Codicons
+
+`resources/codicons/codicon.ttf` is an unmodified copy of the Microsoft Codicons font bundled with Tessel. The artwork is © Microsoft Corporation and distributed under [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/). [Upstream project](https://github.com/microsoft/vscode-codicons).
+
 ## Monaco indentation rules
 
 `src/gpui_ui/editor_indent.rs` adapts indentation detection, tab stops and character

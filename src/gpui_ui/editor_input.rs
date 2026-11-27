@@ -323,8 +323,17 @@ mod tests {
                 .center();
             visual.simulate_click(pos, Default::default());
         };
-        click(cx, "explorer-outline-fold-all");
-        click(cx, parent);
+        click(cx, "outline-fold-/1:parent");
+        {
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert!(visual.debug_bounds(child).is_none());
+            let name = visual.debug_bounds(parent).unwrap();
+            let row = visual.debug_bounds("outline-symbol-/1:parent").unwrap();
+            let pos = gpui::point(row.right() - gpui::px(3.), row.center().y);
+            assert!(pos.x > name.right());
+            visual.simulate_click(pos, Default::default());
+        }
         for key in ["t", "g", "t"] {
             cx.simulate_keystrokes(view.into(), key);
             cx.refresh().unwrap();
