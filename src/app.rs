@@ -3622,18 +3622,18 @@ impl Tessel {
             }
         }
         if crate::agent_preferences::enabled(&self.state, "codex") {
-            commands.push(PaletteCommand::new(
-                "chat",
-                new_group,
-                tr("Native Codex chat"),
-            ));
+            commands.push(
+                PaletteCommand::new("chat", new_group, tr("Native Codex chat")).with_hint(tr(
+                    "Codex without a terminal: team messages reach it as turns of their own",
+                )),
+            );
         }
         if crate::agent_preferences::enabled(&self.state, "claude") {
-            commands.push(PaletteCommand::new(
-                "claude-chat",
-                new_group,
-                tr("Native Claude chat"),
-            ));
+            commands.push(
+                PaletteCommand::new("claude-chat", new_group, tr("Native Claude chat")).with_hint(
+                    tr("Claude without a terminal: team messages reach it as turns of their own"),
+                ),
+            );
         }
 
         // 2. Project / Workspaces
@@ -3764,11 +3764,14 @@ impl Tessel {
                 );
             }
             if sess.terminal.is_some() {
-                commands.push(PaletteCommand::new(
-                    "layout:reset-terminal",
-                    layout_group,
-                    tr("Reset active terminal"),
-                ));
+                commands.push(
+                    PaletteCommand::new(
+                        "layout:reset-terminal",
+                        layout_group,
+                        tr("Reset active terminal"),
+                    )
+                    .with_hint(tr("Turns off modes a program left on; it keeps running")),
+                );
             }
         }
         if has_active_pane {
@@ -3782,7 +3785,7 @@ impl Tessel {
             );
         }
         commands.push(
-            PaletteCommand::new("floating", layout_group, tr("Toggle floating terminal"))
+            PaletteCommand::new("floating", layout_group, tr("Toggle floating terminal")).with_hint(tr("A terminal over the workspace, in the project's folder; it keeps running when hidden"))
                 .with_shortcut("Ctrl+`"),
         );
         commands.push(PaletteCommand::new(
@@ -3857,15 +3860,18 @@ impl Tessel {
         let task_group = tr("Task");
         let dashboard_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::Dashboard;
-        commands.push(PaletteCommand::new(
-            "dashboard",
-            task_group,
-            tr(if dashboard_showing {
-                "Hide agent dashboard"
-            } else {
-                "Show agent dashboard"
-            }),
-        ));
+        commands.push(
+            PaletteCommand::new(
+                "dashboard",
+                task_group,
+                tr(if dashboard_showing {
+                    "Hide agent dashboard"
+                } else {
+                    "Show agent dashboard"
+                }),
+            )
+            .with_hint(tr("Every agent of every project at a glance")),
+        );
         let tasks_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::Tasks;
         commands.push(
@@ -3882,42 +3888,54 @@ impl Tessel {
         );
         let task_hist_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::TaskHistory;
-        commands.push(PaletteCommand::new(
-            "task_history",
-            task_group,
-            tr(if task_hist_showing {
-                "Hide task history"
-            } else {
-                "Show task history"
-            }),
-        ));
+        commands.push(
+            PaletteCommand::new(
+                "task_history",
+                task_group,
+                tr(if task_hist_showing {
+                    "Hide task history"
+                } else {
+                    "Show task history"
+                }),
+            )
+            .with_hint(tr(
+                "Finished tasks with their time, tokens and estimated cost",
+            )),
+        );
         let past_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::History;
-        commands.push(PaletteCommand::new(
-            "history",
-            task_group,
-            tr(if past_showing {
-                "Hide past conversations"
-            } else {
-                "Show past conversations"
-            }),
-        ));
-        commands.push(PaletteCommand::new(
-            "sessions:modal",
-            task_group,
-            tr("Past conversations"),
-        ));
+        commands.push(
+            PaletteCommand::new(
+                "history",
+                task_group,
+                tr(if past_showing {
+                    "Hide past conversations"
+                } else {
+                    "Show past conversations"
+                }),
+            )
+            .with_hint(tr("Browse, search and resume past agent conversations")),
+        );
+        commands.push(
+            PaletteCommand::new("sessions:modal", task_group, tr("Past conversations"))
+                .with_hint(tr("Reopen a past agent conversation")),
+        );
         let conv_showing =
             self.state.panels.right_open && self.state.panels.right_tab == RightTab::Conversations;
-        commands.push(PaletteCommand::new(
-            "conversations",
-            task_group,
-            tr(if conv_showing {
-                "Hide conversation threads"
-            } else {
-                "Show conversation threads"
-            }),
-        ));
+        commands.push(
+            PaletteCommand::new(
+                "conversations",
+                task_group,
+                tr(if conv_showing {
+                    "Hide conversation threads"
+                } else {
+                    "Show conversation threads"
+                }),
+            )
+            .with_hint(tr(
+                "What the agents of a team said to each other and to you",
+            )),
+        );
         if self.state.active_project.is_some() {
             commands.push(PaletteCommand::new("task:new", task_group, tr("New task…")));
             commands.push(PaletteCommand::new(

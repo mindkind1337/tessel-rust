@@ -170,6 +170,7 @@ fn render_command_palette(
             .count();
     let mut list = div()
         .id("gpui-palette-scroll")
+        .role(gpui::Role::ListBox)
         .debug_selector(|| "palette-list".into())
         .when_some(
             inputs.list_scroll(crate::app::gpui_bridge::NativeSearchKind::Palette, child),
@@ -203,20 +204,24 @@ fn render_command_palette(
         list = list.child(
             div()
                 .id(("gpui-palette-row", idx as u64))
+                .role(gpui::Role::ListBoxOption)
+                .aria_selected(selected)
+                .aria_label(row.command.title.clone())
+                .when(selected, |el| el.aria_active_descendant())
                 .flex_shrink_0()
                 .debug_selector(move || format!("palette-row-{idx}"))
                 .px(px(10.0))
-                .py(px(6.0))
+                .h(px(32.0))
                 .rounded(px(tokens.radius_px - 1.0))
                 .bg(if selected {
-                    tokens.accent_soft
+                    tokens.surface_3
                 } else {
                     gpui::rgba(0x0000_0000)
                 })
                 .flex()
                 .items_center()
-                .justify_between()
-                .gap(px(8.0))
+                .cursor_pointer()
+                .gap(px(10.0))
                 .hover(|s| s.bg(tokens.surface_2))
                 .on_mouse_move(cx.listener(move |root, _, _, cx| {
                     if let Some(scope) = scope {
@@ -237,26 +242,49 @@ fn render_command_palette(
                 }))
                 .child(
                     div()
-                        .flex_1()
                         .min_w_0()
                         .text_size(px(12.0))
                         .text_color(tokens.text_strong)
                         .truncate()
                         .child(SharedString::from(row.command.title.clone())),
                 )
+                .when_some(row.command.hint.clone(), |el, hint| {
+                    el.child(
+                        div()
+                            .debug_selector(move || format!("palette-hint-{idx}"))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.5))
+                            .text_color(tokens.text_dim)
+                            .child(hint),
+                    )
+                })
                 .when_some(row.command.shortcut.clone(), |el, sc| {
                     el.child(
                         div()
-                            .px(px(5.0))
-                            .py(px(1.5))
-                            .rounded(px(3.0))
-                            .bg(tokens.surface_2)
-                            .font_family(mono_font_family())
-                            .text_size(px(10.0))
+                            .ml_auto()
+                            .flex_shrink_0()
+                            .text_size(px(11.0))
                             .text_color(tokens.text_dim)
                             .child(SharedString::from(sc)),
                     )
                 }),
+        );
+    }
+
+    if m.palette_rows.is_empty() {
+        let label =
+            crate::i18n::tr("Nothing matches \"{{query}}\"").replace("{{query}}", &m.palette_query);
+        list = list.child(
+            div()
+                .debug_selector(|| "palette-empty".into())
+                .py(px(18.))
+                .px(px(10.))
+                .text_center()
+                .text_size(px(12.5))
+                .text_color(tokens.text_dim)
+                .child(label),
         );
     }
 
@@ -286,9 +314,9 @@ fn render_command_palette(
                             .get(m.palette_selected)
                             .map(|r| r.command.id.as_str()),
                         placeholder: if french {
-                            "Rechercher un panneau, projet ou commande…"
+                            "Chercher des panneaux, espaces de travail et commandes"
                         } else {
-                            "Type a command, pane, or workspace…"
+                            "Search panes, workspaces and commands"
                         },
                         french,
                     },

@@ -376,6 +376,43 @@ mod tests {
         });
     }
     #[gpui::test]
+    fn native_palette_finds_localized_hint_and_renders_empty_result(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.apply_gpui_action(GpuiAction::ToggleCommandPalette);
+            root
+        });
+        for (fr, query) in [(false, "glance agent"), (true, "projets agents")] {
+            view.update(cx, |root, _, cx| {
+                root.dispatch(GpuiAction::SetLanguage { french: fr }, cx);
+                root.dispatch(GpuiAction::PaletteSetQuery(query.into()), cx);
+                let rows = root.app.gpui_snapshot(960., 640., 4.).modals.palette_rows;
+                assert!(
+                    rows.iter()
+                        .any(|r| r.command.id == "dashboard" && r.command.hint.is_some())
+                );
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut ui = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert!(ui.debug_bounds("palette-hint-0").unwrap().size.width > gpui::px(0.));
+            assert!(ui.debug_bounds("palette-empty").is_none());
+        }
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::PaletteSetQuery("unmatched-77-xyz".into()), cx)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        let mut ui = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(ui.debug_bounds("palette-empty").is_some());
+        assert!(ui.debug_bounds("palette-row-0").is_none());
+        view.update(cx, |root, _, cx| {
+            root.dispatch(GpuiAction::SetLanguage { french: false }, cx)
+        })
+        .unwrap();
+    }
+    #[gpui::test]
     fn native_search_long_lists_reveal_keyboard_selection_and_follow_pointer(
         cx: &mut TestAppContext,
     ) {

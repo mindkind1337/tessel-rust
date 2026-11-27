@@ -537,5 +537,14 @@
   "Invalid task history.": "Historique des tâches invalide.",
   "Task history exceeds its limit.": "L’historique des tâches dépasse sa limite.",
   "Task history identifiers are exhausted.": "Les identifiants de l’historique des tâches sont épuisés.",
-  "Task history contains an unfinished period.": "L’historique des tâches contient une période non terminée."
+  "Task history contains an unfinished period.": "L’historique des tâches contient une période non terminée.",
+  "Every agent of every project at a glance": "Tous les agents de tous les projets d'un coup d'\u0153il",
+  "Finished tasks with their time, tokens and estimated cost": "Les t\u00e2ches termin\u00e9es avec leur temps, leurs tokens et leur co\u00fbt estim\u00e9",
+  "What the agents of a team said to each other and to you": "Ce que les agents d'une \u00e9quipe se sont dit, et vous ont dit",
+  "Browse, search and resume past agent conversations": "Parcourir, chercher et reprendre les conversations pass\u00e9es des agents",
+  "Reopen a past agent conversation": "Rouvrir une conversation pass\u00e9e d\u2019un agent",
+  "A terminal over the workspace, in the project's folder; it keeps running when hidden": "Un terminal par-dessus l'espace de travail, dans le dossier du projet ; il continue de tourner une fois masqu\u00e9",
+  "Turns off modes a program left on; it keeps running": "D\u00e9sactive les modes qu'un programme a laiss\u00e9s actifs ; il continue de tourner",
+  "Codex without a terminal: team messages reach it as turns of their own": "Codex sans terminal : les messages d'\u00e9quipe lui arrivent comme des tours \u00e0 part enti\u00e8re",
+  "Claude without a terminal: team messages reach it as turns of their own": "Claude sans terminal : les messages d'\u00e9quipe lui arrivent comme des tours \u00e0 part enti\u00e8re"
 }
