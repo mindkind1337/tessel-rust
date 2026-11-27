@@ -381,7 +381,7 @@ impl Document {
         self.diff_title.is_none()
             && !self.deleted_on_disk
             && self.root.is_absolute()
-            && dunce::simplified(&self.path).starts_with(dunce::simplified(&self.root))
+            && crate::external_editor::under_project(&self.root, &self.path)
     }
     pub(crate) fn external_position(&self) -> Option<FilePosition> {
         if self.media || self.preview_mode || self.diff_title.is_some() {

@@ -1612,7 +1612,8 @@ fn gpui_theme_tokens_and_svg_icons_cover_all_palettes_and_glyphs() {
         let tokens = GpuiThemeTokens::from_theme(theme);
         assert_eq!(tokens.id, theme);
         assert!(tokens.radius_px >= 4.0);
-        assert!((tokens.active_pane_ring.alpha - 0.70).abs() < 1e-5);
+        let expected_ring = if theme == ThemeId::Warp { 0.80 } else { 0.70 };
+        assert!((tokens.active_pane_ring.alpha - expected_ring).abs() < 1e-5);
     }
 
     let mixed = color_mix_srgb(gpui::rgb(0xff0000), 0.25, gpui::rgb(0x0000ff));

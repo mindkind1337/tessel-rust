@@ -174,6 +174,14 @@ pub(crate) fn open(
     open_with(root, file, |p| open_in_code(p, position), system_open)
 }
 
+pub(crate) fn under_project(root: &Path, file: &Path) -> bool {
+    let file = dunce::simplified(file);
+    file.starts_with(dunce::simplified(root))
+        || root
+            .canonicalize()
+            .is_ok_and(|canonical| file.starts_with(dunce::simplified(&canonical)))
+}
+
 fn open_with(
     root: &Path,
     file: &Path,
@@ -184,7 +192,7 @@ fn open_with(
     let file = dunce::simplified(file);
     validate(root)?;
     validate_file(file)?;
-    if !file.starts_with(root) {
+    if !under_project(root, file) {
         return Err("File is outside the project.".into());
     }
     let real = crate::files::confined(root, file)?;
@@ -259,6 +267,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn editor_in_junction_project_accepts_its_canonical_file_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("project");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir(&real).unwrap();
+        let junction = Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(junction.status.success());
+        let path = real.join("document.txt");
+        std::fs::write(&path, "fixture").unwrap();
+        let doc = crate::files::Document::open(&alias, &alias.join("document.txt")).unwrap();
+        assert!(doc.external_available());
+        let canonical = dunce::canonicalize(&path).unwrap();
+        assert!(
+            open_with(&alias, &doc.path, |p| p == canonical, |_| panic!())
+                .unwrap()
+                .is_none()
+        );
+        let sibling = temp.path().join("outside.txt");
+        std::fs::write(&sibling, "outside").unwrap();
+        assert!(open_with(&alias, &sibling, |_| panic!(), |_| panic!()).is_err());
+    }
+
+    #[test]
     fn explorer_external_open_routes_originals_and_blocks_programs_before_launch() {
         let root = tempfile::tempdir().unwrap();
         for name in [
@@ -271,23 +308,29 @@ mod tests {
             std::fs::write(root.path().join(name), b"fixture").unwrap();
         }
         let code = root.path().join("code & notes.js");
+        let canonical_file = |p: &Path| dunce::canonicalize(p).unwrap();
         assert!(
-            open_with(root.path(), &code, |p| p == code, |_| panic!())
-                .unwrap()
-                .is_none()
+            open_with(
+                root.path(),
+                &code,
+                |p| p == canonical_file(&code),
+                |_| panic!()
+            )
+            .unwrap()
+            .is_none()
         );
         assert_eq!(
             open_with(root.path(), &code, |_| false, |_| panic!())
                 .unwrap()
                 .unwrap(),
-            code
+            canonical_file(&code)
         );
         let script = root.path().join("test.cmd");
         assert_eq!(
             open_with(root.path(), &script, |_| false, |_| panic!())
                 .unwrap()
                 .unwrap(),
-            script
+            canonical_file(&script)
         );
         let pdf = root.path().join("report.pdf");
         assert!(
@@ -296,7 +339,7 @@ mod tests {
                 &pdf,
                 |_| false,
                 |p| {
-                    assert_eq!(p, pdf);
+                    assert_eq!(p, canonical_file(&pdf));
                     Ok(())
                 }
             )
