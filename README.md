@@ -6,7 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
-- Word and OpenDocument text previews in GPUI use a centered reading column up to 820 pixels wide. Empty, loading and unreadable documents have distinct messages.
+- Word and OpenDocument text previews in GPUI use a centered reading column up to 820 pixels wide. Headings retain their level, including custom Word style IDs mapped to heading names and OpenDocument outline levels. Empty, loading and unreadable documents have distinct messages.
 - PowerPoint and OpenDocument presentation previews in GPUI show numbered slides in one scrolling view, including empty slides.
 - Local and SSH workbooks show sheet tabs below the grid, with a read-only label and messages for empty sheets and workbooks. Excel date cells use the workbook’s 1900 or 1904 calendar, time-only values show hours, minutes and seconds, and numeric values display up to 15 significant digits. The grid preserves leading blank rows and columns from A1 and reports how many rows and columns fall beyond the 5,000-row by 200-column preview area.
 - Local and SSH PDF toolbars highlight Fit width and apply zoom to the document that displayed the controls. The viewer shows reading and error messages inside the viewport. A page that fails to render is marked individually while other pages stay available.

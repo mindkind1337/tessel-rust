@@ -1817,16 +1817,16 @@ pub(crate) fn render_office_summary(
             .debug_selector(|| "office-reading".into());
     }
     if !workbook {
-        let paragraph = |heading: bool, text: &String| {
+        let paragraph = |heading: u8, text: &String| {
             div()
                 .mb(px(8.))
-                .text_size(px(if heading { 16. } else { 13. }))
-                .font_weight(if heading {
+                .text_size(px(crate::office::heading_size(heading)))
+                .font_weight(if heading > 0 {
                     FontWeight::SEMIBOLD
                 } else {
                     FontWeight::NORMAL
                 })
-                .text_color(if heading {
+                .text_color(if heading > 0 {
                     tokens.text_strong
                 } else {
                     tokens.text

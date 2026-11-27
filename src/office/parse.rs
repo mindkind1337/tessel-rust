@@ -82,12 +82,62 @@ fn attribute(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String
                 .map(|v| v.into_owned())
         })
 }
-fn text_page(source: &str, title: String, odf: bool) -> Result<Section, String> {
+fn numbered_heading(name: &str, prefix: &str) -> Option<u8> {
+    let digit = name.strip_prefix(prefix)?.trim_start();
+    match digit.as_bytes() {
+        [level @ b'1'..=b'6'] => Some(level - b'0'),
+        _ => None,
+    }
+}
+
+fn word_headings(source: &str) -> Result<HashMap<String, u8>, String> {
+    // xml() validates structure and size before this pass.
+    let mut styles = HashMap::new();
+    let mut reader = Xml::from_str(source);
+    let mut style = None;
+    let mut depth = 0;
+    loop {
+        let event = reader.read_event().map_err(|_| "Invalid Word styles")?;
+        let starts = matches!(&event, Event::Start(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                if starts && e.name().as_ref() == "w:style" {
+                    style = attribute(&e, "w:styleId").map(|id| (id, depth + 1));
+                } else if e.name().as_ref() == "w:name"
+                    && let Some((id, parent)) = &style
+                    && *parent == depth
+                    && let Some(level) = attribute(&e, "w:val")
+                        .and_then(|s| numbered_heading(&s.to_ascii_lowercase(), "heading"))
+                {
+                    styles.insert(id.clone(), level);
+                }
+                if starts {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                if style.as_ref().is_some_and(|(_, parent)| *parent == depth) {
+                    style = None;
+                }
+                depth -= 1;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(styles)
+}
+fn text_page(
+    source: &str,
+    title: String,
+    odf: bool,
+    styles: &HashMap<String, u8>,
+) -> Result<Section, String> {
     let mut reader = Xml::from_str(source);
     let mut text = String::new();
     let mut paragraphs = Vec::new();
     let mut capture = 0usize;
-    let mut heading = false;
+    let mut heading = 0;
     let mut total = 0usize;
     let mut events = 0usize;
     loop {
@@ -108,17 +158,30 @@ fn text_page(source: &str, title: String, odf: bool) -> Result<Section, String> 
                             text: std::mem::take(&mut text),
                         });
                     }
-                    heading = n == "text:h";
+                    heading = if n == "text:h" {
+                        attribute(&e, "text:outline-level")
+                            .and_then(|s| s.parse::<i32>().ok())
+                            .unwrap_or(1)
+                            .clamp(1, 6) as u8
+                    } else {
+                        0
+                    };
                 }
                 if !empty && (matches!(n, "w:t" | "a:t") || odf && matches!(n, "text:p" | "text:h"))
                 {
                     capture += 1;
                 }
                 if n == "w:pStyle"
-                    && attribute(&e, "w:val")
-                        .is_some_and(|v| v.to_lowercase().starts_with("heading"))
+                    && let Some(id) = attribute(&e, "w:val")
                 {
-                    heading = true;
+                    let lower = id.to_ascii_lowercase();
+                    heading = styles
+                        .get(&id)
+                        .copied()
+                        .or_else(|| numbered_heading(&lower, "heading"))
+                        .or_else(|| numbered_heading(&lower, "titre"))
+                        .or_else(|| (lower == "title").then_some(1))
+                        .unwrap_or(0);
                 }
                 if matches!(n, "w:tab" | "text:tab") {
                     text.push('\t');
@@ -148,7 +211,7 @@ fn text_page(source: &str, title: String, odf: bool) -> Result<Section, String> 
                         heading,
                         text: std::mem::take(&mut text),
                     });
-                    heading = false;
+                    heading = 0;
                 }
             }
             Event::Text(e) if capture > 0 => {
@@ -329,16 +392,27 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
         }
     } else {
         let mut zip = archive(bytes)?;
+        let styles = if extension == "docx"
+            && zip
+                .file_names()
+                .any(|name| name.is_ok_and(|n| n == "word/styles.xml"))
+        {
+            word_headings(&xml(&mut zip, "word/styles.xml")?)?
+        } else {
+            HashMap::new()
+        };
         match extension {
             "docx" => book.sections.push(text_page(
                 &xml(&mut zip, "word/document.xml")?,
                 "Document".into(),
                 false,
+                &styles,
             )?),
             "odt" => book.sections.push(text_page(
                 &xml(&mut zip, "content.xml")?,
                 "Document".into(),
                 true,
+                &styles,
             )?),
             "pptx" => {
                 let relationships = xml(&mut zip, "ppt/_rels/presentation.xml.rels")?;
@@ -388,8 +462,12 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                                 return Err("Unsupported slide path".into());
                             }
                             let title = format!("Slide {}", book.sections.len() + 1);
-                            book.sections
-                                .push(text_page(&xml(&mut zip, &path)?, title, false)?);
+                            book.sections.push(text_page(
+                                &xml(&mut zip, &path)?,
+                                title,
+                                false,
+                                &styles,
+                            )?);
                         }
                         Event::DocType(_) => return Err("DTD refused".into()),
                         Event::Eof => break,
@@ -417,7 +495,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                         Event::Empty(e) if e.name().as_ref() == "draw:page" => {
                             let title = attribute(&e, "draw:name")
                                 .unwrap_or_else(|| format!("Slide {}", book.sections.len() + 1));
-                            book.sections.push(text_page("", title, true)?);
+                            book.sections.push(text_page("", title, true, &styles)?);
                         }
                         Event::Start(e) if e.name().as_ref() == "draw:page" => {
                             start = Some(offset);
@@ -431,6 +509,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                                     &content[start..end],
                                     title.clone(),
                                     true,
+                                    &styles,
                                 )?);
                             }
                         }

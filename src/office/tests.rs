@@ -73,7 +73,7 @@ fn gpui_office_sections_and_truncation_survive_worker_delivery() {
 #[test]
 fn document_entities_headings_and_empty_runs() {
     let book = parse::parse(&document(), "docx").unwrap();
-    assert!(book.sections[0].paragraphs[0].heading);
+    assert_eq!(book.sections[0].paragraphs[0].heading, 1);
     assert_eq!(book.sections[0].paragraphs[1].text, "A & B");
     assert_eq!(column(0), "A");
     assert_eq!(column(25), "Z");
@@ -351,4 +351,31 @@ fn office_text_document_loading_empty_and_failed_states_render_separately(
             assert!(f32::from(page.size.width) > 0. && f32::from(page.size.width) <= 820.);
         }
     }
+}
+
+#[test]
+fn office_heading_levels_follow_word_styles_and_odf_outlines() {
+    let doc = archive(&[
+        (
+            "word/styles.xml",
+            r#"<w:styles xmlns:w="urn:w"><w:style w:styleId="Custom"><w:name w:val="heading 3"/></w:style></w:styles>"#,
+        ),
+        (
+            "word/document.xml",
+            r#"<w:document xmlns:w="urn:w"><w:p><w:pStyle w:val="Custom"/><w:t>A</w:t></w:p><w:p><w:pStyle w:val="Titre 2"/><w:t>B</w:t></w:p><w:p><w:pStyle w:val="Title"/><w:t>C</w:t></w:p><w:p><w:pStyle w:val="HeadingBody"/><w:t>D</w:t></w:p></w:document>"#,
+        ),
+    ]);
+    let levels = |book: Book| {
+        book.sections[0]
+            .paragraphs
+            .iter()
+            .map(|p| p.heading)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(levels(parse::parse(&doc, "docx").unwrap()), [3, 2, 1, 0]);
+    let odt = archive(&[(
+        "content.xml",
+        r#"<doc xmlns:text="urn:t"><text:h text:outline-level="4">Four</text:h><text:h text:outline-level="9">Six</text:h><text:p>Body</text:p></doc>"#,
+    )]);
+    assert_eq!(levels(parse::parse(&odt, "odt").unwrap()), [4, 6, 0]);
 }

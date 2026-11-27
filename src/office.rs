@@ -19,7 +19,7 @@ const MAX_INPUT: usize = 32 * 1024 * 1024;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
 struct Paragraph {
-    heading: bool,
+    heading: u8,
     text: String,
 }
 #[derive(Serialize, Deserialize)]
@@ -57,6 +57,9 @@ impl Book {
             }
             bytes += page.title.len();
             for paragraph in &page.paragraphs {
+                if paragraph.heading > 6 {
+                    return Err("Invalid Office heading level".into());
+                }
                 bytes += paragraph.text.len();
             }
             for row in &page.rows {
@@ -76,6 +79,16 @@ impl Book {
             return Err("Office content limit reached".into());
         }
         Ok(())
+    }
+}
+pub(crate) fn heading_size(level: u8) -> f32 {
+    match level {
+        1 => 26.,
+        2 => 21.,
+        3 => 18.,
+        4 => 16.,
+        5 => 14.,
+        _ => 13.,
     }
 }
 fn is_presentation(extension: &str) -> bool {
@@ -207,13 +220,13 @@ pub struct OfficeView {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct OfficeSummary {
-    pub slides: Option<Vec<Vec<(bool, String)>>>,
+    pub slides: Option<Vec<Vec<(u8, String)>>>,
     pub omitted_rows: usize,
     pub omitted_cols: usize,
     pub workbook: bool,
     pub section_titles: Vec<String>,
     pub selected: usize,
-    pub paragraphs: Vec<(bool, String)>,
+    pub paragraphs: Vec<(u8, String)>,
     pub sheet: Option<Arc<crate::rich_previews::SheetTable>>,
     pub truncated: bool,
     pub busy: bool,
@@ -381,8 +394,12 @@ impl OfficeView {
                 .id_salt(("office-content", self.selected))
                 .show(ui, |ui| {
                     for paragraph in &page.paragraphs {
-                        if paragraph.heading {
-                            ui.heading(&paragraph.text);
+                        if paragraph.heading > 0 {
+                            ui.label(
+                                egui::RichText::new(&paragraph.text)
+                                    .strong()
+                                    .size(heading_size(paragraph.heading)),
+                            );
                         } else {
                             ui.add(egui::Label::new(&paragraph.text).selectable(true));
                         }
