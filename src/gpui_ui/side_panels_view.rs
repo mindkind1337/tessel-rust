@@ -3240,14 +3240,25 @@ fn render_timeline(
             );
         }
         if history.more {
-            list = list.child(render_chip(
-                "timeline-more",
-                if fr { "Charger la suite" } else { "Load More" }.into(),
-                false,
-                tokens,
-                GpuiAction::Timeline(Action::Refresh(file.clone(), true)),
-                cx,
-            ));
+            let label = crate::file_timeline::more_label(snap.loading, fr);
+            list = if snap.loading {
+                list.child(
+                    div()
+                        .id("timeline-more-loading")
+                        .role(gpui::Role::Status)
+                        .text_color(tokens.text_dim)
+                        .child(label),
+                )
+            } else {
+                list.child(render_chip(
+                    "timeline-more",
+                    label.into(),
+                    false,
+                    tokens,
+                    GpuiAction::Timeline(Action::Refresh(file.clone(), true)),
+                    cx,
+                ))
+            };
         }
         section = section.child(list);
     }

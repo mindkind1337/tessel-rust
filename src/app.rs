@@ -2286,8 +2286,13 @@ impl Tessel {
         if !shown {
             self.timeline.filters_open = false;
         }
-        self.timeline.select(file.clone(), sources);
+        self.timeline.select(
+            file.clone(),
+            sources,
+            self.state.editor_prefs.explorer_timeline_height,
+        );
         crate::file_timeline::Snapshot {
+            loading: self.timeline.loading(),
             sources,
             filters_open: self.timeline.filters_open,
             shown,

@@ -255,17 +255,21 @@ pub struct State {
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
     limit: usize,
+    page_size: usize,
+    reload_requested: bool,
     revision: u64,
     save_cursor: u64,
     last_age_update: Option<std::time::Instant>,
     pending: Option<(u64, mpsc::Receiver<Result<History, String>>)>,
 }
 impl State {
-    pub fn select(&mut self, file: Option<PathBuf>, sources: Sources) {
+    pub fn select(&mut self, file: Option<PathBuf>, sources: Sources, height: u16) {
+        self.page_size = (usize::from(height.clamp(44, 2000)) / 22 - 1).max(20);
         if self.file != file || self.sources != sources {
             if self.file != file {
-                self.limit = 20;
+                self.limit = 0;
             }
+            self.data = None;
             self.sources = sources;
             self.file = file;
             self.refresh(false);
@@ -274,15 +278,22 @@ impl State {
     }
     pub fn refresh(&mut self, more: bool) {
         if more {
-            self.limit = (self.limit + 20).min(500);
+            if self.pending.is_some()
+                || !matches!(self.data.as_ref(), Some(Ok(history)) if history.more)
+            {
+                return;
+            }
+            self.limit = (self.limit + self.page_size).min(500);
+        } else {
+            self.limit = self.limit.max(self.page_size);
         }
         self.revision = self.revision.wrapping_add(1);
-        self.data = None;
+        self.reload_requested = true;
         self.last_age_update = None;
         self.start();
     }
     fn start(&mut self) {
-        if self.data.is_some() {
+        if self.data.is_some() && !self.reload_requested {
             return;
         }
         let Some(file) = self.file.clone() else {
@@ -290,12 +301,14 @@ impl State {
         };
         let sources = self.sources;
         if !sources.git && !sources.local {
+            self.reload_requested = false;
             self.data = Some(Ok(Arc::default()));
             return;
         }
         if self.pending.is_some() {
             return;
         }
+        self.reload_requested = false;
         let (tx, rx) = mpsc::channel();
         let limit = self.limit;
         let profile = self.profile.clone();
@@ -303,6 +316,9 @@ impl State {
         thread::spawn(move || {
             let _ = tx.send(load(&file, limit, profile.as_deref(), sources));
         });
+    }
+    pub fn loading(&self) -> bool {
+        self.file.is_some() && (self.sources.git || self.sources.local) && self.pending.is_some()
     }
     pub fn poll(&mut self) -> bool {
         if crate::local_file_history::changed_since(&mut self.save_cursor, self.file.as_deref())
@@ -360,12 +376,21 @@ pub enum Action {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub loading: bool,
     pub shown: bool,
     pub filters_open: bool,
     pub sources: Sources,
     pub pinned: bool,
     pub file: Option<PathBuf>,
     pub data: Option<Result<Arc<History>, String>>,
+}
+pub fn more_label(loading: bool, fr: bool) -> &'static str {
+    match (loading, fr) {
+        (true, true) => "Chargement...",
+        (true, false) => "Loading...",
+        (false, true) => "Charger la suite",
+        (false, false) => "Load more",
+    }
 }
 impl Snapshot {
     pub fn file_label(&self, file: &Path, fr: bool) -> String {
@@ -1052,7 +1077,10 @@ pub fn compat(ui: &mut eframe::egui::Ui, snap: &Snapshot, fr: bool) -> Option<Ac
                 }
                 if history.more
                     && ui
-                        .button(if fr { "Charger la suite" } else { "Load More" })
+                        .add_enabled(
+                            !snap.loading,
+                            eframe::egui::Button::new(more_label(snap.loading, fr)),
+                        )
                         .clicked()
                 {
                     action = Some(Action::Refresh(file.clone(), true));
@@ -1230,6 +1258,63 @@ mod tests {
         git::run(dir, &opts, None).unwrap()
     }
     #[test]
+    fn file_timeline_pages_keep_entries_and_use_the_current_pane_height() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        git_fixture(root, &["init", "-q", "-b", "main"]);
+        let mut stream = String::new();
+        for i in 1..=65 {
+            let text = i.to_string();
+            stream.push_str(&format!("commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> {} +0000\ndata {}\n{text}\nM 100644 inline notes.txt\ndata {}\n{text}\n\n", 1_700_000_000 + i, text.len(), text.len()));
+        }
+        git::run(root, &["fast-import", "--quiet"], Some(stream.as_bytes())).unwrap();
+        git_fixture(root, &["checkout", "-q", "HEAD", "--", "notes.txt"]);
+        let path = root.join("notes.txt");
+        let sources = Sources {
+            git: true,
+            local: false,
+        };
+        let mut state = State::default();
+        let drain = |state: &mut State| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while state.loading() {
+                state.poll();
+                assert!(std::time::Instant::now() < until);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            state.data.as_ref().unwrap().as_ref().unwrap().clone()
+        };
+        state.select(Some(path.clone()), sources, 220);
+        let first = drain(&mut state);
+        assert_eq!(first.commits.len(), 20);
+        state.select(Some(path.clone()), sources, 880);
+        assert!(!state.loading());
+        state.refresh(true);
+        assert!(state.loading());
+        assert!(Arc::ptr_eq(
+            &first,
+            state.data.as_ref().unwrap().as_ref().unwrap()
+        ));
+        state.refresh(true);
+        let second = drain(&mut state);
+        assert_eq!(second.commits.len(), 59);
+        state.refresh(false);
+        assert!(Arc::ptr_eq(
+            &second,
+            state.data.as_ref().unwrap().as_ref().unwrap()
+        ));
+        assert_eq!(drain(&mut state).commits.len(), 59);
+        state.refresh(true);
+        assert_eq!(drain(&mut state).commits.len(), 65);
+        state.refresh(true);
+        assert!(!state.loading());
+        state.select(None, sources, 880);
+        assert!(state.data.is_none());
+        state.select(Some(path), sources, 880);
+        assert_eq!(drain(&mut state).commits.len(), 39);
+    }
+
+    #[test]
     fn file_timeline_follows_literal_renames_pages_and_opens_original_patch() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -1393,7 +1478,7 @@ mod tests {
             file: Some(PathBuf::from("previous")),
             ..State::default()
         };
-        state.select(None, Sources::default());
+        state.select(None, Sources::default(), 220);
         tx.send(Err("stale error".into())).unwrap();
         assert!(state.poll());
         assert!(state.file.is_none() && state.data.is_none() && state.pending.is_none());
