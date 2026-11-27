@@ -509,6 +509,8 @@ pub struct ExplorerTree {
     restore_open: HashSet<String>,
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
     selected_key: Option<String>,
+    reveal_folder: Option<String>,
+    reveal_generation: u64,
     selected_hit: Option<(PathBuf, usize)>,
     name_search: name_search::Search,
     compact_folders: bool,
@@ -560,6 +562,8 @@ impl ExplorerTree {
             restore_open: HashSet::new(),
             expanded_by_project: VecDeque::new(),
             selected_key: None,
+            reveal_folder: None,
+            reveal_generation: 0,
             selected_hit: None,
             name_search: Default::default(),
             compact_folders: false,
@@ -835,6 +839,7 @@ impl ExplorerTree {
         self.pending_queue.clear();
         self.queued_keys.clear();
         self.selected_key = None;
+        self.reveal_folder = None;
         self.selected_hit = None;
         self.name_search = Default::default();
         self.last_row_rects.clear();
@@ -1387,7 +1392,20 @@ impl ExplorerTree {
         let mut clicked_row: Option<(usize, PathBuf, bool)> = None;
         let row_count = visible_indices.len();
 
-        egui::ScrollArea::vertical()
+        let mut tree_scroll = egui::ScrollArea::vertical();
+        if let Some(row) = self
+            .reveal_folder
+            .as_ref()
+            .and_then(|key| self.cached_tree.index.get(key))
+            && let Ok(idx) = visible_indices.binary_search(row)
+        {
+            let stride = EXPLORER_ROW_HEIGHT + ui.spacing().item_spacing.y;
+            tree_scroll = tree_scroll.vertical_scroll_offset(
+                (idx as f32 * stride - ui.available_height() / 2.0).max(0.0),
+            );
+            self.reveal_folder = None;
+        }
+        tree_scroll
             .id_salt("explorer-tree-scroll")
             .auto_shrink([false, false])
             .show_rows(ui, EXPLORER_ROW_HEIGHT, row_count, |ui, range| {
@@ -1402,7 +1420,11 @@ impl ExplorerTree {
                         .cloned()
                         .unwrap_or_else(|| PathBuf::from(&row.path));
                     let is_active_doc = active_key.as_deref() == Some(row.path.as_str());
-                    let is_selected = self.selected_key.as_deref() == Some(row.path.as_str());
+                    let is_selected = self
+                        .selected_key
+                        .as_ref()
+                        .and_then(|key| self.cached_tree.index.get(key))
+                        == Some(&idx);
 
                     let width = ui.available_width().max(120.0);
                     let (rect, response) = ui.allocate_exact_size(
@@ -1678,6 +1700,8 @@ impl ExplorerTree {
         let root = self.project_root.clone()?;
         let rel = entry.path.strip_prefix(&root).ok()?;
         self.set_filter_query("");
+        self.reveal_folder.clone_from(&self.selected_key);
+        self.reveal_generation = self.reveal_generation.wrapping_add(1);
         let mut parent = root;
         for (index, component) in rel.components().enumerate() {
             if index + 1 > self.limits.max_depth
@@ -1853,6 +1877,7 @@ impl ExplorerTree {
                 truncated: self.truncated || self.content_search_limited,
                 error: self.error.clone(),
                 rows: Vec::new(),
+                reveal: None,
                 content_hits,
             };
         }
@@ -1901,6 +1926,19 @@ impl ExplorerTree {
             }
         }
         let filter_lc = trimmed_query.to_lowercase();
+        let anchor_index = self
+            .reveal_folder
+            .as_ref()
+            .filter(|_| filter_lc.is_empty())
+            .and_then(|key| self.cached_tree.index.get(key).copied());
+        let reveal_index = anchor_index.filter(|_| self.selected_key == self.reveal_folder);
+        let start = anchor_index
+            .filter(|index| *index >= 500)
+            .map_or(0, |index| {
+                index
+                    .saturating_sub(250)
+                    .min(self.cached_tree.rows.len().saturating_sub(500))
+            });
         let mut rows: Vec<_> = self
             .cached_tree
             .rows
@@ -1910,6 +1948,7 @@ impl ExplorerTree {
                     || r.name.to_lowercase().contains(&filter_lc)
                     || r.path.to_lowercase().contains(&filter_lc)
             })
+            .skip(start)
             .take(501)
             .map(|row| {
                 let row_path = self
@@ -1934,13 +1973,16 @@ impl ExplorerTree {
                     depth: row.depth,
                     dir: row.dir,
                     open: row.open,
-                    selected: self.selected_key.as_deref() == Some(row.path.as_str()),
+                    selected: row
+                        .chain
+                        .iter()
+                        .any(|part| self.selected_key.as_ref() == Some(&part.path)),
                     active_doc: active_key.as_deref() == Some(row.path.as_str()),
                 }
             })
             .collect();
 
-        let rows_limited = rows.len() > 500;
+        let rows_limited = start > 0 || rows.len() > 500;
         rows.truncate(500);
 
         ExplorerGpuiSnapshot {
@@ -1954,6 +1996,7 @@ impl ExplorerTree {
             compact_folders: self.compact_folders,
             loading: self.gpui_needs_frame(),
             truncated: self.truncated || rows_limited,
+            reveal: reveal_index.map(|index| (self.reveal_generation, index - start)),
             error: self.error.clone(),
             rows,
             content_hits: Vec::new(),
@@ -2000,6 +2043,7 @@ pub(crate) struct ExplorerGpuiSnapshot {
     pub truncated: bool,
     pub error: String,
     pub rows: Vec<ExplorerGpuiRow>,
+    pub reveal: Option<(u64, usize)>,
     pub content_hits: Vec<ExplorerGpuiContentHit>,
 }
 
@@ -2081,6 +2125,8 @@ mod native_filter_tests {
                 .iter()
                 .any(|r| r.path == nested && r.open && r.selected)
         );
+        let (_, index) = revealed.reveal.expect("folder selection requests a scroll");
+        assert_eq!(revealed.rows[index].path, nested);
         assert!(revealed.rows.iter().any(|r| r.name == "other.txt"));
     }
 
@@ -2186,6 +2232,12 @@ mod native_filter_tests {
         let capped = tree.gpui_rows_snapshot(Some(dir.path()), None);
         assert_eq!(capped.rows.len(), 500);
         assert!(capped.truncated);
+        tree.selected_key = Some(norm_tree_key(&dir.path().join("entry500.txt")));
+        tree.reveal_folder.clone_from(&tree.selected_key);
+        let revealed = tree.gpui_rows_snapshot(Some(dir.path()), None);
+        let (_, index) = revealed.reveal.unwrap();
+        assert_eq!(revealed.rows[index].name, "entry500.txt");
+        assert_eq!(revealed.rows.len(), 500);
         tree.set_filter_query("entry500.txt");
         let narrowed = tree.gpui_rows_snapshot(Some(dir.path()), None);
         assert_eq!(narrowed.rows.len(), 1);

@@ -455,6 +455,7 @@ fn render_explorer_tab(
 
     let mut scroll = div()
         .id("gpui-explorer-scroll")
+        .track_scroll(&explorer_input.tree_scroll)
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
@@ -462,6 +463,17 @@ fn render_explorer_tab(
         .flex_col()
         .gap(px(1.5));
 
+    if let Some((generation, index)) = ex.reveal {
+        let token = (ex.root_path.clone(), generation, index);
+        if explorer_input.last_tree_reveal.borrow().as_ref() != Some(&token) {
+            explorer_input
+                .tree_scroll
+                .scroll_to_item(index + usize::from(!ex.error.is_empty()));
+            explorer_input.last_tree_reveal.replace(Some(token));
+        }
+    } else {
+        explorer_input.last_tree_reveal.replace(None);
+    }
     if !ex.error.is_empty() {
         scroll = scroll.child(
             div()
