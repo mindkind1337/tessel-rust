@@ -4,7 +4,7 @@ use crate::guest_file_editor::Key as FileKey;
 pub(crate) struct GuestFilesView {
     pub image: Option<(FileKey, std::sync::Arc<gpui::RenderImage>)>,
     pub image_menu: Option<(f32, f32, f32)>,
-    pub download_menu: Option<FileKey>,
+    pub download_menu: Option<(FileKey, (f32, f32, f32))>,
     pub directory: String,
     pub tabs: Vec<FileKey>,
     pub confirm_close: bool,
@@ -147,7 +147,7 @@ impl SharePanel {
         Some(GuestFilesView {
             image: self.guest_image.key.clone().zip(self.guest_image.native()),
             image_menu: self.guest_image.menu,
-            download_menu: self.guest_download.menu.clone(),
+            download_menu: self.guest_download.native_menu.clone(),
             versions: self.guest_versions.rows.clone(),
             version_diff: self.guest_versions.diff.clone(),
             version_text: self.guest_versions.text.clone(),

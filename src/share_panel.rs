@@ -3440,7 +3440,7 @@ pub(crate) enum ShareGpuiAction {
     GuestDraftTouch(crate::guest_task_board::Scope),
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
-    GuestFileMenu(crate::guest_file_editor::Key),
+    GuestFileMenu(crate::guest_file_editor::Key, Option<(f32, f32, f32)>),
     GuestImageMenu(crate::guest_file_editor::Key, Option<(f32, f32, f32)>),
     GuestDownload(crate::guest_file_editor::Key),
     GuestOpenFile(crate::guest_file_editor::Key),
@@ -3709,16 +3709,26 @@ impl SharePanel {
                     self.list_guest_files(path);
                 }
             }
-            ShareGpuiAction::GuestFileMenu(key) => {
+            ShareGpuiAction::GuestFileMenu(key, position) => {
                 self.poll_guest_scope();
-                if self.downloadable(&key) {
-                    self.guest_download.menu =
-                        (self.guest_download.menu.as_ref() != Some(&key)).then_some(key);
+                if let Some(position) = position
+                    && self.downloadable(&key)
+                {
+                    self.guest_image.menu = None;
+                    self.guest_download.native_menu = Some((key, position));
+                } else if self
+                    .guest_download
+                    .native_menu
+                    .as_ref()
+                    .is_some_and(|(active, _)| active == &key)
+                {
+                    self.guest_download.native_menu = None;
                 }
             }
             ShareGpuiAction::GuestImageMenu(key, position) => {
                 self.poll_guest_scope();
                 if self.guest_image.key.as_ref() == Some(&key) {
+                    self.guest_download.native_menu = None;
                     self.guest_image.menu = position;
                 }
             }

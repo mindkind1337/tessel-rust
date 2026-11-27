@@ -419,6 +419,56 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
     .unwrap();
 }
 #[gpui::test]
+fn guest_downloads_an_unopened_file_from_the_list(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, _) = joined_guest(cx);
+    let original = dir.path().join("project-1/sample.bin");
+    let destination = dir.path().join("saved.bin");
+    std::fs::write(&original, [0, 255, 42, 13, 10]).unwrap();
+    for selector in [
+        "guest-tab-files",
+        "guest-file-menu-0",
+        "guest-file-download",
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds(selector) {
+                if selector == "guest-file-download" {
+                    crate::download_name::TEST_DOWNLOAD_DESTINATION
+                        .with(|next| next.set(Some(destination.clone())));
+                    cx.simulate_keystrokes(view.into(), "down enter");
+                } else {
+                    visual.simulate_click(bounds.center(), Default::default());
+                }
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !destination.exists() {
+        view.update(cx, |root, _, cx| {
+            root.poll_backend(cx);
+        })
+        .unwrap();
+        assert!(Instant::now() < deadline, "download did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        std::fs::read(original).unwrap()
+    );
+}
+
+#[gpui::test]
 fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
     let (dir, host, _cards, view, scope) = joined_guest(cx);
     let project = dir.path().join("project-1");
@@ -460,8 +510,9 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
     for selector in [
         "guest-tab-files",
         "guest-entry-0",
-        "guest-download-0",
+        "guest-file-download",
         "guest-file-menu-0",
+        "guest-file-download",
         "guest-entry-0",
         "guest-history-refresh",
         "guest-history-commit",
@@ -499,7 +550,14 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
                     checked_download = true;
                     break;
                 }
-                if selector == "guest-download-0" {
+                if selector == "guest-file-download" {
+                    cx.simulate_keystrokes(view.into(), "escape");
+                    cx.refresh().unwrap();
+                    assert!(
+                        gpui::VisualTestContext::from_window(view.into(), cx)
+                            .debug_bounds(selector)
+                            .is_none()
+                    );
                     break;
                 }
                 if selector == "guest-version-0" {

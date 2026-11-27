@@ -866,6 +866,61 @@ fn render_help_modal(
 // 5. Live Share Modal, SAS Knock Modal & Pill Popover
 // ---------------------------------------------------------------------------
 
+fn guest_file_actions(
+    key: crate::guest_file_editor::Key,
+    index: usize,
+    button: AnyElement,
+    french: bool,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let open = move |root: &mut TesselGpuiRoot,
+                     point: gpui::Point<gpui::Pixels>,
+                     window: &mut gpui::Window,
+                     cx: &mut Context<TesselGpuiRoot>| {
+        let position = (
+            point.x.into(),
+            point.y.into(),
+            window.viewport_size().height.into(),
+        );
+        root.dispatch_action(
+            GpuiAction::Share(ShareGpuiAction::GuestFileMenu(key.clone(), Some(position))),
+            cx,
+        );
+        window.focus(&root.image_menu_item, cx);
+        cx.stop_propagation();
+    };
+    let right_click = open.clone();
+    let id = format!("guest-file-menu-{index}");
+    div()
+        .flex()
+        .items_center()
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            cx.listener(move |root, event: &gpui::MouseDownEvent, window, cx| {
+                right_click(root, event.position, window, cx)
+            }),
+        )
+        .child(button)
+        .child(
+            div()
+                .id(SharedString::from(id.clone()))
+                .debug_selector(move || id.clone())
+                .aria_label(if french {
+                    "Actions du fichier"
+                } else {
+                    "File actions"
+                })
+                .cursor_pointer()
+                .px(px(6.))
+                .child("⋯")
+                .on_click(
+                    cx.listener(move |root, event: &gpui::ClickEvent, window, cx| {
+                        open(root, event.position(), window, cx)
+                    }),
+                ),
+        )
+}
+
 fn render_share_modal(
     image_focus: &gpui::FocusHandle,
     snapshot: &GpuiWorkspaceSnapshot,
@@ -1236,46 +1291,19 @@ fn render_share_modal(
                                 scope,
                                 path: entry.path.clone(),
                             };
-                            let menu =
-                                GpuiAction::Share(ShareGpuiAction::GuestFileMenu(key.clone()));
-                            let right_click = menu.clone();
-                            content = content.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .on_mouse_down(
-                                        gpui::MouseButton::Right,
-                                        cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.dispatch_action(right_click.clone(), cx);
-                                        }),
-                                    )
-                                    .child(button)
-                                    .child(modal_btn(
-                                        format!("guest-file-menu-{index}"),
-                                        "⋯".into(),
-                                        false,
-                                        tokens,
-                                        menu,
-                                        cx,
-                                    )),
-                            );
-                            if files.download_menu.as_ref() == Some(&key) {
-                                content = content.child(modal_btn(
-                                    format!("guest-download-{index}"),
-                                    if french {
-                                        "Télécharger…"
-                                    } else {
-                                        "Download…"
-                                    }
-                                    .into(),
-                                    false,
-                                    tokens,
-                                    GpuiAction::Share(ShareGpuiAction::GuestDownload(key)),
-                                    cx,
-                                ));
-                            }
+                            content =
+                                content.child(guest_file_actions(key, index, button, french, cx));
                         }
+                    }
+                    if let Some((key, (x, y, height))) = &files.download_menu
+                        && key.scope == scope
+                        && files
+                            .entries
+                            .iter()
+                            .any(|entry| !entry.directory && entry.path == key.path)
+                    {
+                        let menu = super::image_menu::Menu::guest_file(key, (*x, *y), french);
+                        content = menu.attach(content, image_focus, *height, tokens, cx);
                     }
                     content = render_guest_document(
                         image_focus,

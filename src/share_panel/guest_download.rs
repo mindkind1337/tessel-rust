@@ -18,6 +18,7 @@ pub(super) struct Download {
     pending: Option<(PathBuf, Receiver<Option<NamedTempFile>>)>,
     notice: Option<Result<PathBuf, Failure>>,
     pub menu: Option<Key>,
+    pub native_menu: Option<(Key, (f32, f32, f32))>,
 }
 impl Download {
     pub fn busy(&self) -> bool {
@@ -121,6 +122,7 @@ impl SharePanel {
     ) {
         self.poll_guest_scope();
         self.guest_download.menu = None;
+        self.guest_download.native_menu = None;
         if self.guest_download.busy() || !self.downloadable(key) {
             return;
         }
