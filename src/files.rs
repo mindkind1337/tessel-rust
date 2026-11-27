@@ -185,29 +185,40 @@ pub struct EditorTools {
 
 /// Non-overlapping literal matches in character coordinates and zero-based lines.
 pub fn find_char_matches(text: &str, query: &str) -> Vec<(usize, usize, usize)> {
+    let mut matches = Vec::new();
+    visit_find_matches(text, query, |hit| {
+        matches.push(hit);
+        true
+    });
+    matches
+}
+
+fn visit_find_matches(
+    text: &str,
+    query: &str,
+    mut visit: impl FnMut((usize, usize, usize)) -> bool,
+) {
     if query.is_empty() || text.is_empty() {
-        return Vec::new();
+        return;
     }
     let fold = |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
     let needle = fold(query);
     if text.is_ascii() {
         let mut line = 0;
         let mut prev = 0;
-        return text
-            .to_ascii_lowercase()
-            .match_indices(&needle)
-            .map(|(start, matched)| {
-                line += text.as_bytes()[prev..start]
-                    .iter()
-                    .filter(|&&b| b == b'\n')
-                    .count();
-                prev = start;
-                (start, start + matched.len(), line)
-            })
-            .collect();
+        for (start, matched) in text.to_ascii_lowercase().match_indices(&needle) {
+            line += text.as_bytes()[prev..start]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count();
+            if !visit((start, start + matched.len(), line)) {
+                break;
+            }
+            prev = start;
+        }
+        return;
     }
     let folded = fold(text);
-    let mut matches = Vec::new();
     // A Unicode lowercase mapping can expand a source character into multiple scalars.
     // Track original boundaries as we search so a replacement never splits that character.
     let mut boundaries = text
@@ -237,14 +248,15 @@ pub fn find_char_matches(text: &str, query: &str) -> Vec<(usize, usize, usize)> 
         let mut after = boundaries.clone();
         while after.next_if(|p| p.0 < end).is_some() {}
         if let Some(&(_, last, _)) = after.peek().filter(|p| p.0 == end) {
-            matches.push((first, last, line));
+            if !visit((first, last, line)) {
+                break;
+            }
             boundaries = after;
             offset = end;
         } else {
             offset = boundaries.peek().map_or(folded.len(), |p| p.0);
         }
     }
-    matches
 }
 
 /// Build one bounded edit so Replace All has one undo step in the native editor.
@@ -560,6 +572,45 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
+    pub(crate) fn seed_find_from_selection(&mut self, selection: std::ops::Range<usize>) {
+        let (mut start, mut end) =
+            char_range_to_byte_range(&self.text, selection.start, selection.end);
+        if start == end {
+            // Monaco's default word separators, plus line boundaries and horizontal whitespace.
+            let delimiter = |ch: char| {
+                matches!(ch, ' ' | '\t' | '\r' | '\n')
+                    || r#"`~!@#$%^&*()-=+[{]}\|;:'",.<>/?"#.contains(ch)
+            };
+            start = self.text[..start].rfind(delimiter).map_or(0, |i| i + 1);
+            end += self.text[end..]
+                .find(delimiter)
+                .unwrap_or(self.text.len() - end);
+        }
+        let seed = &self.text[start..end];
+        if seed.is_empty()
+            || seed.contains(['\r', '\n'])
+            || seed.encode_utf16().take(524_288).count() == 524_288
+        {
+            return;
+        }
+        self.tools.find_query = seed.to_owned();
+        let char_start = self.text[..start].chars().count();
+        if char_start == 0 {
+            self.tools.match_index = 0;
+            return;
+        }
+        let mut preceding = 0;
+        self.tools.match_index = 0;
+        visit_find_matches(&self.text, seed, |hit| {
+            if hit.0 >= char_start {
+                self.tools.match_index = preceding;
+                return false;
+            }
+            preceding += 1;
+            true
+        });
+    }
+
     pub(crate) fn display_text(&mut self) -> DisplayText {
         if let Some(cached) = &self.tools.display_text
             && cached.text.as_str() == self.text
@@ -1533,6 +1584,30 @@ mod tests {
         assert_eq!(goto_line_char_offset("", "::1"), Some((0, 0)));
         assert_eq!(goto_line_char_offset(text, "x:3"), None);
         assert_eq!(goto_line_char_offset(text, "::"), None);
+    }
+
+    #[test]
+    fn ctrl_f_seeds_the_selected_occurrence_or_word_and_retains_previous_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seed.txt");
+        std::fs::write(&path, "café ++ café,😀_id\r\nnext").unwrap();
+        let mut doc = super::Document::open(dir.path(), &path).unwrap();
+        for (selection, expected, index) in [
+            (9..9, "café", 1),
+            (12..12, "café", 1),
+            (13..13, "😀_id", 0),
+            (5..7, "++", 0),
+            (7..7, "++", 0),
+            (12..21, "++", 0),
+            (4..8, " ++ ", 0),
+        ] {
+            doc.seed_find_from_selection(selection);
+            assert_eq!(doc.tools.find_query, expected);
+            assert_eq!(doc.tools.match_index, index);
+        }
+        doc.text = "😀".repeat(262144);
+        doc.seed_find_from_selection(0..262144);
+        assert_eq!(doc.tools.find_query, " ++ ");
     }
 
     #[test]

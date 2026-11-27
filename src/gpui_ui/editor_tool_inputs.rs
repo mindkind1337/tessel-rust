@@ -269,6 +269,23 @@ pub(crate) fn open(
     {
         return;
     }
+    if f == EditorToolField::Find
+        && root.editor_input.focused(window, cx)
+        && let Some(source) = root.editor_input.get(id).cloned()
+        && root
+            .app
+            .gpui_editor_document()
+            .is_some_and(|doc| doc.text == source.read(cx).as_str())
+        && let Some(selected) = source.update(cx, |s, cx| {
+            if s.marked_text_range(window, cx).is_some() {
+                return None;
+            }
+            let range = s.selected_text_range(false, window, cx)?.range;
+            Some(utf16_to_char(s.as_str(), range.start)..utf16_to_char(s.as_str(), range.end))
+        })
+    {
+        root.app.seed_editor_find(id, selected);
+    }
     if root.app.gpui_editor_tool_value(id, f).is_none() {
         root.dispatch(
             match f {
@@ -503,6 +520,12 @@ mod tests {
             root
         });
         cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            let state = root.editor_input.get(id).unwrap().clone();
+            window.focus(&state.read(cx).focus_handle(cx), cx);
+            state.update(cx, |s, cx| s.set_selected_text_range(0..3, window, cx));
+        })
+        .unwrap();
         cx.simulate_keystrokes(view.into(), "ctrl-f");
         cx.refresh().unwrap();
         let find = view
@@ -513,6 +536,7 @@ mod tests {
                     .get(id, EditorToolField::Find)
                     .unwrap()
                     .clone();
+                assert_eq!(input.read(cx).as_str(), "é😀");
                 assert!(input.read(cx).focus_handle(cx).is_focused(window));
                 input.update(cx, |s, cx| {
                     s.replace_text_in_range(None, "app😀e", window, cx);
@@ -614,7 +638,7 @@ mod tests {
         view.update(cx, |root, _, _| {
             assert_eq!(
                 root.app.gpui_editor_tool_value(id, EditorToolField::Find),
-                Some("apple")
+                Some("🍎")
             )
         })
         .unwrap();

@@ -16446,6 +16446,13 @@ fn document_toolbar(
     let mut prefs_changed = false;
     if ui.is_enabled() && source_mode {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+            let source_id = egui::Id::new(("local-source", d.instance_id()));
+            if ui.memory(|m| m.has_focus(source_id))
+                && let Some(state) = egui::text_edit::TextEditState::load(ui.ctx(), source_id)
+                && let Some(selection) = state.cursor.char_range()
+            {
+                d.seed_find_from_selection(selection.as_sorted_char_range());
+            }
             d.tools.find_open = true;
             d.tools.focus_find = true;
         }
@@ -17187,6 +17194,17 @@ $lock.Dispose()
                 assert_eq!(cursor.as_sorted_char_range(), 2..4);
             }
         }
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+        );
+        assert_eq!(app.documents[0].tools.find_query, "ph");
     }
 
     #[test]

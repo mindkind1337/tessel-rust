@@ -2839,6 +2839,14 @@ impl Tessel {
         self.view == View::Remote && self.remote.set_pdf_viewport(id, viewport)
     }
 
+    pub(crate) fn seed_editor_find(&mut self, id: u64, selected: std::ops::Range<usize>) {
+        if self.gpui_editor_tool_document_id() == Some(id)
+            && let Some(doc) = self.documents.get_mut(self.active_document)
+        {
+            doc.seed_find_from_selection(selected);
+        }
+    }
+
     pub(crate) fn gpui_editor_document(&self) -> Option<&crate::files::Document> {
         (self.view == View::Files && !self.gpui_has_open_modal())
             .then(|| self.documents.get(self.active_document))
