@@ -705,6 +705,9 @@ pub struct Workspace {
     pub schema: u32,
     pub projects: Vec<Project>,
     pub hosts: Vec<Host>,
+    /// Recently removed config aliases, excluded from passive SSH discovery.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removed_ssh_aliases: Vec<String>,
     pub agent_model_defaults:
         std::collections::BTreeMap<String, crate::agent_model_defaults::Defaults>,
     pub agent_prefs: std::collections::BTreeMap<String, crate::agent_preferences::Preferences>,
@@ -773,6 +776,7 @@ impl Default for Workspace {
             schema: 1,
             projects: vec![],
             hosts: vec![],
+            removed_ssh_aliases: vec![],
             agent_prefs: Default::default(),
             agent_folder_trust: true,
             agent_model_defaults: Default::default(),
@@ -1203,6 +1207,12 @@ impl Workspace {
             {
                 return Err("Invalid task metadata.".into());
             }
+        }
+        if self.removed_ssh_aliases.len() > 200 {
+            return Err("Too many removed SSH aliases".into());
+        }
+        for alias in &self.removed_ssh_aliases {
+            validate_host(alias)?;
         }
         // Older versions could save identical rows. Keep those readable while
         // rejecting any explicit ID that collides with another target.

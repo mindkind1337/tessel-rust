@@ -817,7 +817,9 @@ pub struct Tessel {
     native_terminals: native_terminals::State,
     host_notice: Option<(String, bool)>,
     host_tests: std::collections::HashSet<String>,
-    host_import: Option<Receiver<crate::ssh_config::Discovery>>,
+    host_import: Option<(Receiver<crate::ssh_config::Discovery>, bool)>,
+    ssh_sync_home: Option<PathBuf>,
+    ssh_settings_visible: bool,
     tasks_board: crate::tasks_board_panel::TasksBoard,
     tasks_board_project: Option<u64>,
     pending_close: Option<usize>,
@@ -1074,6 +1076,8 @@ impl Tessel {
             host_notice: None,
             host_tests: Default::default(),
             host_import: None,
+            ssh_sync_home: directories::BaseDirs::new().map(|base| base.home_dir().to_owned()),
+            ssh_settings_visible: false,
             tasks_board: Default::default(),
             tasks_board_project: None,
             pending_close: None,
@@ -2691,6 +2695,7 @@ impl Tessel {
             .model_discovery
             .as_mut()
             .is_some_and(|discovery| discovery.poll());
+        self.sync_ssh_settings_visibility();
         self.poll_host_import();
         self.sync_git_project();
         if let Some(completion) = self.git_result.poll() {
@@ -10428,10 +10433,24 @@ impl Tessel {
             self.host_notice = Some((tr("User home directory unavailable").into(), true));
             return;
         };
-        self.start_ssh_import(base.home_dir().to_owned());
+        self.start_ssh_import(base.home_dir().to_owned(), true);
     }
 
-    fn start_ssh_import(&mut self, home: PathBuf) {
+    fn sync_ssh_settings_visibility(&mut self) {
+        let visible = self.overlay == Some(Overlay::Settings)
+            && self.settings_section == SettingsSection::Hosts;
+        if visible
+            && !self.ssh_settings_visible
+            && self.store.is_some()
+            && self.host_import.is_none()
+            && let Some(home) = self.ssh_sync_home.clone()
+        {
+            self.start_ssh_import(home, false);
+        }
+        self.ssh_settings_visible = visible;
+    }
+
+    fn start_ssh_import(&mut self, home: PathBuf, re_adopt: bool) {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("ssh-config-import".into())
@@ -10439,7 +10458,7 @@ impl Tessel {
                 let _ = sender.send(crate::ssh_config::discover(&home));
             });
         if worker.is_ok() {
-            self.host_import = Some(receiver);
+            self.host_import = Some((receiver, re_adopt));
             self.host_notice = None;
         } else {
             self.host_notice = Some((
@@ -10450,29 +10469,36 @@ impl Tessel {
     }
 
     fn poll_host_import(&mut self) {
-        let result = self
-            .host_import
-            .as_ref()
-            .and_then(|receiver| match receiver.try_recv() {
-                Ok(discovery) => Some(Ok(discovery)),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("SSH configuration import stopped without a result."))
-                }
-            });
+        let result =
+            self.host_import
+                .as_ref()
+                .and_then(|(receiver, re_adopt)| match receiver.try_recv() {
+                    Ok(discovery) => Some(Ok((discovery, *re_adopt))),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        Some(Err("SSH configuration import stopped without a result."))
+                    }
+                });
         let Some(result) = result else {
             return;
         };
         self.host_import = None;
         match result {
-            Ok(discovery) => {
-                let mut added = 0;
-                let saved = self.change_hosts(|hosts| {
-                    added = crate::host_actions::import_aliases(hosts, &discovery.aliases)?;
-                    Ok(added != 0)
-                });
+            Ok((discovery, re_adopt)) => {
+                let saved = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "Settings store unavailable".to_owned())
+                    .and_then(|store| {
+                        crate::host_actions::sync_config(
+                            &mut self.state,
+                            store,
+                            &discovery.aliases,
+                            re_adopt,
+                        )
+                    });
                 match saved {
-                    Ok(_) => {
+                    Ok(added) => {
                         let incomplete = discovery.truncated || discovery.skipped_files != 0;
                         let mut message = format!("{} {added}", tr("SSH targets imported:"));
                         if incomplete {
@@ -10539,7 +10565,12 @@ impl Tessel {
         change: impl FnOnce(&mut Vec<Host>) -> Result<bool, String>,
     ) -> Result<bool, String> {
         let store = self.store.as_ref().ok_or("Settings store unavailable")?;
-        crate::host_actions::persist(&mut self.state, store, change)
+        let changed = crate::host_actions::persist(&mut self.state, store, change)?;
+        if changed {
+            // A config scan started before this edit must not restore a removed target.
+            self.host_import = None;
+        }
+        Ok(changed)
     }
 
     fn agent_settings(&mut self, ui: &mut egui::Ui) {

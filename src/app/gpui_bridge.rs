@@ -1708,6 +1708,11 @@ impl Tessel {
             host_notice: None,
             host_tests: Default::default(),
             host_import: None,
+            ssh_sync_home: probe_environment
+                .then(directories::BaseDirs::new)
+                .flatten()
+                .map(|base| base.home_dir().to_owned()),
+            ssh_settings_visible: false,
             tasks_board: Default::default(),
             tasks_board_project: None,
             pending_close: None,
@@ -11793,6 +11798,56 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn ssh_settings_passive_sync_runs_on_entry_and_does_not_resurrect_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".ssh")).unwrap();
+        std::fs::write(dir.path().join(".ssh/config"), "Host lab office\n").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.ssh_sync_home = Some(dir.path().into());
+        app.apply_gpui_action(GpuiAction::OpenSettingsPage("ssh".into()));
+        app.sync_ssh_settings_visibility();
+        assert!(app.host_import.is_some());
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.host_import.is_some() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert_eq!(app.state.hosts.len(), 2);
+        let removed = app.state.hosts[0].clone();
+        // A queued explicit import may not undo a removal made after it started.
+        let (sender, receiver) = mpsc::channel();
+        app.host_import = Some((receiver, true));
+        app.remove_saved_host(0, &removed).unwrap();
+        assert!(app.host_import.is_none());
+        assert!(
+            sender
+                .send(crate::ssh_config::Discovery::default())
+                .is_err()
+        );
+        app.sync_ssh_settings_visibility();
+        assert!(app.host_import.is_none(), "no rescan on every frame");
+        app.overlay = None;
+        app.sync_ssh_settings_visibility();
+        app.apply_gpui_action(GpuiAction::OpenSettingsPage("ssh".into()));
+        app.sync_ssh_settings_visibility();
+        assert!(app.host_import.is_some());
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.host_import.is_some() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert_eq!(app.state.hosts.len(), 1);
+        assert!(
+            !app.state
+                .hosts
+                .iter()
+                .any(|host| host.alias == removed.alias)
+        );
+    }
+
+    #[test]
     fn ssh_settings_show_import_progress_and_persist_the_discovered_aliases() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join(".ssh");
@@ -11810,7 +11865,7 @@ mod panel_snapshot_tests {
             folder: "/srv/app".into(),
         });
         app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
-        app.start_ssh_import(dir.path().into());
+        app.start_ssh_import(dir.path().into(), true);
         // A second click must not start a scan of the real user's home.
         app.apply_gpui_action(GpuiAction::ImportSshConfig);
         let settings = app.gpui_snapshot(960., 640., 4.).settings.unwrap();

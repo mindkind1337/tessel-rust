@@ -426,3 +426,10 @@ Optional connected native reviewers are now selectable in both New Task renderer
 - New Task now includes captured connected native agents with availability labels. Existing selection hides copy/setup options and excludes that pane from reviewers. Terminal agents and disconnected-conversation startup remain outstanding.
 
 - Worktree origin: owner tasks and reused native panes preserve a recorded starting branch/commit; unknown historical origins are described explicitly rather than assumed to be main. Old saved panes remain compatible.
+
+
+## SSH settings follow-up (2026-11-27)
+
+Both renderers now synchronize concrete OpenSSH aliases when entering SSH settings. Passive discovery preserves removed/renamed aliases across restarts (the last 200); explicit Import re-adopts them. Scanning stays in the bounded discovery worker, and successful manual metadata changes discard an older pending result. Existing manual folders remain unchanged. These behaviors have synthetic config/persistence and app-controller coverage; visual equivalence remains unverified.
+
+The current Vue `RemoteHostForm.vue` still exposes structured label, username, port, identity file, proxy command and jump host fields that Rust's alias/folder form does not yet reproduce. OpenSSH-config support is not equivalent to these editable fields. Full SSH form and connection-profile parity remain open.

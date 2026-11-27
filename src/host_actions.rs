@@ -11,11 +11,48 @@ pub fn persist(
     let mut next = state.clone();
     let changed = change(&mut next.hosts)?;
     if changed {
+        // Remember removals and renamed endpoints, so passive discovery cannot resurrect them.
+        for old in &state.hosts {
+            if !next.hosts.iter().any(|host| host.alias == old.alias) {
+                next.removed_ssh_aliases.retain(|alias| alias != &old.alias);
+                next.removed_ssh_aliases.push(old.alias.clone());
+            }
+        }
+        next.removed_ssh_aliases
+            .retain(|alias| !next.hosts.iter().any(|host| &host.alias == alias));
+        let excess = next.removed_ssh_aliases.len().saturating_sub(200);
+        next.removed_ssh_aliases.drain(..excess);
         // Persist before publishing UI state; failed writes leave the original intact.
         store.save(&next)?;
         state.hosts = next.hosts;
+        state.removed_ssh_aliases = next.removed_ssh_aliases;
     }
     Ok(changed)
+}
+
+/// Passive sync respects removals; explicit Import re-adopts them only after a successful save.
+pub fn sync_config(
+    state: &mut Workspace,
+    store: &Store,
+    aliases: &[String],
+    re_adopt: bool,
+) -> Result<usize> {
+    let mut next = state.clone();
+    if re_adopt {
+        next.removed_ssh_aliases.clear();
+    }
+    let aliases: Vec<_> = aliases
+        .iter()
+        .filter(|alias| !next.removed_ssh_aliases.contains(alias))
+        .cloned()
+        .collect();
+    let added = import_aliases(&mut next.hosts, &aliases)?;
+    if added != 0 || next.removed_ssh_aliases != state.removed_ssh_aliases {
+        store.save(&next)?;
+        state.hosts = next.hosts;
+        state.removed_ssh_aliases = next.removed_ssh_aliases;
+    }
+    Ok(added)
 }
 
 fn validate(host: &Host) -> Result<()> {
@@ -231,6 +268,62 @@ mod tests {
         );
         assert_eq!(hosts.len(), MAX_HOSTS);
     }
+    #[test]
+    fn passive_sync_remembers_removed_and_renamed_aliases_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let aliases = vec!["lab".into(), "office".into()];
+        assert_eq!(sync_config(&mut state, &store, &aliases, false).unwrap(), 2);
+        let lab = state.hosts[0].clone();
+        persist(&mut state, &store, |hosts| {
+            remove(hosts, 0, &lab)?;
+            Ok(true)
+        })
+        .unwrap();
+        let office = state.hosts[0].clone();
+        persist(&mut state, &store, |hosts| {
+            save(hosts, Some((0, &office)), host("edited", "/manual"))
+        })
+        .unwrap();
+        assert_eq!(state.removed_ssh_aliases, ["lab", "office"]);
+        drop(store);
+        let (store, mut restored) = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            sync_config(&mut restored, &store, &aliases, false).unwrap(),
+            0
+        );
+        assert_eq!(restored.hosts.len(), 1);
+        assert_eq!(restored.hosts[0].folder, "/manual");
+        assert_eq!(
+            sync_config(&mut restored, &store, &aliases, true).unwrap(),
+            2
+        );
+        assert!(restored.removed_ssh_aliases.is_empty());
+        assert_eq!(restored.hosts[0].folder, "/manual");
+    }
+
+    #[test]
+    fn failed_readoption_retains_removals_and_manual_add_can_restore_an_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        state.removed_ssh_aliases = vec!["lab".into()];
+        std::fs::create_dir(dir.path().join("workspace.json")).unwrap();
+        assert!(sync_config(&mut state, &store, &["lab".into()], true).is_err());
+        assert!(state.hosts.is_empty());
+        assert_eq!(state.removed_ssh_aliases, ["lab"]);
+        std::fs::remove_dir(dir.path().join("workspace.json")).unwrap();
+        persist(&mut state, &store, |hosts| {
+            save(hosts, None, host("lab", "/manual"))
+        })
+        .unwrap();
+        assert!(state.removed_ssh_aliases.is_empty());
+        assert_eq!(
+            sync_config(&mut state, &store, &["lab".into()], false).unwrap(),
+            0
+        );
+        assert_eq!(state.hosts[0].folder, "/manual");
+    }
+
     #[test]
     fn failed_persistence_does_not_publish_a_changed_host_list() {
         let dir = tempfile::tempdir().unwrap();
