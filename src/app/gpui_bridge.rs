@@ -2904,7 +2904,7 @@ impl Tessel {
             View::Files => GpuiFocusTarget::EditorBody,
             View::GuestFiles | View::Remote => GpuiFocusTarget::None,
             #[cfg(windows)]
-            View::Browser => GpuiFocusTarget::None,
+            View::Browser | View::EmptyBrowserGrid => GpuiFocusTarget::None,
         }
     }
 
@@ -3451,10 +3451,11 @@ impl Tessel {
             .filter(|s| s.project == self.state.active_project)
             .map(|s| s.id)
             .collect();
-        if self.active_session.is_none()
-            || !project_session_ids
-                .iter()
-                .any(|id| Some(*id) == self.active_session)
+        if !self.empty_browser_grid()
+            && (self.active_session.is_none()
+                || !project_session_ids
+                    .iter()
+                    .any(|id| Some(*id) == self.active_session))
         {
             self.active_session = project_session_ids.first().copied();
         }
@@ -3759,7 +3760,7 @@ impl Tessel {
             kind: crate::view_tabs::Kind::Terminal,
             doc_index: None,
             guest_key: None,
-            selected: self.view == View::Work,
+            selected: self.view == View::Work || self.empty_browser_grid(),
             dirty: false,
             closable: false,
             preview: false,
@@ -3843,6 +3844,8 @@ impl Tessel {
             View::Remote => GpuiCenterMode::RemoteSftp,
             #[cfg(windows)]
             View::Browser => GpuiCenterMode::BrowserTab,
+            #[cfg(windows)]
+            View::EmptyBrowserGrid => GpuiCenterMode::EmptyProjectLauncher,
             _ => {
                 if self.state.projects.is_empty() && project_session_ids.is_empty() {
                     GpuiCenterMode::NoProjectsWelcome
@@ -8309,6 +8312,123 @@ mod panel_snapshot_tests {
                 .unwrap()
                 .rect_px,
             smaller.rect_px
+        );
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn terminal_tab_of_empty_browser_checkout_restores_launcher_and_starts_chat_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let checkout = dir.path().join("feature");
+        std::fs::create_dir(&project).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&project)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "-c",
+            "user.name=Tessel Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ]);
+        git(&[
+            "worktree",
+            "add",
+            "-qb",
+            "feature",
+            checkout.to_str().unwrap(),
+        ]);
+        let start = || Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut app = start();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let main = app.active_session.unwrap();
+        app.new_browser_page();
+        app.new_session_in_worktree(
+            app.state.active_project,
+            Launch::ClaudeChat,
+            None,
+            false,
+            Some(crate::workspace::SavedWorktree {
+                path: checkout.clone(),
+                branch: "feature".into(),
+                base_branch: None,
+            }),
+        );
+        let old = app.active_session.unwrap();
+        app.new_browser_page();
+        app.remove_session(old);
+        app.apply_gpui_action(GpuiAction::SelectWorkTab);
+        let check = |app: &mut Tessel| {
+            let snap = app.gpui_snapshot(1200., 640., 4.);
+            assert_eq!(snap.center_mode, GpuiCenterMode::EmptyProjectLauncher);
+            assert!(snap.tiles.is_empty());
+            assert!(snap.view_tabs[0].selected);
+            assert_eq!(
+                snap.view_tabs
+                    .iter()
+                    .filter(|t| t.browser_id.is_some())
+                    .count(),
+                1
+            );
+            assert!(app.active_session.is_none());
+        };
+        check(&mut app);
+        app.select_browser_page(app.browser.tab_id);
+        assert_eq!(
+            app.gpui_snapshot(1200., 640., 4.).center_mode,
+            GpuiCenterMode::BrowserTab
+        );
+        app.select_work_tab();
+        drop(app);
+        let mut app = start();
+        check(&mut app);
+        let pid = app.state.active_project.unwrap();
+        app.worktree_state.refresh_missing(&app.state.projects);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while app.worktree_state.summary(pid).is_none() {
+            app.poll_worktrees();
+            assert!(
+                std::time::Instant::now() < until,
+                "checkout discovery timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
+        let session = app.sessions.last().unwrap();
+        assert_eq!(
+            session.cwd.canonicalize().unwrap(),
+            checkout.canonicalize().unwrap()
+        );
+        assert_eq!(session.worktree.as_ref().unwrap().branch, "feature");
+        assert_ne!(app.active_session, Some(main));
+        assert_eq!(
+            app.gpui_snapshot(1200., 640., 4.).center_mode,
+            GpuiCenterMode::WorkGrid
+        );
+        assert_eq!(app.sessions.len(), 2);
+        app.remove_session(app.active_session.unwrap());
+        check(&mut app);
+        app.apply_gpui_action(GpuiAction::FocusSession(main));
+        assert_eq!(
+            app.gpui_snapshot(1200., 640., 4.).center_mode,
+            GpuiCenterMode::WorkGrid
         );
     }
 

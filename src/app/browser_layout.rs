@@ -31,6 +31,8 @@ struct Layout {
     selected_side: Option<usize>,
     groups: Vec<Group>,
     visible_project: Option<u64>,
+    #[serde(default)]
+    empty_grid: bool,
 }
 
 impl Tessel {
@@ -84,7 +86,8 @@ impl Tessel {
                 .keys()
                 .position(|id| Some(*id) == self.selected_side_browser),
             groups,
-            visible_project: (self.view == View::Browser)
+            empty_grid: self.empty_browser_grid(),
+            visible_project: (self.view == View::Browser || self.empty_browser_grid())
                 .then_some(self.browser_project)
                 .flatten(),
         }
@@ -164,7 +167,11 @@ impl Tessel {
                     self.replace_browser_page(page);
                     self.browser_tab_open = true;
                     if layout.visible_project == owner {
-                        self.view = View::Browser;
+                        self.view = if layout.empty_grid {
+                            View::EmptyBrowserGrid
+                        } else {
+                            View::Browser
+                        };
                     }
                 } else {
                     self.background_browsers.insert(owner, (page, true));
@@ -238,6 +245,7 @@ mod tests {
             selected_side: Some(50),
             groups: Vec::new(),
             visible_project: None,
+            empty_grid: false,
         };
         std::fs::write(state.join(FILE), serde_json::to_vec(&layout).unwrap()).unwrap();
         let app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});

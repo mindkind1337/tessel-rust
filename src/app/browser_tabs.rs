@@ -12,6 +12,19 @@ fn same_view(a: Option<&std::path::Path>, b: Option<&std::path::Path>) -> bool {
 }
 
 impl Tessel {
+    pub(super) fn browser_in_checkout(&self, checkout: Option<&std::path::Path>) -> Option<u64> {
+        if self.browser_tab_open && same_view(self.browser.view_worktree.as_deref(), checkout) {
+            return Some(self.browser.tab_id);
+        }
+        let owner = self.state.active_project;
+        self.other_browser_pages
+            .range((owner, 0)..=(owner, u64::MAX))
+            .map(|(_, page)| page)
+            .filter(|page| same_view(page.view_worktree.as_deref(), checkout))
+            .min_by_key(|page| page.tab_order)
+            .map(|page| page.tab_id)
+    }
+
     pub(super) fn browser_grid_target(&self) -> Option<u64> {
         self.sessions
             .iter()
@@ -137,6 +150,16 @@ impl Tessel {
                 .map(|(key, _)| *key);
             let next = key.and_then(|key| self.other_browser_pages.remove(&key));
             self.browser_tab_open = next.is_some();
+            if self.empty_browser_grid()
+                && !next.as_ref().is_some_and(|page| {
+                    same_view(
+                        page.view_worktree.as_deref(),
+                        self.browser.view_worktree.as_deref(),
+                    )
+                })
+            {
+                self.view = View::Work;
+            }
             if !self.browser_tab_open && self.view == View::Browser {
                 self.view = View::Files;
                 self.reconcile_editor_selection();
@@ -216,7 +239,7 @@ impl Tessel {
     }
 
     fn browser_opening_worktree(&self) -> Option<std::path::PathBuf> {
-        if self.view == View::Browser {
+        if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
             return self.browser.view_worktree.clone();
         }
         let id = self.active_project_work_pane()?;

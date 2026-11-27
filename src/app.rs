@@ -657,6 +657,8 @@ enum TimelineOrigin {
 }
 #[derive(PartialEq)]
 enum View {
+    #[cfg(windows)]
+    EmptyBrowserGrid,
     GuestFiles,
     Work,
     Files,
@@ -1809,7 +1811,7 @@ impl Tessel {
                 .insert(self.browser_project, (previous, was_open));
         }
         self.browser_project = target;
-        if self.view == View::Browser && !open {
+        if self.empty_browser_grid() || (self.view == View::Browser && !open) {
             self.view = View::Work;
         }
     }
@@ -3170,6 +3172,11 @@ impl Tessel {
         split: Option<(u64, crate::pane_grid::SplitDir)>,
         before: bool,
     ) {
+        #[cfg(windows)]
+        if self.empty_browser_grid() && split.is_none() {
+            self.launch_from_browser_grid(launch);
+            return;
+        }
         self.new_session_in_worktree(self.state.active_project, launch, split, before, None);
     }
 
@@ -3441,6 +3448,18 @@ impl Tessel {
                 .filter(|s| s.project == session.project)
                 .min_by_key(|s| members.as_ref().is_some_and(|ids| !ids.contains(&s.id)))
                 .map(|s| s.id);
+            #[cfg(windows)]
+            if self.view == View::Work
+                && self.state.active_project == session.project
+                && self
+                    .active_session
+                    .is_none_or(|next| members.as_ref().is_some_and(|ids| !ids.contains(&next)))
+                && let Some(page) =
+                    self.browser_in_checkout(session.worktree.as_ref().map(|wt| wt.path.as_path()))
+            {
+                self.select_browser_page(page);
+                self.select_work_tab();
+            }
         }
         self.save();
         self.grid_dirty = false;
@@ -3714,7 +3733,7 @@ impl Tessel {
                             file_path: None,
                             hint: tr("Terminal"),
                             kind: crate::view_tabs::Kind::Terminal,
-                            selected: self.view == View::Work,
+                            selected: self.view == View::Work || self.empty_browser_grid(),
                             dirty: false,
                             closable: false,
                             preview: false,
@@ -6428,7 +6447,7 @@ impl Tessel {
             .and_then(|s| s.worktree.as_ref())
             .map(|wt| wt.path.as_path());
         #[cfg(windows)]
-        let scope = if self.view == View::Browser {
+        let scope = if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
             self.browser.view_worktree.as_deref()
         } else {
             scope
@@ -6469,6 +6488,9 @@ impl Tessel {
     }
 
     fn active_project_work_pane(&self) -> Option<u64> {
+        if self.empty_browser_grid() {
+            return None;
+        }
         self.active_session
             .filter(|id| {
                 self.sessions
@@ -6513,7 +6535,7 @@ impl Tessel {
         match self.view {
             View::Files => self.documents.get(self.active_document).is_some(),
             #[cfg(windows)]
-            View::Browser => true,
+            View::Browser | View::EmptyBrowserGrid => true,
             _ => false,
         }
     }
@@ -6523,15 +6545,55 @@ impl Tessel {
             && (has_pane || self.tab_can_start_grid())
     }
 
+    fn empty_browser_grid(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.view == View::EmptyBrowserGrid
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
     fn select_work_tab(&mut self) {
         #[cfg(windows)]
-        if self.view == View::Browser
-            && let Some(target) = self.browser_grid_target()
-        {
-            self.active_session = Some(target);
+        if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
+            self.active_session = self.browser_grid_target();
+            if self.active_session.is_none() {
+                self.view = View::EmptyBrowserGrid;
+                return;
+            }
             self.remember_active_work_pane();
         }
         self.view = View::Work;
+    }
+
+    #[cfg(windows)]
+    fn launch_from_browser_grid(&mut self, launch: Launch) {
+        let worktree = if let Some(path) = self.browser.view_worktree.as_deref() {
+            let checkout = self
+                .state
+                .active_project
+                .and_then(|id| self.worktree_state.summary(id))
+                .and_then(|summary| {
+                    summary.worktrees.iter().find(|wt| {
+                        crate::sidebar_model::same_path(&wt.path, &path.to_string_lossy())
+                    })
+                });
+            let Some(wt) = checkout else {
+                self.error = tr("Worktree unavailable.").into();
+                return;
+            };
+            Some(workspace::SavedWorktree {
+                path: PathBuf::from(&wt.path),
+                branch: wt.branch.clone(),
+                base_branch: None,
+            })
+        } else {
+            None
+        };
+        self.new_session_in_worktree(self.state.active_project, launch, None, false, worktree);
     }
 
     fn split_active_shell(&mut self, dir: crate::pane_grid::SplitDir) {
@@ -6539,38 +6601,11 @@ impl Tessel {
             return;
         }
         #[cfg(windows)]
-        if self.view == View::Browser {
-            let path = self.browser.view_worktree.as_deref();
+        if matches!(self.view, View::Browser | View::EmptyBrowserGrid) {
             if let Some(target) = self.browser_grid_target() {
                 self.split_shell_beside(target, dir);
-            } else if let Some(path) = path {
-                let checkout = self
-                    .state
-                    .active_project
-                    .and_then(|id| self.worktree_state.summary(id))
-                    .and_then(|summary| {
-                        summary.worktrees.iter().find(|wt| {
-                            crate::sidebar_model::same_path(&wt.path, &path.to_string_lossy())
-                        })
-                    });
-                if let Some(wt) = checkout {
-                    let worktree = workspace::SavedWorktree {
-                        path: PathBuf::from(&wt.path),
-                        branch: wt.branch.clone(),
-                        base_branch: None,
-                    };
-                    self.new_session_in_worktree(
-                        self.state.active_project,
-                        Launch::Shell,
-                        None,
-                        false,
-                        Some(worktree),
-                    );
-                } else {
-                    self.error = tr("Worktree unavailable.").into();
-                }
             } else {
-                self.new_session_placed(Launch::Shell, None);
+                self.launch_from_browser_grid(Launch::Shell);
             }
             return;
         }
@@ -6739,7 +6774,7 @@ impl Tessel {
             .filter(|s| s.project == self.state.active_project)
             .map(|s| s.id)
             .collect();
-        if ids.is_empty() {
+        if ids.is_empty() || self.empty_browser_grid() {
             use crate::empty_state_panel::{EmptyStateAction, Entry, ShellOption};
             let agents_group = tr("Agents").to_owned();
             let other_group = tr("Terminals & pages").to_owned();
@@ -15220,6 +15255,8 @@ impl eframe::App for Tessel {
             self.center_tabs(ui);
             match self.view {
                 View::Work => self.work(ui),
+                #[cfg(windows)]
+                View::EmptyBrowserGrid => self.work(ui),
                 View::Files => self.editor(ui),
                 View::GuestFiles => {
                     if take_close_shortcut(
