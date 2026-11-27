@@ -52,6 +52,7 @@ struct Restart {
 }
 struct Session {
     ssh_tmux_id: Option<String>,
+    ssh_retry: crate::ssh_reconnect::Retry,
     native_host: Option<workspace::SavedHostTerminal>,
     last_model: Option<crate::pane_session_model::SavedPaneModel>,
     model_save_attempt: Option<std::time::Instant>,
@@ -88,6 +89,32 @@ impl Session {
             Launch::Ssh(host) if self.native_host.is_none() => Some(&host.alias),
             _ => None,
         }
+    }
+
+    fn exit_banner(&self, code: Option<i32>, french: bool) -> (String, &'static str, &'static str) {
+        let mut labels =
+            crate::terminal_exit::ended_session_copy(self.ssh_terminal_alias(), code, french);
+        if self.ssh_retry.pending() {
+            labels.0.push_str(if french {
+                " Nouvelle tentative automatique prévue."
+            } else {
+                " Automatic reconnect scheduled."
+            });
+        } else if self.ssh_retry.exhausted()
+            && code == Some(255)
+            && self
+                .terminal
+                .as_ref()
+                .and_then(|t| t.ssh_channel.as_ref())
+                .is_some_and(|channel| !channel.remote_255)
+        {
+            labels.0.push_str(if french {
+                " Les tentatives automatiques sont terminées."
+            } else {
+                " Automatic retries have ended."
+            });
+        }
+        labels
     }
 
     fn model_agent(&self) -> Option<&str> {
@@ -181,8 +208,14 @@ impl Session {
             return;
         }
         match &self.terminal {
-            Some(terminal) if terminal.exited() => self.stop_for_relaunch(prefs, preferred_shell),
-            None if !self.error.is_empty() => self.start_with_shell(prefs, preferred_shell),
+            Some(terminal) if terminal.exited() => {
+                self.ssh_retry = Default::default();
+                self.stop_for_relaunch(prefs, preferred_shell);
+            }
+            None if !self.error.is_empty() => {
+                self.ssh_retry = Default::default();
+                self.start_with_shell(prefs, preferred_shell);
+            }
             _ => {}
         }
     }
@@ -413,6 +446,7 @@ impl Session {
             return;
         }
         let ssh_tmux_id = self.ssh_tmux_id.clone();
+        let automatic = self.ssh_retry.automatic();
         let cwd = self.cwd.clone();
         let scrollback = self.scrollback;
         let (sender, receiver) = mpsc::channel();
@@ -443,12 +477,16 @@ impl Session {
                 if let (Some(binding), Launch::Agent(agent)) = (&profile_binding,&launch) {
                     crate::session_profile::check_account_available(binding,agent,profile_data_dir.as_deref())?;
                 }
-                let command = launch::command_with_shell(
+                let channel = if cfg!(windows) && matches!(&launch, Launch::Ssh(host) if host.persistent_sessions_enabled() || !host.folder.is_empty()) {
+                    Some(crate::ssh_reconnect::Channel::new(automatic)?)
+                } else { None };
+                let command = launch::pane_command(
                     &launch,
                     &cwd,
                     prefs.as_ref(),
                     preferred_shell.as_deref(),
                     ssh_tmux_id.as_deref(),
+                    channel.as_ref(),
                 )?;
                 if let Some(home) = &trust_home
                     && matches!(&launch, Launch::Agent(id) if id == "claude")
@@ -471,7 +509,7 @@ impl Session {
                     Launch::Agent(agent) if !custom => {
                         Terminal::spawn_agent_command_with_scrollback(agent, command, scrollback)
                     }
-                    _ => Terminal::spawn_command_with_scrollback(command, scrollback),
+                    _ => Terminal::spawn_command_with_scrollback(command, scrollback).map(|mut t| { t.ssh_channel = channel; t }),
                 }
                 .map_err(|e| e.to_string())
             });
@@ -522,6 +560,9 @@ impl Session {
                     self.start_with_shell(pending.preferences, pending.preferred_shell);
                 }
                 Ok(Err((terminal, error))) => {
+                    if self.ssh_retry.automatic() {
+                        self.ssh_retry.give_up();
+                    }
                     self.terminal = Some(terminal);
                     self.error = error;
                 }
@@ -558,6 +599,18 @@ impl Session {
             let was_exited = t.exited();
             t.poll();
             changed |= was_exited != t.exited();
+            if let Some(channel) = &t.ssh_channel {
+                let was_pending = self.ssh_retry.pending();
+                if self
+                    .ssh_retry
+                    .due(std::time::Instant::now(), channel, t.exit_code())
+                {
+                    self.stop_for_relaunch(None, None);
+                    changed = true;
+                } else {
+                    changed |= was_pending != self.ssh_retry.pending();
+                }
+            }
         }
         changed
     }
@@ -1078,6 +1131,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: saved.conversation_id.is_some(),
+                    ssh_retry: Default::default(),
                     ssh_tmux_id: saved.ssh_tmux_id.clone(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
@@ -1351,6 +1405,7 @@ impl Tessel {
                         profile_root: None,
                         profile_migration: None,
                         resume_required: false,
+                        ssh_retry: Default::default(),
                         ssh_tmux_id: None,
                         native_host: None,
                         restarting: None,
@@ -1447,6 +1502,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: false,
+                    ssh_retry: Default::default(),
                     ssh_tmux_id: None,
                     native_host: None,
                     restarting: None,
@@ -2787,6 +2843,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -3002,6 +3059,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: resume.is_some(),
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -5580,6 +5638,7 @@ impl Tessel {
                 profile_root: None,
                 profile_migration: None,
                 resume_required: false,
+                ssh_retry: Default::default(),
                 ssh_tmux_id: None,
                 native_host: None,
                 restarting: None,
@@ -6505,11 +6564,7 @@ impl Tessel {
                                 let is_exited = terminal.exited();
                                 if is_exited {
                                     let (msg, restart_lbl, close_lbl) =
-                                        crate::terminal_exit::ended_session_copy(
-                                            session.ssh_terminal_alias(),
-                                            exited_code,
-                                            french,
-                                        );
+                                        session.exit_banner(exited_code, french);
                                     let mut do_restart = false;
                                     let mut do_close = false;
                                     let wrap_actions =
@@ -7784,6 +7839,7 @@ impl Tessel {
                 profile_root: None,
                 profile_migration: None,
                 resume_required: saved.conversation_id.is_some(),
+                ssh_retry: Default::default(),
                 ssh_tmux_id: saved.ssh_tmux_id.clone(),
                 native_host: saved.native_host.clone(),
                 restarting: None,
@@ -9942,6 +9998,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -15162,6 +15219,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -15250,6 +15308,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: Some(Restart {
@@ -15340,6 +15399,7 @@ $lock.Dispose()
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -15728,6 +15788,7 @@ $lock.Dispose()
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -15792,6 +15853,7 @@ $lock.Dispose()
                 profile_root: None,
                 profile_migration: None,
                 resume_required: false,
+                ssh_retry: Default::default(),
                 ssh_tmux_id: None,
                 native_host,
                 restarting: None,
@@ -15857,6 +15919,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             codex_discovery: None,
@@ -16014,6 +16077,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             codex_seed: None,
@@ -16076,6 +16140,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,
@@ -16125,6 +16190,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_retry: Default::default(),
             ssh_tmux_id: None,
             native_host: None,
             restarting: None,

@@ -294,6 +294,7 @@ pub fn encode_gpui_terminal_key(
 }
 
 pub struct Terminal {
+    pub(crate) ssh_channel: Option<crate::ssh_reconnect::Channel>,
     backend: backend::Backend,
     parser: vt100::Parser,
     model_dirty: bool,
@@ -352,7 +353,9 @@ impl Terminal {
     }
 
     fn input_channel_open(&self) -> bool {
-        !self.exited && self.backend.writable()
+        !self.exited
+            && self.backend.writable()
+            && self.ssh_channel.as_ref().is_none_or(|c| c.permits_input())
     }
 
     pub fn take_broadcast_inputs(&mut self) -> Vec<BroadcastInput> {
@@ -447,7 +450,7 @@ impl Terminal {
             scrollback_offset,
             status: self.status.clone(),
             exited: self.exited,
-            exit_code: self.exit_code,
+            exit_code: self.exit_code(),
             find_open: self.find_open,
             find_input_id: self.find_input_id,
             find_query: self.find_query.clone(),
@@ -1305,6 +1308,7 @@ impl Terminal {
             status: String::new(),
             exited: false,
             exit_code: None,
+            ssh_channel: None,
             query_tail: Vec::new(),
             selection: None,
             composition: String::new(),
@@ -1334,6 +1338,9 @@ impl Terminal {
     }
 
     fn process_output(&mut self, bytes: &[u8]) {
+        if let Some(channel) = &mut self.ssh_channel {
+            channel.observe(bytes);
+        }
         if !bytes.is_empty() {
             self.selection = None;
             self.model_dirty = true;
@@ -1391,14 +1398,22 @@ impl Terminal {
         if let Some(exit) = self.backend.exit_status() {
             self.mark_exited();
             self.exit_code = Some(exit.exit_code() as i32);
-            self.status = format!("Shell exited: {exit}");
+            self.status = if self.exit_code() == Some(255) && self.exit_code == Some(254) {
+                "Shell exited: 255".into()
+            } else {
+                format!("Shell exited: {exit}")
+            };
         }
     }
 
     #[allow(dead_code)]
     #[must_use]
     pub fn exit_code(&self) -> Option<i32> {
-        self.exit_code
+        if self.exit_code == Some(254) && self.ssh_channel.as_ref().is_some_and(|c| c.remote_255) {
+            Some(255)
+        } else {
+            self.exit_code
+        }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {

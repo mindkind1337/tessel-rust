@@ -313,7 +313,7 @@ pub(crate) struct GpuiViewTabItem {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiPaneTileSnapshot {
-    pub ssh_host: Option<String>,
+    pub exit_banner: Option<(String, &'static str, &'static str)>,
     pub session_id: u64,
     pub title: String,
     pub kind_label: String,
@@ -1618,6 +1618,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: saved.conversation_id.is_some(),
+                    ssh_retry: Default::default(),
                     ssh_tmux_id: saved.ssh_tmux_id.clone(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
@@ -4107,7 +4108,12 @@ impl Tessel {
         let wake_banner = self.teams_hub.wake_banners.get(&sess.id).cloned();
 
         GpuiPaneTileSnapshot {
-            ssh_host: sess.ssh_terminal_alias().map(str::to_owned),
+            exit_banner: sess.terminal.as_ref().filter(|t| t.exited()).map(|t| {
+                sess.exit_banner(
+                    t.exit_code(),
+                    self.state.language == crate::i18n::Language::French,
+                )
+            }),
             session_id: sess.id,
             title: sess.label().to_owned(),
             kind_label,
@@ -8261,6 +8267,40 @@ mod panel_snapshot_tests {
         assert_eq!(disk.sessions[0].title, "Current runtime pane");
         assert_eq!(disk.tasks[0].timeline.pane_id, Some(41));
         assert_eq!(disk.tasks[0].timeline.work_periods.len(), 1);
+    }
+
+    #[test]
+    #[cfg(all(windows, feature = "visual-test"))]
+    fn ssh_reconnect_poll_relaunches_an_established_pane_without_a_click() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
+        let (id, _input) = app.install_terminal_find_fixture();
+        let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+        pane.launch = Launch::Ssh(crate::workspace::Host {
+            alias: "-invalid-fixture".into(),
+            ..Default::default()
+        });
+        let tmux_id = crate::claude::uuid().unwrap();
+        pane.ssh_tmux_id = Some(tmux_id.clone());
+        let mut channel = crate::ssh_reconnect::Channel::new(false).unwrap();
+        channel.opened = Some(std::time::Instant::now());
+        let mut cmd = portable_pty::CommandBuilder::new("cmd.exe");
+        cmd.args(["/d", "/c", "exit 255"]);
+        let mut terminal = crate::terminal::Terminal::spawn_command(cmd).unwrap();
+        terminal.ssh_channel = Some(channel);
+        pane.terminal = Some(terminal);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut scheduled = false;
+        while pane.error.is_empty() {
+            pane.poll();
+            scheduled |= pane.ssh_retry.pending();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(scheduled && pane.ssh_retry.automatic());
+        assert!(pane.error.contains("SSH config alias"));
+        assert_eq!(pane.ssh_tmux_id, Some(tmux_id));
     }
 
     #[test]

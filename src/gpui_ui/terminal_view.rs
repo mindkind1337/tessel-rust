@@ -158,7 +158,7 @@ pub(crate) fn render_terminal_pane_body(
 
     render_vt_surface(
         Some(sid),
-        tile.ssh_host.as_deref(),
+        tile.exit_banner.as_ref(),
         render_snap,
         inputs,
         tile.cursor_style,
@@ -175,7 +175,7 @@ pub(crate) fn render_terminal_pane_body(
 #[allow(clippy::too_many_arguments)]
 fn render_vt_surface(
     session_id: Option<u64>,
-    ssh_host: Option<&str>,
+    exit_banner: Option<&(String, &'static str, &'static str)>,
     snap: &TerminalRenderSnapshot,
     inputs: &super::terminal_find_inputs::Inputs,
     cursor_style: TerminalCursorStyle,
@@ -595,15 +595,8 @@ fn render_vt_surface(
     }
 
     let mut out = wrapper.child(grid);
-    if snap.exited
-        && let Some(sid) = session_id
-    {
-        out = out.child(render_exit_overlay_pill(
-            sid,
-            crate::terminal_exit::ended_session_copy(ssh_host, snap.exit_code, french),
-            tokens,
-            cx,
-        ));
+    if let (Some(sid), Some(labels)) = (session_id, exit_banner) {
+        out = out.child(render_exit_overlay_pill(sid, labels.clone(), tokens, cx));
     }
     out
 }

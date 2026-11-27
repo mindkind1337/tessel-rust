@@ -1701,3 +1701,6 @@ Custom-agent additions, edits, removals and visibility changes persist before th
 The native custom-agent form previews the selected accent and initial. Its eight swatches support keyboard navigation and retain the selected color across submissions.
 
 GPUI Settings covers the workspace below the 40-pixel toolbar. The navigation and page scroll independently, and Back to app closes Settings.
+
+
+Windows split SSH terminals with a persistent session or project folder use the Vue reconnect delay sequence after a transport loss. The OpenSSH fixture cuts an authenticated connection and checks the tmux pane process identity after reattachment. Floating terminals and unwrapped default login shells still require separate recovery work. On the Windows ConPTY + tmux 3.4 fixture, a device-attributes reply can appear on the reattached shell’s input line. Clean input on reattachment remains an open compatibility issue.

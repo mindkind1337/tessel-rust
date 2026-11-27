@@ -231,6 +231,17 @@ pub fn command_with_shell(
     preferred_shell: Option<&str>,
     ssh_tmux_id: Option<&str>,
 ) -> Result<CommandBuilder> {
+    pane_command(launch, cwd, prefs, preferred_shell, ssh_tmux_id, None)
+}
+
+pub(crate) fn pane_command(
+    launch: &Launch,
+    cwd: &Path,
+    prefs: Option<&crate::agent_preferences::Preferences>,
+    preferred_shell: Option<&str>,
+    ssh_tmux_id: Option<&str>,
+    channel: Option<&crate::ssh_reconnect::Channel>,
+) -> Result<CommandBuilder> {
     if launch.native_chat().is_some() {
         return Err("Native chats do not launch a terminal.".into());
     }
@@ -311,9 +322,11 @@ pub fn command_with_shell(
                 crate::ssh_config::KEEPALIVE_INTERVAL,
                 "-o",
                 crate::ssh_config::KEEPALIVE_COUNT,
-                "--",
-                &host.alias,
             ]);
+            if channel.is_some_and(|c| c.automatic) {
+                c.args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]);
+            }
+            c.args(["--", &host.alias]);
             if host.persistent_sessions_enabled()
                 && !ssh_tmux_id.is_some_and(crate::claude::valid_uuid)
             {
@@ -326,7 +339,10 @@ pub fn command_with_shell(
                 ssh_tmux_id,
                 true,
             )? {
-                c.arg(remote_sh_command(&remote_script));
+                let script = channel
+                    .map(|c| c.wrap(&remote_script))
+                    .unwrap_or(remote_script);
+                c.arg(remote_sh_command(&script));
             }
             c
         }

@@ -174,6 +174,7 @@ pub mod side_panels_ui;
 pub mod sidebar_model;
 mod ssh_config;
 pub mod ssh_hosts_panel;
+mod ssh_reconnect;
 pub mod ssh_tmux;
 pub mod status_metrics;
 pub mod status_strip;
