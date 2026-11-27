@@ -230,3 +230,23 @@ fn office_sparse_sheet_preserves_coordinates_and_counts_omitted_dimensions() {
     assert_eq!(sheet.rows[4].len(), 200);
     assert_eq!(sheet.rows[4][199], "200");
 }
+
+#[test]
+fn office_excel_dates_times_numbers_and_booleans_match_vue() {
+    let sheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" s="1"><v>25569.5</v></c><c r="B1" s="1"><v>0.25</v></c><c r="C1" s="1"><v>25569</v></c><c r="D1"><v>0.30000000000000004</v></c><c r="E1" t="b"><v>1</v></c><c r="F1"><v>0.00000001</v></c><c r="G1" t="b"><v>0</v></c></row></sheetData></worksheet>"#;
+    for (date1904, day) in [(false, "1970-01-01"), (true, "1974-01-02")] {
+        let book = parse::parse(&styled_spreadsheet(sheet, date1904), "xlsx").unwrap();
+        assert_eq!(
+            book.sections[0].rows[0],
+            [
+                format!("{day} 12:00:00"),
+                "06:00:00".into(),
+                day.into(),
+                "0.3".into(),
+                "TRUE".into(),
+                "1e-8".into(),
+                "FALSE".into()
+            ]
+        );
+    }
+}

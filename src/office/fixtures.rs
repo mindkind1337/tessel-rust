@@ -24,6 +24,9 @@ pub(super) fn spreadsheet() -> Vec<u8> {
     )
 }
 pub(super) fn spreadsheet_with_sheet(sheet_xml: &str) -> Vec<u8> {
+    styled_spreadsheet(sheet_xml, false)
+}
+pub(super) fn styled_spreadsheet(sheet_xml: &str, date1904: bool) -> Vec<u8> {
     archive(&[
         (
             "[Content_Types].xml",
@@ -35,12 +38,13 @@ pub(super) fn spreadsheet_with_sheet(sheet_xml: &str) -> Vec<u8> {
         ),
         (
             "xl/workbook.xml",
-            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Example" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            &r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Example" sheetId="1" r:id="rId1"/></sheets></workbook>"#.replace("<sheets>", if date1904 { r#"<workbookPr date1904="1"/><sheets>"# } else { "<sheets>" }),
         ),
         (
             "xl/_rels/workbook.xml.rels",
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
         ),
+        ("xl/styles.xml", r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="22"/></cellXfs></styleSheet>"#),
         ("xl/worksheets/sheet1.xml", sheet_xml),
     ])
 }

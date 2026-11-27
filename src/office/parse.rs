@@ -190,6 +190,60 @@ fn text_page(source: &str, title: String, odf: bool) -> Result<Section, String> 
         start_col: 0,
     })
 }
+// Excel shows fifteen significant digits. Use ordinary decimal notation in
+// the same exponent range as JavaScript's Number.toString in the Vue reader.
+fn number_text(value: f64) -> String {
+    if !value.is_finite() {
+        return String::new();
+    }
+    if value == 0. {
+        return "0".into();
+    }
+    let decimal = format!("{value:.14e}");
+    let (mantissa, exponent) = decimal.split_once('e').expect("scientific notation");
+    let exponent: i32 = exponent.parse().expect("decimal exponent");
+    if (-6..21).contains(&exponent) {
+        decimal
+            .parse::<f64>()
+            .expect("formatted number")
+            .to_string()
+    } else {
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        format!("{mantissa}e{exponent:+}")
+    }
+}
+
+fn sheet_cell_text(cell: &calamine::Data, date1904: bool, ods: bool) -> String {
+    use calamine::Data;
+    match cell {
+        Data::DateTime(date) => {
+            let serial = date.as_f64();
+            let epoch_offset = if date1904 { 24107. } else { 25569. };
+            let millis = (serial - epoch_offset) * 86_400_000.;
+            if !millis.is_finite() {
+                return serial.to_string();
+            }
+            let Some(utc) = chrono::DateTime::from_timestamp_millis((millis + 0.5).floor() as i64)
+            else {
+                return serial.to_string();
+            };
+            let time = utc.format("%H:%M:%S").to_string();
+            if (0.0..1.).contains(&serial) {
+                time
+            } else if time == "00:00:00" {
+                utc.format("%Y-%m-%d").to_string()
+            } else {
+                format!("{} {time}", utc.format("%Y-%m-%d"))
+            }
+        }
+        Data::DateTimeIso(value) if ods => value.replace('T', " "),
+        Data::Bool(true) => "TRUE".into(),
+        Data::Bool(false) => "FALSE".into(),
+        Data::Float(value) => number_text(*value),
+        Data::Int(value) => number_text(*value as f64),
+        other => other.to_string(),
+    }
+}
 pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
     let mut book = Book {
         sections: vec![],
@@ -198,6 +252,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
     if super::is_workbook(extension) {
         let mut workbook = calamine::open_workbook_auto_from_rs(Cursor::new(bytes))
             .map_err(|_| "Cannot decode spreadsheet")?;
+        let date1904 = matches!(&workbook, calamine::Sheets::Xlsx(xlsx) if xlsx.has_1904_epoch());
         let names = workbook.sheet_names().to_vec();
         if names.len() > 200 {
             book.truncated = true;
@@ -240,7 +295,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                     if cell == &calamine::Data::Empty {
                         continue;
                     }
-                    let mut value = cell.to_string();
+                    let mut value = sheet_cell_text(cell, date1904, extension == "ods");
                     if value.is_empty() {
                         continue;
                     }
