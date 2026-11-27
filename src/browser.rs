@@ -507,6 +507,42 @@ impl Browser {
         }
     }
 
+    pub fn open_find(&mut self) {
+        if let Some(view) = &self.view {
+            let _ = view.focus();
+            if self.start_find(view, "").is_err() {
+                self.error = tr("Could not open Find in page.").into();
+            }
+        }
+    }
+
+    fn start_find(&self, view: &WebView, term: &str) -> windows::core::Result<()> {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2_28, ICoreWebView2Environment15,
+        };
+        use windows::core::{HSTRING, Interface as _};
+        use wry::WebViewExtWindows as _;
+        let sender = self.sender.clone();
+        unsafe {
+            let options = view
+                .environment()
+                .cast::<ICoreWebView2Environment15>()?
+                .CreateFindOptions()?;
+            options.SetFindTerm(&HSTRING::from(term))?;
+            options.SetSuppressDefaultFindDialog(false)?;
+            view.webview().cast::<ICoreWebView2_28>()?.Find()?.Start(
+                &options,
+                &webview2_com::FindStartCompletedHandler::create(Box::new(move |status| {
+                    if status.is_err() {
+                        let _ =
+                            sender.send(Event::Error(tr("Could not open Find in page.").into()));
+                    }
+                    Ok(())
+                })),
+            )
+        }
+    }
+
     pub fn hard_reload(&self) {
         if self.failed_page.is_some() {
             self.reload_now();
@@ -1927,6 +1963,56 @@ mod tests {
         assert_ne!(page.address_str(), "https://localhost/a");
         page.try_https("https://localhost/b");
         assert_eq!(page.address_str(), "https://localhost/b");
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn find_in_page_counts_matches_in_the_loaded_document() {
+        use crate::webview_test_support::{hidden_parent, pump, wait_for};
+        use std::time::{Duration, Instant};
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_28;
+        use windows::core::Interface as _;
+        use wry::WebViewExtWindows as _;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("search.html");
+        std::fs::write(
+            &file,
+            "<title>Find fixture</title><p>needle one</p><p>needle two</p>",
+        )
+        .unwrap();
+        let parent = hidden_parent();
+        let mut page = Browser::default();
+        page.create_with_profile(&parent, dir.path().join("profile"))
+            .unwrap();
+        page.open_project_page(
+            &crate::files::Document::open(dir.path(), &file).unwrap(),
+            false,
+        )
+        .unwrap();
+        let view = page.view.as_ref().unwrap();
+        wait_for(view, "document.title === 'Find fixture'");
+        page.start_find(view, "needle").unwrap();
+        let find = unsafe {
+            view.webview()
+                .cast::<ICoreWebView2_28>()
+                .unwrap()
+                .Find()
+                .unwrap()
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            pump();
+            let mut count = 0;
+            unsafe { find.MatchCount(&mut count).unwrap() };
+            if count == 2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected two matches, got {count}"
+            );
+        }
+        unsafe { find.Stop().unwrap() };
     }
 
     #[test]

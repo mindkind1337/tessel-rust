@@ -851,6 +851,7 @@ pub(crate) enum HtmlViewMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AddressCommand {
+    Find,
     Back,
     Forward,
     Reload,
@@ -6882,6 +6883,7 @@ impl Tessel {
                         AddressCommand::Back => page.go_back_now(),
                         AddressCommand::Forward => page.go_forward_now(),
                         AddressCommand::Reload => page.reload_now(),
+                        AddressCommand::Find => page.open_find(),
                         AddressCommand::HardReload => page.hard_reload(),
                     }
                 }

@@ -260,6 +260,7 @@ impl TesselGpuiRoot {
                 browser_input::Reload,
                 Some("TesselBrowserAddress"),
             ),
+            gpui::KeyBinding::new("ctrl-f", browser_input::Find, Some("TesselBrowserAddress")),
             gpui::KeyBinding::new("f5", browser_input::Reload, Some("TesselBrowserAddress")),
             gpui::KeyBinding::new(
                 if cfg!(target_os = "macos") {
