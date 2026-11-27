@@ -113,8 +113,22 @@ impl SharePanel {
         let Some(session) = &self.guest_session else {
             return false;
         };
-        if self.guest_image.busy() {
-            return false;
+        let loading = self.guest_file_editor.reading().or_else(|| {
+            if self.guest_image.busy() {
+                self.guest_image.key.as_ref()
+            } else {
+                None
+            }
+        });
+        if let Some(loading) = loading {
+            if self.guest_files_scope != Some(key.scope)
+                || !crate::guest_file_editor::valid_path(&key.path)
+            {
+                return false;
+            }
+            // Finish the current request, then read only the most recently selected file.
+            self.next_guest_file = (loading != &key).then_some(key);
+            return true;
         }
         self.confirm_guest_file_discard = false;
         if self.guest_files_scope == Some(key.scope)
@@ -141,7 +155,9 @@ impl SharePanel {
     }
 
     pub(super) fn select_guest_tab(&mut self, key: FileKey) {
-        if self.guest_file_editor.tabs.contains(&key) && !self.guest_tab_active(&key) {
+        if self.guest_file_editor.tabs.contains(&key)
+            && (!self.guest_tab_active(&key) || self.next_guest_file.is_some())
+        {
             self.open_guest_file(key);
         }
     }
@@ -298,7 +314,9 @@ impl SharePanel {
         let mut open = None;
         for entry in &self.guest_file_listing.entries {
             let row = ui.add_enabled(
-                !self.guest_file_listing.busy() && !self.guest_file_editor.busy(),
+                !self.guest_file_listing.busy()
+                    && (!self.guest_file_editor.busy()
+                        || self.guest_file_editor.reading().is_some()),
                 egui::Button::new(format!(
                     "{} {}",
                     if entry.directory { "▸" } else { "·" },
@@ -357,7 +375,7 @@ impl SharePanel {
         ui.horizontal_wrapped(|ui| {
             for key in &self.guest_file_editor.tabs {
                 let active = self.guest_tab_active(key);
-                if ui.selectable_label(active, &key.path).clicked() && !active {
+                if ui.selectable_label(active, &key.path).clicked() {
                     selected = Some(key.clone());
                 }
                 if ui

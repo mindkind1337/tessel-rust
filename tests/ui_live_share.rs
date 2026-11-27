@@ -1151,3 +1151,57 @@ fn guest_text_tabs_reopen_from_host_and_close_to_the_neighbor() {
     panel.apply_gpui_share_action(GuestCloseTab(b), &[]);
     assert!(panel.guest_file_document().is_none());
 }
+
+#[test]
+fn guest_file_navigation_honors_the_last_click_while_reading() {
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let file = |path: &str| guest_file_editor::Key {
+        scope,
+        path: path.into(),
+    };
+    let a = file("a.txt");
+    let b = file("b.txt");
+    assert!(panel.open_guest_file(a.clone()));
+    assert!(panel.open_guest_file(file("AGENTS.md")));
+    assert!(panel.open_guest_file(b.clone()));
+    await_guest_document(&mut panel, &b);
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestSelectTab(file("AGENTS.md")),
+        &[],
+    );
+    assert_eq!(panel.guest_file_document().unwrap().key, b);
+    assert!(panel.open_guest_file(a.clone()));
+    assert!(panel.open_guest_file(b.clone()));
+    assert!(panel.open_guest_file(a.clone()));
+    await_guest_document(&mut panel, &a);
+    assert!(!panel.guest_file_document().unwrap().dirty());
+
+    let poster = file("poster.png");
+    image::RgbaImage::new(3, 3)
+        .save(dir.path().join("p1/poster.png"))
+        .unwrap();
+    assert!(panel.open_guest_file(poster.clone()));
+    assert!(panel.open_guest_file(b.clone()));
+    await_guest_document(&mut panel, &b);
+    assert!(panel.open_guest_file(poster));
+    assert!(panel.open_guest_file(a));
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestProject {
+            session: scope.session,
+            project: 2,
+        },
+        &[],
+    );
+    let next_scope = panel.guest_task_snapshot().scope.unwrap();
+    assert_eq!(next_scope.project, 2);
+    let next = guest_file_editor::Key {
+        scope: next_scope,
+        path: "b.txt".into(),
+    };
+    panel.open_guest_file(next.clone());
+    assert_eq!(
+        await_guest_document(&mut panel, &next).text.as_str(),
+        "B in 2"
+    );
+}

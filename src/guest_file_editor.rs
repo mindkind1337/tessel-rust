@@ -105,6 +105,12 @@ impl Editor {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    pub(crate) fn reading(&self) -> Option<&Key> {
+        match &self.pending.as_ref()?.operation {
+            Operation::Read(key) => Some(key),
+            Operation::Save(..) => None,
+        }
+    }
     pub fn has_draft(&self) -> bool {
         self.document.as_ref().is_some_and(|d| {
             d.dirty()

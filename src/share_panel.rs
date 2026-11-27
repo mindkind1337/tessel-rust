@@ -203,6 +203,7 @@ pub struct SharePanel {
     guest_download: guest_download::Download,
     guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
+    next_guest_file: Option<crate::guest_file_editor::Key>,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
     pub guest_new_file_name: String,
@@ -258,6 +259,7 @@ impl Default for SharePanel {
             guest_download: Default::default(),
             guest_versions: Default::default(),
             guest_history: Default::default(),
+            next_guest_file: None,
             guest_files_scope: None,
             confirm_guest_file_discard: false,
             guest_new_file_name: String::new(),
@@ -396,6 +398,7 @@ impl SharePanel {
         self.guest_image = Default::default();
         self.guest_git.bind(None, false);
         self.confirm_guest_git_discard = false;
+        self.next_guest_file = None;
         self.guest_files_scope = None;
         self.confirm_guest_file_discard = false;
         self.guest_selected_project = None;
@@ -472,6 +475,12 @@ impl SharePanel {
                 self.guest_file_editor.remember_tab(image_key);
             }
         }
+        if !self.guest_image.busy()
+            && !self.guest_file_editor.busy()
+            && let Some(next) = self.next_guest_file.take()
+        {
+            changed |= self.open_guest_file(next);
+        }
         let key = self
             .guest_file_editor
             .document
@@ -532,6 +541,7 @@ impl SharePanel {
         changed |= self.guest_file_listing.bind(scope);
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
+            self.next_guest_file = None;
             self.guest_image = Default::default();
             self.guest_download = Default::default();
             self.guest_history.bind(None);
