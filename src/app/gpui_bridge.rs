@@ -33,6 +33,20 @@ pub(crate) struct NativeExplorerScope {
     pub owner: crate::git_result::Owner,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExplorerCommand {
+    Select,
+    Open,
+    NewFile,
+    NewFolder,
+    Rename,
+    Trash,
+    CopyPath,
+    CopyRelative,
+    Dotfiles,
+    Compact,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NativeScmScope {
     pub owner: crate::git_result::Owner,
@@ -461,6 +475,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_filter: Option<crate::side_panels_model::DashboardState>,
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
+    pub explorer_editable: bool,
     pub timeline: crate::file_timeline::Snapshot,
     pub outline_open: bool,
     pub outline_options_open: bool,
@@ -1002,6 +1017,7 @@ pub(crate) enum GpuiAction {
         OutlineRowAction,
     ),
     ExplorerRefresh,
+    ExplorerMenu(NativeExplorerScope, Option<String>, ExplorerCommand),
     ExplorerNavigate(PathBuf, eframe::egui::Key),
     ExplorerClickRow {
         key: String,
@@ -4434,6 +4450,7 @@ impl Tessel {
             self.gpui_extra.outline_cache = None;
         }
         GpuiSidePanelsSnapshot {
+            explorer_editable: self.file_actions_ready(),
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
             outline_placeholder: self
                 .gpui_extra
@@ -6477,6 +6494,82 @@ impl Tessel {
                 self.explorer_tree.set_compact_folders(next);
                 self.state.editor_prefs.compact_folders = next;
                 self.save();
+            }
+            GpuiAction::ExplorerMenu(scope, key, command) => {
+                if self
+                    .gpui_explorer_input()
+                    .is_none_or(|(live, _)| live != scope)
+                {
+                    return;
+                }
+                let root = scope.owner.root;
+                let Some((path, directory)) = self.explorer_tree.menu_entry(&root, key.as_deref())
+                else {
+                    return;
+                };
+                use ExplorerCommand::*;
+                match command {
+                    Select => {}
+                    Open if !directory => self.open_document_preview(path),
+                    CopyPath => {
+                        self.gpui_extra.copied_clipboard =
+                            Some(dunce::simplified(&path).display().to_string())
+                    }
+                    CopyRelative => {
+                        self.gpui_extra.copied_clipboard = path
+                            .strip_prefix(&root)
+                            .ok()
+                            .map(|rel| rel.display().to_string())
+                    }
+                    Dotfiles => self.apply_gpui_action_inner(GpuiAction::ExplorerToggleDotfiles),
+                    Compact => self.apply_gpui_action_inner(GpuiAction::ExplorerToggleCompact),
+                    NewFile | NewFolder | Rename | Trash if self.file_actions_ready() => {
+                        use crate::file_actions::{Action, Kind};
+                        let (kind, path, name) = match command {
+                            NewFile | NewFolder => {
+                                let dest = if directory {
+                                    path
+                                } else {
+                                    let Some(p) = path.parent() else { return };
+                                    p.to_owned()
+                                };
+                                (
+                                    if command == NewFile {
+                                        Kind::File
+                                    } else {
+                                        Kind::Folder
+                                    },
+                                    dest,
+                                    String::new(),
+                                )
+                            }
+                            Rename | Trash if key.is_some() => {
+                                let Some(name) =
+                                    path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                else {
+                                    return;
+                                };
+                                (
+                                    if command == Rename {
+                                        Kind::Rename
+                                    } else {
+                                        Kind::Trash
+                                    },
+                                    path,
+                                    name,
+                                )
+                            }
+                            _ => return,
+                        };
+                        self.file_action = Some(Action {
+                            kind,
+                            root,
+                            path,
+                            name,
+                        });
+                    }
+                    _ => {}
+                }
             }
             GpuiAction::ExplorerRefresh => {
                 self.explorer_tree.refresh();

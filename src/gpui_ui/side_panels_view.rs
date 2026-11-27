@@ -503,6 +503,9 @@ fn render_explorer_tab(
                 }),
             );
     }
+    if ex.filter_query.trim().is_empty() {
+        scroll = super::explorer_menu::trigger(scroll, None, true, cx);
+    }
     if let Some((generation, index)) = ex.reveal {
         let token = (ex.root_path.clone(), generation, index);
         if explorer_input.last_tree_reveal.borrow().as_ref() != Some(&token) {
@@ -610,17 +613,22 @@ fn render_explorer_tab(
                     let focus = row_focus.clone();
                     let key = key.clone();
                     crumbs = crumbs.child(
-                        div()
-                            .id(SharedString::from(format!(
+                        super::explorer_menu::trigger(
+                            div().id(SharedString::from(format!(
                                 "explorer-crumb-{idx}-{segment}"
-                            )))
-                            .debug_selector(move || format!("explorer-crumb-{idx}-{segment}"))
-                            .flex_shrink_0()
-                            .when(row.selected_segment == Some(segment), |el| {
-                                el.text_color(tokens.accent)
-                            })
-                            .child(SharedString::from(name.clone()))
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                            ))),
+                            Some(key.clone()),
+                            true,
+                            cx,
+                        )
+                        .debug_selector(move || format!("explorer-crumb-{idx}-{segment}"))
+                        .flex_shrink_0()
+                        .when(row.selected_segment == Some(segment), |el| {
+                            el.text_color(tokens.accent)
+                        })
+                        .child(SharedString::from(name.clone()))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 if let Some(handle) = &focus {
                                     this.focus_input = FocusInputTarget::ExplorerTree;
@@ -633,80 +641,85 @@ fn render_explorer_tab(
                                     },
                                     cx,
                                 );
-                            })),
+                            },
+                        )),
                     );
                 }
                 crumbs
             };
             scroll = scroll.child(
-                div()
-                    .id(("gpui-ex-row", idx as u64))
-                    .debug_selector(move || format!("explorer-file-row-{idx}"))
-                    .pl(px(6.0 + indent))
-                    .pr(px(6.0))
-                    .py(px(3.0))
-                    .rounded(px(tokens.radius_px - 1.0))
-                    .bg(if row.active_doc || row.selected {
-                        tokens.accent_soft
-                    } else {
-                        gpui::rgba(0x0000_0000)
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(4.0))
-                    .hover(|s| s.bg(tokens.surface_2))
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if let Some(focus) = &row_focus {
-                                this.focus_input = FocusInputTarget::ExplorerTree;
-                                window.focus(focus, cx);
-                            }
+                super::explorer_menu::trigger(
+                    div().id(("gpui-ex-row", idx as u64)),
+                    Some(row_key.clone()),
+                    row.dir,
+                    cx,
+                )
+                .debug_selector(move || format!("explorer-file-row-{idx}"))
+                .pl(px(6.0 + indent))
+                .pr(px(6.0))
+                .py(px(3.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(if row.active_doc || row.selected {
+                    tokens.accent_soft
+                } else {
+                    gpui::rgba(0x0000_0000)
+                })
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(4.0))
+                .hover(|s| s.bg(tokens.surface_2))
+                .on_click(
+                    cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        if let Some(focus) = &row_focus {
+                            this.focus_input = FocusInputTarget::ExplorerTree;
+                            window.focus(focus, cx);
+                        }
+                        this.dispatch_action(
+                            GpuiAction::ExplorerClickRow {
+                                key: row_key.clone(),
+                                pinned: event.click_count() == 2,
+                            },
+                            cx,
+                        );
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .child(icon)
+                        .child(label.text_size(px(11.5)).text_color(if row.active_doc {
+                            tokens.text_strong
+                        } else {
+                            tokens.text
+                        })),
+                )
+                .child(
+                    div()
+                        .id(("gpui-ex-del", idx as u64))
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .rounded(px(3.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(tokens.surface))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
                             this.dispatch_action(
-                                GpuiAction::ExplorerClickRow {
-                                    key: row_key.clone(),
-                                    pinned: event.click_count() == 2,
+                                GpuiAction::ExplorerDeletePath {
+                                    path: del_path.clone(),
+                                    permanent: false,
                                 },
                                 cx,
                             );
-                        }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(5.0))
-                            .child(icon)
-                            .child(label.text_size(px(11.5)).text_color(if row.active_doc {
-                                tokens.text_strong
-                            } else {
-                                tokens.text
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id(("gpui-ex-del", idx as u64))
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .rounded(px(3.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .hover(|s| s.bg(tokens.surface))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.dispatch_action(
-                                    GpuiAction::ExplorerDeletePath {
-                                        path: del_path.clone(),
-                                        permanent: false,
-                                    },
-                                    cx,
-                                );
-                            }))
-                            .child(GpuiIcon::Trash2.render(10.0, tokens.text_dim)),
-                    ),
+                        }))
+                        .child(GpuiIcon::Trash2.render(10.0, tokens.text_dim)),
+                ),
             );
         }
     }
@@ -1086,6 +1099,12 @@ fn render_explorer_tab(
         .child(toolbar)
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
         .child(scroll)
+        .children(
+            explorer_input
+                .menu
+                .as_ref()
+                .map(|menu| menu.render(french, sp.explorer_editable, ex, tokens, cx)),
+        )
         .child(outline)
         .child(render_timeline(&sp.timeline, french, tokens, cx))
         .into_any_element()

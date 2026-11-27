@@ -15,6 +15,7 @@ struct Binding {
 pub(crate) struct Input {
     binding: Option<Binding>,
     pub outline_focus: std::cell::OnceCell<gpui::FocusHandle>,
+    pub(super) menu: Option<super::explorer_menu::Menu>,
     pub tree_focus: std::cell::OnceCell<gpui::FocusHandle>,
     pub tree_scroll: gpui::ScrollHandle,
     pub last_tree_reveal: std::cell::RefCell<Option<(std::path::PathBuf, u64, usize)>>,
@@ -36,6 +37,13 @@ impl Input {
         text: &str,
         cx: &mut Context<TesselGpuiRoot>,
     ) {
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.scope != scope || m.query != text)
+        {
+            self.menu = None;
+        }
         if self.binding.as_ref().is_some_and(|b| {
             b.scope == scope
                 && (b.state.read(cx).as_str() == text || (b.too_long && b.synced == text))

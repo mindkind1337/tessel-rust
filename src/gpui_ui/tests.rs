@@ -82,8 +82,42 @@ fn explorer_compact_parent_click_targets_that_folder_for_rename(test: &mut gpui:
     assert_eq!(rename.draft, "parent");
     assert_eq!(
         std::fs::canonicalize(&rename.subtitle).unwrap(),
-        std::fs::canonicalize(parent).unwrap()
+        std::fs::canonicalize(&parent).unwrap()
     );
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::CancelPromptModal, cx)
+    })
+    .unwrap();
+    for (selector, expected) in [
+        ("explorer-crumb-0-1", parent.join("child")),
+        ("explorer-crumb-0-0", parent.clone()),
+    ] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_mouse_down(point, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(point, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let choice = visual
+            .debug_bounds("explorer-context-Rename")
+            .expect("right-click opens the explorer menu");
+        visual.simulate_click(choice.center(), Default::default());
+        view.update(cx, |root, _, cx| {
+            let dialog = root
+                .app
+                .gpui_snapshot(960., 640., 4.)
+                .modals
+                .prompt_modal
+                .unwrap();
+            assert_eq!(
+                std::fs::canonicalize(dialog.subtitle).unwrap(),
+                std::fs::canonicalize(expected).unwrap()
+            );
+            root.dispatch(GpuiAction::CancelPromptModal, cx);
+        })
+        .unwrap();
+    }
 }
 
 #[cfg(all(windows, feature = "visual-test"))]

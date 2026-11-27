@@ -1564,9 +1564,25 @@ impl ExplorerTree {
                         }
                     }
 
+                    if response.secondary_clicked() {
+                        self.selected_key = Some(clicked_key.clone());
+                        self.selected_hit = None;
+                    }
                     response.context_menu(|ui| {
+                        let Some(part) = row
+                            .chain
+                            .iter()
+                            .find(|part| self.selected_key.as_ref() == Some(&part.path))
+                        else {
+                            ui.close();
+                            return;
+                        };
+                        let Some(menu_path) = self.path_by_key.get(&part.path) else {
+                            ui.close();
+                            return;
+                        };
                         if ui.button(tr("Copy path")).clicked() {
-                            emitted = Some(TreeAction::CopyPath(row_path.clone()));
+                            emitted = Some(TreeAction::CopyPath(menu_path.clone()));
                             ui.close();
                             return;
                         }
@@ -1585,7 +1601,7 @@ impl ExplorerTree {
                                     emitted = Some(TreeAction::Context {
                                         kind,
                                         root: root_path.clone(),
-                                        path: row_path.clone(),
+                                        path: menu_path.clone(),
                                         name: String::new(),
                                     });
                                     ui.close();
@@ -1602,8 +1618,8 @@ impl ExplorerTree {
                                 emitted = Some(TreeAction::Context {
                                     kind,
                                     root: root_path.clone(),
-                                    path: row_path.clone(),
-                                    name: row.name.clone(),
+                                    path: menu_path.clone(),
+                                    name: part.name.clone(),
                                 });
                                 ui.close();
                             }
@@ -1785,6 +1801,29 @@ impl ExplorerTree {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn menu_entry(&mut self, root: &Path, key: Option<&str>) -> Option<(PathBuf, bool)> {
+        if self.project_root.as_deref() != Some(root) {
+            return None;
+        }
+        let entry = if let Some(key) = key {
+            if let Some(results) = &self.name_search.results {
+                let hit = results
+                    .entries
+                    .iter()
+                    .find(|entry| norm_tree_key(&entry.path) == key)?;
+                (hit.path.clone(), hit.directory)
+            } else {
+                let row = &self.cached_tree.rows[*self.cached_tree.index.get(key)?];
+                (self.path_by_key.get(key)?.clone(), row.dir)
+            }
+        } else {
+            (root.to_owned(), true)
+        };
+        self.selected_key = key.map(str::to_owned);
+        self.selected_hit = None;
+        Some(entry)
+    }
+
     pub(crate) fn gpui_click_row(&mut self, key: &str, pinned: bool) -> Option<TreeAction> {
         if let Some(results) = &self.name_search.results {
             let hit = results

@@ -13,6 +13,7 @@ mod editor_syntax;
 mod editor_tool_inputs;
 pub mod editor_view;
 mod explorer_input;
+mod explorer_menu;
 mod file_icons;
 pub mod icons;
 mod image_menu;
@@ -1481,8 +1482,11 @@ impl Render for TesselGpuiRoot {
             } else if explorer_was_focused {
                 window.focus(&self.focus_handle, cx);
             }
-        } else if explorer_was_focused {
-            window.focus(&self.focus_handle, cx);
+        } else {
+            self.explorer_input.menu = None;
+            if explorer_was_focused {
+                window.focus(&self.focus_handle, cx);
+            }
         }
         let scm_was_focused = self.scm_input.focused(window, cx);
         self.scm_input.retain(&self.app.gpui_scm_input_ids());

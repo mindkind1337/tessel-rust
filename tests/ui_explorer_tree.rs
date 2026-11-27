@@ -165,6 +165,41 @@ fn egui_tree_expands_folders_opens_files_caches_rows_and_gates_context_actions()
     assert_eq!(snapshot.rows[0].selected_segment, Some(0));
     assert_eq!(snapshot.new_target_dir, root.join("src"));
 
+    for (label, path) in [
+        ("nested", root.join("src/nested")),
+        ("src", root.join("src")),
+    ] {
+        let (_, painted) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, true, vec![]);
+        let point = find_text_center(&painted.shapes, label).unwrap();
+        run_frame(
+            &ctx_fx,
+            &mut fixture_tree,
+            Some(root),
+            None,
+            true,
+            click_events(point, egui::PointerButton::Secondary),
+        );
+        let (_, menu) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, true, vec![]);
+        let rename = find_text_center(&menu.shapes, "Rename…").unwrap();
+        let (action, _) = run_frame(
+            &ctx_fx,
+            &mut fixture_tree,
+            Some(root),
+            None,
+            true,
+            click_events(rename, egui::PointerButton::Primary),
+        );
+        assert_eq!(
+            action,
+            Some(TreeAction::Context {
+                kind: TreeContextKind::Rename,
+                root: root.into(),
+                path,
+                name: label.into()
+            })
+        );
+    }
+
     // Real async `ExplorerTree` driven through `egui::Context` frames:
     let mut tree = ExplorerTree::default();
     let ctx = egui::Context::default();
