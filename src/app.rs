@@ -16246,26 +16246,31 @@ fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
             d.tools.pending_char_range = Some((sc, ec));
             d.tools.pending_scroll_line = Some(line);
         }
-        if do_replace_one && let Some(&(sc, ec, line)) = matches.get(d.tools.match_index) {
-            let (sb, eb) = crate::files::char_range_to_byte_range(&d.text, sc, ec);
-            d.text.replace_range(sb..eb, &d.tools.replace_text);
-            d.preview = None;
-            d.unpinned_preview = false;
-            d.last_edited_at = Some(std::time::Instant::now());
-            d.syntax_cache.invalidate();
-            let rep_chars = d.tools.replace_text.chars().count();
-            d.tools.pending_char_range = Some((sc, sc + rep_chars));
-            d.tools.pending_scroll_line = Some(line);
-        } else if do_replace_all && !matches.is_empty() {
-            for &(sc, ec, _) in matches.iter().rev() {
-                let (sb, eb) = crate::files::char_range_to_byte_range(&d.text, sc, ec);
-                d.text.replace_range(sb..eb, &d.tools.replace_text);
+        if do_replace_one || do_replace_all {
+            match crate::files::replacement_edit(
+                &d.text,
+                &matches,
+                &d.tools.replace_text,
+                d.tools.match_index,
+                do_replace_all,
+            ) {
+                Ok(Some((range, replacement))) => {
+                    d.text.replace_range(range, &replacement);
+                    d.preview = None;
+                    d.sheet_cache = None;
+                    d.unpinned_preview = false;
+                    d.last_edited_at = Some(std::time::Instant::now());
+                    d.syntax_cache.invalidate();
+                    if do_replace_all {
+                        d.tools.match_index = 0;
+                    } else if let Some(&(sc, _, line)) = matches.get(d.tools.match_index) {
+                        d.tools.pending_char_range = Some((sc, sc + replacement.chars().count()));
+                        d.tools.pending_scroll_line = Some(line);
+                    }
+                }
+                Err(error) => d.error = error,
+                Ok(None) => {}
             }
-            d.preview = None;
-            d.unpinned_preview = false;
-            d.last_edited_at = Some(std::time::Instant::now());
-            d.syntax_cache.invalidate();
-            d.tools.match_index = 0;
         }
         if close_find {
             d.tools.find_open = false;

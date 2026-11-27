@@ -451,13 +451,8 @@ fn replace(
             return;
         }
     }
-    let plan = plan_replacement(
-        &doc.text,
-        &doc.tools.find_query,
-        &doc.tools.replace_text,
-        index,
-        all,
-    );
+    let plan =
+        crate::files::replacement_edit(&doc.text, &hits, &doc.tools.replace_text, index, all);
     root.editor_input.tools.replacement_too_large = None;
     match plan {
         Ok(Some((range, replacement))) => {
@@ -474,62 +469,12 @@ fn replace(
                 select_match(root, id, from, cx);
             }
         }
-        Err(()) => {
+        Err(_) => {
             root.editor_input.tools.replacement_too_large = Some(id);
             cx.notify();
         }
         Ok(None) => {}
     }
-}
-
-fn plan_replacement(
-    source: &str,
-    query: &str,
-    replacement: &str,
-    index: usize,
-    all: bool,
-) -> Result<Option<(std::ops::Range<usize>, String)>, ()> {
-    let hits = crate::files::find_char_matches(source, query);
-    if hits.is_empty() {
-        return Ok(None);
-    }
-    let hits = if all {
-        hits.as_slice()
-    } else {
-        std::slice::from_ref(&hits[index.min(hits.len() - 1)])
-    };
-    let offsets: Vec<usize> = source
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain(std::iter::once(source.len()))
-        .collect();
-    let removed: usize = hits.iter().map(|(a, b, _)| offsets[*b] - offsets[*a]).sum();
-    let final_len = source
-        .len()
-        .checked_sub(removed)
-        .and_then(|n| {
-            replacement
-                .len()
-                .checked_mul(hits.len())
-                .and_then(|added| n.checked_add(added))
-        })
-        .ok_or(())?;
-    if final_len > crate::files::MAX_TEXT {
-        return Err(());
-    }
-    let start = offsets[hits[0].0];
-    let end = offsets[hits.last().unwrap().1];
-    let mut next = String::with_capacity(final_len - (source.len() - (end - start)));
-    let mut cursor = start;
-    for &(a, b, _) in hits {
-        let a = offsets[a];
-        let b = offsets[b];
-        next.push_str(&source[cursor..a]);
-        next.push_str(replacement);
-        cursor = b;
-    }
-    next.push_str(&source[cursor..end]);
-    Ok(Some((start..end, next)))
 }
 
 #[cfg(all(test, feature = "visual-test"))]
@@ -929,6 +874,24 @@ mod tests {
     }
     #[test]
     fn replacement_plan_bounds_unicode_and_single_hit() {
+        let plan_replacement = |source: &str, query: &str, replacement: &str, index, all| {
+            crate::files::replacement_edit(
+                source,
+                &crate::files::find_char_matches(source, query),
+                replacement,
+                index,
+                all,
+            )
+        };
+        assert_eq!(
+            plan_replacement("aaaaa", "aa", "x", 0, true).unwrap(),
+            Some((0..4, "xx".into()))
+        );
+        assert_eq!(
+            plan_replacement("😀İİİ", "i\u{307}i\u{307}", "X", 0, true).unwrap(),
+            Some((4..8, "X".into()))
+        );
+
         assert_eq!(
             plan_replacement("😀 a A", "a", "é", 0, true).unwrap(),
             Some((5..8, "é é".into()))

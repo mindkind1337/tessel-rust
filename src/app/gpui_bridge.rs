@@ -6486,40 +6486,27 @@ impl Tessel {
                     }
                 }
             }
-            GpuiAction::ReplaceEditorCurrent => {
+            action @ (GpuiAction::ReplaceEditorCurrent | GpuiAction::ReplaceEditorAll) => {
                 if let Some(doc) = self.documents.get_mut(self.active_document)
                     && !doc.media
                 {
                     let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
-                    if !hits.is_empty() {
-                        let idx = doc.tools.match_index.min(hits.len() - 1);
-                        let (sc, ec, _) = hits[idx];
-                        let (sb, eb) = crate::files::char_range_to_byte_range(&doc.text, sc, ec);
-                        doc.text.replace_range(sb..eb, &doc.tools.replace_text);
-                        doc.unpinned_preview = false;
-                        doc.sheet_cache = None;
-                        doc.preview = None;
-                        doc.last_edited_at = Some(std::time::Instant::now());
-                    }
-                }
-            }
-            GpuiAction::ReplaceEditorAll => {
-                if let Some(doc) = self.documents.get_mut(self.active_document)
-                    && !doc.media
-                    && !doc.tools.find_query.is_empty()
-                {
-                    let hits = crate::files::find_char_matches(&doc.text, &doc.tools.find_query);
-                    if !hits.is_empty() {
-                        let rep = doc.tools.replace_text.clone();
-                        for &(sc, ec, _) in hits.iter().rev() {
-                            let (sb, eb) =
-                                crate::files::char_range_to_byte_range(&doc.text, sc, ec);
-                            doc.text.replace_range(sb..eb, &rep);
+                    match crate::files::replacement_edit(
+                        &doc.text,
+                        &hits,
+                        &doc.tools.replace_text,
+                        doc.tools.match_index,
+                        matches!(action, GpuiAction::ReplaceEditorAll),
+                    ) {
+                        Ok(Some((range, replacement))) => {
+                            doc.text.replace_range(range, &replacement);
+                            doc.unpinned_preview = false;
+                            doc.sheet_cache = None;
+                            doc.preview = None;
+                            doc.last_edited_at = Some(std::time::Instant::now());
                         }
-                        doc.unpinned_preview = false;
-                        doc.sheet_cache = None;
-                        doc.preview = None;
-                        doc.last_edited_at = Some(std::time::Instant::now());
+                        Err(error) => doc.error = error,
+                        Ok(None) => {}
                     }
                 }
             }

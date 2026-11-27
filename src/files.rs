@@ -164,58 +164,114 @@ pub struct EditorTools {
     pub pending_scroll_line: Option<usize>,
 }
 
-/// Case-insensitive substring search returning `(start_char, end_char, zero_based_line)` tuples.
+/// Non-overlapping literal matches in character coordinates and zero-based lines.
 pub fn find_char_matches(text: &str, query: &str) -> Vec<(usize, usize, usize)> {
-    if query.is_empty() {
+    if query.is_empty() || text.is_empty() {
         return Vec::new();
     }
-    let needle_lower = query.to_lowercase();
-    if needle_lower.is_empty() {
-        return Vec::new();
+    let fold = |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
+    let needle = fold(query);
+    if text.is_ascii() {
+        let mut line = 0;
+        let mut prev = 0;
+        return text
+            .to_ascii_lowercase()
+            .match_indices(&needle)
+            .map(|(start, matched)| {
+                line += text.as_bytes()[prev..start]
+                    .iter()
+                    .filter(|&&b| b == b'\n')
+                    .count();
+                prev = start;
+                (start, start + matched.len(), line)
+            })
+            .collect();
     }
-    // Map byte offsets in `hay_lower` safely when ASCII, or scan line-by-line by char index for Unicode:
-    let text_chars: Vec<char> = text.chars().collect();
-    let folded_chars: Vec<String> = text_chars
-        .iter()
-        .map(|c| c.to_lowercase().collect())
-        .collect();
-    let mut flat = String::with_capacity(text.len());
-    let mut byte_to_char = Vec::with_capacity(text.len() + 1);
-    for (ci, piece) in folded_chars.iter().enumerate() {
-        for _ in 0..piece.len() {
-            byte_to_char.push(ci);
-        }
-        flat.push_str(piece);
-    }
-    byte_to_char.push(text_chars.len());
-
-    let mut line_at_char = Vec::with_capacity(text_chars.len() + 1);
-    let mut cur_line = 0usize;
-    for &ch in &text_chars {
-        line_at_char.push(cur_line);
-        if ch == '\n' {
-            cur_line += 1;
-        }
-    }
-    line_at_char.push(cur_line);
-
-    let mut out = Vec::new();
-    let mut pos = 0usize;
-    while let Some(rel) = flat[pos..].find(&needle_lower) {
-        let start_b = pos + rel;
-        let end_b = start_b + needle_lower.len();
-        if let (Some(&sc), Some(&ec)) = (byte_to_char.get(start_b), byte_to_char.get(end_b))
-            && ec > sc
-        {
-            let line = line_at_char.get(sc).copied().unwrap_or(0);
-            out.push((sc, ec, line));
-        }
-        pos = start_b + needle_lower.chars().next().map_or(1, char::len_utf8);
-        if pos > flat.len() {
+    let folded = fold(text);
+    let mut matches = Vec::new();
+    // A Unicode lowercase mapping can expand a source character into multiple scalars.
+    // Track original boundaries as we search so a replacement never splits that character.
+    let mut boundaries = text
+        .chars()
+        .scan((0usize, 0usize, 0usize), |pos, ch| {
+            let before = *pos;
+            pos.0 += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
+            pos.1 += 1;
+            pos.2 += usize::from(ch == '\n');
+            Some(before)
+        })
+        .chain(std::iter::once((folded.len(), text.chars().count(), 0)))
+        .peekable();
+    let mut offset = 0;
+    while let Some(found) = folded[offset..].find(&needle) {
+        let start = offset + found;
+        while boundaries.next_if(|p| p.0 < start).is_some() {}
+        let Some(&(boundary, first, line)) = boundaries.peek() else {
             break;
+        };
+        if boundary != start {
+            offset = boundary;
+            continue;
+        }
+        boundaries.next();
+        let end = start + needle.len();
+        let mut after = boundaries.clone();
+        while after.next_if(|p| p.0 < end).is_some() {}
+        if let Some(&(_, last, _)) = after.peek().filter(|p| p.0 == end) {
+            matches.push((first, last, line));
+            boundaries = after;
+            offset = end;
+        } else {
+            offset = boundaries.peek().map_or(folded.len(), |p| p.0);
         }
     }
-    out
+    matches
+}
+
+/// Build one bounded edit so Replace All has one undo step in the native editor.
+pub(crate) fn replacement_edit(
+    source: &str,
+    hits: &[(usize, usize, usize)],
+    replacement: &str,
+    index: usize,
+    all: bool,
+) -> Result<Option<(std::ops::Range<usize>, String)>> {
+    if hits.is_empty() {
+        return Ok(None);
+    }
+    let hits = if all {
+        hits
+    } else {
+        std::slice::from_ref(&hits[index.min(hits.len() - 1)])
+    };
+    let mut offsets = source
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain(std::iter::once(source.len()))
+        .enumerate()
+        .peekable();
+    let mut byte_at = |target: usize| {
+        while offsets.next_if(|(i, _)| *i < target).is_some() {}
+        offsets.peek().expect("match within source").1
+    };
+    let first = byte_at(hits[0].0);
+    let mut cursor = first;
+    let mut insert = String::new();
+    let limit = "Text editor limit is 2 MiB.";
+    for &(start, end, _) in hits {
+        let gap = &source[cursor..byte_at(start)];
+        let room = MAX_TEXT.saturating_sub(first + insert.len());
+        if gap.len() > room || replacement.len() > room - gap.len() {
+            return Err(limit.into());
+        }
+        insert.push_str(gap);
+        insert.push_str(replacement);
+        cursor = byte_at(end);
+    }
+    if first + insert.len() + (source.len() - cursor) > MAX_TEXT {
+        return Err(limit.into());
+    }
+    Ok(Some((first..cursor, insert)))
 }
 
 pub fn char_range_to_byte_range(text: &str, start_char: usize, end_char: usize) -> (usize, usize) {
@@ -1288,6 +1344,14 @@ mod tests {
         let path = dir.path().join("binary");
         fs::write(&path, [0, 1, 2]).unwrap();
         assert!(Document::open(dir.path(), &path).is_err());
+    }
+
+    #[test]
+    fn editor_find_skips_overlaps_and_preserves_lines_across_multiline_matches() {
+        assert_eq!(find_char_matches("aaaaa", "AA"), [(0, 2, 0), (2, 4, 0)]);
+        assert_eq!(find_char_matches("x\nx\nx", "X\n"), [(0, 2, 0), (2, 4, 1)]);
+        assert_eq!(find_char_matches("😀İi\nI", "i"), [(2, 3, 0), (4, 5, 1)]);
+        assert_eq!(find_char_matches("😀İi\nI", "i\u{307}"), [(1, 2, 0)]);
     }
 
     #[test]
