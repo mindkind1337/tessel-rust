@@ -505,7 +505,8 @@ impl RemotePanel {
                     return;
                 }
                 let name = crate::download_name::suggest(&entry.name);
-                if let Some(destination) = crate::files::choose_download_destination(name.as_ref())
+                if let Some(destination) =
+                    crate::download_name::choose_download_destination(name.as_ref())
                 {
                     self.folder_report = None;
                     self.downloaded = None;
@@ -572,7 +573,7 @@ impl RemotePanel {
 
     pub(super) fn download_original(&mut self, path: &str) {
         self.download_original_with(path, |name| {
-            crate::files::choose_download_destination(name.as_ref())
+            crate::download_name::choose_download_destination(name.as_ref())
         });
     }
     fn download_original_with(

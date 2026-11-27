@@ -316,9 +316,15 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
     image::RgbaImage::from_pixel(80, 48, image::Rgba([51u8, 103, 222, 255]))
         .save_with_format(&file, image::ImageFormat::Png)
         .unwrap();
+    std::fs::write(dir.path().join("project-1/readme.txt"), "fixture").unwrap();
+    let saved = dir.path().join("saved-poster.png");
     for selector in [
         "guest-tab-files",
         "guest-entry-0",
+        "guest-doc-tab-0",
+        "guest-entry-1",
+        "guest-doc-tab-1",
+        "guest-doc-tab-0",
         "viewer-copy-path",
         "guest-image-preview",
         "guest-image-download",
@@ -352,7 +358,11 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
                             .as_deref(),
                         Some("poster.PNG")
                     );
-                } else if selector != "guest-image-download" {
+                } else {
+                    if selector == "guest-image-download" {
+                        crate::download_name::TEST_DOWNLOAD_DESTINATION
+                            .with(|next| next.set(Some(saved.clone())));
+                    }
                     visual.simulate_click(rect.center(), Default::default());
                 }
                 break;
@@ -361,6 +371,16 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !saved.exists() {
+        view.update(cx, |root, _, cx| {
+            root.poll_backend(cx);
+        })
+        .unwrap();
+        assert!(Instant::now() < deadline, "guest image was not saved");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read(saved).unwrap(), std::fs::read(file).unwrap());
     view.update(cx, |root, _, cx| {
         let files = root
             .app

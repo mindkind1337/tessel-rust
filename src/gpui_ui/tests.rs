@@ -810,7 +810,7 @@ fn local_image_menu_opens_on_the_displayed_pixels(cx: &mut gpui::TestAppContext)
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
     assert!(visual.debug_bounds("local-image-menu").is_some());
     let saved = dir.path().join("original-copy");
-    crate::files::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(saved.clone())));
+    crate::download_name::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(saved.clone())));
     visual.simulate_keystrokes("down");
     visual.simulate_keystrokes("enter");
     cx.refresh().unwrap();

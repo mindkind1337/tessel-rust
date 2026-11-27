@@ -36,6 +36,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_DOWNLOAD_DESTINATION: std::cell::Cell<Option<PathBuf>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn choose_download_destination(name: &std::ffi::OsStr) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        let _ = name;
+        TEST_DOWNLOAD_DESTINATION.with(std::cell::Cell::take)
+    }
+    #[cfg(not(test))]
+    rfd::FileDialog::new()
+        .set_file_name(name.to_string_lossy())
+        .save_file()
+}
+
 pub(crate) fn reserve_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
     for i in 1..100 {
         let dest = if i == 1 {

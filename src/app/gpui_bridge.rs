@@ -7926,7 +7926,7 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(action.clone());
         assert!(!app.file_action_pending);
         let dest = dir.path().join("my copy.bin");
-        crate::files::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(dest.clone())));
+        crate::download_name::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(dest.clone())));
         app.apply_gpui_action(action);
         while app.file_action_pending {
             app.poll();

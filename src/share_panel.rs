@@ -464,13 +464,20 @@ impl SharePanel {
         let mut changed = self.poll_guest_scope();
         changed |= self.guest_task_board.poll(Instant::now());
         changed |= self.guest_file_editor.poll(Instant::now());
+        if self.guest_image.poll() {
+            changed = true;
+            if !self.guest_image.failed
+                && let Some(image_key) = &self.guest_image.key
+            {
+                self.guest_file_editor.remember_tab(image_key);
+            }
+        }
         let key = self
             .guest_file_editor
             .document
             .as_ref()
             .filter(|doc| Some(doc.key.scope) == self.guest_files_scope)
             .map(|doc| &doc.key);
-        changed |= self.guest_image.poll();
         changed |= self.guest_download.poll();
         changed |= self.guest_versions.bind(key);
         changed |= self

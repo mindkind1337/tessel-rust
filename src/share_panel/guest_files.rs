@@ -132,14 +132,16 @@ impl SharePanel {
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
     }
+    fn guest_tab_active(&self, key: &FileKey) -> bool {
+        self.guest_file_editor
+            .document
+            .as_ref()
+            .is_some_and(|doc| &doc.key == key)
+            || (!self.guest_image.failed && self.guest_image.key.as_ref() == Some(key))
+    }
+
     pub(super) fn select_guest_tab(&mut self, key: FileKey) {
-        if self.guest_file_editor.tabs.contains(&key)
-            && self
-                .guest_file_editor
-                .document
-                .as_ref()
-                .is_none_or(|doc| doc.key != key)
-        {
+        if self.guest_file_editor.tabs.contains(&key) && !self.guest_tab_active(&key) {
             self.open_guest_file(key);
         }
     }
@@ -161,7 +163,10 @@ impl SharePanel {
 
     pub(super) fn close_guest_tab(&mut self, key: &FileKey) {
         self.poll_guest_scope();
-        if self.guest_files_scope != Some(key.scope) || self.guest_file_editor.busy() {
+        if self.guest_files_scope != Some(key.scope)
+            || self.guest_file_editor.busy()
+            || self.guest_image.busy()
+        {
             return;
         }
         let Some(index) = self
@@ -172,6 +177,12 @@ impl SharePanel {
         else {
             return;
         };
+        if self.guest_image.key.as_ref() == Some(key) {
+            self.guest_image = Default::default();
+            self.guest_file_editor.tabs.remove(index);
+            self.open_neighbor_tab(index);
+            return;
+        }
         if self
             .guest_file_editor
             .document
@@ -196,6 +207,10 @@ impl SharePanel {
             .position(|tab| tab == key)
             .unwrap_or(0);
         self.guest_file_editor.discard();
+        self.open_neighbor_tab(index);
+    }
+
+    fn open_neighbor_tab(&mut self, index: usize) {
         if let Some(next) = self
             .guest_file_editor
             .tabs
@@ -341,11 +356,7 @@ impl SharePanel {
         let mut closed = None;
         ui.horizontal_wrapped(|ui| {
             for key in &self.guest_file_editor.tabs {
-                let active = self
-                    .guest_file_editor
-                    .document
-                    .as_ref()
-                    .is_some_and(|doc| doc.key == *key);
+                let active = self.guest_tab_active(key);
                 if ui.selectable_label(active, &key.path).clicked() && !active {
                     selected = Some(key.clone());
                 }

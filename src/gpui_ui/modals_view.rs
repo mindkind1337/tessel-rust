@@ -1271,7 +1271,11 @@ fn render_share_modal(
                     if !files.tabs.is_empty() {
                         let mut tabs = div().flex().flex_wrap().gap(px(3.));
                         for (index, key) in files.tabs.iter().enumerate() {
-                            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key);
+                            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key)
+                                || files
+                                    .image
+                                    .as_ref()
+                                    .is_some_and(|(image_key, _)| image_key == key);
                             tabs = tabs.child(
                                 div()
                                     .flex()

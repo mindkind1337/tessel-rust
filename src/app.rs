@@ -5668,7 +5668,7 @@ impl Tessel {
             let name = crate::download_name::suggest(
                 &path.file_name().unwrap_or_default().to_string_lossy(),
             );
-            crate::files::choose_download_destination(name.as_ref())
+            crate::download_name::choose_download_destination(name.as_ref())
         };
         let Some(dest) = dest else { return };
         self.file_action_pending = true;

@@ -451,7 +451,7 @@ mod tests {
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
         assert!(visual.debug_bounds("remote-image-menu").is_some());
         let saved = dir.path().join("original-copy");
-        crate::files::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(saved.clone())));
+        crate::download_name::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(saved.clone())));
         visual.simulate_keystrokes("up");
         visual.simulate_keystrokes("space");
         cx.refresh().unwrap();

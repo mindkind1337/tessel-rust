@@ -154,7 +154,7 @@ impl SharePanel {
     }
     pub(super) fn choose_guest_download(&mut self, key: &Key) {
         self.download_guest_file(key, |name| {
-            rfd::FileDialog::new().set_file_name(name).save_file()
+            crate::download_name::choose_download_destination(name.as_ref())
         });
     }
 }

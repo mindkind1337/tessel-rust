@@ -115,6 +115,12 @@ impl Editor {
                     .is_some_and(|p| matches!(p.operation, Operation::Save(..)))
         })
     }
+    pub(super) fn remember_tab(&mut self, key: &Key) {
+        if Some(key.scope) == self.scope && !self.tabs.contains(key) {
+            self.tabs.push(key.clone());
+        }
+    }
+
     pub fn editable(&self) -> bool {
         self.writable
             && self.document.as_ref().is_some_and(|d| {
@@ -307,9 +313,7 @@ impl Editor {
             Operation::Read(key) => {
                 let text = decode_text(&value, MAX_READ);
                 if let Some(text) = text {
-                    if !self.tabs.contains(&key) {
-                        self.tabs.push(key.clone());
-                    }
+                    self.remember_tab(&key);
                     let text = Arc::new(text);
                     self.notice = (text.len() > MAX_EDIT).then_some(Notice::TooLarge);
                     self.document = Some(Document {

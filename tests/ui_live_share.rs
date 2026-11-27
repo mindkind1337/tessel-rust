@@ -740,6 +740,22 @@ fn verify_guest_image(filename: &str) {
         );
     }
     assert!(egui::Popup::is_any_open(&ctx));
+    let text = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(text.clone());
+    await_guest_document(&mut panel, &text);
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestSelectTab(key.clone()),
+        &[],
+    );
+    assert!(panel.guest_file_document().is_none());
+    while panel.guest_requests_busy() {
+        panel.poll_guest_requests();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let dest = dir.path().join(filename);
     panel.download_guest_file(&key, |name| {
         assert_eq!(name, filename);
@@ -751,11 +767,10 @@ fn verify_guest_image(filename: &str) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(std::fs::read(&dest).unwrap(), std::fs::read(path).unwrap());
-    let text = guest_file_editor::Key {
-        scope,
-        path: "a.txt".into(),
-    };
-    panel.open_guest_file(text.clone());
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestCloseTab(key.clone()),
+        &[],
+    );
     await_guest_document(&mut panel, &text);
     panel.edit_guest_file(&text, "draft".into());
     panel.open_guest_file(key);
