@@ -147,7 +147,10 @@ pub(crate) fn render_terminal_pane_body(
             )
             .when(has_startup_err, |el| {
                 el.child(render_exit_overlay_pill(
-                    sid, true, None, french, tokens, cx,
+                    sid,
+                    crate::terminal::terminal_exit_banner_copy(true, None, french),
+                    tokens,
+                    cx,
                 ))
             })
             .into_any_element();
@@ -155,6 +158,7 @@ pub(crate) fn render_terminal_pane_body(
 
     render_vt_surface(
         Some(sid),
+        tile.ssh_host.as_deref(),
         render_snap,
         inputs,
         tile.cursor_style,
@@ -171,6 +175,7 @@ pub(crate) fn render_terminal_pane_body(
 #[allow(clippy::too_many_arguments)]
 fn render_vt_surface(
     session_id: Option<u64>,
+    ssh_host: Option<&str>,
     snap: &TerminalRenderSnapshot,
     inputs: &super::terminal_find_inputs::Inputs,
     cursor_style: TerminalCursorStyle,
@@ -595,9 +600,7 @@ fn render_vt_surface(
     {
         out = out.child(render_exit_overlay_pill(
             sid,
-            false,
-            snap.exit_code,
-            french,
+            crate::terminal_exit::ended_session_copy(ssh_host, snap.exit_code, french),
             tokens,
             cx,
         ));
@@ -607,14 +610,11 @@ fn render_vt_surface(
 
 fn render_exit_overlay_pill(
     sid: u64,
-    failed_to_start: bool,
-    exit_code: Option<i32>,
-    french: bool,
+    labels: (String, &'static str, &'static str),
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
-    let (msg, primary_lbl, close_lbl) =
-        crate::terminal::terminal_exit_banner_copy(failed_to_start, exit_code, french);
+    let (msg, primary_lbl, close_lbl) = labels;
     div()
         .id(("exit-overlay-wrap", sid))
         .w_full()
@@ -780,6 +780,7 @@ pub(crate) fn render_floating_terminal_drawer(
 
     let body = if let Some(snap) = &floating.terminal_render {
         render_vt_surface(
+            None,
             None,
             snap,
             inputs,

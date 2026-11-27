@@ -83,6 +83,13 @@ struct Session {
     error: String,
 }
 impl Session {
+    fn ssh_terminal_alias(&self) -> Option<&str> {
+        match &self.launch {
+            Launch::Ssh(host) if self.native_host.is_none() => Some(&host.alias),
+            _ => None,
+        }
+    }
+
     fn model_agent(&self) -> Option<&str> {
         match &self.launch {
             Launch::Agent(agent) if crate::agent_model_catalog::find(agent).is_some() => {
@@ -6498,8 +6505,8 @@ impl Tessel {
                                 let is_exited = terminal.exited();
                                 if is_exited {
                                     let (msg, restart_lbl, close_lbl) =
-                                        crate::terminal::terminal_exit_banner_copy(
-                                            false,
+                                        crate::terminal_exit::ended_session_copy(
+                                            session.ssh_terminal_alias(),
                                             exited_code,
                                             french,
                                         );

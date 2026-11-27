@@ -215,6 +215,16 @@ fn lot_b178_system_account_covered_and_profile_email_probing() {
 
 #[test]
 fn lot_b178_terminal_exit_banner_copy_and_narrow_wrap() {
+    let (msg, action, _) = terminal_exit::ended_session_copy(Some("dev"), Some(255), true);
+    assert_eq!(msg, "Session SSH terminée sur dev (code 255).");
+    assert_eq!(action, "Reconnecter");
+    let (msg, action, _) = terminal_exit::ended_session_copy(Some("dev"), None, false);
+    assert_eq!(msg, "SSH session on dev ended.");
+    assert_eq!(action, "Reconnect");
+    assert_eq!(
+        terminal_exit::ended_session_copy(None, Some(0), false),
+        terminal_exit::terminal_exit_banner_copy(false, Some(0), false)
+    );
     let (msg_en, act_en, close_en) =
         terminal_exit::terminal_exit_banner_copy(false, Some(130), false);
     assert_eq!(msg_en, "Process exited with code 130.");

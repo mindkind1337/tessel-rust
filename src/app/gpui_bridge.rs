@@ -313,6 +313,7 @@ pub(crate) struct GpuiViewTabItem {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiPaneTileSnapshot {
+    pub ssh_host: Option<String>,
     pub session_id: u64,
     pub title: String,
     pub kind_label: String,
@@ -4106,6 +4107,7 @@ impl Tessel {
         let wake_banner = self.teams_hub.wake_banners.get(&sess.id).cloned();
 
         GpuiPaneTileSnapshot {
+            ssh_host: sess.ssh_terminal_alias().map(str::to_owned),
             session_id: sess.id,
             title: sess.label().to_owned(),
             kind_label,

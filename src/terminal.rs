@@ -341,9 +341,20 @@ impl Terminal {
     /// Called on the restart worker. No replacement may start until this succeeds.
     pub fn stop_for_restart(&mut self) -> Result<(), String> {
         self.backend.stop_for_restart()?;
-        self.exited = true;
+        self.mark_exited();
         Ok(())
     }
+    fn mark_exited(&mut self) {
+        self.exited = true;
+        self.pending_multiline_paste = None;
+        self.composing = false;
+        self.composition.clear();
+    }
+
+    fn input_channel_open(&self) -> bool {
+        !self.exited && self.backend.writable()
+    }
+
     pub fn take_broadcast_inputs(&mut self) -> Vec<BroadcastInput> {
         std::mem::take(&mut self.broadcast_outbox)
     }
@@ -575,6 +586,9 @@ impl Terminal {
     }
 
     pub fn gpui_paste_with_prefs(&mut self, text: &str, confirm_multiline: bool) {
+        if !self.accepts_broadcast_input() {
+            return;
+        }
         if text.len() > 65536 {
             self.status = "Paste limit: 64 KiB".into();
         } else if confirm_multiline && text.trim_end_matches(['\r', '\n']).contains('\n') {
@@ -715,7 +729,7 @@ impl Terminal {
         let release = self
             .mouse
             .release(self.parser.screen().mouse_protocol_encoding());
-        if self.backend.writable() && !release.is_empty() {
+        if self.input_channel_open() && !release.is_empty() {
             let _ = self.send(release);
         }
         self.parser.process(
@@ -816,7 +830,7 @@ impl Terminal {
         {
             return false;
         }
-        self.backend.writable() && !self.exited && !self.viewing_archive()
+        self.input_channel_open() && !self.viewing_archive()
     }
 
     pub fn send_broadcast(&mut self, input: &BroadcastInput) {
@@ -1353,10 +1367,15 @@ impl Terminal {
                 self.last_output_at = Some(std::time::Instant::now());
             }
             self.size = self.parser.screen().size();
-            self.exited = native
+            if native
                 .feed
                 .as_ref()
-                .is_some_and(|feed| matches!(feed.state, host_events::State::Exited { .. }));
+                .is_some_and(|feed| matches!(feed.state, host_events::State::Exited { .. }))
+            {
+                self.mark_exited();
+            } else {
+                self.exited = false;
+            }
             return;
         }
         #[cfg(feature = "visual-test")]
@@ -1370,7 +1389,7 @@ impl Terminal {
             self.process_output(&bytes);
         }
         if let Some(exit) = self.backend.exit_status() {
-            self.exited = true;
+            self.mark_exited();
             self.exit_code = Some(exit.exit_code() as i32);
             self.status = format!("Shell exited: {exit}");
         }
@@ -1622,10 +1641,11 @@ impl Terminal {
         };
         self.widget_id = Some(response.id);
         #[cfg(windows)]
-        let accepts_input =
-            self.native_overlays(ui, rect, &response) && ui.is_enabled() && self.backend.writable();
+        let accepts_input = self.native_overlays(ui, rect, &response)
+            && ui.is_enabled()
+            && self.input_channel_open();
         #[cfg(not(windows))]
-        let accepts_input = ui.is_enabled() && self.backend.writable();
+        let accepts_input = ui.is_enabled() && self.input_channel_open();
         #[cfg(windows)]
         let overlay_pointer = matches!(self.backend, backend::Backend::Native(_))
             && ui.input(|i| {
@@ -1714,7 +1734,7 @@ impl Terminal {
         };
         // Release only a previously held TUI button when a dialog takes input.
         // A lost lease still forbids even this cleanup from reaching the host.
-        if (accepts_input && !overlay_pointer || release_mouse && self.backend.writable())
+        if (accepts_input && !overlay_pointer || release_mouse && self.input_channel_open())
             && !mouse_bytes.is_empty()
         {
             self.selection = None;
@@ -2863,6 +2883,48 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("settings-text-field")));
         assert!(!terminal.has_focus(&ctx));
     }
+    #[test]
+    fn exited_terminal_discards_pending_paste_and_rejects_new_input() {
+        let mut terminal = Terminal::spawn().unwrap();
+        let (tx, rx) = mpsc::sync_channel(8);
+        terminal.backend.replace_input(tx);
+        let ctx = egui::Context::default();
+        let render_input = |terminal: &mut Terminal, events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| terminal.show(ui, 14.0));
+                },
+            );
+        };
+        render_input(&mut terminal, vec![]);
+        terminal.request_focus(&ctx);
+        render_input(&mut terminal, vec![egui::Event::Text("live".into())]);
+        assert_eq!(rx.try_recv().unwrap(), b"live");
+        assert_eq!(terminal.take_broadcast_inputs().len(), 1);
+        terminal.gpui_paste_with_prefs("one\ntwo", true);
+        assert!(terminal.pending_multiline_paste.is_some());
+        terminal.mark_exited();
+        assert!(terminal.pending_multiline_paste.is_none());
+        render_input(
+            &mut terminal,
+            vec![
+                egui::Event::Text("closed".into()),
+                egui::Event::Paste("closed".into()),
+            ],
+        );
+        terminal.gpui_paste_with_prefs("three\nfour", true);
+        terminal.gpui_confirm_multiline_paste(true);
+        terminal.gpui_send_key("x", Some("x"), false, false, false, false);
+        terminal.send_broadcast(&BroadcastInput::Paste("five".into()));
+        assert!(terminal.pending_multiline_paste.is_none());
+        assert!(terminal.take_broadcast_inputs().is_empty());
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn broadcast_captures_user_input_skips_mouse_and_adapts_target_modes() {
         let mut source = Terminal::spawn().unwrap();

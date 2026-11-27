@@ -38,6 +38,33 @@ pub fn terminal_exit_banner_copy(
     }
 }
 
+/// Labels for a terminal whose process has exited.
+pub fn ended_session_copy(
+    ssh_host: Option<&str>,
+    exit_code: Option<i32>,
+    french: bool,
+) -> (String, &'static str, &'static str) {
+    let Some(host) = ssh_host else {
+        return terminal_exit_banner_copy(false, exit_code, french);
+    };
+    let suffix = exit_code
+        .map(|code| format!(" (code {code})"))
+        .unwrap_or_default();
+    if french {
+        (
+            format!("Session SSH terminée sur {host}{suffix}."),
+            "Reconnecter",
+            "Fermer le panneau",
+        )
+    } else {
+        (
+            format!("SSH session on {host} ended{suffix}."),
+            "Reconnect",
+            "Close pane",
+        )
+    }
+}
+
 /// Returns `true` when the `.exit-overlay` pill wraps its grouped `.exit-actions` container
 /// (`[Restart/Retry]` + `[Close pane]`) together onto a second row in narrow panes.
 #[must_use]
