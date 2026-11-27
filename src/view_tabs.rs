@@ -15,6 +15,7 @@ pub enum Kind {
 
 pub struct Tab<'a> {
     pub title: &'a str,
+    pub file_path: Option<&'a str>,
     pub hint: &'a str,
     pub kind: Kind,
     pub selected: bool,
@@ -124,7 +125,12 @@ pub fn show(ui: &mut egui::Ui, tab: Tab<'_>) -> Response {
             icon_color,
         ),
         Kind::Editor => {
-            let file_col = file_icon_tint(tab.title, tab.selected, accent, base_color);
+            let file_col = file_icon_tint(
+                tab.file_path.unwrap_or(tab.title),
+                tab.selected,
+                accent,
+                base_color,
+            );
             let p = |x: f32, y: f32| icon_rect.min + Vec2::new(x, y) * (14.0 / 16.0);
             for points in [
                 [p(5.5, 4.5), p(2.0, 8.0), p(5.5, 11.5)],
@@ -291,6 +297,7 @@ mod tests {
                                 ui,
                                 Tab {
                                     title: "A very long modified document name.txt",
+                                    file_path: Some("project/document.txt"),
                                     hint: "project/document.txt",
                                     kind: Kind::Editor,
                                     selected: true,

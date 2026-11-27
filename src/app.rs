@@ -3408,18 +3408,23 @@ impl Tessel {
             TabsLang::En
         }
     }
-    fn document_tab_labels(&self, paths: &[String]) -> Vec<String> {
+    fn document_tab_labels(&self, paths: &[String]) -> (Vec<String>, Vec<(String, String)>) {
         use crate::view_tabs_browser_model::{file_name_of, qualified_tab_name};
         let keys: Vec<_> = paths
             .iter()
             .zip(&self.documents)
             .map(|(path, doc)| (file_name_of(path).to_lowercase(), doc.diff_title.is_some()))
             .collect();
+        let tabs = self.share.workspace_tabs();
+        let guest_keys: Vec<_> = tabs
+            .iter()
+            .map(|tab| (file_name_of(&tab.path).to_lowercase(), false))
+            .collect();
         let mut counts = std::collections::HashMap::new();
-        for key in &keys {
+        for key in keys.iter().chain(&guest_keys) {
             *counts.entry(key).or_insert(0usize) += 1;
         }
-        paths
+        let local = paths
             .iter()
             .zip(&self.documents)
             .zip(&keys)
@@ -3436,7 +3441,33 @@ impl Tessel {
                     None => label,
                 }
             })
-            .collect()
+            .collect();
+        let context = self.share.workspace_tab_context();
+        let guests = tabs
+            .iter()
+            .zip(&guest_keys)
+            .map(|(tab, key)| {
+                let twin = counts[key] > 1;
+                let label = if twin
+                    && !tab.path.contains('/')
+                    && let Some((_, project)) = &context
+                {
+                    format!("{} · {project}", tab.path)
+                } else {
+                    qualified_tab_name(&tab.path, twin)
+                };
+                let host = context
+                    .as_ref()
+                    .map_or("Live Share", |(name, _)| name.as_str());
+                let path = &tab.path;
+                let hint = match self.tab_language() {
+                    TabsLang::Fr => format!("Onglet de {host} : {path}"),
+                    TabsLang::En => format!("{host}’s tab: {path}"),
+                };
+                (label, hint)
+            })
+            .collect();
+        (local, guests)
     }
     fn center_tabs(&mut self, ui: &mut egui::Ui) {
         let paths: Vec<_> = self
@@ -3444,7 +3475,7 @@ impl Tessel {
             .iter()
             .map(|d| d.path.to_string_lossy().into_owned())
             .collect();
-        let labels = self.document_tab_labels(&paths);
+        let (labels, guest_labels) = self.document_tab_labels(&paths);
         let mut close = None;
         let mut keep_open = None;
         let mut close_others = None;
@@ -3460,6 +3491,7 @@ impl Tessel {
                         ui,
                         crate::view_tabs::Tab {
                             title: tr("Terminal"),
+                            file_path: None,
                             hint: tr("Terminal"),
                             kind: crate::view_tabs::Kind::Terminal,
                             selected: self.view == View::Work,
@@ -3479,6 +3511,7 @@ impl Tessel {
                             ui,
                             crate::view_tabs::Tab {
                                 title: tr("Browser"),
+                                file_path: None,
                                 hint: tr("Browser"),
                                 kind: crate::view_tabs::Kind::Browser,
                                 selected: self.view == View::Browser,
@@ -3506,6 +3539,7 @@ impl Tessel {
                             ui,
                             crate::view_tabs::Tab {
                                 title,
+                                file_path: Some(&paths[i]),
                                 hint: &paths[i],
                                 kind,
                                 selected: self.view == View::Files && self.active_document == i,
@@ -3534,12 +3568,15 @@ impl Tessel {
                         }
                     }
                     let mut clicked = None;
-                    for key in self.share.workspace_tabs() {
+                    for (key, (title, hint)) in
+                        self.share.workspace_tabs().iter().zip(&guest_labels)
+                    {
                         let tab = crate::view_tabs::show(
                             ui,
                             crate::view_tabs::Tab {
-                                title: key.path.rsplit('/').next().unwrap_or(&key.path),
-                                hint: &key.path,
+                                title,
+                                file_path: Some(&key.path),
+                                hint,
                                 kind: crate::view_tabs::Kind::Editor,
                                 selected: self.view == View::GuestFiles
                                     && self.share.guest_tab_active(key),

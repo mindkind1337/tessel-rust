@@ -253,7 +253,11 @@ fn render_view_tabs_bar(
                 .flex_shrink_0()
                 .into_any_element(),
             crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
-                super::file_icons::render(&tab.hint, tokens, tint).into_any_element()
+                let path = tab
+                    .guest_key
+                    .as_ref()
+                    .map_or(tab.hint.as_str(), |key| &key.path);
+                super::file_icons::render(path, tokens, tint).into_any_element()
             }
         };
         let close = match kind {

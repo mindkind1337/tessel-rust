@@ -564,6 +564,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                             ui,
                             Tab {
                                 title: "Browser",
+                                file_path: None,
                                 hint: "https://example.com",
                                 kind: Kind::Browser,
                                 selected: true,
@@ -580,6 +581,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                         ui,
                         Tab {
                             title: "preview.rs",
+                            file_path: Some("C:/preview.rs"),
                             hint: "C:/preview.rs",
                             kind: Kind::Editor,
                             selected: false,
@@ -595,6 +597,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                         ui,
                         Tab {
                             title: "app.rs (Working tree)",
+                            file_path: None,
                             hint: "C:/app.rs",
                             kind: Kind::Diff,
                             selected: false,
@@ -609,6 +612,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                         ui,
                         Tab {
                             title: "removed.ts",
+                            file_path: Some("C:/removed.ts"),
                             hint: "C:/removed.ts",
                             kind: Kind::Editor,
                             selected: false,
@@ -663,6 +667,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                         ui,
                         Tab {
                             title: "Browser",
+                            file_path: None,
                             hint: "https://example.com",
                             kind: Kind::Browser,
                             selected: true,
@@ -677,6 +682,7 @@ fn view_tabs_closable_browser_diff_preview_pin_and_deleted_strikethrough() {
                         ui,
                         Tab {
                             title: "preview.rs",
+                            file_path: Some("C:/preview.rs"),
                             hint: "C:/preview.rs",
                             kind: Kind::Editor,
                             selected: false,

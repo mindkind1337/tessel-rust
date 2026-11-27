@@ -649,4 +649,47 @@ fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) 
             );
         }
     }
+    let local = dir.path().join("local");
+    std::fs::create_dir(&local).unwrap();
+    let path = local.join("B.TXT");
+    std::fs::write(&path, "local contents").unwrap();
+    view.update(cx, |root, _, cx| {
+        root.app.install_editor_input_fixture(
+            vec![crate::files::Document::open(&local, &path).unwrap()],
+            0,
+        );
+        let snapshot = root.app.gpui_snapshot(1100., 850., 4.);
+        let local_tab = snapshot
+            .view_tabs
+            .iter()
+            .find(|t| t.doc_index == Some(0))
+            .unwrap();
+        let guest_tab = snapshot
+            .view_tabs
+            .iter()
+            .find(|t| t.guest_key.is_some())
+            .unwrap();
+        assert_eq!(local_tab.title, "B.TXT · local");
+        assert_eq!(guest_tab.title, "b.txt · Project 1");
+        assert_eq!(
+            guest_tab.hint,
+            if snapshot.french {
+                "Onglet de Fixture : b.txt"
+            } else {
+                "Fixture’s tab: b.txt"
+            }
+        );
+        root.dispatch(GpuiAction::CloseDocumentTab(0), cx);
+        let snapshot = root.app.gpui_snapshot(1100., 850., 4.);
+        assert_eq!(
+            snapshot
+                .view_tabs
+                .iter()
+                .find(|t| t.guest_key.is_some())
+                .unwrap()
+                .title,
+            "b.txt"
+        );
+    })
+    .unwrap();
 }

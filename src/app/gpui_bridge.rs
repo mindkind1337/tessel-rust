@@ -3570,7 +3570,7 @@ impl Tessel {
             .iter()
             .map(|d| d.path.to_string_lossy().into_owned())
             .collect();
-        let labels = self.document_tab_labels(&paths);
+        let (labels, guest_labels) = self.document_tab_labels(&paths);
         let mut view_tabs = Vec::with_capacity(self.documents.len() + 2);
         view_tabs.push(GpuiViewTabItem {
             id: "work".into(),
@@ -3622,14 +3622,14 @@ impl Tessel {
             });
         }
 
-        for key in self.share.workspace_tabs() {
+        for (key, (title, hint)) in self.share.workspace_tabs().iter().zip(guest_labels) {
             view_tabs.push(GpuiViewTabItem {
                 id: format!(
                     "guest:{}:{}:{}",
                     key.scope.session, key.scope.project, key.path
                 ),
-                title: key.path.rsplit('/').next().unwrap_or(&key.path).into(),
-                hint: key.path.clone(),
+                title,
+                hint,
                 kind: crate::view_tabs::Kind::Editor,
                 doc_index: None,
                 guest_key: Some(key.clone()),

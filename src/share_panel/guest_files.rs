@@ -146,6 +146,15 @@ impl SharePanel {
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
     }
+    pub(crate) fn workspace_tab_context(&self) -> Option<(String, String)> {
+        let key = self.workspace_tabs().first()?;
+        let session = self.guest_session.as_ref()?;
+        if session.generation() != key.scope.session {
+            return None;
+        }
+        session.tab_context(key.scope.project)
+    }
+
     pub(crate) fn workspace_tabs(&self) -> &[FileKey] {
         &self.guest_file_editor.tabs
     }

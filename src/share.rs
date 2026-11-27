@@ -2722,6 +2722,15 @@ impl GuestSession {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    pub(crate) fn tab_context(&self, project: u64) -> Option<(String, String)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let GuestPhase::Joined { host_name, .. } = &state.phase else {
+            return None;
+        };
+        let (_, name) = state.projects.iter().find(|(id, _)| *id == project)?;
+        Some((host_name.clone(), name.clone()))
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
