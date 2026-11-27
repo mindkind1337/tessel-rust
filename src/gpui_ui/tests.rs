@@ -2433,3 +2433,77 @@ fn gpui_native_approval_delayed_click_cannot_resolve_the_next_request() {
     });
     assert!(app.gpui_chat_request_id(pane, true).is_none());
 }
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
+fn pane_drop_header_swaps_native_grid_tiles(cx: &mut gpui::TestAppContext) {
+    use gpui::MouseButton::Left;
+    let dir = tempfile::tempdir().unwrap();
+    let mut ids = Vec::new();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+        for _ in 0..2 {
+            ids.push(root.app.install_terminal_find_fixture().0);
+        }
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let src = visual
+        .debug_bounds(Box::leak(
+            format!("pane-drag-header-{}", ids[0]).into_boxed_str(),
+        ))
+        .unwrap();
+    let dst = visual
+        .debug_bounds(Box::leak(format!("pane-drop-{}", ids[1]).into_boxed_str()))
+        .unwrap();
+    let start = src.center();
+    visual.simulate_mouse_down(start, Left, Default::default());
+    visual.simulate_mouse_move(
+        start + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(dst.center(), Some(Left), Default::default());
+    visual.simulate_mouse_up(dst.center(), Left, Default::default());
+    let tiles = view
+        .update(cx, |root, _, _| {
+            root.app.gpui_snapshot(900., 600., 4.).tiles
+        })
+        .unwrap();
+    assert_eq!(
+        tiles.iter().map(|tile| tile.session_id).collect::<Vec<_>>(),
+        [ids[1], ids[0]]
+    );
+    assert!(tiles[1].active);
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let src = visual
+        .debug_bounds(Box::leak(
+            format!("pane-drag-header-{}", ids[0]).into_boxed_str(),
+        ))
+        .unwrap()
+        .center();
+    let dst = visual
+        .debug_bounds(Box::leak(format!("pane-drop-{}", ids[1]).into_boxed_str()))
+        .unwrap();
+    let bottom = gpui::point(dst.center().x, dst.origin.y + dst.size.height * 0.8);
+    visual.simulate_mouse_down(src, Left, Default::default());
+    visual.simulate_mouse_move(
+        src + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(bottom, Some(Left), Default::default());
+    visual.simulate_mouse_up(bottom, Left, Default::default());
+    let tiles = view
+        .update(cx, |root, _, _| {
+            root.app.gpui_snapshot(900., 600., 4.).tiles
+        })
+        .unwrap();
+    assert_eq!(tiles[0].session_id, ids[1]);
+    assert_eq!(tiles[1].session_id, ids[0]);
+    assert_eq!(tiles[0].rect_px.left, tiles[1].rect_px.left);
+    assert!(tiles[1].rect_px.top > tiles[0].rect_px.top);
+}

@@ -758,6 +758,12 @@ fn render_work_grid(
     stage
 }
 
+#[derive(Clone)]
+struct DraggedPane {
+    id: u64,
+    title: String,
+}
+
 fn render_pane_tile(
     tile: &GpuiPaneTileSnapshot,
     chat_inputs: &super::chat_inputs::Inputs,
@@ -770,6 +776,13 @@ fn render_pane_tile(
     let font_size = snapshot.font_size;
     let sid = tile.session_id;
     let width_px = tile.rect_px.width;
+    let bounds = std::rc::Rc::new(std::cell::Cell::new(gpui::Bounds::default()));
+    let painted = bounds.clone();
+    let ghost_tokens = *tokens;
+    let drag = DraggedPane {
+        id: sid,
+        title: tile.title.clone(),
+    };
     let border_color = if snapshot.toolbar.broadcast_enabled
         && tile.active
         && tile.broadcast
@@ -808,8 +821,64 @@ fn render_pane_tile(
         .into_any_element()
     };
 
+    let zone_at = |bounds: gpui::Bounds<gpui::Pixels>, pos: gpui::Point<gpui::Pixels>| {
+        let pt = pos - bounds.origin;
+        crate::pane_grid::DropZone::at(
+            f32::from(pt.x) / f32::from(bounds.size.width),
+            f32::from(pt.y) / f32::from(bounds.size.height),
+            true,
+        )
+    };
+    let accent = tokens.accent;
+    let maximized = tile.maximized;
+    let drop_preview = gpui::canvas(
+        |_, _, _| (),
+        move |mut bounds, (), window, cx| {
+            use crate::pane_grid::DropZone;
+            let Some(drag) = cx
+                .active_drag()
+                .and_then(|drag| drag.value.downcast_ref::<DraggedPane>())
+            else {
+                return;
+            };
+            if maximized || drag.id == sid {
+                return;
+            }
+            let Some(zone) = zone_at(bounds, window.mouse_position()) else {
+                return;
+            };
+            match zone {
+                DropZone::Center => bounds = bounds.inset(px(8.)),
+                DropZone::Left | DropZone::Right => {
+                    bounds.size.width /= 2.;
+                    if zone == DropZone::Right {
+                        bounds.origin.x += bounds.size.width;
+                    }
+                }
+                DropZone::Top | DropZone::Bottom => {
+                    bounds.size.height /= 2.;
+                    if zone == DropZone::Bottom {
+                        bounds.origin.y += bounds.size.height;
+                    }
+                }
+            }
+            window
+                .paint_quad(gpui::PaintQuad::new(bounds).background(rgba_with_alpha(accent, 0.24)));
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
     div()
         .id(("pane-tile", sid))
+        .debug_selector(move || format!("pane-drop-{sid}"))
+        .on_prepaint(move |layout, _, _| painted.set(layout.bounds))
+        .on_drop(cx.listener(move |root, drag: &DraggedPane, window, cx| {
+            if !maximized && let Some(zone) = zone_at(bounds.get(), window.mouse_position()) {
+                root.dispatch(GpuiAction::MovePane { from: drag.id, to: sid, zone }, cx);
+            }
+        }))
         .absolute()
         .left(px(tile.rect_px.left as f32))
         .top(px(tile.rect_px.top as f32))
@@ -830,6 +899,14 @@ fn render_pane_tile(
         // 30px `.pane-nav` header
         .child(
             div()
+                .id(("pane-drag-header", sid))
+                .debug_selector(move || format!("pane-drag-header-{sid}"))
+                .on_drag(drag, move |drag, _, _, cx| {
+                    cx.new(|_| super::task_card_input::Ghost {
+                        title: drag.title.clone(),
+                        tokens: ghost_tokens,
+                    })
+                })
                 .h(px(PANE_NAV_HEIGHT_PX))
                 .w_full()
                 .px(px(8.0))
@@ -1214,6 +1291,7 @@ fn render_pane_tile(
             )
         })
         .child(body)
+        .child(drop_preview)
 }
 
 fn pane_header_icon_btn(

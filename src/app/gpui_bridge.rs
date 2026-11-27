@@ -814,6 +814,11 @@ pub(crate) enum GpuiAction {
     ToggleBroadcastMode,
     LayoutMenu(Option<f32>),
     ChooseLayout(crate::layout_broadcast_ui::LayoutMenuAction),
+    MovePane {
+        from: u64,
+        to: u64,
+        zone: crate::pane_grid::DropZone,
+    },
     ResizeSplitDivider {
         split_id: String,
         dir: SplitDir,
@@ -5576,6 +5581,18 @@ impl Tessel {
             GpuiAction::ChooseLayout(action) => {
                 if self.gpui_extra.layout_menu_right.take().is_some() {
                     self.apply_layout_action(action);
+                    self.save();
+                }
+            }
+            GpuiAction::MovePane { from, to, zone } => {
+                let key = crate::terminal_layout::project_key(self.state.active_project);
+                if self.view == View::Work
+                    && !self.gpui_has_open_modal()
+                    && let Some(layout) = self.state.terminal_layouts.get_mut(&key)
+                    && layout.maximized.is_none()
+                    && layout.move_pane(from, to, zone)
+                {
+                    self.active_session = Some(from);
                     self.save();
                 }
             }

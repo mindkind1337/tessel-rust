@@ -425,6 +425,82 @@ fn replace_leaf(node: &PaneNode, id: &str, replacement: &PaneNode) -> PaneNode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropZone {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DropZone {
+    pub fn at(x: f32, y: f32, allow_swap: bool) -> Option<Self> {
+        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+            return None;
+        }
+        if allow_swap && (0.3..=0.7).contains(&x) && (0.3..=0.7).contains(&y) {
+            return Some(Self::Center);
+        }
+        [
+            (Self::Left, x),
+            (Self::Right, 1. - x),
+            (Self::Top, y),
+            (Self::Bottom, 1. - y),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(zone, _)| zone)
+    }
+}
+
+pub fn reposition_leaf(
+    tree: &PaneNode,
+    from: &str,
+    to: &str,
+    zone: DropZone,
+    split_id: String,
+) -> Option<PaneNode> {
+    if from == to {
+        return None;
+    }
+    let source = find_leaf(Some(tree), from)?;
+    let target = find_leaf(Some(tree), to)?;
+    if zone == DropZone::Center {
+        fn swap(node: &mut PaneNode, a: &PaneLeaf, b: &PaneLeaf) {
+            match node {
+                PaneNode::Leaf(leaf) if leaf.id == a.id => *leaf = b.clone(),
+                PaneNode::Leaf(leaf) if leaf.id == b.id => *leaf = a.clone(),
+                PaneNode::Leaf(_) => (),
+                PaneNode::Split { children, .. } => {
+                    children.iter_mut().for_each(|child| swap(child, a, b))
+                }
+            }
+        }
+        let mut next = tree.clone();
+        swap(&mut next, source, target);
+        return Some(next);
+    }
+    let rest = without_leaves(tree, &HashSet::from([from.to_owned()]))?;
+    let dir = if matches!(zone, DropZone::Left | DropZone::Right) {
+        SplitDir::Row
+    } else {
+        SplitDir::Col
+    };
+    let mut children = vec![
+        PaneNode::Leaf(source.clone()),
+        PaneNode::Leaf(target.clone()),
+    ];
+    if matches!(zone, DropZone::Right | DropZone::Bottom) {
+        children.reverse();
+    }
+    Some(replace_leaf(
+        &rest,
+        to,
+        &PaneNode::split(split_id, dir, children, vec![50., 50.]),
+    ))
+}
+
 /// Splits leaf `target_id` in `dir`, placing `new_leaf` immediately after `target_id`.
 pub fn split_leaf(
     node: &PaneNode,
@@ -1385,5 +1461,64 @@ impl EditorTabStrip {
             };
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    #[test]
+    fn pane_drop_zones_match_inclusive_center_and_nearest_edge_ties() {
+        use DropZone::*;
+        for (x, y, swap, expected) in [
+            (0.3, 0.7, true, Center),
+            (0.7, 0.3, true, Center),
+            (0.5, 0.5, false, Left),
+            (0.9, 0.5, true, Right),
+            (0.5, 0.1, true, Top),
+            (0.4, 0.95, true, Bottom),
+        ] {
+            assert_eq!(DropZone::at(x, y, swap), Some(expected));
+        }
+        assert_eq!(DropZone::at(f32::NAN, 0.5, true), None);
+        let a = PaneLeaf::new("one", LeafKind::Browser).with_view_path("branch");
+        let b = PaneLeaf::new("two", LeafKind::Agent).with_worktree("agent-dir");
+        let root = PaneNode::split(
+            "old",
+            SplitDir::Row,
+            vec![PaneNode::Leaf(a.clone()), PaneNode::Leaf(b.clone())],
+            vec![30., 70.],
+        );
+        for zone in [Center, Left, Right, Top, Bottom] {
+            let next = reposition_leaf(&root, "one", "two", zone, "new".into()).unwrap();
+            let PaneNode::Split { dir, sizes, .. } = &next else {
+                panic!()
+            };
+            assert_eq!(
+                *dir,
+                if matches!(zone, Top | Bottom) {
+                    SplitDir::Col
+                } else {
+                    SplitDir::Row
+                }
+            );
+            assert_eq!(
+                sizes,
+                if zone == Center {
+                    &[30., 70.]
+                } else {
+                    &[50., 50.]
+                }
+            );
+            assert_eq!(
+                tree_leaves(Some(&next), |_| true),
+                if matches!(zone, Left | Top) {
+                    vec![&a, &b]
+                } else {
+                    vec![&b, &a]
+                }
+            );
+        }
+        assert!(reposition_leaf(&root, "one", "gone", Top, "new".into()).is_none());
     }
 }

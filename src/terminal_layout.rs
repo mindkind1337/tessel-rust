@@ -310,6 +310,43 @@ impl TerminalLayout {
         true
     }
 
+    pub fn move_pane(&mut self, from: u64, to: u64, zone: pane_grid::DropZone) -> bool {
+        let Some(tree) = self.tree.as_ref() else {
+            return false;
+        };
+        let Some(candidate) = pane_grid::reposition_leaf(
+            tree,
+            &from.to_string(),
+            &to.to_string(),
+            zone,
+            format!("split-{}", self.next_split),
+        ) else {
+            return false;
+        };
+        let allowed = pane_grid::tree_leaves(Some(tree), |_| true)
+            .into_iter()
+            .filter_map(|leaf| leaf.id.parse().ok())
+            .collect();
+        let next = Self {
+            tree: Some(candidate),
+            maximized: None,
+            focused: Some(from),
+            grid_mode: if zone == pane_grid::DropZone::Center {
+                self.grid_mode
+            } else {
+                Some(GridMode::Manual)
+            },
+            next_split: self
+                .next_split
+                .saturating_add(u64::from(zone != pane_grid::DropZone::Center)),
+        };
+        if next.validate(&allowed).is_err() {
+            return false;
+        }
+        *self = next;
+        true
+    }
+
     pub fn resize(
         &mut self,
         split: &str,
@@ -374,6 +411,25 @@ impl TerminalLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_drop_persists_layout_and_preserves_auto_tiling_for_a_swap() {
+        use pane_grid::DropZone;
+        let mut layout = TerminalLayout::default();
+        let room = [1000., 600.];
+        layout.sync(&[1, 2, 3], room);
+        let mode = layout.grid_mode;
+        assert!(layout.move_pane(1, 2, DropZone::Center));
+        assert_eq!(layout.grid_mode, mode);
+        assert!(layout.move_pane(1, 3, DropZone::Top));
+        assert_eq!(layout.grid_mode, Some(GridMode::Manual));
+        let mut restored: TerminalLayout =
+            serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap();
+        assert!(!restored.sync(&[1, 2, 3], room));
+        assert_eq!(restored, layout);
+        assert!(!restored.move_pane(1, 7, DropZone::Left));
+        assert_eq!(restored, layout);
+    }
 
     #[test]
     fn manual_grid_adds_to_the_largest_pane_and_arrange_resumes_tiling() {
