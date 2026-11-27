@@ -98,6 +98,8 @@ pub struct Browser {
     default_zoom: i8,
     muted: bool,
     playing_audio: bool,
+    #[cfg(all(test, feature = "visual-test"))]
+    find_requests: std::rc::Rc<std::cell::Cell<u32>>,
     project_pages: project_page::Pages,
     trusted_preview_folders: std::collections::HashSet<html_trust::Folder>,
     address_generation: u64,
@@ -149,6 +151,8 @@ impl Default for Browser {
             muted: false,
             playing_audio: false,
             default_zoom: crate::workspace::BrowserPreferences::default().zoom_half_steps,
+            #[cfg(all(test, feature = "visual-test"))]
+            find_requests: Default::default(),
             project_pages: Default::default(),
             trusted_preview_folders: Default::default(),
             address_generation: next_address_generation(),
@@ -528,7 +532,10 @@ impl Browser {
                 .environment()
                 .cast::<ICoreWebView2Environment15>()?
                 .CreateFindOptions()?;
-            options.SetFindTerm(&HSTRING::from(term))?;
+            // An unset term opens the find bar without submitting a query.
+            if !term.is_empty() {
+                options.SetFindTerm(&HSTRING::from(term))?;
+            }
             options.SetSuppressDefaultFindDialog(false)?;
             view.webview().cast::<ICoreWebView2_28>()?.Find()?.Start(
                 &options,
@@ -539,8 +546,11 @@ impl Browser {
                     }
                     Ok(())
                 })),
-            )
+            )?;
         }
+        #[cfg(all(test, feature = "visual-test"))]
+        self.find_requests.set(self.find_requests.get() + 1);
+        Ok(())
     }
 
     pub fn hard_reload(&self) {
@@ -1963,6 +1973,76 @@ mod tests {
         assert_ne!(page.address_str(), "https://localhost/a");
         page.try_https("https://localhost/b");
         assert_eq!(page.address_str(), "https://localhost/b");
+    }
+
+    #[cfg(feature = "visual-test")]
+    #[gpui::test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn ctrl_f_from_each_address_targets_its_own_live_page(cx: &mut gpui::TestAppContext) {
+        use crate::app::gpui_bridge::GpuiAction;
+        use crate::gpui_ui::TesselGpuiRoot;
+        use crate::webview_test_support::{hidden_parent, wait_for};
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("find.html");
+        std::fs::write(
+            &file,
+            "<title>Scoped find</title><p>needle one</p><p>needle two</p>",
+        )
+        .unwrap();
+        let document = crate::files::Document::open(dir.path(), &file).unwrap();
+        let parent = hidden_parent();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.dispatch(GpuiAction::PaletteExecute("browser".into()), cx);
+            if !root.app.gpui_snapshot(960., 640., 4.).toolbar.right_open {
+                root.dispatch(GpuiAction::ToggleRightSidebar, cx);
+            }
+            root.dispatch(GpuiAction::NewSideBrowser, cx);
+            root
+        });
+        let [center, side] = view
+            .update(cx, |root, _, _| {
+                let side = root.app.selected_side_browser.unwrap();
+                [
+                    &mut root.app.browser,
+                    root.app.side_browsers.get_mut(&side).unwrap(),
+                ]
+                .map(|page| {
+                    page.create_with_profile(
+                        &parent,
+                        dir.path().join(format!("profile-{}", page.tab_id)),
+                    )
+                    .unwrap();
+                    page.open_project_page(&document, false).unwrap();
+                    let webview = page.view.as_ref().unwrap();
+                    wait_for(webview, "document.title === 'Scoped find'");
+                    page.poll();
+                    page.find_requests.clone()
+                })
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        for (selector, target, other, other_count) in [
+            ("side-browser-address", &side, &center, 0),
+            ("center-browser-address", &center, &side, 1),
+        ] {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let bounds = visual.debug_bounds(selector).unwrap();
+            visual.simulate_click(bounds.center(), Default::default());
+            cx.refresh().unwrap();
+            view.update(cx, |root, w, cx| {
+                assert!(
+                    root.address_is_focused(selector == "side-browser-address", w, cx),
+                    "{selector} did not receive focus at {bounds:?}"
+                );
+            })
+            .unwrap();
+            cx.simulate_keystrokes(view.into(), "ctrl-f");
+            cx.run_until_parked();
+            assert_eq!(target.get(), 1);
+            assert_eq!(other.get(), other_count);
+        }
     }
 
     #[test]

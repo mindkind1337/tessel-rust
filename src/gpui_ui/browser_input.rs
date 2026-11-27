@@ -164,6 +164,13 @@ impl Input {
         let forward = command.clone();
         let reload = command.clone();
         div()
+            .debug_selector(move || {
+                if side {
+                    "side-browser-address".into()
+                } else {
+                    "center-browser-address".into()
+                }
+            })
             .on_action(cx.listener(move |root, _: &Find, window, cx| {
                 find(root, AddressCommand::Find, window, cx)
             }))

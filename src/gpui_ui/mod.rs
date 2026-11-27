@@ -151,6 +151,15 @@ impl TesselGpuiRoot {
         Self::from_app(app, repaint_flag, cx)
     }
 
+    #[cfg(all(test, feature = "visual-test", windows))]
+    pub(crate) fn address_is_focused(&self, side: bool, window: &Window, cx: &gpui::App) -> bool {
+        if side {
+            self.side_browser_input.focused(window, cx)
+        } else {
+            self.browser_input.focused(window, cx)
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn new_in_dir(
         override_dir: Option<PathBuf>,
