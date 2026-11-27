@@ -18,6 +18,56 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn broadcast_shortcut_and_write_checkbox_route_only_selected_terminals(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panes = Vec::new();
+    let view = cx.add_window(|window, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        for (name, count) in [("hidden", 1), ("visible", 2)] {
+            let project = dir.path().join(name);
+            std::fs::create_dir(&project).unwrap();
+            root.dispatch(GpuiAction::AddProjectPath(project), cx);
+            for _ in 0..count {
+                panes.push(root.app.install_terminal_find_fixture());
+            }
+        }
+        root.focus_handle.focus(window, cx);
+        root
+    });
+    let target: &'static str = Box::leak(format!("pane-write-{}", panes[1].0).into_boxed_str());
+    let bounds = |name, cx: &mut gpui::TestAppContext| {
+        cx.refresh().unwrap();
+        gpui::VisualTestContext::from_window(view.into(), cx).debug_bounds(name)
+    };
+    let click = |name, cx: &mut gpui::TestAppContext| {
+        let point = bounds(name, cx).unwrap().center();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        visual.simulate_mouse_down(point, gpui::MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(point, gpui::MouseButton::Left, Default::default());
+    };
+    assert!(bounds(target, cx).is_none());
+    cx.simulate_keystrokes(view.into(), "ctrl-shift-b");
+    assert_eq!(
+        f32::from(bounds("broadcast-banner", cx).unwrap().size.height),
+        24.
+    );
+    cx.simulate_keystrokes(view.into(), "z");
+    assert_eq!(panes[2].1.try_recv().unwrap(), b"z");
+    assert_eq!(panes[1].1.try_recv().unwrap(), b"z");
+    click(target, cx);
+    cx.simulate_keystrokes(view.into(), "y");
+    assert_eq!(panes[2].1.try_recv().unwrap(), b"y");
+    assert!(panes[1].1.try_recv().is_err());
+    assert!(panes[0].1.try_recv().is_err());
+    click("broadcast-toggle", cx);
+    assert!(bounds("broadcast-banner", cx).is_none());
+    assert!(bounds(target, cx).is_none());
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn toolbar_layout_menu_changes_the_grid_only_after_a_choice(cx: &mut gpui::TestAppContext) {
     use gpui::MouseButton::Left;
     let temp = tempfile::tempdir().unwrap();

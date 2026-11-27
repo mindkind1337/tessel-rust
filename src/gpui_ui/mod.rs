@@ -917,6 +917,14 @@ impl TesselGpuiRoot {
                     self.dispatch(GpuiAction::ToggleCommandPalette, cx);
                     return;
                 }
+                "b" if shift && !self.app.gpui_has_open_modal() => {
+                    if !event.is_held {
+                        self.dispatch(GpuiAction::ToggleBroadcastMode, cx);
+                    }
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 "b" if !shift => {
                     self.dispatch(GpuiAction::ToggleLeftSidebar, cx);
                     return;
@@ -1831,7 +1839,7 @@ impl Render for TesselGpuiRoot {
                 cx,
             ))
             .when_some(
-                chrome::render_broadcast_banner(&snapshot, &tokens, cx),
+                chrome::render_broadcast_banner(&snapshot, &tokens),
                 |el, banner| el.child(banner),
             )
             .when_some(

@@ -21,8 +21,13 @@ fn all_seven_themes_map_cleanly_to_gpui_tokens() {
         assert_eq!(tokens.id, id);
         assert!((tokens.radius_px - spec.radius_px).abs() < f32::EPSILON);
         assert!((tokens.accent_soft_bg.alpha - 0.16).abs() < 1e-5);
-        assert!((tokens.active_pane_ring.alpha - 0.70).abs() < 1e-5);
-        assert!((tokens.broadcast_pane_ring.alpha - 0.82).abs() < 1e-5);
+        let active_alpha = if id == theme_palettes::ThemeId::Warp {
+            0.80
+        } else {
+            0.70
+        };
+        assert!((tokens.active_pane_ring.alpha - active_alpha).abs() < 1e-5);
+        assert_eq!(tokens.broadcast_pane_ring, tokens.warn);
     }
 }
 

@@ -241,7 +241,6 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub left_open: bool,
     pub right_open: bool,
     pub broadcast_enabled: bool,
-    pub broadcast_count: usize,
     pub floating_open: bool,
     pub share_active: bool,
     pub share_pill_label: Option<String>,
@@ -3754,12 +3753,6 @@ impl Tessel {
                 (id.clone(), label)
             })
             .collect();
-        let broadcast_count = self
-            .sessions
-            .iter()
-            .filter(|s| s.project == self.state.active_project && s.broadcast)
-            .count();
-
         let (changed_files_count, staged_count) = match &self.scm_state.result {
             Some(Ok(parsed)) => {
                 let staged = parsed
@@ -3889,7 +3882,6 @@ impl Tessel {
                 left_open: self.state.panels.left_open,
                 right_open: self.state.panels.right_open,
                 broadcast_enabled: self.state.broadcast,
-                broadcast_count,
                 floating_open: floating.open,
                 share_active: self.overlay == Some(Overlay::Share)
                     || self.share.has_pending_ask()
@@ -5492,7 +5484,12 @@ impl Tessel {
                 self.save();
             }
             GpuiAction::ToggleSessionBroadcast(id) => {
-                if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id) {
+                if self.state.broadcast
+                    && let Some(sess) = self
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == id && s.project == self.state.active_project)
+                {
                     sess.broadcast = !sess.broadcast;
                     self.save();
                 }

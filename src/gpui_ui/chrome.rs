@@ -81,7 +81,6 @@ impl gpui::Render for ToolbarTooltip {
 /// from the same fixed item sizes this file renders.
 pub(crate) fn toolbar_fit_level(snapshot: &GpuiWorkspaceSnapshot, viewport_w: f32) -> u8 {
     let tb = &snapshot.toolbar;
-    let french = snapshot.french;
     let text_w = |s: &str, per: f32| s.chars().count() as f32 * per;
     let icon = TOOLBAR_ICON_BTN_WIDTH_PX + 4.0;
     let version = text_w(&toolbar_version_text(&tb.build_label), 6.0);
@@ -95,11 +94,9 @@ pub(crate) fn toolbar_fit_level(snapshot: &GpuiWorkspaceSnapshot, viewport_w: f3
     }
     left += 24.0; // the two drag spacers' minimum
     let left_toggle = TOOLBAR_ICON_BTN_WIDTH_PX + 6.0;
-    let broadcast_label = if french { "Diffusion" } else { "Broadcast" };
-    let broadcast = text_w(broadcast_label, 6.6) + 13.0 + 5.0 + 18.0 + 4.0;
     let mut right = left_toggle;
-    let mut secondary = left_toggle + broadcast + icon * 2.0 + icon; // + right toggle
-    right += broadcast + icon * 2.0 + icon;
+    let mut secondary = left_toggle + icon * 4.0; // + right toggle
+    right += icon * 4.0;
     if let Some(pill) = &tb.dev_update_pill {
         right += text_w(pill, 6.4) + 20.0;
     }
@@ -165,7 +162,9 @@ pub(crate) fn render_toolbar(
     } else {
         "Search or run a command..."
     };
-    let broadcast_label = if french { "Diffusion" } else { "Broadcast" };
+    let broadcast_tip =
+        crate::layout_broadcast_ui::broadcast_toolbar_tooltip(french, tb.broadcast_enabled);
+    let (tip_bg, tip_fg, tip_border) = (tokens.surface_2, tokens.text_strong, tokens.border);
 
     div()
         .id("gpui-toolbar")
@@ -464,52 +463,46 @@ pub(crate) fn render_toolbar(
                     el.child(
                         div()
                             .id("btn-broadcast-toggle")
+                            .debug_selector(|| "broadcast-toggle".into())
+                            .role(gpui::Role::Button)
+                            .focusable()
+                            .tab_stop(true)
+                            .aria_label(crate::layout_broadcast_ui::broadcast_toolbar_label(french))
+                            .aria_toggled(tb.broadcast_enabled.into())
+                            .w(px(TOOLBAR_ICON_BTN_WIDTH_PX))
                             .h(px(TOOLBAR_BTN_HEIGHT_PX))
-                            .px(px(8.0))
                             .rounded(px(tokens.radius_px))
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
-                            .bg(if tb.broadcast_enabled {
-                                rgba_with_alpha(tokens.warn, 0.20)
-                            } else {
-                                tokens.surface
-                            })
-                            .border_1()
-                            .border_color(if tb.broadcast_enabled {
-                                tokens.warn
-                            } else {
-                                tokens.border
+                            .justify_center()
+                            .when(tb.broadcast_enabled, |el| {
+                                el.bg(rgba_with_alpha(tokens.warn, 0.20))
+                                    .border_1()
+                                    .border_color(rgba_with_alpha(tokens.warn, 0.60))
                             })
                             .cursor_pointer()
                             .hover(|s| s.bg(tokens.surface_2))
-                            .on_click(cx.listener(|root, _, _, cx| {
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| ToolbarTooltip {
+                                    text: broadcast_tip.into(),
+                                    bg: tip_bg,
+                                    fg: tip_fg,
+                                    border: tip_border,
+                                })
+                                .into()
+                            })
+                            .on_click(cx.listener(|root, _, window, cx| {
                                 root.dispatch(GpuiAction::ToggleBroadcastMode, cx);
+                                root.focus_handle.focus(window, cx);
                             }))
                             .child(GpuiIcon::Radio.render(
-                                13.0,
+                                16.,
                                 if tb.broadcast_enabled {
                                     tokens.warn
                                 } else {
                                     tokens.text_dim
                                 },
-                            ))
-                            .child(
-                                div()
-                                    .text_color(if tb.broadcast_enabled {
-                                        tokens.broadcast_banner_fg
-                                    } else {
-                                        tokens.text_dim
-                                    })
-                                    .child(if tb.broadcast_count > 0 {
-                                        SharedString::from(format!(
-                                            "{broadcast_label} ({})",
-                                            tb.broadcast_count
-                                        ))
-                                    } else {
-                                        SharedString::new_static(broadcast_label)
-                                    }),
-                            ),
+                            )),
                     )
                     .child(layout_button(
                         tb.layout_menu_right.is_some(),
@@ -936,65 +929,26 @@ fn toolbar_icon_btn(
 pub(crate) fn render_broadcast_banner(
     snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
 ) -> Option<impl IntoElement> {
-    if !snapshot.toolbar.broadcast_enabled {
-        return None;
-    }
-    let msg = if snapshot.french {
-        format!(
-            "Mode diffusion actif — la saisie clavier est envoyée à {} terminal(aux).",
-            snapshot.toolbar.broadcast_count
-        )
-    } else {
-        format!(
-            "Broadcast mode active — keystrokes are sent to {} terminal pane(s).",
-            snapshot.toolbar.broadcast_count
-        )
-    };
-    let stop_label = if snapshot.french {
-        "Arrêter"
-    } else {
-        "Turn off"
-    };
-
-    Some(
+    snapshot.toolbar.broadcast_enabled.then(|| {
         div()
             .id("gpui-broadcast-banner")
+            .debug_selector(|| "broadcast-banner".into())
             .h(px(BROADCAST_BANNER_HEIGHT_PX))
+            .flex_shrink_0()
             .w_full()
-            .px(px(12.0))
             .flex()
             .items_center()
-            .justify_between()
+            .justify_center()
             .bg(tokens.broadcast_banner_bg)
             .border_b_1()
-            .border_color(rgba_with_alpha(tokens.warn, 0.45))
+            .border_color(rgba_with_alpha(tokens.warn, 0.40))
             .text_size(px(11.5))
             .text_color(tokens.broadcast_banner_fg)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(GpuiIcon::Radio.render(12.5, tokens.warn))
-                    .child(SharedString::from(msg)),
-            )
-            .child(
-                div()
-                    .id("btn-stop-broadcast")
-                    .px(px(7.0))
-                    .py(px(1.5))
-                    .rounded(px(4.0))
-                    .bg(rgba_with_alpha(tokens.warn, 0.22))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgba_with_alpha(tokens.warn, 0.35)))
-                    .on_click(cx.listener(|root, _, _, cx| {
-                        root.dispatch(GpuiAction::ToggleBroadcastMode, cx);
-                    }))
-                    .child(stop_label),
-            ),
-    )
+            .child(crate::layout_broadcast_ui::broadcast_banner_text(
+                snapshot.french,
+            ))
+    })
 }
 
 pub(crate) fn render_error_banner(

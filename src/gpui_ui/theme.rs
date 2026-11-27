@@ -168,9 +168,12 @@ impl GpuiThemeTokens {
             titlebar_bg,
             titlebar_symbol,
             // Matches `color-mix(in srgb, var(--accent) 70%, transparent)`
-            active_pane_ring: rgba_with_alpha(accent, 0.70),
-            broadcast_pane_ring: rgba_with_alpha(warn, 0.82),
-            broadcast_banner_bg: color_mix_srgb(warn, 0.14, chrome),
+            active_pane_ring: rgba_with_alpha(
+                accent,
+                if theme == ThemeId::Warp { 0.80 } else { 0.70 },
+            ),
+            broadcast_pane_ring: warn,
+            broadcast_banner_bg: color_mix_srgb(warn, 0.16, chrome),
             broadcast_banner_fg: gpui::rgb(0xffd98f),
             caption_close_hover_bg: gpui::rgb(0xe81123),
         }

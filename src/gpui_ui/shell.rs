@@ -703,8 +703,7 @@ fn render_work_grid(
             tile,
             chat_inputs,
             terminal_inputs,
-            snapshot.font_size,
-            snapshot.french,
+            snapshot,
             tokens,
             cx,
         ));
@@ -719,14 +718,19 @@ fn render_pane_tile(
     tile: &GpuiPaneTileSnapshot,
     chat_inputs: &super::chat_inputs::Inputs,
     terminal_inputs: &super::terminal_find_inputs::Inputs,
-    font_size: f32,
-    french: bool,
+    snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
+    let french = snapshot.french;
+    let font_size = snapshot.font_size;
     let sid = tile.session_id;
     let width_px = tile.rect_px.width;
-    let border_color = if tile.broadcast {
+    let border_color = if snapshot.toolbar.broadcast_enabled
+        && tile.active
+        && tile.broadcast
+        && !tile.is_native_chat
+    {
         tokens.broadcast_pane_ring
     } else if tile.active {
         tokens.active_pane_ring
@@ -977,18 +981,70 @@ fn render_pane_tile(
                                     .child(mode_lbl),
                             )
                         })
-                        .child(pane_header_icon_btn(
-                            ("pane-broadcast", sid),
-                            GpuiIcon::Radio,
-                            if tile.broadcast {
-                                tokens.warn
-                            } else {
-                                tokens.text_dim
+                        .when(
+                            snapshot.toolbar.broadcast_enabled && !tile.is_native_chat,
+                            |el| {
+                                el.child(
+                                    div()
+                                        .id(("pane-broadcast", sid))
+                                        .debug_selector(move || format!("pane-write-{sid}"))
+                                        .role(gpui::Role::CheckBox)
+                                        .aria_toggled(tile.broadcast.into())
+                                        .focusable()
+                                        .tab_stop(true)
+                                        .aria_label(
+                                            crate::layout_broadcast_ui::pane_broadcast_tooltip(
+                                                french,
+                                            ),
+                                        )
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .mr(px(4.))
+                                        .text_size(px(11.))
+                                        .text_color(if tile.broadcast {
+                                            tokens.broadcast_banner_fg
+                                        } else {
+                                            tokens.text_dim
+                                        })
+                                        .cursor_pointer()
+                                        .tooltip({
+                                            let (bg,fg,border) = (tokens.surface_2,tokens.text_strong,tokens.border);
+                                            move |_, cx| cx.new(|_| super::chrome::ToolbarTooltip {text: crate::layout_broadcast_ui::pane_broadcast_tooltip(french).into(),bg,fg,border}).into()
+                                        })
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_click(cx.listener(move |root, _, window, cx| {
+                                            cx.stop_propagation();
+                                            root.dispatch(
+                                                GpuiAction::ToggleSessionBroadcast(sid),
+                                                cx,
+                                            );
+                                            root.focus_handle.focus(window, cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .size(px(12.))
+                                                .rounded(px(2.))
+                                                .border_1()
+                                                .border_color(if tile.broadcast {
+                                                    tokens.warn
+                                                } else {
+                                                    tokens.border_strong
+                                                })
+                                                .when(tile.broadcast, |el| {
+                                                    el.bg(tokens.warn).child(
+                                                        GpuiIcon::Check.render(10., tokens.chrome),
+                                                    )
+                                                }),
+                                        )
+                                        .child(crate::layout_broadcast_ui::pane_broadcast_label(
+                                            french,
+                                        )),
+                                )
                             },
-                            tokens,
-                            GpuiAction::ToggleSessionBroadcast(sid),
-                            cx,
-                        ))
+                        )
                         .child(pane_header_icon_btn(
                             ("pane-split-v", sid),
                             GpuiIcon::Columns,
