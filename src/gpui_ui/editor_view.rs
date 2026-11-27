@@ -18,8 +18,8 @@ use crate::{
     theme_palettes::ThemeId,
 };
 use gpui::{
-    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder, Rgba,
-    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, img, point,
+    AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    Rgba, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, img, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -599,6 +599,40 @@ fn render_editor_toolbar(
                 .flex()
                 .items_center()
                 .gap(px(5.0))
+                .when(doc.external_available, |el| {
+                    let id = doc.instance_id;
+                    let colors = *tokens;
+                    let title = if french {
+                        "Ouvrir dans VS Code à la position du curseur"
+                    } else {
+                        "Open in VS Code at the cursor position"
+                    };
+                    el.child(
+                        div()
+                            .id("editor-open-external")
+                            .debug_selector(|| "editor-open-external".into())
+                            .role(gpui::Role::Button)
+                            .aria_label(title)
+                            .cursor_pointer()
+                            .px(px(5.))
+                            .py(px(2.))
+                            .child(
+                                super::icons::GpuiIcon::ExternalLink.render(14., tokens.text_dim),
+                            )
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::chrome::ToolbarTooltip {
+                                    text: title.into(),
+                                    bg: colors.surface,
+                                    fg: colors.text,
+                                    border: colors.border,
+                                })
+                                .into()
+                            })
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                root.dispatch(GpuiAction::OpenEditorExternally(id), cx)
+                            })),
+                    )
+                })
                 .when(
                     doc.can_toggle_preview && matches!(doc.extension.as_str(), "htm" | "html"),
                     |mut el| {

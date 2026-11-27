@@ -101,13 +101,21 @@ fn code_command() -> Option<Command> {
     Some(cmd)
 }
 
-fn open_in_code(path: &Path) -> bool {
+fn goto_argument(path: &Path, position: Option<crate::files::FilePosition>) -> std::ffi::OsString {
+    let mut arg = path.as_os_str().to_owned();
+    if let Some(pos) = position {
+        arg.push(format!(":{}:{}", pos.line, pos.column));
+    }
+    arg
+}
+
+fn open_in_code(path: &Path, position: Option<crate::files::FilePosition>) -> bool {
     let Some(mut cmd) = code_command() else {
         return false;
     };
     let Ok(mut child) = cmd
         .arg("-g")
-        .arg(path)
+        .arg(goto_argument(path, position))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -158,8 +166,12 @@ fn system_open(path: &Path) -> Result<(), String> {
     open::that_detached(path).map_err(|e| e.to_string())
 }
 
-pub(crate) fn open(root: &Path, file: &Path) -> Result<Option<PathBuf>, String> {
-    open_with(root, file, open_in_code, system_open)
+pub(crate) fn open(
+    root: &Path,
+    file: &Path,
+    position: Option<crate::files::FilePosition>,
+) -> Result<Option<PathBuf>, String> {
+    open_with(root, file, |p| open_in_code(p, position), system_open)
 }
 
 fn open_with(
@@ -194,6 +206,41 @@ fn open_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editor_external_goto_uses_the_open_draft_and_utf16_columns() {
+        use crate::files::{Document, FilePosition, OutlineCursor};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("notes & records.txt");
+        std::fs::write(&path, "saved version").unwrap();
+        let mut doc = Document::open(root.path(), &path).unwrap();
+        assert!(doc.external_available());
+        assert_eq!(
+            doc.external_position(),
+            Some(FilePosition { line: 1, column: 1 })
+        );
+        doc.text = "intro\r\n😀éx".into();
+        for cursor in [
+            OutlineCursor::Chars(9),
+            OutlineCursor::Bytes("intro\r\n😀é".len()),
+        ] {
+            doc.tools.outline_cursor = Some(cursor);
+            assert_eq!(
+                doc.external_position(),
+                Some(FilePosition { line: 2, column: 4 })
+            );
+            assert_eq!(
+                goto_argument(&path, doc.external_position()),
+                format!("{}:2:4", path.display()).as_str()
+            );
+        }
+        doc.preview_mode = true;
+        assert!(doc.external_position().is_none());
+        assert_eq!(goto_argument(&path, None), path.as_os_str());
+        doc.deleted_on_disk = true;
+        assert!(!doc.external_available());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved version");
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "requires the installed VS Code CLI on PATH"]

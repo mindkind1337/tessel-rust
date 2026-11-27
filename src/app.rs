@@ -5597,7 +5597,31 @@ impl Tessel {
         }
     }
 
+    fn open_active_file_externally(&mut self, id: u64) {
+        let Some(doc) = self.documents.get(self.active_document).filter(|doc| {
+            self.view == View::Files && doc.instance_id() == id && doc.external_available()
+        }) else {
+            return;
+        };
+        self.launch_external_editor(
+            doc.root.clone(),
+            doc.path.clone(),
+            doc.external_position(),
+            true,
+        );
+    }
+
     fn open_external_project_file(&mut self, root: PathBuf, path: PathBuf) {
+        self.launch_external_editor(root, path, None, false);
+    }
+
+    fn launch_external_editor(
+        &mut self,
+        root: PathBuf,
+        path: PathBuf,
+        position: Option<crate::files::FilePosition>,
+        from_editor: bool,
+    ) {
         if self.state.active().is_none_or(|p| p.path != root) {
             return;
         }
@@ -5605,7 +5629,14 @@ impl Tessel {
         if let Err(error) = thread::Builder::new()
             .name("external-editor".into())
             .spawn(move || {
-                let result = crate::external_editor::open(&root, &path);
+                let result =
+                    crate::external_editor::open(&root, &path, position).and_then(|fallback| {
+                        if from_editor && fallback.is_some() {
+                            Err("VS Code is unavailable for this file.".into())
+                        } else {
+                            Ok(fallback)
+                        }
+                    });
                 let _ = sender.send(Message::ExternalOpen(root, result));
             })
         {
@@ -7318,7 +7349,7 @@ impl Tessel {
                     | "jsonl"
                     | "ndjson"
             );
-        let (close_clicked, prefs_changed) = document_toolbar(
+        let (close_clicked, prefs_changed, open_external) = document_toolbar(
             ui,
             d,
             readable,
@@ -7618,6 +7649,10 @@ impl Tessel {
         let resolved = link.map(|href| {
             crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
         });
+        let external_id = open_external.then(|| d.instance_id());
+        if let Some(id) = external_id {
+            self.open_active_file_externally(id);
+        }
         let _ = &mut save_prefs;
         if save_prefs {
             self.save();
@@ -15322,7 +15357,8 @@ fn document_toolbar(
     readable: bool,
     editor_prefs: &mut crate::workspace::EditorPreferences,
     profile: Option<&std::path::Path>,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
+    let mut open_external = false;
     let source_mode = !d.media && d.diff_title.is_none() && !(readable && d.preview_mode);
     let mut prefs_changed = false;
     if ui.is_enabled() && source_mode {
@@ -15414,6 +15450,12 @@ fn document_toolbar(
                     d.tools.focus_goto = true;
                 }
             }
+            if d.external_available() {
+                open_external = ui
+                    .button(tr("Open in VS Code"))
+                    .on_hover_text(tr("Open in VS Code at the cursor position"))
+                    .clicked();
+            }
             let close = ui.button(tr("Close")).clicked()
                 || take_close_shortcut(ui.ctx(), ui.is_enabled(), egui::Modifiers::CTRL);
             if let Some(diff_title) = &d.diff_title {
@@ -15427,7 +15469,7 @@ fn document_toolbar(
             close
         })
         .inner;
-    (close, prefs_changed)
+    (close, prefs_changed, open_external)
 }
 
 fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {

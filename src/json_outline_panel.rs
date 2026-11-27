@@ -43,30 +43,7 @@ impl Cache {
         }
         self.followed = cursor;
         let Some(cursor) = cursor else { return false };
-        let byte = match cursor {
-            crate::files::OutlineCursor::Bytes(i) => {
-                doc.text.floor_char_boundary(i.min(doc.text.len()))
-            }
-            crate::files::OutlineCursor::Chars(i) => doc
-                .text
-                .char_indices()
-                .nth(i)
-                .map_or(doc.text.len(), |(offset, _)| offset),
-        };
-        let mut line = 1;
-        let mut column = 1;
-        let mut chars = doc.text[..byte].chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\r' || c == '\n' {
-                if c == '\r' {
-                    chars.next_if_eq(&'\n');
-                }
-                line += 1;
-                column = 1;
-            } else {
-                column += c.len_utf16();
-            }
-        }
+        let crate::files::FilePosition { line, column } = cursor.position(&doc.text);
         let mut path = crate::outline_tree::symbol_path_at(&self.symbols, line, column);
         let Some(key) = path.pop() else { return false };
         for ancestor in path {

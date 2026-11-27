@@ -339,6 +339,33 @@ pub(crate) struct FilePosition {
     pub column: usize,
 }
 
+impl OutlineCursor {
+    pub(crate) fn position(self, text: &str) -> FilePosition {
+        let byte = match self {
+            crate::files::OutlineCursor::Bytes(i) => text.floor_char_boundary(i.min(text.len())),
+            crate::files::OutlineCursor::Chars(i) => text
+                .char_indices()
+                .nth(i)
+                .map_or(text.len(), |(offset, _)| offset),
+        };
+        let mut line = 1;
+        let mut column = 1;
+        let mut chars = text[..byte].chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\r' || c == '\n' {
+                if c == '\r' {
+                    chars.next_if_eq(&'\n');
+                }
+                line += 1;
+                column = 1;
+            } else {
+                column += c.len_utf16();
+            }
+        }
+        FilePosition { line, column }
+    }
+}
+
 pub struct Document {
     instance_id: u64,
     pub root: PathBuf,
@@ -366,6 +393,24 @@ pub struct Document {
     pub sheet_cache: Option<std::sync::Arc<crate::rich_previews::SheetTable>>,
 }
 impl Document {
+    pub(crate) fn external_available(&self) -> bool {
+        self.diff_title.is_none()
+            && !self.deleted_on_disk
+            && self.root.is_absolute()
+            && dunce::simplified(&self.path).starts_with(dunce::simplified(&self.root))
+    }
+    pub(crate) fn external_position(&self) -> Option<FilePosition> {
+        if self.media || self.preview_mode || self.diff_title.is_some() {
+            return None;
+        }
+        Some(
+            self.tools
+                .outline_cursor
+                .unwrap_or(OutlineCursor::Bytes(0))
+                .position(&self.text),
+        )
+    }
+
     pub(crate) fn reveal_location(&mut self, position: Option<FilePosition>) {
         let Some(position) = position else { return };
         if self.media {

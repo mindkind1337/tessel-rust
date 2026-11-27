@@ -408,6 +408,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub line_numbers: bool,
     pub syntax_highlighting: bool,
     pub doc_index: usize,
+    pub external_available: bool,
     pub title: String,
     pub path_display: String,
     pub extension: String,
@@ -906,6 +907,7 @@ pub(crate) enum GpuiAction {
     OpenChatCitation(u64, crate::chat::citations::FileLink),
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
+    OpenEditorExternally(u64),
     #[cfg(windows)]
     OpenHtmlInBrowser(u64),
     #[cfg(windows)]
@@ -2622,7 +2624,8 @@ impl Tessel {
         };
         if self.view != View::Files
             || doc.instance_id() != id
-            || !crate::json_outline_panel::supported(doc)
+            || doc.media
+            || doc.diff_title.is_some()
         {
             return false;
         }
@@ -2631,7 +2634,9 @@ impl Tessel {
             return false;
         }
         doc.tools.outline_cursor = cursor;
-        self.gpui_extra.outline_open && self.state.editor_prefs.outline_follow_cursor
+        self.gpui_extra.outline_open
+            && self.state.editor_prefs.outline_follow_cursor
+            && crate::json_outline_panel::supported(doc)
     }
 
     pub(crate) fn take_outline_focus(&mut self, id: u64) -> Option<bool> {
@@ -4008,6 +4013,7 @@ impl Tessel {
             doc_index,
             title,
             path_display: doc.path.to_string_lossy().into_owned(),
+            external_available: doc.external_available(),
             extension,
             lang,
             is_diff,
@@ -5807,6 +5813,7 @@ impl Tessel {
                     }
                 }
             }
+            GpuiAction::OpenEditorExternally(id) => self.open_active_file_externally(id),
             GpuiAction::SaveActiveDocument => {
                 if let Some(doc) = self.documents.get_mut(self.active_document) {
                     match doc.save(self.store.as_ref().map(|s| s.directory())) {
