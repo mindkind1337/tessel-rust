@@ -644,6 +644,25 @@ fn finder_scores_and_result_order_match_vue_for_unicode_and_path_boundaries() {
 }
 
 #[test]
+fn finder_orders_unicode_paths_and_preserves_ties_at_the_visible_cutoff() {
+    let root = tempfile::tempdir().unwrap();
+    let names = ["\u{e000}.rs", "\u{10000}.rs", "plain.rs"];
+    for name in names {
+        std::fs::write(root.path().join(name), "").unwrap();
+    }
+    assert_eq!(
+        walk_project_files(root.path(), 10).unwrap().files,
+        ["plain.rs", "\u{10000}.rs", "\u{e000}.rs"]
+    );
+
+    let mut paths: Vec<_> = (0..300).rev().map(|i| format!("{i:03}/a.rs")).collect();
+    paths.push("a.rs".into());
+    let mut expected = vec![String::from("a.rs")];
+    expected.extend_from_slice(&paths[..FILE_FINDER_LIMIT - 1]);
+    assert_eq!(fuzzy_filter("a", &paths, FILE_FINDER_LIMIT), expected);
+}
+
+#[test]
 fn fuzzy_matcher_file_finder_and_bounded_walk_match_reference() {
     assert_eq!(FILE_FINDER_LIMIT, 60);
     assert_eq!(MAX_LISTED_FILES, 20_000);

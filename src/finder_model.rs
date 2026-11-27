@@ -115,11 +115,17 @@ pub fn fuzzy_filter(query: &str, paths: &[String], limit: usize) -> Vec<String> 
         })
         .collect();
 
-    hits.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    hits.into_iter()
-        .take(limit)
-        .map(|(_, _, p)| p.clone())
-        .collect()
+    // Include the input index in the ordering so ties at the visible cutoff
+    // survive selection in the same order as the stable sort in Vue.
+    let by_rank = |a: &(usize, f64, &String), b: &(usize, f64, &String)| {
+        b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0))
+    };
+    if hits.len() > limit {
+        hits.select_nth_unstable_by(limit, by_rank);
+        hits.truncate(limit);
+    }
+    hits.sort_unstable_by(by_rank);
+    hits.into_iter().map(|(_, _, p)| p.clone()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +422,8 @@ pub fn walk_project_files_with_limits(
         }
     }
 
-    files.sort();
+    // JavaScript Array.sort compares UTF-16 units, including surrogate pairs.
+    files.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     Ok(ProjectFileList {
         files,
         total_path_bytes,
