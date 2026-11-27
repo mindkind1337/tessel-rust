@@ -35,6 +35,7 @@ pub struct NativeChatViewSnapshot {
     pub connected: bool,
     pub ready: bool,
     pub working: bool,
+    pub can_interrupt: bool,
     pub can_load_older: bool,
     pub status: String,
     pub error: String,
@@ -1043,14 +1044,8 @@ impl Chat {
             } else if ui.button(tr("Stop process")).clicked() {
                 self.stop();
             }
-            if self.turn.is_some()
-                && ui.button(tr("Interrupt turn")).clicked()
-                && let Err(e) = self.request(
-                    "turn/interrupt",
-                    json!({"threadId":self.thread_id,"turnId":self.turn}),
-                )
-            {
-                self.error = e;
+            if self.turn.is_some() && ui.button(tr("Interrupt turn")).clicked() {
+                self.gpui_interrupt();
             }
         });
         if self.rpc.is_none() && self.connecting.is_none() {
@@ -1184,7 +1179,8 @@ impl Chat {
                     }
                 });
         });
-        let enter = composer::edit(ui, self.composer_id, &mut self.composer);
+        let can_interrupt = self.can_interrupt_from_composer();
+        let keys = composer::edit(ui, self.composer_id, &mut self.composer, can_interrupt);
         let send = ui.add_enabled(
             self.ready && !self.starting_turn,
             egui::Button::new(if self.turn.is_some() {
@@ -1193,7 +1189,9 @@ impl Chat {
                 tr("Send")
             }),
         );
-        if send.clicked() || enter {
+        if keys.interrupt {
+            self.gpui_interrupt();
+        } else if send.clicked() || keys.submit {
             self.send_message();
         }
         clicked
@@ -1236,6 +1234,7 @@ impl Chat {
             connected: self.rpc.is_some() || self.connecting.is_some(),
             ready: self.ready,
             working: self.working(),
+            can_interrupt: self.can_interrupt_from_composer(),
             can_load_older: self.history_cursor.is_some()
                 && !self.pending.values().any(|(m, _)| m == "thread/items/list"),
             status: self.status.clone(),
@@ -1325,6 +1324,10 @@ impl Chat {
 
     pub fn gpui_stop(&mut self) {
         self.stop();
+    }
+
+    pub(crate) fn can_interrupt_from_composer(&self) -> bool {
+        self.turn.is_some() && !self.waiting_for_user()
     }
 
     pub fn gpui_interrupt(&mut self) {

@@ -278,6 +278,7 @@ impl TesselGpuiRoot {
                 gpui_ce_elements::editable_text::actions::Enter,
                 Some("TesselChatQuestion"),
             ),
+            gpui::KeyBinding::new("escape", chat_inputs::Interrupt, Some("TesselChatWorking")),
             gpui::KeyBinding::new("enter", chat_inputs::Submit, Some("TesselChatComposer")),
             gpui::KeyBinding::new(
                 "shift-enter",

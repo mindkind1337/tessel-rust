@@ -1,10 +1,31 @@
 //! Keyboard submission in the compatibility chat composer.
 use eframe::egui::{Event, ImeEvent, Key, KeyboardShortcut, Modifiers, TextEdit, Ui};
 
-pub(crate) fn edit(ui: &mut Ui, instance: u64, draft: &mut String) -> bool {
+#[derive(Default)]
+pub(crate) struct ComposerKeys {
+    pub submit: bool,
+    pub interrupt: bool,
+}
+
+pub(crate) fn edit(
+    ui: &mut Ui,
+    instance: u64,
+    draft: &mut String,
+    can_interrupt: bool,
+) -> ComposerKeys {
     let id = ui.make_persistent_id(("native-chat-draft", instance));
     let ime_id = id.with("composing");
-    let mut submit = false;
+    let mut keys = ComposerKeys::default();
+    let can_interrupt = can_interrupt && !eframe::egui::Popup::is_any_open(ui.ctx());
+    // egui normally drops text focus at the beginning of the Escape frame,
+    // before this widget receives its events. Reclaim only this composer's key.
+    if can_interrupt
+        && ui.is_enabled()
+        && ui.input(|i| i.key_pressed(Key::Escape))
+        && ui.memory(|m| m.focused().is_none() && m.had_focus_last_frame(id))
+    {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
     if ui.is_enabled() && ui.memory(|m| m.has_focus(id)) {
         let mut composing = ui.data(|d| d.get_temp::<bool>(ime_id).unwrap_or(false));
         ui.input_mut(|input| {
@@ -21,7 +42,16 @@ pub(crate) fn edit(ui: &mut Ui, instance: u64, draft: &mut String) -> bool {
                         modifiers,
                         ..
                     } if modifiers.is_none() && !composing && !ime_frame => {
-                        submit |= !repeat;
+                        keys.submit |= !repeat;
+                        return false;
+                    }
+                    Event::Key {
+                        key: Key::Escape,
+                        pressed: true,
+                        repeat,
+                        ..
+                    } if can_interrupt && !composing && !ime_frame => {
+                        keys.interrupt |= !repeat;
                         return false;
                     }
                     _ => {}
@@ -40,7 +70,8 @@ pub(crate) fn edit(ui: &mut Ui, instance: u64, draft: &mut String) -> bool {
             .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
             .desired_width(f32::INFINITY),
     );
-    submit && !draft.trim().is_empty()
+    keys.submit &= !draft.trim().is_empty();
+    keys
 }
 
 #[cfg(test)]
@@ -56,6 +87,58 @@ mod tests {
             repeat: false,
             modifiers,
         }
+    }
+
+    #[test]
+    fn escape_preserves_the_draft_and_only_interrupts_when_available() {
+        let cx = Context::default();
+        let mut draft = String::from("next question");
+        let escape = |pressed| Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let mut frame = |focus, working, events| {
+            let mut interrupted = false;
+            let _ = cx.run(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |cx| {
+                    CentralPanel::default().show(cx, |ui| {
+                        let id = ui.make_persistent_id(("native-chat-draft", 42_u64));
+                        if focus == Some(true) {
+                            ui.memory_mut(|m| m.request_focus(id));
+                        } else if focus == Some(false) {
+                            ui.memory_mut(|m| m.surrender_focus(id));
+                        }
+                        let keys = edit(ui, 42, &mut draft, working);
+                        assert!(!keys.submit);
+                        interrupted |= keys.interrupt;
+                    });
+                },
+            );
+            interrupted
+        };
+        assert!(!frame(Some(false), true, vec![escape(true), escape(false)]));
+        assert!(!frame(Some(true), false, vec![escape(true), escape(false)]));
+        assert!(!frame(
+            Some(true),
+            true,
+            vec![Event::Ime(ImeEvent::Enabled), escape(true), escape(false)]
+        ));
+        assert!(!frame(
+            Some(true),
+            true,
+            vec![Event::Ime(ImeEvent::Disabled)]
+        ));
+        assert!(!frame(Some(true), true, vec![]));
+        assert!(frame(None, true, vec![escape(true)]));
+        assert!(!frame(Some(true), true, vec![escape(true)]));
+        assert_eq!(draft, "next question");
     }
 
     #[test]
@@ -78,7 +161,7 @@ mod tests {
                         } else {
                             ui.memory_mut(|m| m.surrender_focus(id));
                         }
-                        sent |= edit(ui, 7, &mut draft);
+                        sent |= edit(ui, 7, &mut draft, false).submit;
                     });
                 },
             );

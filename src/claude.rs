@@ -219,6 +219,7 @@ impl Chat {
             connected: self.transport.is_some() || self.connecting.is_some(),
             ready: self.ready,
             working: self.working(),
+            can_interrupt: self.can_interrupt_from_composer(),
             can_load_older: false,
             status: self.status.clone(),
             error: self.error.clone(),
@@ -311,6 +312,10 @@ impl Chat {
             self.resume.clear();
             self.transcript.clear();
         }
+    }
+
+    pub(crate) fn can_interrupt_from_composer(&self) -> bool {
+        self.active && !self.interrupting && !self.waiting_for_user()
     }
 
     pub fn gpui_interrupt(&mut self) {
@@ -968,24 +973,20 @@ impl Chat {
                 crate::chat::citations::apply_latest(ui, jump_id);
             });
         crate::chat::citations::latest_control(ui, &scroll, jump_id);
-        ui.add_enabled_ui(self.ready && !self.active, |ui| {
-            let enter = crate::chat::composer::edit(ui, self.composer_id, &mut self.composer);
-            if (ui.button(tr("Send")).clicked() || enter)
-                && let Err(e) = self.begin()
-            {
-                self.error = e;
-            }
-        });
-        if self.active && ui.button(tr("Interrupt")).clicked() {
-            self.task_completion.cancel();
-            self.interrupting = true;
-            if let Some(questions) = self.questions.take() {
-                self.deny(&questions.id);
-            }
-            for approval in self.approvals.drain(..).collect::<Vec<_>>() {
-                self.deny(&approval.id);
-            }
-            if let Err(e)=self.send(json!({"type":"control_request","request_id":"tessel-interrupt","request":{"subtype":"interrupt"}})){self.error=e;self.stop();}
+        let can_interrupt = self.can_interrupt_from_composer();
+        let keys = ui
+            .add_enabled_ui(self.ready, |ui| {
+                crate::chat::composer::edit(ui, self.composer_id, &mut self.composer, can_interrupt)
+            })
+            .inner;
+        let send = ui.add_enabled(self.ready && !self.active, egui::Button::new(tr("Send")));
+        let interrupt = self.active && ui.button(tr("Interrupt")).clicked();
+        if interrupt || keys.interrupt {
+            self.gpui_interrupt();
+        } else if (send.clicked() || (self.ready && !self.active && keys.submit))
+            && let Err(e) = self.begin()
+        {
+            self.error = e;
         }
         if self.active || self.initializing.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));

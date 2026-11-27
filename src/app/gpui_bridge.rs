@@ -2404,6 +2404,28 @@ impl Tessel {
         }
     }
 
+    pub(crate) fn gpui_chat_can_interrupt(&self, pane: u64) -> bool {
+        if !self.gpui_chat_input_allowed(pane) {
+            return false;
+        }
+        match self
+            .sessions
+            .iter()
+            .find(|s| s.id == pane)
+            .map(|s| &s.launch)
+        {
+            Some(Launch::CodexChat) => self
+                .chats
+                .iter()
+                .any(|c| c.pane == pane && c.can_interrupt_from_composer()),
+            Some(Launch::ClaudeChat) => self
+                .claude_chats
+                .iter()
+                .any(|c| c.pane == pane && c.can_interrupt_from_composer()),
+            _ => false,
+        }
+    }
+
     pub(crate) fn gpui_chat_request_id(&self, pane: u64, approval: bool) -> Option<u64> {
         let session = self.sessions.iter().find(|s| s.id == pane)?;
         match session.launch {
@@ -5546,12 +5568,26 @@ impl Tessel {
                 }
             }
             GpuiAction::ChatInterrupt(pane_id) => {
-                self.cancel_owner_task_pane(pane_id);
-                if let Some(c) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_interrupt();
-                } else if let Some(c) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id) {
-                    c.gpui_interrupt();
+                let provider = self
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == pane_id)
+                    .map(|s| &s.launch);
+                match provider {
+                    Some(Launch::CodexChat) => {
+                        if let Some(chat) = self.chats.iter_mut().find(|c| c.pane == pane_id) {
+                            chat.gpui_interrupt();
+                        }
+                    }
+                    Some(Launch::ClaudeChat) => {
+                        if let Some(chat) = self.claude_chats.iter_mut().find(|c| c.pane == pane_id)
+                        {
+                            chat.gpui_interrupt();
+                        }
+                    }
+                    _ => return,
                 }
+                self.cancel_owner_task_pane(pane_id);
             }
             GpuiAction::ChatNewConversation(pane_id) => {
                 self.cancel_owner_task_pane(pane_id);

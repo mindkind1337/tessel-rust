@@ -463,12 +463,6 @@ pub(crate) fn render_native_chat_pane_body(
         }
     }
 
-    let composer_placeholder = if french {
-        "Écrire un message à l'agent… (Entrée = envoyer, Maj+Entrée = nouvelle ligne)"
-    } else {
-        "Ask the agent… (Enter to send, Shift+Enter for newline)"
-    };
-
     div()
         .id(("native-chat-root", pane_id))
         .flex_1()
@@ -716,7 +710,7 @@ pub(crate) fn render_native_chat_pane_body(
                         .border_color(tokens.border_strong)
                         .child(chat_inputs.render(
                             pane_id,
-                            composer_placeholder,
+                            chat.can_interrupt,
                             font_size,
                             french,
                             tokens,

@@ -5,7 +5,7 @@ use gpui::{App, AppContext, Context, Entity, Focusable, Subscription, Window};
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
 use std::collections::HashMap;
 
-gpui::actions!(tessel_chat_composer, [Submit]);
+gpui::actions!(tessel_chat_composer, [Submit, Interrupt]);
 
 pub(super) struct Transcript {
     pub handle: gpui::ScrollHandle,
@@ -191,7 +191,7 @@ impl Inputs {
     pub fn render(
         &self,
         pane: u64,
-        placeholder: &'static str,
+        can_interrupt: bool,
         font_size: f32,
         french: bool,
         tokens: &super::theme::GpuiThemeTokens,
@@ -205,11 +205,34 @@ impl Inputs {
         let Some(binding) = self.bindings.get(&pane) else {
             return gpui::div().into_any_element();
         };
+        let placeholder = if french {
+            "Écrire un message à l'agent… (Entrée = envoyer, Maj+Entrée = nouvelle ligne)"
+        } else {
+            "Ask the agent… (Enter to send, Shift+Enter for newline)"
+        };
+
         let expected_id = binding.id;
         let area = text_area(("native-chat-composer", pane))
             .state(binding.state.downgrade())
             .placeholder(placeholder)
-            .key_context("EditableText TesselChatComposer")
+            .key_context(if can_interrupt {
+                "EditableText TesselChatComposer TesselChatWorking"
+            } else {
+                "EditableText TesselChatComposer"
+            })
+            .on_action(cx.listener(move |root, _: &Interrupt, window, cx| {
+                use gpui::EntityInputHandler;
+                if root.app.gpui_chat_can_interrupt(pane)
+                    && root
+                        .app
+                        .gpui_chat_composer(pane)
+                        .is_some_and(|(id, _)| id == expected_id)
+                    && let Some(input) = root.chat_inputs.get(pane).cloned()
+                    && input.update(cx, |s, cx| s.marked_text_range(window, cx).is_none())
+                {
+                    root.dispatch(GpuiAction::ChatInterrupt(pane), cx);
+                }
+            }))
             .on_action(cx.listener(move |root, _: &Submit, window, cx| {
                 submit(root, pane, expected_id, window, cx)
             }))
@@ -474,6 +497,86 @@ mod tests {
                 assert_eq!(root.app.gpui_chat_composer(pane).unwrap().1, "")
             })
             .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn focused_escape_interrupts_the_provider_and_preserves_the_draft(cx: &mut TestAppContext) {
+        use serde_json::json;
+        register(cx);
+        for claude in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                root.app.synthetic_native_profiles(dir.path());
+                root.app
+                    .apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+                root.app.apply_gpui_action(if claude {
+                    GpuiAction::LaunchClaudeChat
+                } else {
+                    GpuiAction::LaunchCodexChat
+                });
+                root
+            });
+            cx.refresh().unwrap();
+            let (pane, outgoing) = view.update(cx, |root,window,cx| {
+                let pane = root.app.gpui_snapshot(960.,640.,4.).tiles[0].session_id;
+                let outgoing = root.app.gpui_chat_sender_for_test(pane);
+                assert!(!root.app.gpui_chat_can_interrupt(pane));
+                let id = root.app.gpui_chat_composer(pane).unwrap().0;
+                root.chat_inputs.get(pane).unwrap().update(cx,|s,cx|s.replace_text_in_range(None,"start",window,cx));
+                submit(root,pane,id,window,cx);
+                outgoing.try_recv().unwrap();
+                if !claude {
+                    root.app.inject_codex_frame_for_test(pane,json!({"method":"turn/started","params":{"threadId":"synthetic-thread","turn":{"id":"turn-1"}}}));
+                }
+                assert!(root.app.gpui_chat_can_interrupt(pane));
+                (pane,outgoing)
+            }).unwrap();
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                let input = root.chat_inputs.get(pane).unwrap().clone();
+                input.read(cx).focus_handle(cx).focus(window, cx);
+                input.update(cx, |s, cx| {
+                    s.replace_and_mark_text_in_range(None, "draft", None, window, cx);
+                });
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.simulate_keystrokes(view.into(), "escape");
+            assert!(
+                outgoing.try_recv().is_err(),
+                "IME composition must not interrupt"
+            );
+            view.update(cx, |root, window, cx| {
+                root.chat_inputs.get(pane).unwrap().update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "next question", window, cx);
+                });
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.simulate_keystrokes(view.into(), "escape");
+            let request = outgoing
+                .try_recv()
+                .expect("Escape reaches the active provider");
+            if claude {
+                assert_eq!(
+                    request.pointer("/request/subtype"),
+                    Some(&json!("interrupt"))
+                );
+            } else {
+                assert_eq!(request["method"], "turn/interrupt");
+                assert_eq!(request["params"]["turnId"], "turn-1");
+            }
+            view.update(cx, |root, _, _| {
+                assert_eq!(
+                    root.app.gpui_chat_composer(pane).unwrap().1,
+                    "next question"
+                )
+            })
+            .unwrap();
+            assert!(outgoing.try_recv().is_err());
         }
     }
 
