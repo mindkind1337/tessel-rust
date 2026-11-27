@@ -1570,6 +1570,9 @@ fn render_right_panel(
             div()
                 .id(("side-browser-tab", id))
                 .debug_selector(move || format!("side-browser-tab-{id}"))
+                .flex()
+                .items_center()
+                .gap(px(3.))
                 .px(px(7.))
                 .py(px(3.5))
                 .rounded(px(4.))
@@ -1580,13 +1583,38 @@ fn render_right_panel(
                 .on_click(cx.listener(move |root, _, _, cx| {
                     root.dispatch(GpuiAction::SelectSideBrowser(id), cx)
                 }))
+                .on_aux_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
+                    if event.is_middle_click() {
+                        cx.stop_propagation();
+                        root.dispatch(GpuiAction::CloseSideBrowser(id), cx);
+                    }
+                }))
                 .on_drag(SideBrowserDrag(id), move |_, _, _, cx| {
                     cx.new(|_| super::task_card_input::Ghost {
                         title: drag_title.clone(),
                         tokens: drag_tokens,
                     })
                 })
-                .child(title.clone()),
+                .child(title.clone())
+                .child(
+                    div()
+                        .id(("side-browser-close", id))
+                        .debug_selector(move || format!("side-browser-close-{id}"))
+                        .aria_label(if snapshot.french {
+                            "Fermer l’onglet"
+                        } else {
+                            "Close tab"
+                        })
+                        .p(px(2.))
+                        .rounded(px(3.))
+                        .hover(|s| s.bg(tokens.surface_3))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            cx.stop_propagation();
+                            root.dispatch(GpuiAction::CloseSideBrowser(id), cx);
+                        }))
+                        .child(GpuiIcon::Close.render(10.5, tokens.text_dim)),
+                ),
         );
     }
     tab_strip = tab_strip.child(tabs_left).child(

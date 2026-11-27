@@ -868,6 +868,8 @@ pub struct Tessel {
     #[cfg(windows)]
     pub(crate) selected_side_browser: Option<u64>,
     #[cfg(windows)]
+    side_browser_history: std::collections::VecDeque<u64>,
+    #[cfg(windows)]
     finishing_browser_pages: Vec<(Option<u64>, crate::browser::Browser)>,
     #[cfg(windows)]
     pub(crate) browser: crate::browser::Browser,
@@ -1135,6 +1137,8 @@ impl Tessel {
             side_browsers: Default::default(),
             #[cfg(windows)]
             selected_side_browser: None,
+            #[cfg(windows)]
+            side_browser_history: Default::default(),
             #[cfg(windows)]
             finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
@@ -4379,8 +4383,7 @@ impl Tessel {
             PaletteCommand::new("finder", files_group, tr("Find a file"))
                 .with_shortcut("Ctrl+Shift+J"),
         );
-        let files_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Files;
+        let files_showing = self.right_tool_visible(RightTab::Files);
         commands.push(
             PaletteCommand::new(
                 "files",
@@ -4393,8 +4396,7 @@ impl Tessel {
             )
             .with_shortcut("Ctrl+Shift+X"),
         );
-        let changes_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Changes;
+        let changes_showing = self.right_tool_visible(RightTab::Changes);
         commands.push(
             PaletteCommand::new(
                 "changes",
@@ -4415,8 +4417,7 @@ impl Tessel {
 
         // 5. Task & Side Panels
         let task_group = tr("Task");
-        let dashboard_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Dashboard;
+        let dashboard_showing = self.right_tool_visible(RightTab::Dashboard);
         commands.push(
             PaletteCommand::new(
                 "dashboard",
@@ -4429,8 +4430,7 @@ impl Tessel {
             )
             .with_hint(tr("Every agent of every project at a glance")),
         );
-        let tasks_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Tasks;
+        let tasks_showing = self.right_tool_visible(RightTab::Tasks);
         commands.push(
             PaletteCommand::new(
                 "tasks",
@@ -4443,8 +4443,7 @@ impl Tessel {
             )
             .with_shortcut("Ctrl+Shift+K"),
         );
-        let task_hist_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::TaskHistory;
+        let task_hist_showing = self.right_tool_visible(RightTab::TaskHistory);
         commands.push(
             PaletteCommand::new(
                 "task_history",
@@ -4459,8 +4458,7 @@ impl Tessel {
                 "Finished tasks with their time, tokens and estimated cost",
             )),
         );
-        let past_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::History;
+        let past_showing = self.right_tool_visible(RightTab::History);
         commands.push(
             PaletteCommand::new(
                 "history",
@@ -4477,8 +4475,7 @@ impl Tessel {
             PaletteCommand::new("sessions:modal", task_group, tr("Past conversations"))
                 .with_hint(tr("Reopen a past agent conversation")),
         );
-        let conv_showing =
-            self.state.panels.right_open && self.state.panels.right_tab == RightTab::Conversations;
+        let conv_showing = self.right_tool_visible(RightTab::Conversations);
         commands.push(
             PaletteCommand::new(
                 "conversations",
@@ -4748,20 +4745,20 @@ impl Tessel {
             "project:prev" => self.cycle_workspace(-1),
             "project:next" => self.cycle_workspace(1),
             "finder" => self.open_finder(),
-            "dashboard" => self.state.panels.toggle_right(RightTab::Dashboard),
-            "files" => self.state.panels.toggle_right(RightTab::Files),
-            "changes" => self.state.panels.toggle_right(RightTab::Changes),
-            "tasks" => self.state.panels.toggle_right(RightTab::Tasks),
-            "task_history" => self.state.panels.toggle_right(RightTab::TaskHistory),
+            "dashboard" => self.toggle_right_tool(RightTab::Dashboard),
+            "files" => self.toggle_right_tool(RightTab::Files),
+            "changes" => self.toggle_right_tool(RightTab::Changes),
+            "tasks" => self.toggle_right_tool(RightTab::Tasks),
+            "task_history" => self.toggle_right_tool(RightTab::TaskHistory),
             "history" => {
                 self.refresh_past_sessions();
-                self.state.panels.toggle_right(RightTab::History);
+                self.toggle_right_tool(RightTab::History);
             }
             "sessions:modal" => {
                 self.refresh_past_sessions();
                 self.side_panels_ui.sessions_modal_open = true;
             }
-            "conversations" => self.state.panels.toggle_right(RightTab::Conversations),
+            "conversations" => self.toggle_right_tool(RightTab::Conversations),
             "notes" => self.open_notes_modal(),
             "review" => self.open_review_modal(),
             "task:new" => self.open_new_task(),
@@ -6151,16 +6148,36 @@ impl Tessel {
             self.error = error.to_string();
         }
     }
+    fn toggle_right_tool(&mut self, tab: RightTab) {
+        #[cfg(windows)]
+        if self.selected_side_browser.take().is_some() {
+            self.side_browser_history.clear();
+            self.state.panels.right_open = true;
+            self.state.panels.right_tab = tab;
+            return;
+        }
+        self.state.panels.toggle_right(tab);
+        if !self.state.panels.right_open {
+            self.right_fullscreen = false;
+        }
+    }
+
+    fn right_tool_visible(&self, tab: RightTab) -> bool {
+        #[cfg(windows)]
+        if self.selected_side_browser.is_some() {
+            return false;
+        }
+        self.state.panels.right_open && self.state.panels.right_tab == tab
+    }
+
     fn right_panel(&mut self, ctx: &egui::Context, _frame: &eframe::Frame) {
         if !self.state.panels.right_open {
             self.right_fullscreen = false;
             return;
         }
         if self.state.active().is_some()
-            && matches!(
-                self.state.panels.right_tab,
-                RightTab::Changes | RightTab::Files
-            )
+            && (self.right_tool_visible(RightTab::Changes)
+                || self.right_tool_visible(RightTab::Files))
             && self.scm_state.result.is_none()
             && !self.scm_state.busy()
             && !self.git_result.busy()
@@ -6259,6 +6276,7 @@ impl Tessel {
                         #[cfg(windows)]
                         {
                             self.selected_side_browser = None;
+                            self.side_browser_history.clear();
                         }
                         if tab == RightTab::History
                             && self.past_sessions_cache.is_empty()
@@ -6303,23 +6321,33 @@ impl Tessel {
             ui.separator();
             #[cfg(windows)]
             if !self.side_browsers.is_empty() {
+                let mut select = None;
+                let mut close = None;
                 egui::ScrollArea::horizontal()
                     .id_salt("side-browser-tabs")
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             for (id, page) in &self.side_browsers {
-                                if ui
-                                    .selectable_label(
-                                        Some(*id) == self.selected_side_browser,
-                                        page.tab_label().0,
-                                    )
-                                    .clicked()
-                                {
-                                    self.selected_side_browser = Some(*id);
+                                let tab = ui.selectable_label(
+                                    Some(*id) == self.selected_side_browser,
+                                    page.tab_label().0,
+                                );
+                                if tab.clicked() {
+                                    select = Some(*id);
+                                }
+                                let close_button =
+                                    ui.small_button("×").on_hover_text(tr("Close tab"));
+                                if tab.middle_clicked() || close_button.clicked() {
+                                    close = Some(*id);
                                 }
                             }
                         });
                     });
+                if let Some(id) = close {
+                    self.close_side_browser(id);
+                } else if let Some(id) = select {
+                    self.select_side_browser(id);
+                }
                 if let Some(id) = self.selected_side_browser {
                     if ui.button(tr("Move to center")).clicked() {
                         self.undock_browser(id);
@@ -8664,6 +8692,7 @@ impl Tessel {
             self.agent_browsers = Default::default();
             self.background_browsers.clear();
             self.side_browsers.clear();
+            self.side_browser_history.clear();
             self.selected_side_browser = None;
             self.other_browser_pages.clear();
             self.finishing_browser_pages.clear();
@@ -14495,7 +14524,7 @@ impl eframe::App for Tessel {
                     if ctx.input_mut(|i| {
                         i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
                     }) {
-                        self.state.panels.toggle_right(tab);
+                        self.toggle_right_tool(tab);
                     }
                 }
                 if ctx.input_mut(|i| {

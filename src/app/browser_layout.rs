@@ -174,6 +174,38 @@ mod tests {
     use crate::app::gpui_bridge::GpuiAction;
 
     #[test]
+    fn closing_side_pages_restores_last_visit_and_skips_closed_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+        let ids = [0; 4].map(|_| {
+            app.new_browser_page();
+            app.dock_browser(app.browser.tab_id);
+            app.selected_side_browser.unwrap()
+        });
+        app.apply_gpui_action(GpuiAction::SelectSideBrowser(ids[0]));
+        app.apply_gpui_action(GpuiAction::CloseSideBrowser(ids[2]));
+        assert_eq!(app.selected_side_browser, Some(ids[0]));
+        app.apply_gpui_action(GpuiAction::CloseSideBrowser(ids[0]));
+        assert_eq!(app.selected_side_browser, Some(ids[3]));
+        app.apply_gpui_action(GpuiAction::CloseSideBrowser(ids[3]));
+        assert_eq!(app.selected_side_browser, Some(ids[1]));
+        app.apply_gpui_action(GpuiAction::CloseSideBrowser(ids[1]));
+        assert!(app.selected_side_browser.is_none());
+        assert!(app.side_browsers.is_empty());
+        assert!(app.state.panels.right_open);
+        app.new_browser_page();
+        app.dock_browser(app.browser.tab_id);
+        let side = app.selected_side_browser.unwrap();
+        app.execute_palette_command(&eframe::egui::Context::default(), "files");
+        assert!(app.right_tool_visible(crate::workspace::SideTab::Files));
+        app.select_side_browser(side);
+        assert!(app.gpui_explorer_input().is_none());
+        app.close_side_browser(side);
+        assert!(app.right_tool_visible(crate::workspace::SideTab::Files));
+    }
+
+    #[test]
     fn side_only_layout_restores_selection_without_creating_center_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");

@@ -126,8 +126,42 @@ impl Tessel {
             page.change_presentation();
             let id = page.tab_id;
             self.side_browsers.insert(id, page);
-            self.selected_side_browser = Some(id);
+            self.select_side_browser(id);
+            self.save();
+        }
+    }
+
+    pub(super) fn select_side_browser(&mut self, id: u64) {
+        if self.side_browsers.contains_key(&id) {
+            if let Some(previous) = self.selected_side_browser.replace(id)
+                && previous != id
+            {
+                self.side_browser_history.push_back(previous);
+                if self.side_browser_history.len() > 20 {
+                    self.side_browser_history.pop_front();
+                }
+            }
             self.state.panels.right_open = true;
+        }
+    }
+
+    fn take_side_browser(&mut self, id: u64) -> Option<Browser> {
+        let mut page = self.side_browsers.remove(&id)?;
+        page.visible(false);
+        page.close_popups();
+        self.side_browser_history.retain(|previous| *previous != id);
+        if self.selected_side_browser == Some(id) {
+            self.selected_side_browser = self.side_browser_history.pop_back();
+        }
+        Some(page)
+    }
+
+    pub(super) fn close_side_browser(&mut self, id: u64) {
+        if let Some(mut page) = self.take_side_browser(id) {
+            page.poll();
+            if page.downloading() {
+                self.finishing_browser_pages.push((None, page));
+            }
             self.save();
         }
     }
@@ -139,10 +173,7 @@ impl Tessel {
         {
             return;
         }
-        if let Some(mut page) = self.side_browsers.remove(&id) {
-            if self.selected_side_browser == Some(id) {
-                self.selected_side_browser = None;
-            }
+        if let Some(mut page) = self.take_side_browser(id) {
             page.change_presentation();
             let was_open = self.browser_tab_open || self.view == View::Browser;
             let previous = self.replace_browser_page(page);

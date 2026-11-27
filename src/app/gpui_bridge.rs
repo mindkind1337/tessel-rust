@@ -796,6 +796,7 @@ pub(crate) enum GpuiAction {
     SelectSideTab(SideTab),
     DockBrowser(u64),
     UndockBrowser(u64),
+    CloseSideBrowser(u64),
     SelectSideBrowser(u64),
     ToggleRightFullscreen,
     SelectProject(u64),
@@ -1662,6 +1663,8 @@ impl Tessel {
             #[cfg(windows)]
             selected_side_browser: None,
             #[cfg(windows)]
+            side_browser_history: Default::default(),
+            #[cfg(windows)]
             finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
             browser,
@@ -1744,16 +1747,12 @@ impl Tessel {
         // These workers use channels rather than the terminal repaint callback.
         // Keep their visible view updating through the frame that consumes completion.
         let refresh = self.share.guest_requests_busy()
-            || (self.state.panels.right_open
-                && self.state.panels.right_tab == SideTab::Files
-                && self.explorer_tree.gpui_needs_frame())
+            || (self.right_tool_visible(SideTab::Files) && self.explorer_tree.gpui_needs_frame())
             || ((self.side_panels_ui.sessions_modal_open
-                || (self.state.panels.right_open
-                    && self.state.panels.right_tab == SideTab::History))
+                || self.right_tool_visible(SideTab::History))
                 && self.gpui_extra.session_query.pending())
             || (self.view == View::Remote && self.remote.gpui_needs_frame())
-            || (self.state.panels.right_open
-                && self.state.panels.right_tab == SideTab::Conversations
+            || (self.right_tool_visible(SideTab::Conversations)
                 && (self.gpui_extra.conversation_loader.needs_frame()
                     || self
                         .gpui_extra
@@ -1956,7 +1955,7 @@ impl Tessel {
             }
             return Some((GpuiFocusTarget::SessionsQuery, self.gpui_scm_owner(), true));
         }
-        if self.gpui_has_open_modal() || !self.state.panels.right_open {
+        if self.gpui_has_open_modal() || !self.right_tool_visible(self.state.panels.right_tab) {
             return None;
         }
         let target = match self.state.panels.right_tab {
@@ -2002,8 +2001,7 @@ impl Tessel {
         if self.gpui_has_open_modal()
             || self.view != View::Files
             || !self.gpui_extra.outline_open
-            || !self.state.panels.right_open
-            || self.state.panels.right_tab != SideTab::Files
+            || !self.right_tool_visible(SideTab::Files)
         {
             return None;
         }
@@ -2014,10 +2012,7 @@ impl Tessel {
     }
 
     fn gpui_explorer_owner(&self) -> Option<crate::git_result::Owner> {
-        if self.gpui_has_open_modal()
-            || !self.state.panels.right_open
-            || self.state.panels.right_tab != SideTab::Files
-        {
+        if self.gpui_has_open_modal() || !self.right_tool_visible(SideTab::Files) {
             return None;
         }
         self.gpui_scm_owner()
@@ -2033,10 +2028,7 @@ impl Tessel {
     }
 
     pub(crate) fn gpui_scm_input(&self) -> Option<(NativeScmScope, &str)> {
-        if self.gpui_has_open_modal()
-            || !self.state.panels.right_open
-            || self.state.panels.right_tab != SideTab::Changes
-        {
+        if self.gpui_has_open_modal() || !self.right_tool_visible(SideTab::Changes) {
             return None;
         }
         self.gpui_scm_draft()
@@ -3427,18 +3419,16 @@ impl Tessel {
             layout.maximized
         };
 
-        if self.state.panels.right_open {
-            if self.state.panels.right_tab == SideTab::Changes
-                && self.scm_commits_project != self.state.active_project
-            {
-                self.refresh_scm_commits();
-            } else if self.state.panels.right_tab == SideTab::History
-                && self.past_sessions_cache.is_empty()
-                && !self.gpui_extra.session_discovery.requested()
-                && self.store.is_some()
-            {
-                self.refresh_past_sessions();
-            }
+        if self.right_tool_visible(SideTab::Changes)
+            && self.scm_commits_project != self.state.active_project
+        {
+            self.refresh_scm_commits();
+        } else if self.right_tool_visible(SideTab::History)
+            && self.past_sessions_cache.is_empty()
+            && !self.gpui_extra.session_discovery.requested()
+            && self.store.is_some()
+        {
+            self.refresh_past_sessions();
         }
         if self.overlay == Some(Overlay::Settings) {
             match self.current_settings_page_id() {
@@ -5360,8 +5350,8 @@ impl Tessel {
     }
 
     fn reconcile_native_task_board(&mut self) {
-        let project = (self.state.panels.right_open
-            && self.state.panels.right_tab == SideTab::Tasks)
+        let project = self
+            .right_tool_visible(SideTab::Tasks)
             .then_some(self.state.active_project)
             .flatten()
             .filter(|id| self.state.projects.iter().any(|p| p.id == *id));
@@ -5467,22 +5457,18 @@ impl Tessel {
             }
             GpuiAction::SelectSideBrowser(id) => {
                 #[cfg(windows)]
-                if self.side_browsers.contains_key(&id) {
-                    self.selected_side_browser = Some(id);
-                    self.state.panels.right_open = true;
-                }
+                self.select_side_browser(id);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
+            GpuiAction::CloseSideBrowser(id) => {
+                #[cfg(windows)]
+                self.close_side_browser(id);
                 #[cfg(not(windows))]
                 let _ = id;
             }
             GpuiAction::SelectSideTab(tab) => {
-                #[cfg(windows)]
-                if self.selected_side_browser.take().is_some() {
-                    self.state.panels.right_open = false;
-                }
-                self.state.panels.toggle_right(tab);
-                if !self.state.panels.right_open {
-                    self.right_fullscreen = false;
-                }
+                self.toggle_right_tool(tab);
                 self.save();
             }
             GpuiAction::ToggleRightFullscreen => {
