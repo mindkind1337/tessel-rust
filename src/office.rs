@@ -41,7 +41,9 @@ impl Book {
     fn validate(&self, extension: &str) -> Result<(), String> {
         let mut bytes = 0usize;
         let mut cells = 0usize;
-        if (self.sections.is_empty() && !is_workbook(extension)) || self.sections.len() > 200 {
+        if (self.sections.is_empty() && !is_workbook(extension) && !is_presentation(extension))
+            || self.sections.len() > 200
+        {
             return Err("Office section limit reached".into());
         }
         for page in &self.sections {
@@ -75,6 +77,9 @@ impl Book {
         }
         Ok(())
     }
+}
+fn is_presentation(extension: &str) -> bool {
+    matches!(extension, "pptx" | "odp")
 }
 fn is_workbook(extension: &str) -> bool {
     matches!(extension, "xlsx" | "xlsm" | "ods")
@@ -202,6 +207,7 @@ pub struct OfficeView {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct OfficeSummary {
+    pub slides: Option<Vec<Vec<(bool, String)>>>,
     pub omitted_rows: usize,
     pub omitted_cols: usize,
     pub workbook: bool,
@@ -264,6 +270,17 @@ impl OfficeView {
                         delimiter_label: "Workbook sheet",
                     });
             OfficeSummary {
+                slides: is_presentation(&self.extension).then(|| {
+                    book.sections
+                        .iter()
+                        .map(|page| {
+                            page.paragraphs
+                                .iter()
+                                .map(|p| (p.heading, p.text.clone()))
+                                .collect()
+                        })
+                        .collect()
+                }),
                 workbook: is_workbook(&self.extension),
                 omitted_rows: page.map_or(0, |p| p.omitted_rows),
                 omitted_cols: page.map_or(0, |p| p.omitted_cols),
@@ -339,7 +356,11 @@ impl OfficeView {
                 );
             }
             if book.sections.is_empty() {
-                ui.label(tr("This workbook has no sheet."));
+                ui.label(tr(if is_presentation(&self.extension) {
+                    "This presentation has no slide."
+                } else {
+                    "This workbook has no sheet."
+                }));
                 return;
             }
             let previous_section = self.selected;

@@ -408,6 +408,17 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                         .read_event()
                         .map_err(|_| "Invalid OpenDocument presentation")?
                     {
+                        Event::Start(e) | Event::Empty(e)
+                            if e.name().as_ref() == "draw:page" && book.sections.len() == 200 =>
+                        {
+                            book.truncated = true;
+                            break;
+                        }
+                        Event::Empty(e) if e.name().as_ref() == "draw:page" => {
+                            let title = attribute(&e, "draw:name")
+                                .unwrap_or_else(|| format!("Slide {}", book.sections.len() + 1));
+                            book.sections.push(text_page("", title, true)?);
+                        }
                         Event::Start(e) if e.name().as_ref() == "draw:page" => {
                             start = Some(offset);
                             title = attribute(&e, "draw:name")
@@ -421,10 +432,6 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                                     title.clone(),
                                     true,
                                 )?);
-                                if book.sections.len() == 200 {
-                                    book.truncated = true;
-                                    break;
-                                }
                             }
                         }
                         Event::DocType(_) => return Err("DTD refused".into()),
@@ -437,7 +444,10 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
             _ => return Err("Unsupported Office format".into()),
         }
     }
-    if book.sections.is_empty() && !super::is_workbook(extension) {
+    if book.sections.is_empty()
+        && !super::is_workbook(extension)
+        && !super::is_presentation(extension)
+    {
         return Err("No readable Office content found".into());
     }
     book.validate(extension)?;

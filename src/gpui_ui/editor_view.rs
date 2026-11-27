@@ -1801,6 +1801,80 @@ pub(crate) fn render_office_summary(
             .text_color(tokens.text_dim)
             .child(label)
     };
+    if let Some(slides) = &summary.slides {
+        let mut list = div()
+            .id("office-slides")
+            .debug_selector(|| "office-slides".into())
+            .size_full()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(24.))
+            .pt(px(16.))
+            .pb(px(40.));
+        list = list.child(
+            div()
+                .mx_auto()
+                .max_w(px(820.))
+                .text_right()
+                .mb(px(8.))
+                .text_size(px(12.))
+                .text_color(tokens.text_dim)
+                .child(if french { "Lecture seule" } else { "Read-only" }),
+        );
+        if slides.is_empty() {
+            return div().size_full().child(list.child(note(if french {
+                "Cette présentation ne contient aucune diapositive."
+            } else {
+                "This presentation has no slide."
+            })));
+        }
+        for (index, paragraphs) in slides.iter().enumerate() {
+            let number = index + 1;
+            let label = if french {
+                format!("Diapositive {number}")
+            } else {
+                format!("Slide {number}")
+            };
+            let mut page = div()
+                .debug_selector(move || format!("office-slide-{number}"))
+                .mx_auto()
+                .max_w(px(820.))
+                .border_1()
+                .border_color(tokens.border)
+                .rounded(px(8.))
+                .px(px(20.))
+                .py(px(14.))
+                .mb(px(16.))
+                .child(
+                    div()
+                        .mb(px(6.))
+                        .text_color(tokens.text_dim)
+                        .text_size(px(12.))
+                        .child(label),
+                );
+            for (heading, text) in paragraphs {
+                page = page.child(
+                    div()
+                        .mb(px(8.))
+                        .text_size(px(if *heading { 16. } else { 13. }))
+                        .font_weight(if *heading {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .child(text.clone()),
+                );
+            }
+            list = list.child(page);
+        }
+        return div().size_full().child(list.when(summary.truncated, |el| {
+            el.child(note(if french {
+                "Aperçu limité aux données prises en charge."
+            } else {
+                "Preview limited to supported data."
+            }))
+        }));
+    }
     if workbook {
         if !summary.error.is_empty() {
             return note(if french {

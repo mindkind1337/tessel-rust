@@ -250,3 +250,51 @@ fn office_excel_dates_times_numbers_and_booleans_match_vue() {
         );
     }
 }
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn office_presentation_shows_all_slides_in_order_including_blank_pages(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("slides.odp");
+    let bytes = archive(&[(
+        "content.xml",
+        r#"<office:document xmlns:office="urn:o" xmlns:text="urn:t" xmlns:draw="urn:d"><draw:page><text:p>First</text:p></draw:page><draw:page/><draw:page><text:p>Last</text:p></draw:page></office:document>"#,
+    )]);
+    std::fs::write(&path, &bytes).unwrap();
+    let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+    let office = doc.office.as_mut().unwrap();
+    office.book = Some(parse::parse(&bytes, "odp").unwrap());
+    let summary = office.gpui_poll_summary();
+    let slides = summary.slides.as_ref().unwrap();
+    assert_eq!(slides.len(), 3);
+    assert_eq!(slides[0][0].1, "First");
+    assert!(slides[1].is_empty());
+    assert_eq!(slides[2][0].1, "Last");
+    let window = cx.add_window(|_, cx| {
+        let mut root =
+            crate::gpui_ui::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app.install_editor_input_fixture(vec![doc], 0);
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let first = visual.debug_bounds("office-slide-1").unwrap();
+    let blank = visual.debug_bounds("office-slide-2").unwrap();
+    let last = visual.debug_bounds("office-slide-3").unwrap();
+    assert!(first.bottom() < blank.top() && blank.bottom() < last.top());
+    assert!(visual.debug_bounds("office-section-tabs").is_none());
+}
+#[test]
+fn office_presentation_truncates_only_when_another_slide_exists() {
+    for (count, expected) in [(0, false), (200, false), (201, true)] {
+        let xml = format!(
+            "<office:document xmlns:office='urn:o' xmlns:draw='urn:d'>{}</office:document>",
+            "<draw:page/>".repeat(count)
+        );
+        let book = parse::parse(&archive(&[("content.xml", &xml)]), "odp").unwrap();
+        assert_eq!(book.sections.len(), count.min(200));
+        assert_eq!(book.truncated, expected);
+    }
+}
