@@ -757,6 +757,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub font_size: f32,
     pub editor_font_size: u8,
     pub renderer: RendererPreference,
+    pub side_browser_error: String,
     pub side_browser_tabs: Vec<(u64, String)>,
     pub selected_side_browser: Option<u64>,
     pub right_fullscreen: bool,
@@ -794,6 +795,7 @@ pub(crate) enum GpuiAction {
     ToggleLeftSidebar,
     ToggleRightSidebar,
     SelectSideTab(SideTab),
+    NewSideBrowser,
     DockBrowser(u64),
     UndockBrowser(u64),
     CloseSideBrowser(u64),
@@ -2652,8 +2654,26 @@ impl Tessel {
     }
 
     pub(crate) fn gpui_browser_address(&self) -> Option<((u64, Option<u64>), &str)> {
+        self.browser_address_for(false)
+    }
+
+    pub(crate) fn browser_address_for(&self, side: bool) -> Option<((u64, Option<u64>), &str)> {
         #[cfg(windows)]
-        if self.view == View::Browser && !self.gpui_has_open_modal() && !self.floating.ui.is_open()
+        if side {
+            let id = self.selected_side_browser?;
+            if !self.side_browser_visible(id) {
+                return None;
+            }
+            let page = self.side_browsers.get(&id)?;
+            return Some(((page.address_generation(), Some(id)), page.address_str()));
+        }
+        #[cfg(not(windows))]
+        let _ = side;
+        #[cfg(windows)]
+        if self.view == View::Browser
+            && !self.right_fullscreen
+            && !self.gpui_has_open_modal()
+            && !self.floating.ui.is_open()
         {
             return Some((
                 (self.browser.address_generation(), self.state.active_project),
@@ -2661,6 +2681,20 @@ impl Tessel {
             ));
         }
         None
+    }
+
+    #[cfg(windows)]
+    fn address_page_mut(
+        &mut self,
+        scope: (u64, Option<u64>),
+    ) -> Option<&mut crate::browser::Browser> {
+        if self
+            .browser_address_for(true)
+            .is_some_and(|(active, _)| active == scope)
+        {
+            return self.side_browsers.get_mut(&scope.1?);
+        }
+        (self.gpui_browser_address()?.0 == scope).then_some(&mut self.browser)
     }
 
     pub(crate) fn gpui_terminal_find_ids(&self) -> Vec<u64> {
@@ -3957,10 +3991,18 @@ impl Tessel {
             font_size,
             renderer: self.state.renderer,
             #[cfg(windows)]
+            side_browser_error: self
+                .selected_side_browser
+                .and_then(|id| self.side_browsers.get(&id))
+                .map(|page| page.error_str().to_owned())
+                .unwrap_or_default(),
+            #[cfg(not(windows))]
+            side_browser_error: String::new(),
+            #[cfg(windows)]
             side_browser_tabs: self
                 .side_browsers
                 .iter()
-                .map(|(id, page)| (*id, page.tab_label().0))
+                .map(|(id, page)| (*id, page.side_tab_title()))
                 .collect(),
             #[cfg(not(windows))]
             side_browser_tabs: Vec::new(),
@@ -5443,6 +5485,10 @@ impl Tessel {
                 }
                 self.save();
             }
+            GpuiAction::NewSideBrowser => {
+                #[cfg(windows)]
+                self.new_side_browser();
+            }
             GpuiAction::DockBrowser(id) => {
                 #[cfg(windows)]
                 self.dock_browser(id);
@@ -6470,16 +6516,20 @@ impl Tessel {
                 }
             }
             GpuiAction::BeginNativeBrowserAddress(scope) => {
-                if self.gpui_browser_address().map(|v| v.0) == Some(scope) {
-                    #[cfg(windows)]
-                    self.browser.begin_native_address_edit();
+                #[cfg(windows)]
+                if let Some(page) = self.address_page_mut(scope) {
+                    page.begin_native_address_edit();
                 }
+                #[cfg(not(windows))]
+                let _ = scope;
             }
             GpuiAction::CancelNativeBrowserAddress(scope) => {
-                if self.gpui_browser_address().map(|v| v.0) == Some(scope) {
-                    #[cfg(windows)]
-                    self.browser.cancel_native_address_edit();
+                #[cfg(windows)]
+                if let Some(page) = self.address_page_mut(scope) {
+                    page.cancel_native_address_edit();
                 }
+                #[cfg(not(windows))]
+                let _ = scope;
             }
             GpuiAction::NativeBrowserAddress {
                 scope,
@@ -6487,18 +6537,26 @@ impl Tessel {
                 text,
                 navigate,
             } => {
-                if text.len() <= 8192 && self.gpui_browser_address() == Some((scope, base.as_str()))
+                #[cfg(windows)]
+                let side = self
+                    .browser_address_for(true)
+                    .is_some_and(|(active, _)| active == scope);
+                #[cfg(windows)]
+                if text.len() <= 8192
+                    && let Some(page) = self.address_page_mut(scope)
+                    && page.address_str() == base
                 {
-                    #[cfg(windows)]
-                    {
-                        self.browser.set_native_address_draft(text);
-                        if navigate {
-                            self.browser.navigate_now();
+                    page.set_native_address_draft(text);
+                    if navigate {
+                        if side {
+                            page.submit_address();
+                        } else {
+                            page.navigate_now();
                         }
                     }
-                    #[cfg(not(windows))]
-                    let _ = (text, navigate);
                 }
+                #[cfg(not(windows))]
+                let _ = (scope, base, text, navigate);
             }
             GpuiAction::BrowserSetAddress(addr) => {
                 #[cfg(windows)]

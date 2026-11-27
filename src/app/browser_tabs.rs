@@ -131,6 +131,18 @@ impl Tessel {
         }
     }
 
+    pub(super) fn new_side_browser(&mut self) {
+        if self.gpui_has_open_modal() {
+            return;
+        }
+        let mut page = Browser::new_address_page();
+        page.set_default_zoom(self.state.browser_prefs.zoom_half_steps);
+        let id = page.tab_id;
+        self.side_browsers.insert(id, page);
+        self.select_side_browser(id);
+        self.save();
+    }
+
     pub(super) fn select_side_browser(&mut self, id: u64) {
         if self.side_browsers.contains_key(&id) {
             if let Some(previous) = self.selected_side_browser.replace(id)

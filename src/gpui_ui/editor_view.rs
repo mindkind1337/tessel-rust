@@ -2405,7 +2405,7 @@ pub(crate) fn render_browser_stage(
                         .cursor_pointer()
                         .on_click(cx.listener(move |root, _, window, cx| {
                             if expected_address_input.as_ref() == root.browser_input.state() {
-                                super::browser_input::navigate(root, window, cx);
+                                super::browser_input::navigate_for(root, false, window, cx);
                             }
                         }))
                         .child("Go"),

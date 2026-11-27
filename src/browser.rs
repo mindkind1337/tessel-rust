@@ -218,6 +218,14 @@ impl Browser {
     }
 
     pub(crate) fn tab_label(&self) -> (String, String) {
+        self.browser_label(false)
+    }
+
+    pub(crate) fn side_tab_title(&self) -> String {
+        self.browser_label(true).0
+    }
+
+    fn browser_label(&self, side: bool) -> (String, String) {
         let pending = (self.view.is_none() && self.auto_start_pending && !self.address_editing)
             .then(|| crate::view_tabs_browser_model::allowed_browser_url(&self.address, true))
             .flatten();
@@ -227,7 +235,9 @@ impl Browser {
         let title = if !self.title.is_empty() {
             self.title.clone()
         } else if url.is_empty() {
-            crate::i18n::tr("Browser").to_owned()
+            crate::i18n::tr(if side { "New page" } else { "Browser" }).to_owned()
+        } else if side {
+            url.clone()
         } else {
             crate::view_tabs_browser_model::host_of(&url)
         };
@@ -253,6 +263,10 @@ impl Browser {
 
     pub fn is_started(&self) -> bool {
         self.view.is_some()
+    }
+
+    pub(crate) fn has_page_focus(&self) -> bool {
+        self.webview_had_focus
     }
 
     pub fn address_str(&self) -> &str {
@@ -301,6 +315,21 @@ impl Browser {
 
     pub fn navigate_now(&mut self) {
         self.navigate();
+    }
+
+    pub(crate) fn new_address_page() -> Self {
+        Self {
+            address: String::new(),
+            committed_address: "about:blank".into(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn submit_address(&mut self) {
+        self.navigate();
+        if self.view.is_none() && self.error.is_empty() {
+            self.auto_start_pending = true;
+        }
     }
 
     pub fn go_back_now(&self) {
@@ -633,7 +662,7 @@ impl Browser {
         self.popups.close_all();
         let parent_hwnd_raw = match parent.window_handle().map(|h| h.as_raw()) {
             Ok(wry::raw_window_handle::RawWindowHandle::Win32(raw)) => raw.hwnd.get(),
-            _ => 0,
+            _ => return Err("A native Windows window is required to display this page.".into()),
         };
         self.context = Some(WebContext::new(Some(profile)));
         let start = self.sender.clone();
@@ -903,6 +932,16 @@ impl Browser {
         }
     }
     pub fn show(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+        self.show_with_address(ui, frame, false, true);
+    }
+
+    pub(crate) fn show_with_address(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &eframe::Frame,
+        side: bool,
+        only_browser: bool,
+    ) {
         self.poll();
         if self.view.is_none() && self.auto_start_pending {
             self.auto_start_pending = false;
@@ -910,7 +949,7 @@ impl Browser {
                 self.error = e;
             }
         }
-        if self.view.is_none() {
+        if self.view.is_none() && !side {
             ui.label(tr("Private browser profile for this Rust app. No cookies or passwords are imported from Tessel."));
             if ui.button(tr("Start browser")).clicked()
                 && let Err(e) = self.create(frame)
@@ -922,9 +961,12 @@ impl Browser {
             }
             return;
         }
+        let address_id = egui::Id::new(("browser-address", self.tab_id));
+        let shortcuts = ui.is_enabled()
+            && (only_browser || self.has_page_focus() || ui.memory(|m| m.has_focus(address_id)));
         let focus_url =
-            ui.is_enabled() && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
-        let reload_shortcut = ui.is_enabled()
+            shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
+        let reload_shortcut = shortcuts
             && ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
                     || i.consume_key(egui::Modifiers::NONE, egui::Key::F5)
@@ -943,6 +985,7 @@ impl Browser {
             }
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.address)
+                    .id(address_id)
                     .desired_width((ui.available_width() - 140.0).max(100.0)),
             );
             if focus_url {
@@ -951,7 +994,7 @@ impl Browser {
             if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 || ui.button(tr("Go")).clicked()
             {
-                self.navigate();
+                self.submit_address();
             }
             ui.toggle_value(
                 &mut self.downloads_open,
@@ -1250,15 +1293,19 @@ mod tests {
                     .unwrap();
                 let mut reader = BufReader::new(&socket);
                 let mut first = String::new();
-                if reader.read_line(&mut first).is_err() || !first.starts_with("GET /saved-tab ") {
+                if reader.read_line(&mut first).is_err() {
                     continue;
                 }
+                let body = match first.split_whitespace().nth(1) {
+                    Some("/saved-tab") => "<title>Restored owner tab</title>",
+                    Some("/side") => "<title>Side browser page</title>",
+                    _ => continue,
+                };
                 for line in reader.lines() {
                     if !matches!(line, Ok(header) if !header.is_empty()) {
                         break;
                     }
                 }
-                let body = "<title>Restored owner tab</title>";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -1271,6 +1318,28 @@ mod tests {
             .create_with_profile(&parent, temp.path().join("profile"))
             .unwrap();
         app.browser.navigate_now();
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.title === 'Restored owner tab'",
+        );
+        app.apply_gpui_action(GpuiAction::NewSideBrowser);
+        let side = app.selected_side_browser.unwrap();
+        let scope = app.browser_address_for(true).unwrap().0;
+        app.side_browsers
+            .get_mut(&side)
+            .unwrap()
+            .create_with_profile(&parent, temp.path().join("profile"))
+            .unwrap();
+        app.apply_gpui_action(GpuiAction::NativeBrowserAddress {
+            scope,
+            base: String::new(),
+            text: url.replace("/saved-tab", "/side"),
+            navigate: true,
+        });
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "document.title === 'Side browser page'",
+        );
         wait_for(
             app.browser.view.as_ref().unwrap(),
             "document.title === 'Restored owner tab'",

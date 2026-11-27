@@ -35,6 +35,7 @@ pub(crate) fn render_workspace_body(
     chat_inputs: &super::chat_inputs::Inputs,
     terminal_inputs: &super::terminal_find_inputs::Inputs,
     browser_input: &super::browser_input::Input,
+    side_browser_input: &super::browser_input::Input,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
@@ -96,6 +97,7 @@ pub(crate) fn render_workspace_body(
         .when(snapshot.toolbar.right_open, |el| {
             el.child(render_right_panel(
                 snapshot,
+                side_browser_input,
                 scm_input,
                 explorer_input,
                 panel_query_inputs,
@@ -1436,42 +1438,58 @@ fn render_split_divider(
 
 fn render_side_browser(
     id: u64,
-    french: bool,
+    address: &super::browser_input::Input,
+    snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> gpui::AnyElement {
-    let mut page = div().size_full().flex().flex_col().child(
-        div()
-            .id("side-browser-return")
-            .debug_selector(|| "side-browser-return".into())
-            .cursor_pointer()
-            .p(px(6.))
-            .text_color(tokens.text)
-            .text_size(px(11.))
-            .on_click(
-                cx.listener(move |root, _, _, cx| root.dispatch(GpuiAction::UndockBrowser(id), cx)),
+    let french = snapshot.french;
+    let page = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .child(address.render(french, tokens, cx))
+                .child(
+                    div()
+                        .id("side-browser-return")
+                        .debug_selector(|| "side-browser-return".into())
+                        .cursor_pointer()
+                        .p(px(6.))
+                        .text_color(tokens.text)
+                        .text_size(px(11.))
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            root.dispatch(GpuiAction::UndockBrowser(id), cx)
+                        }))
+                        .child(if french {
+                            "Ramener au centre"
+                        } else {
+                            "Move to center"
+                        }),
+                ),
+        )
+        .when(!snapshot.side_browser_error.is_empty(), |el| {
+            el.child(
+                div()
+                    .text_color(tokens.warn)
+                    .child(snapshot.side_browser_error.clone()),
             )
-            .child(if french {
-                "Ramener au centre"
-            } else {
-                "Move to center"
-            }),
-    );
+        });
     #[cfg(windows)]
-    {
+    let page = {
         let entity = cx.weak_entity();
-        page = page.child(
+        page.child(
             gpui::canvas(
                 |_, _, _| (),
                 move |bounds, (), window, cx| {
                     let dragging = cx.has_active_drag();
                     let _ = entity.update(cx, |root, cx| {
                         let show = !dragging && root.app.side_browser_visible(id);
-                        if let Some(page) = root.app.side_browsers.get_mut(&id) {
-                            if show {
-                                page.auto_start_if_pending(window);
-                            }
-                            if page.sync_gpui_bounds(
+                        if let Some(page) = root.app.side_browsers.get_mut(&id)
+                            && page.sync_gpui_bounds(
                                 bounds.origin.x.into(),
                                 bounds.origin.y.into(),
                                 bounds.size.width.into(),
@@ -1480,10 +1498,10 @@ fn render_side_browser(
                                 show,
                                 None,
                                 !show,
-                            ) {
-                                root.focus_input = FocusInputTarget::None;
-                                window.blur(cx);
-                            }
+                            )
+                        {
+                            root.focus_input = FocusInputTarget::None;
+                            window.blur(cx);
                         }
                     });
                 },
@@ -1491,14 +1509,15 @@ fn render_side_browser(
             .flex_1()
             .min_h_0()
             .w_full(),
-        );
-    }
+        )
+    };
     page.into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
 fn render_right_panel(
     snapshot: &GpuiWorkspaceSnapshot,
+    side_browser_input: &super::browser_input::Input,
     scm_input: &super::scm_input::Input,
     explorer_input: &super::explorer_input::Input,
     panel_query_inputs: &super::panel_query_inputs::Inputs,
@@ -1529,16 +1548,23 @@ fn render_right_panel(
         .items_center()
         .justify_between()
         .border_b_1()
-        .border_color(tokens.border)
-        .overflow_x_scroll();
+        .border_color(tokens.border);
 
-    let mut tabs_left = div().flex().items_center().gap(px(2.0));
+    let mut tabs_left = div()
+        .id("side-scrollable-tabs")
+        .flex_1()
+        .min_w_0()
+        .overflow_x_scroll()
+        .flex()
+        .items_center()
+        .gap(px(2.0));
     for (idx, (tab, en_lbl, fr_lbl)) in tabs.iter().copied().enumerate() {
         let active = snapshot.selected_side_browser.is_none() && snapshot.right_tab == tab;
         let label = if snapshot.french { fr_lbl } else { en_lbl };
         tabs_left = tabs_left.child(
             div()
                 .id(("right-side-tab", idx))
+                .flex_shrink_0()
                 .px(px(7.0))
                 .py(px(3.5))
                 .rounded(px(4.0))
@@ -1569,6 +1595,7 @@ fn render_right_panel(
         tabs_left = tabs_left.child(
             div()
                 .id(("side-browser-tab", id))
+                .flex_shrink_0()
                 .debug_selector(move || format!("side-browser-tab-{id}"))
                 .flex()
                 .items_center()
@@ -1595,7 +1622,7 @@ fn render_right_panel(
                         tokens: drag_tokens,
                     })
                 })
-                .child(title.clone())
+                .child(div().max_w(px(160.)).truncate().child(title.clone()))
                 .child(
                     div()
                         .id(("side-browser-close", id))
@@ -1617,9 +1644,31 @@ fn render_right_panel(
                 ),
         );
     }
-    tab_strip = tab_strip.child(tabs_left).child(
+    tab_strip = tab_strip.child(tabs_left);
+    #[cfg(windows)]
+    {
+        tab_strip = tab_strip.child(
+            div()
+                .id("side-browser-new")
+                .flex_shrink_0()
+                .debug_selector(|| "side-browser-new".into())
+                .aria_label(if snapshot.french {
+                    "Nouvelle page Web"
+                } else {
+                    "New browser page"
+                })
+                .p(px(4.))
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(|root, _, _, cx| root.dispatch(GpuiAction::NewSideBrowser, cx)),
+                )
+                .child(GpuiIcon::Plus.render(14., tokens.text_dim)),
+        );
+    }
+    tab_strip = tab_strip.child(
         div()
             .id("btn-right-fullscreen")
+            .flex_shrink_0()
             .p(px(4.0))
             .rounded(px(4.0))
             .cursor_pointer()
@@ -1668,7 +1717,7 @@ fn render_right_panel(
                 .flex()
                 .flex_col()
                 .child(if let Some(id) = snapshot.selected_side_browser {
-                    render_side_browser(id, snapshot.french, tokens, cx)
+                    render_side_browser(id, side_browser_input, snapshot, tokens, cx)
                 } else {
                     side_panels_view::render_side_panel_tab_body(
                         snapshot,

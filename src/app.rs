@@ -6288,6 +6288,21 @@ impl Tessel {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    #[cfg(windows)]
+                    if crate::pane_header::button(
+                        ui,
+                        crate::icons::Icon::Plus,
+                        tr("New browser page"),
+                    )
+                    .clicked()
+                    {
+                        self.new_side_browser();
+                        if let Some(id) = self.selected_side_browser {
+                            ui.memory_mut(|m| {
+                                m.request_focus(egui::Id::new(("browser-address", id)))
+                            });
+                        }
+                    }
                     if crate::pane_header::button(
                         ui,
                         crate::icons::Icon::PaneClose,
@@ -6330,7 +6345,7 @@ impl Tessel {
                             for (id, page) in &self.side_browsers {
                                 let tab = ui.selectable_label(
                                     Some(*id) == self.selected_side_browser,
-                                    page.tab_label().0,
+                                    page.side_tab_title(),
                                 );
                                 if tab.clicked() {
                                     select = Some(*id);
@@ -6352,7 +6367,12 @@ impl Tessel {
                     if ui.button(tr("Move to center")).clicked() {
                         self.undock_browser(id);
                     } else if let Some(page) = self.side_browsers.get_mut(&id) {
-                        page.show(ui, _frame);
+                        page.show_with_address(
+                            ui,
+                            _frame,
+                            true,
+                            self.right_fullscreen || self.view != View::Browser,
+                        );
                     }
                     return;
                 }

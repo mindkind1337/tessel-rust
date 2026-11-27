@@ -15,10 +15,31 @@ struct Binding {
 #[derive(Default)]
 pub(crate) struct Input {
     binding: Option<Binding>,
+    side: bool,
     pub select_all: bool,
 }
 gpui::actions!(tessel_browser_address, [Navigate, Dismiss]);
+fn input(root: &TesselGpuiRoot, side: bool) -> &Input {
+    if side {
+        &root.side_browser_input
+    } else {
+        &root.browser_input
+    }
+}
+fn input_mut(root: &mut TesselGpuiRoot, side: bool) -> &mut Input {
+    if side {
+        &mut root.side_browser_input
+    } else {
+        &mut root.browser_input
+    }
+}
 impl Input {
+    pub fn side() -> Self {
+        Self {
+            side: true,
+            ..Default::default()
+        }
+    }
     pub fn focused(&self, window: &Window, cx: &App) -> bool {
         self.binding
             .as_ref()
@@ -35,19 +56,20 @@ impl Input {
             return;
         }
         let state = cx.new(|cx| EditableTextState::new(StringStorage::from(text), cx));
+        let side = self.side;
         let changed = cx.subscribe(&state, move |root, state, _: &TextChanged, cx| {
-            let Some(b) = root.browser_input.binding.as_ref() else {
+            let Some(b) = input(root, side).binding.as_ref() else {
                 return;
             };
             if b.scope != scope
                 || b.state != state
-                || root.app.gpui_browser_address() != Some((scope, b.synced.as_str()))
+                || root.app.browser_address_for(side) != Some((scope, b.synced.as_str()))
             {
                 return;
             }
             let base = b.synced.clone();
             let too_long = state.read(cx).as_str().len() > LIMIT;
-            root.browser_input.binding.as_mut().unwrap().too_long = too_long;
+            input_mut(root, side).binding.as_mut().unwrap().too_long = too_long;
             if !too_long {
                 root.dispatch(
                     GpuiAction::NativeBrowserAddress {
@@ -58,7 +80,7 @@ impl Input {
                     },
                     cx,
                 );
-                acknowledge(root);
+                acknowledge(root, side);
             }
             cx.notify();
         });
@@ -82,40 +104,45 @@ impl Input {
         let Some(b) = &self.binding else {
             return div().flex_1().into_any_element();
         };
+        let side = self.side;
         let expected = b.state.clone();
         let clicked = b.state.clone();
         let dismissed = b.state.clone();
-        let field = gpui_ce_elements::editable_text::text_input("native-browser-address")
-            .state(b.state.downgrade())
-            .key_context("EditableText TesselBrowserAddress")
-            .on_action(cx.listener(move |root, _: &Navigate, window, cx| {
-                if root.browser_input.state() == Some(&expected) {
-                    navigate(root, window, cx);
+        let field = gpui_ce_elements::editable_text::text_input(if side {
+            "native-side-browser-address"
+        } else {
+            "native-browser-address"
+        })
+        .state(b.state.downgrade())
+        .key_context("EditableText TesselBrowserAddress")
+        .on_action(cx.listener(move |root, _: &Navigate, window, cx| {
+            if input(root, side).state() == Some(&expected) {
+                navigate_for(root, side, window, cx);
+            }
+        }))
+        .on_action(cx.listener(move |root, _: &Dismiss, window, cx| {
+            if input(root, side).state() == Some(&dismissed) {
+                dismiss(root, side, window, cx);
+            }
+        }))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |root, _, _, cx| {
+                if input(root, side).state() == Some(&clicked)
+                    && root.app.browser_address_for(side).is_some()
+                {
+                    begin_edit_for(root, side, cx);
+                    root.focus_input = FocusInputTarget::BrowserUrl;
                 }
-            }))
-            .on_action(cx.listener(move |root, _: &Dismiss, window, cx| {
-                if root.browser_input.state() == Some(&dismissed) {
-                    dismiss(root, window, cx);
-                }
-            }))
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |root, _, _, cx| {
-                    if root.browser_input.state() == Some(&clicked)
-                        && root.app.gpui_browser_address().is_some()
-                    {
-                        begin_edit(root, cx);
-                        root.focus_input = FocusInputTarget::BrowserUrl;
-                    }
-                    cx.stop_propagation();
-                }),
-            )
-            .w_full()
-            .h(px(26.))
-            .px(px(8.))
-            .py(px(3.))
-            .text_size(px(11.5))
-            .text_color(tokens.text_strong);
+                cx.stop_propagation();
+            }),
+        )
+        .w_full()
+        .h(px(26.))
+        .px(px(8.))
+        .py(px(3.))
+        .text_size(px(11.5))
+        .text_color(tokens.text_strong);
         div()
             .flex_1()
             .min_w_0()
@@ -139,16 +166,25 @@ impl Input {
             .into_any_element()
     }
 }
-pub(crate) fn begin_edit(root: &mut TesselGpuiRoot, cx: &mut Context<TesselGpuiRoot>) {
-    if let Some((scope, _)) = root.app.gpui_browser_address() {
+pub(crate) fn begin_edit_for(
+    root: &mut TesselGpuiRoot,
+    side: bool,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    if let Some((scope, _)) = root.app.browser_address_for(side) {
         root.dispatch(GpuiAction::BeginNativeBrowserAddress(scope), cx);
     }
 }
-fn dismiss(root: &mut TesselGpuiRoot, window: &mut Window, cx: &mut Context<TesselGpuiRoot>) {
-    let Some(b) = root.browser_input.binding.as_ref() else {
+fn dismiss(
+    root: &mut TesselGpuiRoot,
+    side: bool,
+    window: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    let Some(b) = input(root, side).binding.as_ref() else {
         return;
     };
-    if root.app.gpui_browser_address() != Some((b.scope, b.synced.as_str())) {
+    if root.app.browser_address_for(side) != Some((b.scope, b.synced.as_str())) {
         return;
     }
     if b.state
@@ -160,23 +196,27 @@ fn dismiss(root: &mut TesselGpuiRoot, window: &mut Window, cx: &mut Context<Tess
     root.focus_input = FocusInputTarget::None;
     window.focus(&root.focus_handle, cx);
 }
-fn acknowledge(root: &mut TesselGpuiRoot) {
-    if let Some((scope, text)) = root.app.gpui_browser_address()
-        && let Some(b) = root.browser_input.binding.as_mut()
+fn acknowledge(root: &mut TesselGpuiRoot, side: bool) {
+    if let Some((scope, text)) = root
+        .app
+        .browser_address_for(side)
+        .map(|(s, t)| (s, t.to_owned()))
+        && let Some(b) = input_mut(root, side).binding.as_mut()
         && b.scope == scope
     {
-        b.synced = text.to_owned();
+        b.synced = text;
     }
 }
-pub(crate) fn navigate(
+pub(crate) fn navigate_for(
     root: &mut TesselGpuiRoot,
+    side: bool,
     window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) {
-    let Some(b) = root.browser_input.binding.as_ref() else {
+    let Some(b) = input(root, side).binding.as_ref() else {
         return;
     };
-    if root.app.gpui_browser_address() != Some((b.scope, b.synced.as_str())) {
+    if root.app.browser_address_for(side) != Some((b.scope, b.synced.as_str())) {
         return;
     }
     let state = b.state.clone();
@@ -195,8 +235,8 @@ pub(crate) fn navigate(
         },
         cx,
     );
-    acknowledge(root);
-    if root.app.gpui_browser_address().map(|v| v.0) != Some(scope) {
+    acknowledge(root, side);
+    if root.app.browser_address_for(side).map(|v| v.0) != Some(scope) {
         root.focus_input = FocusInputTarget::None;
         window.focus(&root.focus_handle, cx);
     }
@@ -214,6 +254,74 @@ mod tests {
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
     }
+    #[gpui::test]
+    fn side_plus_focuses_address_and_enter_only_navigates_the_selected_page(
+        cx: &mut TestAppContext,
+    ) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.dispatch(GpuiAction::SelectBrowserTab, cx);
+            if !root.app.gpui_snapshot(960., 640., 4.).toolbar.right_open {
+                root.dispatch(GpuiAction::ToggleRightSidebar, cx);
+            }
+            root
+        });
+        cx.refresh().unwrap();
+        let center = view
+            .update(cx, |root, _, _| root.app.browser.address_str().to_owned())
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let button = visual.debug_bounds("side-browser-new").unwrap().center();
+        visual.simulate_click(button, Default::default());
+        cx.refresh().unwrap();
+        let (id, scope) = view
+            .update(cx, |root, w, cx| {
+                assert!(
+                    root.app.selected_side_browser.is_some(),
+                    "new-page button must be reachable at normal panel width"
+                );
+                assert!(root.side_browser_input.focused(w, cx));
+                let id = root.app.selected_side_browser.unwrap();
+                let (scope, text) = root.app.browser_address_for(true).unwrap();
+                assert!(text.is_empty());
+                root.side_browser_input
+                    .state()
+                    .unwrap()
+                    .clone()
+                    .update(cx, |s, cx| {
+                        s.replace_text_in_range(None, "example.test/side", w, cx)
+                    });
+                (id, scope)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.dispatch_action(view.into(), Navigate);
+        cx.run_until_parked();
+        view.update(cx, |root, _, cx| {
+            assert_eq!(
+                root.app.side_browsers[&id].address_str(),
+                "https://example.test/side"
+            );
+            assert_eq!(root.app.browser.address_str(), center);
+            root.dispatch(GpuiAction::NewSideBrowser, cx);
+            root.dispatch(
+                GpuiAction::NativeBrowserAddress {
+                    scope,
+                    base: String::new(),
+                    text: "https://wrong.test/".into(),
+                    navigate: true,
+                },
+                cx,
+            );
+            assert_eq!(root.app.browser_address_for(true).unwrap().1, "");
+            assert_eq!(root.app.side_browsers.len(), 2);
+        })
+        .unwrap();
+    }
+
     #[gpui::test]
     fn native_address_unicode_undo_pending_navigation_and_policy(cx: &mut TestAppContext) {
         bindings(cx);
@@ -253,7 +361,7 @@ mod tests {
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(Some(0..5), "example.test/path", w, cx)
             });
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://example.test/path");
             assert!(!root.app.browser.is_started());
         })
@@ -266,7 +374,7 @@ mod tests {
                 let n = s.as_str().encode_utf16().count();
                 s.replace_text_in_range(Some(0..n), "javascript:alert(1)", w, cx);
             });
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert!(!root.app.browser.error_str().is_empty());
             assert!(!root.app.browser.is_started());
         })
@@ -294,7 +402,7 @@ mod tests {
                 cx,
             );
             old.update(cx, |s, cx| s.replace_text_in_range(None, "late", w, cx));
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://new.example/");
         })
         .unwrap();
@@ -310,7 +418,7 @@ mod tests {
             root.dispatch(GpuiAction::SelectBrowserTab, cx);
             assert_ne!(root.app.gpui_browser_address().unwrap().0, scope);
             current.update(cx, |s, cx| s.replace_text_in_range(None, "closed", w, cx));
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://new.example/");
             root.dispatch(GpuiAction::OpenHelp, cx);
         })
@@ -321,7 +429,7 @@ mod tests {
             assert!(!root.browser_input.focused(w, cx));
             let current = root.browser_input.state().unwrap().clone();
             current.update(cx, |s, cx| s.replace_text_in_range(None, "modal", w, cx));
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://new.example/");
         })
         .unwrap();
@@ -359,18 +467,18 @@ mod tests {
         view.update(cx, |root, w, cx| {
             assert_eq!(root.browser_input.state(), Some(&input));
             assert!(root.browser_input.binding.as_ref().unwrap().too_long);
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://example.com");
             input.update(cx, |s, cx| {
                 s.replace_and_mark_text_in_range(Some(0..LIMIT + 1), "日", None, w, cx)
             });
             let generation = root.app.browser.address_generation();
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_generation(), generation);
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(None, "example.test", w, cx)
             });
-            navigate(root, w, cx);
+            navigate_for(root, false, w, cx);
             assert_eq!(root.app.browser.address_str(), "https://example.test/");
         })
         .unwrap();
@@ -404,7 +512,7 @@ mod tests {
                 root.app
                     .browser
                     .navigation_fixture("https://redirect.example/one");
-                navigate(root, w, cx);
+                navigate_for(root, false, w, cx);
                 assert_eq!(root.app.browser.address_str(), "https://example.test/draft");
                 input
             })
