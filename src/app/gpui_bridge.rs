@@ -5248,6 +5248,7 @@ impl Tessel {
             GpuiAction::Remote(command) => {
                 if self.view == View::Remote {
                     self.remote.command(command, &self.state.hosts);
+                    self.open_requested_remote_terminal();
                 }
             }
             GpuiAction::ToggleLeftSidebar => {

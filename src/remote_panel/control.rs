@@ -8,6 +8,10 @@ pub(crate) enum Command {
     Refresh,
     Parent,
     Open(String),
+    TerminalHere {
+        host: String,
+        path: String,
+    },
     Name(String),
     Create(bool),
     BeginRename(String),
@@ -424,6 +428,36 @@ impl RemotePanel {
                     parent.into()
                 }));
             }
+            Command::TerminalHere { host, path } => {
+                let Some(connected) = self
+                    .host
+                    .as_ref()
+                    .filter(|h| h.alias == host && hosts.contains(h))
+                else {
+                    return;
+                };
+                let folder = if path == self.path {
+                    &self.path
+                } else if let Some(entry) = self.entries.iter().find(|e| e.path == path) {
+                    if entry.directory {
+                        &entry.path
+                    } else {
+                        &self.path
+                    }
+                } else {
+                    return;
+                };
+                if folder.starts_with('/')
+                    && crate::remote::clean(folder)
+                    && crate::remote::within(&self.root, folder)
+                    && !self.root.is_empty()
+                {
+                    self.terminal_request = Some(Host {
+                        folder: folder.clone(),
+                        ..connected.clone()
+                    });
+                }
+            }
             Command::Open(path) => {
                 if let Some(entry) = self.entries.iter().find(|entry| entry.path == path) {
                     self.request(if entry.directory {
@@ -633,6 +667,61 @@ mod tests {
             .unwrap();
         panel.poll();
         panel
+    }
+
+    #[test]
+    fn remote_terminal_here_preserves_host_and_resolves_only_current_entries() {
+        let host = Host {
+            alias: "test-host".into(),
+            folder: "/project".into(),
+            persistent_sessions: Some(false),
+            ..Default::default()
+        };
+        let mut panel = RemotePanel {
+            host: Some(host.clone()),
+            root: host.folder.clone(),
+            path: "/project/files".into(),
+            ..Default::default()
+        };
+        for (name, directory) in [("report.txt", false), ("notes & drafts", true)] {
+            panel.entries.push(Entry {
+                name: name.into(),
+                path: format!("/project/files/{name}"),
+                directory,
+                size: 0,
+            });
+        }
+        let hosts = std::slice::from_ref(&host);
+        let command = |alias: &str, path: &str| Command::TerminalHere {
+            host: alias.into(),
+            path: path.into(),
+        };
+        for (path, expected) in [
+            ("/project/files", "/project/files"),
+            ("/project/files/report.txt", "/project/files"),
+            (
+                "/project/files/notes & drafts",
+                "/project/files/notes & drafts",
+            ),
+        ] {
+            panel.command(command(&host.alias, path), hosts);
+            assert_eq!(
+                panel.terminal_request.take(),
+                Some(Host {
+                    folder: expected.into(),
+                    ..host.clone()
+                })
+            );
+        }
+        for (alias, path) in [
+            ("other", "/project/files"),
+            ("test-host", "/project/missing"),
+        ] {
+            panel.command(command(alias, path), hosts);
+            assert!(panel.terminal_request.is_none());
+        }
+        panel.command(command(&host.alias, "/project/files"), &[]);
+        assert!(panel.terminal_request.is_none());
     }
 
     #[test]

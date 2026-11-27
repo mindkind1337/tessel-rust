@@ -5475,6 +5475,20 @@ impl Tessel {
             }
         }
     }
+    fn open_requested_remote_terminal(&mut self) {
+        if let Some(host) = self.remote.terminal_request.take() {
+            let split = self
+                .active_session
+                .filter(|id| {
+                    self.sessions
+                        .iter()
+                        .any(|s| s.id == *id && s.project == self.state.active_project)
+                })
+                .map(|id| (id, crate::pane_grid::SplitDir::Col));
+            self.new_session_placed(Launch::Ssh(host), split);
+        }
+    }
+
     fn open_project_terminal_here(&mut self, root: &Path, path: &Path) {
         let Some(project) = self
             .state
@@ -14333,7 +14347,8 @@ impl eframe::App for Tessel {
                 View::Files => self.editor(ui),
                 View::Remote => {
                     self.remote
-                        .show(ui, &self.state.hosts, self.state.editor_prefs.font_size)
+                        .show(ui, &self.state.hosts, self.state.editor_prefs.font_size);
+                    self.open_requested_remote_terminal();
                 }
                 #[cfg(windows)]
                 View::Browser => {

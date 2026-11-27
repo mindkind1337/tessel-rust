@@ -176,6 +176,21 @@ pub(crate) fn render(
                 cx,
             ))
             .child(button(
+                "remote-terminal-here",
+                if fr {
+                    "Ouvrir un terminal ici"
+                } else {
+                    "Open a terminal here"
+                },
+                Command::TerminalHere {
+                    host: remote.connected.clone().unwrap_or_default(),
+                    path: remote.path.clone(),
+                },
+                free && connected && !remote.path.is_empty(),
+                tokens,
+                cx,
+            ))
+            .child(button(
                 "remote-disconnect",
                 if fr { "Déconnecter" } else { "Disconnect" },
                 Command::Disconnect,
@@ -245,6 +260,7 @@ pub(crate) fn render(
                 )),
         );
     }
+    let connected_alias = remote.connected.clone().unwrap_or_default();
     let entries = remote.entries.clone();
     let palette = *tokens;
     body = body.child(
@@ -309,6 +325,17 @@ pub(crate) fn render(
                                         el.child(div().flex_shrink_0().child(format!("· {size} B")))
                                     }),
                             )
+                            .child(button(
+                                format!("remote-terminal-{index}"),
+                                if fr { "Terminal ici" } else { "Terminal here" },
+                                Command::TerminalHere {
+                                    host: connected_alias.clone(),
+                                    path: path.clone(),
+                                },
+                                free,
+                                &palette,
+                                cx,
+                            ))
                             .child(
                                 div()
                                     .id(("remote-rename", index))

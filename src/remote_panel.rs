@@ -144,6 +144,7 @@ pub struct RemotePanel {
     rename: Option<(String, String)>,
     delete: Option<Entry>,
     host: Option<Host>,
+    pub(crate) terminal_request: Option<Host>,
     root: String,
     path: String,
     entries: Vec<Entry>,
@@ -662,6 +663,7 @@ impl RemotePanel {
             ));
         }
         let mut action = None;
+        let mut terminal_path = None;
         let mut compare = None;
         let mut download = None;
         let mut git_request = None;
@@ -673,6 +675,12 @@ impl RemotePanel {
                     if self.host.is_some() && ui.button(tr("Refresh")).clicked() {
                         self.tree_alignment_attempted = false;
                         action = Some(Action::List(self.path.clone()));
+                    }
+                    if self.host.is_some()
+                        && !self.path.is_empty()
+                        && ui.button(tr("Open a terminal here")).clicked()
+                    {
+                        terminal_path = Some(self.path.clone());
                     }
                     if self.path != self.root
                         && !self.path.is_empty()
@@ -727,6 +735,10 @@ impl RemotePanel {
                                 }
                             ));
                             response.context_menu(|ui| {
+                                if ui.button(tr("Open a terminal here")).clicked() {
+                                    terminal_path = Some(entry.path.clone());
+                                    ui.close();
+                                }
                                 if ui.button(tr("Delete…")).clicked() {
                                     self.delete = Some(entry.clone());
                                     ui.close();
@@ -749,6 +761,15 @@ impl RemotePanel {
                 );
             },
         );
+        if let (Some(host), Some(path)) = (&self.host, terminal_path) {
+            self.command(
+                control::Command::TerminalHere {
+                    host: host.alias.clone(),
+                    path,
+                },
+                hosts,
+            );
+        }
         if let Some(entry) = &self.delete {
             let mut close = false;
             egui::Modal::new(egui::Id::new("remote-delete")).show(ui.ctx(), |ui| {

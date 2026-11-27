@@ -104,7 +104,7 @@ impl AsyncWrite for Transport {
         Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
     }
 }
-fn clean(path: &str) -> bool {
+pub(crate) fn clean(path: &str) -> bool {
     path.len() <= 8192 && !path.chars().any(char::is_control) && !path.split('/').any(|p| p == "..")
 }
 fn child_name(name: &str) -> bool {
@@ -115,7 +115,7 @@ fn child_name(name: &str) -> bool {
         && !name.contains(['/', '\\'])
         && !name.chars().any(char::is_control)
 }
-fn within(root: &str, path: &str) -> bool {
+pub(crate) fn within(root: &str, path: &str) -> bool {
     path == root
         || (path.starts_with(root)
             && (root == "/" || path.as_bytes().get(root.len()) == Some(&b'/')))
