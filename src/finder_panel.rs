@@ -22,7 +22,18 @@ struct Scan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinderAction {
     OpenFile(PathBuf),
-    InsertInTerminal(PathBuf),
+    InsertInTerminal { path: PathBuf, relative: String },
+}
+
+impl FinderAction {
+    fn from_choice(root: &Path, relative: String, insert: bool) -> Self {
+        let path = root.join(&relative);
+        if insert {
+            Self::InsertInTerminal { path, relative }
+        } else {
+            Self::OpenFile(path)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -159,8 +170,10 @@ impl Finder {
 
     #[cfg(test)]
     pub fn show(&mut self, ctx: &egui::Context, active_root: Option<&Path>) -> Option<PathBuf> {
-        match self.show_action(ctx, active_root) {
-            Some(FinderAction::OpenFile(path) | FinderAction::InsertInTerminal(path)) => Some(path),
+        match self.show_action(ctx, active_root, true) {
+            Some(FinderAction::OpenFile(path) | FinderAction::InsertInTerminal { path, .. }) => {
+                Some(path)
+            }
             None => None,
         }
     }
@@ -169,6 +182,7 @@ impl Finder {
         &mut self,
         ctx: &egui::Context,
         active_root: Option<&Path>,
+        can_insert: bool,
     ) -> Option<FinderAction> {
         if !self.open {
             return None;
@@ -250,18 +264,17 @@ impl Finder {
                     }
                 });
             ui.separator();
-            ui.weak(tr("Enter to open · Ctrl+Enter to insert path in terminal"));
+            ui.weak(if can_insert {
+                tr("Enter to open · Ctrl+Enter to insert path in terminal")
+            } else {
+                tr("Enter to open")
+            });
         });
         if selected.is_some() || response.should_close() {
             self.close();
         }
         selected.map(|(relative, insert)| {
-            let full = self.root.join(relative);
-            if insert {
-                FinderAction::InsertInTerminal(full)
-            } else {
-                FinderAction::OpenFile(full)
-            }
+            FinderAction::from_choice(&self.root, relative, insert && can_insert)
         })
     }
 
@@ -305,12 +318,7 @@ impl Finder {
     pub(crate) fn gpui_accept_index(&mut self, idx: usize, insert: bool) -> Option<FinderAction> {
         let relative = self.results.get(idx)?.clone();
         self.close();
-        let full = self.root.join(relative);
-        if insert {
-            Some(FinderAction::InsertInTerminal(full))
-        } else {
-            Some(FinderAction::OpenFile(full))
-        }
+        Some(FinderAction::from_choice(&self.root, relative, insert))
     }
 
     #[allow(dead_code)]
@@ -493,7 +501,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    action = finder.show_action(ctx, Some(root.path()));
+                    action = finder.show_action(ctx, Some(root.path()), true);
                 },
             );
             action
@@ -517,9 +525,10 @@ mod tests {
         );
         assert_eq!(
             inserted,
-            Some(FinderAction::InsertInTerminal(
-                root.path().join("src/terminal.rs")
-            ))
+            Some(FinderAction::InsertInTerminal {
+                path: root.path().join("src/terminal.rs"),
+                relative: "src/terminal.rs".into()
+            })
         );
         assert!(!finder.is_open());
     }

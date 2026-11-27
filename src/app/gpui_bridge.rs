@@ -630,6 +630,7 @@ pub(crate) struct GpuiModalsSnapshot {
     pub palette_query: String,
     pub palette_selected: usize,
     pub palette_rows: Vec<crate::palette::PaletteRow>,
+    pub finder_can_insert: bool,
     pub finder: Option<crate::finder_panel::FinderGpuiSnapshot>,
     pub launch_menu_open: bool,
     pub launch_placement: crate::finder_model::LaunchPlacement,
@@ -4991,6 +4992,7 @@ impl Tessel {
             palette_selected: self.command_palette.index,
             palette_rows,
             finder: self.finder.gpui_snapshot(),
+            finder_can_insert: self.finder_target().is_some(),
             launch_menu_open: self.gpui_extra.launch_menu_open
                 || self.overlay == Some(Overlay::Launcher),
             launch_placement: self.gpui_extra.launch_placement,
@@ -7173,20 +7175,9 @@ impl Tessel {
                     Some(i) => self.finder.gpui_accept_index(i, insert),
                     None => self.finder.gpui_accept(insert),
                 };
-                if let Some(a) = act {
-                    match a {
-                        crate::finder_panel::FinderAction::OpenFile(p) => {
-                            self.open_document(p);
-                        }
-                        crate::finder_panel::FinderAction::InsertInTerminal(p) => {
-                            let quoted = format!("\"{}\"", p.display());
-                            let sid = self.active_session;
-                            self.apply_gpui_action(GpuiAction::TerminalPaste {
-                                session_id: sid,
-                                text: quoted,
-                            });
-                        }
-                    }
+                if let Some(action) = act {
+                    let ctx = self.gpui_extra.dummy_egui_ctx.clone();
+                    self.handle_finder_action(&ctx, action);
                 }
             }
             GpuiAction::ToggleLaunchMenu => {

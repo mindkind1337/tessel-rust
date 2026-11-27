@@ -204,7 +204,7 @@ fn render_command_palette(
                 .hover(|s| s.bg(tokens.surface_2))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(scope) = scope {
-                        super::search_inputs::choose(this, scope, &query, &cmd_id, cx);
+                        super::search_inputs::choose(this, scope, &query, &cmd_id, false, cx);
                     }
                 }))
                 .child(
@@ -299,12 +299,14 @@ fn render_file_finder(
 
     for (idx, rel) in f.results.iter().enumerate() {
         let sel = idx == f.selected;
+        let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
         let scope = inputs.scope(crate::app::gpui_bridge::NativeSearchKind::Finder);
         let query = f.query.clone();
         let relative = rel.clone();
         list = list.child(
             div()
                 .id(("gpui-finder-row", idx as u64))
+                .debug_selector(move || format!("finder-row-{idx}"))
                 .px(px(10.0))
                 .py(px(5.5))
                 .rounded(px(tokens.radius_px - 1.0))
@@ -320,18 +322,29 @@ fn render_file_finder(
                 .items_center()
                 .gap(px(6.))
                 .hover(|s| s.bg(tokens.surface_2))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     if let Some(scope) = scope {
-                        super::search_inputs::choose(this, scope, &query, &relative, cx);
+                        super::search_inputs::choose(
+                            this,
+                            scope,
+                            &query,
+                            &relative,
+                            event.modifiers().control,
+                            cx,
+                        );
                     }
                 }))
                 .child(super::file_icons::render(rel, tokens, tokens.text_dim))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(rel.clone())),
-                ),
+                .child(div().min_w_0().truncate().child(name.to_owned()))
+                .when(!dir.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(tokens.text_dim)
+                            .child(dir.to_owned()),
+                    )
+                }),
         );
     }
 
@@ -357,16 +370,61 @@ fn render_file_finder(
                     value: &f.query,
                     selected: f.results.get(f.selected).map(String::as_str),
                     placeholder: if french {
-                        "Aller à un fichier du projet…"
+                        "Aller à un fichier : tapez quelques lettres de son nom"
                     } else {
-                        "Jump to a project file…"
+                        "Jump to a file: type a few letters of its name"
                     },
                     french,
                 },
                 tokens,
                 cx,
             ))
-            .child(list)
+            .child(
+                if f.scanning || !f.error.is_empty() || f.results.is_empty() {
+                    let message = if f.scanning {
+                        if french {
+                            "Liste des fichiers du projet…"
+                        } else {
+                            "Listing the project's files…"
+                        }
+                    } else if !f.error.is_empty() {
+                        &f.error
+                    } else if french {
+                        "Aucun fichier ne correspond."
+                    } else {
+                        "No file matches."
+                    };
+                    div()
+                        .debug_selector(|| "finder-message".into())
+                        .text_color(tokens.text_dim)
+                        .child(message.to_owned())
+                        .into_any_element()
+                } else {
+                    list.into_any_element()
+                },
+            )
+            .child(div().text_size(px(11.)).text_color(tokens.text_dim).child({
+                let mut hints = vec![if french {
+                    "Entrée : ouvrir"
+                } else {
+                    "Enter: open"
+                }];
+                if m.finder_can_insert {
+                    hints.push(if french {
+                        "Ctrl+Entrée : mettre son chemin dans le panneau actif"
+                    } else {
+                        "Ctrl+Enter: put its path in the active pane"
+                    });
+                }
+                if f.truncated {
+                    hints.push(if french {
+                        "liste partielle"
+                    } else {
+                        "partial file list"
+                    });
+                }
+                hints.join(" · ")
+            }))
             .into_any_element(),
         cx,
     )

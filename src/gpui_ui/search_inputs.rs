@@ -305,6 +305,7 @@ pub(crate) fn choose(
     scope: NativeSearchScope,
     query: &str,
     choice: &str,
+    insert: bool,
     cx: &mut Context<TesselGpuiRoot>,
 ) {
     let Some(b) = root.search_inputs.bindings.get(&scope.kind) else {
@@ -316,7 +317,7 @@ pub(crate) fn choose(
                 scope,
                 query: query.into(),
                 choice: Some(choice.into()),
-                insert: false,
+                insert,
             },
             cx,
         );
@@ -337,6 +338,72 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+    #[gpui::test]
+    fn native_finder_ctrl_click_inserts_relative_path_or_opens_without_a_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        for with_terminal in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("project");
+            std::fs::create_dir_all(project.join("src")).unwrap();
+            let relative = "src/my file.rs";
+            std::fs::write(project.join(relative), "fixture").unwrap();
+            let expected = project.join(relative).canonicalize().unwrap();
+            let mut received = None;
+            let view = cx.add_window(|_, cx| {
+                let mut root =
+                    TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+                root.app
+                    .apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+                if with_terminal {
+                    received = Some(root.app.install_terminal_find_fixture().1);
+                }
+                root.app.install_finder_input_fixture(project.clone());
+                root.app
+                    .complete_finder_scan_for_test(vec![relative.to_owned()]);
+                root
+            });
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            let point = visual.debug_bounds("finder-row-0").unwrap().center();
+            visual.simulate_click(
+                point,
+                gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            );
+            if let Some(output) = received {
+                let bytes = output
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap();
+                assert_eq!(bytes, br#""src/my file.rs""#);
+            } else {
+                for _ in 0..100 {
+                    let ready = view
+                        .update(cx, |root, _, _| {
+                            root.app.poll_for_gpui();
+                            root.app
+                                .gpui_editor_document()
+                                .is_some_and(|doc| doc.path == expected)
+                        })
+                        .unwrap();
+                    if ready {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                view.update(cx, |root, _, _| {
+                    assert_eq!(root.app.gpui_editor_document().unwrap().path, expected)
+                })
+                .unwrap();
+            }
+            view.update(cx, |root, _, _| {
+                assert!(root.app.gpui_native_search_input().is_none())
+            })
+            .unwrap();
+        }
     }
     #[gpui::test]
     fn native_search_accept_preserves_rendered_result_across_scan_and_pending_edit(
@@ -647,7 +714,7 @@ mod tests {
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(Some(0..257), "main", window, cx)
             });
-            choose(root, scope, "", "README.md", cx); // renderer's old row, before queued edit settles
+            choose(root, scope, "", "README.md", false, cx); // renderer's old row, before queued edit settles
             assert!(root.app.gpui_native_search_input().is_some());
         })
         .unwrap();

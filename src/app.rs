@@ -3398,6 +3398,49 @@ impl Tessel {
         }
     }
 
+    fn finder_target(&self) -> Option<u64> {
+        self.active_session.filter(|id| {
+            self.sessions.iter().any(|session| {
+                session.id == *id
+                    && session.project == self.state.active_project
+                    && session
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|t| !t.exited() && t.accepts_broadcast_input())
+            })
+        })
+    }
+    fn handle_finder_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::finder_panel::FinderAction,
+    ) {
+        use crate::finder_panel::FinderAction;
+        match action {
+            FinderAction::OpenFile(path) => self.open_document(path),
+            FinderAction::InsertInTerminal { path, relative } => {
+                if let Some(target) = self.finder_target()
+                    && let Some(term) = self
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == target)
+                        .and_then(|s| s.terminal.as_mut())
+                {
+                    let text = if relative.chars().any(char::is_whitespace) {
+                        format!("\"{relative}\"")
+                    } else {
+                        relative
+                    };
+                    term.paste_text(&text);
+                    term.request_focus(ctx);
+                    self.view = View::Work;
+                } else {
+                    self.open_document(path);
+                }
+            }
+        }
+    }
+
     fn paste_into_active_terminal(&mut self, ctx: &egui::Context, text: &str) -> bool {
         if text.is_empty() {
             return false;
@@ -14044,19 +14087,13 @@ impl eframe::App for Tessel {
         });
         #[cfg_attr(not(windows), allow(unused_variables))]
         let floating_rect = self.show_floating(ctx, central.response.rect);
-        if let Some(action) = self
-            .finder
-            .show_action(ctx, self.state.active().map(|p| p.path.as_path()))
-        {
-            match action {
-                crate::finder_panel::FinderAction::OpenFile(path) => self.open_document(path),
-                crate::finder_panel::FinderAction::InsertInTerminal(path) => {
-                    let quoted = shell_quote_path(&path);
-                    if !self.paste_into_active_terminal(ctx, &quoted) {
-                        self.open_document(path);
-                    }
-                }
-            }
+        let can_insert = self.finder_target().is_some();
+        if let Some(action) = self.finder.show_action(
+            ctx,
+            self.state.active().map(|p| p.path.as_path()),
+            can_insert,
+        ) {
+            self.handle_finder_action(ctx, action);
         }
         self.show_overlay(ctx);
         self.show_command_palette(ctx);
