@@ -9346,6 +9346,53 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    fn preview_replacement_stays_in_the_document_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("main");
+        let feature = temp.path().join("feature");
+        for root in [&project, &feature] {
+            std::fs::create_dir(root).unwrap();
+            for name in ["one.txt", "two.txt"] {
+                std::fs::write(root.join(name), name).unwrap();
+            }
+        }
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+        let open = |app: &mut Tessel, root: &std::path::Path, file: &str| {
+            app.open_document_at_mode(root.to_owned(), root.join(file), false);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !app.document_pending.is_empty() {
+                app.poll_for_gpui();
+                assert!(std::time::Instant::now() < until);
+                std::thread::yield_now();
+            }
+        };
+        open(&mut app, &project, "one.txt");
+        let original = app.documents[app.active_document].instance_id();
+        open(&mut app, &feature, "one.txt");
+        open(&mut app, &feature, "two.txt");
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.documents[0].instance_id(), original);
+        assert_eq!(app.documents[app.active_document].root, feature);
+        assert!(app.documents[app.active_document].path.ends_with("two.txt"));
+        app.sender
+            .send(super::super::Message::DiffDocument {
+                project: app.state.active_project,
+                source_doc: None,
+                root: feature.clone(),
+                path: feature.join("one.txt"),
+                area: crate::view_tabs_browser_model::DiffTabArea::Staged,
+                pinned: false,
+                result: Ok("patch".into()),
+            })
+            .unwrap();
+        app.poll();
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.documents[0].instance_id(), original);
+        assert!(app.documents[app.active_document].diff_area.is_some());
+    }
+
+    #[test]
     fn delayed_previews_and_diffs_leave_the_current_projects_editor_selected() {
         use crate::view_tabs_browser_model::DiffTabArea;
         let temp = tempfile::tempdir().unwrap();

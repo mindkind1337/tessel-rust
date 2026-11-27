@@ -2194,10 +2194,13 @@ impl Tessel {
     fn open_document_at_mode(&mut self, root: PathBuf, path: PathBuf, pinned: bool) {
         self.open_document_at_position(root, path, pinned, None);
     }
-    fn replaceable_preview(&self, project: Option<u64>) -> Option<usize> {
-        self.documents
-            .iter()
-            .position(|doc| doc.project == project && doc.unpinned_preview && !doc.dirty())
+    fn replaceable_preview(&self, project: Option<u64>, root: &std::path::Path) -> Option<usize> {
+        self.documents.iter().position(|doc| {
+            doc.project == project
+                && dunce::simplified(&doc.root) == dunce::simplified(root)
+                && doc.unpinned_preview
+                && !doc.dirty()
+        })
     }
 
     fn open_document_at_position(
@@ -2228,7 +2231,7 @@ impl Tessel {
             }
             return;
         }
-        let replaceable = !pinned && self.replaceable_preview(project).is_some();
+        let replaceable = !pinned && self.replaceable_preview(project, &root).is_some();
         if !replaceable && self.documents.len() + self.document_pending.len() >= 24 {
             self.error = "Close a document before opening more (24-tab limit)".into();
             return;
@@ -2440,7 +2443,7 @@ impl Tessel {
         });
         let replaceable = !pinned
             && self
-                .replaceable_preview(self.state.active_project)
+                .replaceable_preview(self.state.active_project, &root)
                 .is_some();
         if !existing && !replaceable && self.documents.len() + self.document_pending.len() >= 24 {
             self.error = "Close a document before opening more (24-tab limit)".into();
@@ -2915,7 +2918,9 @@ impl Tessel {
                                     self.documents[i].unpinned_preview = false;
                                 }
                                 i
-                            } else if !pinned && let Some(i) = self.replaceable_preview(project) {
+                            } else if !pinned
+                                && let Some(i) = self.replaceable_preview(project, &d.root)
+                            {
                                 self.documents[i] = d;
                                 i
                             } else if self.documents.len() >= 24 {
@@ -2984,7 +2989,8 @@ impl Tessel {
                                 self.documents[i].unpinned_preview = false;
                             }
                             i
-                        } else if !pinned && let Some(i) = self.replaceable_preview(project) {
+                        } else if !pinned && let Some(i) = self.replaceable_preview(project, &root)
+                        {
                             self.documents[i] = doc;
                             i
                         } else if self.documents.len() < 24 {
@@ -8693,7 +8699,11 @@ impl Tessel {
             return;
         }
         if self.documents.len() >= 24 {
-            if let Some(idx) = self.replaceable_preview(self.state.active_project) {
+            let root = self
+                .state
+                .active()
+                .map_or(std::path::Path::new(""), |p| p.path.as_path());
+            if let Some(idx) = self.replaceable_preview(self.state.active_project, root) {
                 self.documents[idx] =
                     Document::from_readonly_text(PathBuf::new(), vpath, title, content, markdown);
                 self.documents[idx].project = self.state.active_project;
