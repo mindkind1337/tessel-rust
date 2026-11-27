@@ -36,10 +36,10 @@ struct Book {
     truncated: bool,
 }
 impl Book {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self, extension: &str) -> Result<(), String> {
         let mut bytes = 0usize;
         let mut cells = 0usize;
-        if self.sections.is_empty() || self.sections.len() > 200 {
+        if (self.sections.is_empty() && !is_workbook(extension)) || self.sections.len() > 200 {
             return Err("Office section limit reached".into());
         }
         for page in &self.sections {
@@ -73,6 +73,9 @@ impl Book {
         }
         Ok(())
     }
+}
+fn is_workbook(extension: &str) -> bool {
+    matches!(extension, "xlsx" | "xlsm" | "ods")
 }
 pub fn supported(extension: &str) -> bool {
     matches!(
@@ -181,7 +184,7 @@ fn decode(bytes: &[u8], extension: &str, cancel: &AtomicBool) -> Result<Book, St
         return Err("Office output exceeds limit".into());
     }
     let book: Book = serde_json::from_slice(&result).map_err(|_| "Invalid Office preview")?;
-    book.validate()?;
+    book.validate(extension)?;
     Ok(book)
 }
 pub struct OfficeView {
@@ -197,6 +200,7 @@ pub struct OfficeView {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct OfficeSummary {
+    pub workbook: bool,
     pub section_titles: Vec<String>,
     pub selected: usize,
     pub paragraphs: Vec<(bool, String)>,
@@ -244,21 +248,24 @@ impl OfficeView {
         }
         let summary = if let Some(book) = &self.book {
             let idx = self.selected.min(book.sections.len().saturating_sub(1));
-            let page = &book.sections[idx];
-            let sheet = (!page.rows.is_empty()).then(|| crate::rich_previews::SheetTable {
-                rows: page.rows.clone(),
-                start_row: page.start_row as usize,
-                start_col: page.start_col as usize,
-                truncated_rows: usize::from(book.truncated),
-                truncated_cols: 0,
-                delimiter_label: "Workbook sheet",
-            });
+            let page = book.sections.get(idx);
+            let sheet =
+                page.filter(|p| !p.rows.is_empty())
+                    .map(|page| crate::rich_previews::SheetTable {
+                        rows: page.rows.clone(),
+                        start_row: page.start_row as usize,
+                        start_col: page.start_col as usize,
+                        truncated_rows: usize::from(book.truncated),
+                        truncated_cols: 0,
+                        delimiter_label: "Workbook sheet",
+                    });
             OfficeSummary {
+                workbook: is_workbook(&self.extension),
                 section_titles: book.sections.iter().map(|s| s.title.clone()).collect(),
                 selected: idx,
                 paragraphs: page
-                    .paragraphs
-                    .iter()
+                    .into_iter()
+                    .flat_map(|p| &p.paragraphs)
                     .map(|p| (p.heading, p.text.clone()))
                     .collect(),
                 sheet: sheet.map(Arc::new),
@@ -268,6 +275,7 @@ impl OfficeView {
             }
         } else {
             OfficeSummary {
+                workbook: is_workbook(&self.extension),
                 busy: self.pending.is_some(),
                 error: self.error.clone(),
                 ..Default::default()
@@ -324,6 +332,10 @@ impl OfficeView {
                     tr("Preview truncated at the document limits."),
                 );
             }
+            if book.sections.is_empty() {
+                ui.label(tr("This workbook has no sheet."));
+                return;
+            }
             let previous_section = self.selected;
             egui::ScrollArea::horizontal()
                 .id_salt("office-tabs")
@@ -347,6 +359,9 @@ impl OfficeView {
                         } else {
                             ui.add(egui::Label::new(&paragraph.text).selectable(true));
                         }
+                    }
+                    if page.rows.is_empty() && is_workbook(&self.extension) {
+                        ui.label(tr("This sheet is empty."));
                     }
                     if !page.rows.is_empty() {
                         let sheet = crate::rich_previews::SheetTable {

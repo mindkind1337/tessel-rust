@@ -1793,21 +1793,62 @@ pub(crate) fn render_office_summary(
     cx: &Context<TesselGpuiRoot>,
     remote: bool,
 ) -> gpui::Div {
+    let workbook = summary.workbook;
+    let note = |label: &'static str| {
+        div()
+            .px(px(20.))
+            .py(px(16.))
+            .text_color(tokens.text_dim)
+            .child(label)
+    };
+    if workbook {
+        if !summary.error.is_empty() {
+            return note(if french {
+                "Ce classeur n'a pas pu être lu."
+            } else {
+                "This workbook could not be read."
+            })
+            .text_color(tokens.danger);
+        }
+        if summary.busy {
+            return note(if french { "Lecture…" } else { "Reading…" });
+        }
+        if summary.section_titles.is_empty() {
+            return note(if french {
+                "Ce classeur n'a aucune feuille."
+            } else {
+                "This workbook has no sheet."
+            });
+        }
+    }
     let mut tabs = div()
-        .px(px(10.0))
-        .py(px(5.0))
+        .id("office-section-tabs")
+        .role(gpui::Role::TabList)
+        .debug_selector(|| "office-section-tabs".into())
+        .px(px(if workbook { 8. } else { 10. }))
+        .py(px(if workbook { 4. } else { 5. }))
         .bg(tokens.chrome)
-        .border_b_1()
+        .when(workbook, |el| el.border_t_1())
+        .when(!workbook, |el| el.border_b_1())
         .border_color(tokens.border)
+        .flex_shrink_0()
         .flex()
         .items_center()
-        .gap(px(6.0));
+        .overflow_x_scroll()
+        .gap(px(if workbook { 2. } else { 6. }));
 
     for (idx, title) in summary.section_titles.iter().enumerate() {
         let active = idx == summary.selected;
         tabs = tabs.child(
             div()
                 .id(("office-sec", idx))
+                .role(gpui::Role::Tab)
+                .aria_selected(active)
+                .aria_label(title.clone())
+                .debug_selector(move || format!("office-section-{idx}"))
+                .max_w(px(220.))
+                .flex_shrink_0()
+                .truncate()
                 .px(px(8.0))
                 .py(px(3.0))
                 .rounded(px(4.0))
@@ -1837,9 +1878,33 @@ pub(crate) fn render_office_summary(
         );
     }
 
-    let body = if let Some(sheet) = &summary.sheet {
-        super::sheet_view::render(sheet.clone(), french, tokens, cx).into_any_element()
-    } else {
+    if workbook {
+        tabs = tabs.child(
+            div()
+                .ml_auto()
+                .pl(px(12.))
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(tokens.text_dim)
+                .child(if french { "Lecture seule" } else { "Read-only" }),
+        );
+        let body = match &summary.sheet {
+            Some(sheet) => super::sheet_view::render(sheet.clone(), french, tokens, cx),
+            None => note(if french {
+                "Cette feuille est vide."
+            } else {
+                "This sheet is empty."
+            })
+            .debug_selector(|| "office-empty-sheet".into()),
+        };
+        return div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().child(body))
+            .child(tabs);
+    }
+    let body = {
         let mut p_col = div()
             .id("office-paragraphs")
             .flex_1()

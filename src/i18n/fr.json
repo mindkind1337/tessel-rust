@@ -1,4 +1,6 @@
 {
+  "This workbook has no sheet.": "Ce classeur n'a aucune feuille.",
+  "This sheet is empty.": "Cette feuille est vide.",
   "Duplicate custom agent name.": "Un agent portant ce nom existe déjà.",
   "Enter a name and the command that starts the agent.": "Entrez un nom et la commande qui démarre l’agent.",
   "Too many custom agents (maximum 30).": "Le maximum de 30 agents personnalisés est atteint.",

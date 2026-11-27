@@ -6,6 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Local and SSH workbooks show sheet tabs below the grid, with a read-only label and messages for empty sheets and workbooks.
 - Local and SSH PDF toolbars highlight Fit width and apply zoom to the document that displayed the controls. The viewer shows reading and error messages inside the viewport. A page that fails to render is marked individually while other pages stay available.
 - Following a local document link pins the source tab and opens the target in a pinned tab. The index stays available when you preview another file.
 - Local and SSH HTML previews show the project-relative page path with controls to reload, open in the browser, and manage folder trust.

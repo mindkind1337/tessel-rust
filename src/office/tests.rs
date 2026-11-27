@@ -155,3 +155,60 @@ fn ods_values_and_repeated_cells() {
     let book = parse::parse(&bytes, "ods").unwrap();
     assert_eq!(book.sections[0].rows[0], ["Hello", "12", "12"]);
 }
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn office_workbook_tabs_switch_between_data_and_an_empty_sheet(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.xlsx");
+    let bytes = spreadsheet();
+    std::fs::write(&path, &bytes).unwrap();
+    let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+    let mut book = parse::parse(&bytes, "xlsx").unwrap();
+    book.sections.push(Section {
+        title: "Blank".into(),
+        rows: vec![],
+        paragraphs: vec![],
+        start_row: 0,
+        start_col: 0,
+    });
+    doc.office.as_mut().unwrap().book = Some(book);
+    let window = cx.add_window(|_, cx| {
+        let mut root =
+            crate::gpui_ui::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app.install_editor_input_fixture(vec![doc], 0);
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let footer = visual.debug_bounds("office-section-tabs").unwrap();
+    assert!(visual.debug_bounds("office-empty-sheet").is_none());
+    let blank = visual.debug_bounds("office-section-1").unwrap().center();
+    visual.simulate_click(blank, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let empty = visual.debug_bounds("office-empty-sheet").unwrap();
+    assert!(empty.bottom() <= footer.top());
+    let first = visual.debug_bounds("office-section-0").unwrap().center();
+    visual.simulate_click(first, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("office-empty-sheet").is_none());
+    assert_eq!(visual.debug_bounds("office-section-tabs").unwrap(), footer);
+}
+
+#[test]
+fn empty_office_workbooks_have_no_synthetic_section() {
+    let (mut view, tx) = pending_view();
+    view.extension = "xlsx".into();
+    let book = Book {
+        sections: vec![],
+        truncated: false,
+    };
+    assert!(book.validate("xlsx").is_ok());
+    assert!(book.validate("docx").is_err());
+    tx.send(Ok(book)).unwrap();
+    let summary = view.gpui_poll_summary();
+    assert!(summary.workbook && summary.section_titles.is_empty() && summary.sheet.is_none());
+    assert!(!summary.busy && summary.error.is_empty());
+}

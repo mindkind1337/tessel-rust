@@ -193,7 +193,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
         sections: vec![],
         truncated: false,
     };
-    if matches!(extension, "xlsx" | "xlsm" | "ods") {
+    if super::is_workbook(extension) {
         let mut workbook = calamine::open_workbook_auto_from_rs(Cursor::new(bytes))
             .map_err(|_| "Cannot decode spreadsheet")?;
         let names = workbook.sheet_names().to_vec();
@@ -355,9 +355,9 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
             _ => return Err("Unsupported Office format".into()),
         }
     }
-    if book.sections.is_empty() {
+    if book.sections.is_empty() && !super::is_workbook(extension) {
         return Err("No readable Office content found".into());
     }
-    book.validate()?;
+    book.validate(extension)?;
     Ok(book)
 }
