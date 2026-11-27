@@ -43,6 +43,27 @@ impl Grid {
         }
     }
 
+    pub(crate) fn prepend_history(&mut self, mut previous: Self) {
+        if self.scrollback_len == 0 {
+            return;
+        }
+        // Keep blank lines between output, but not unused rows below it.
+        let last = previous.rows.iter().rposition(|row| !row.is_blank());
+        previous.rows.truncate(last.map_or(0, |index| index + 1));
+        let anchor = previous.scrollback_offset;
+        if anchor > 0 && self.scrollback_offset == 0 {
+            self.scrollback_offset = anchor
+                .saturating_add(previous.rows.len())
+                .saturating_add(self.scrollback.len())
+                .min(self.scrollback_len);
+        }
+        previous.scrollback.extend(previous.rows);
+        previous.scrollback.append(&mut self.scrollback);
+        let excess = previous.scrollback.len().saturating_sub(self.scrollback_len);
+        previous.scrollback.drain(..excess);
+        self.scrollback = previous.scrollback;
+    }
+
     fn new_row(&self) -> crate::row::Row {
         crate::row::Row::new(self.size.cols)
     }

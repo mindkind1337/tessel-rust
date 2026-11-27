@@ -82,9 +82,19 @@ pub(crate) struct Retry {
     attempts: usize,
     deadline: Option<Instant>,
     last_lost_session: Option<Instant>,
+    history: Option<Box<vt100::Parser>>,
 }
 
 impl Retry {
+    pub fn retain_output(&mut self, terminal: &mut crate::terminal::Terminal) {
+        self.history = Some(Box::new(terminal.take_history_for_reconnect()));
+    }
+    pub fn restore_output(&mut self, terminal: &mut crate::terminal::Terminal, replaced: bool) {
+        if let Some(previous) = self.history.take() {
+            terminal.restore_history_after_restart(*previous, replaced);
+        }
+    }
+
     pub fn automatic(&self) -> bool {
         self.attempts != 0
     }
@@ -157,6 +167,41 @@ impl Retry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnected_ssh_history_keeps_styled_rows_within_the_new_limit() {
+        let mut old = vt100::Parser::new(3, 12, 20);
+        old.process(b"discard\r\n\x1b[31mfirst\x1b[m\r\n\r\nlast\x1b[?2004h\x1b[?1049hprivate TUI");
+        let mut new = vt100::Parser::new(2, 15, 3);
+        new.process(b"fresh");
+        new.prepend_history(old);
+        assert_eq!(new.screen().contents(), "fresh");
+        assert!(!new.screen().alternate_screen());
+        assert!(!new.screen().bracketed_paste());
+        new.set_scrollback(usize::MAX);
+        assert_eq!(new.screen().scrollback(), 3);
+        assert!(new.screen().contents().starts_with("first"));
+        assert_eq!(
+            new.screen().cell(0, 0).unwrap().fgcolor(),
+            vt100::Color::Idx(1)
+        );
+        new.set_scrollback(1);
+        assert_eq!(new.screen().contents(), "last\nfresh");
+    }
+
+    #[test]
+    fn reconnect_keeps_the_reader_at_the_same_archived_line() {
+        let mut old = vt100::Parser::new(2, 20, 10);
+        old.process(b"first\r\nsecond\r\nthird\r\nfourth");
+        old.set_scrollback(1);
+        assert_eq!(old.screen().contents(), "second\nthird");
+        let mut new = vt100::Parser::new(2, 20, 10);
+        new.prepend_history(old);
+        new.process(b"new shell");
+        assert_eq!(new.screen().contents(), "second\nthird");
+        new.set_scrollback(0);
+        assert_eq!(new.screen().contents(), "new shell");
+    }
 
     #[test]
     fn frames_require_the_same_launch_and_survive_arbitrary_read_boundaries() {
@@ -311,6 +356,67 @@ mod openssh_tests {
         (fixture, local, config)
     }
 
+    fn fixture_terminal(
+        config: &Path,
+        host: &Launch,
+        id: Option<&str>,
+        automatic: bool,
+    ) -> Terminal {
+        let channel = Channel::new(automatic).unwrap();
+        let mut command =
+            crate::launch::pane_command(host, Path::new("."), None, None, id, Some(&channel))
+                .unwrap();
+        command
+            .get_argv_mut()
+            .splice(1..1, ["-F".into(), config.as_os_str().to_owned()]);
+        let mut terminal = Terminal::spawn_command(command).unwrap();
+        terminal.ssh_channel = Some(channel);
+        terminal
+    }
+
+    #[test]
+    #[ignore = "requires WSL with OpenSSH server and public-key login to self"]
+    fn ssh_reconnect_preserves_searchable_output_after_real_transport_loss() {
+        let (fixture, _local, config) = isolated_server();
+        let host = Launch::Ssh(Host {
+            alias: "fixture".into(),
+            folder: "~".into(),
+            persistent_sessions: Some(false),
+            ..Default::default()
+        });
+        let mut first = fixture_terminal(&config, &host, None, false);
+        wait_until(&mut first, |t| {
+            t.ssh_channel.as_ref().unwrap().opened.is_some() && t.output().contains('$')
+        });
+        first
+            .run_quick_command(r#"seq 1 80 | sed 's/^/history-line-/'"#, true)
+            .unwrap();
+        wait_until(&mut first, |t| t.output().contains("history-line-80"));
+        wsl(&[
+            "sh",
+            "-c",
+            r#"kill -KILL "$(cat "$1/transport")""#,
+            "sh",
+            &fixture.0,
+        ]);
+        wait_until(&mut first, Terminal::exited);
+        assert_eq!(first.exit_code(), Some(255));
+
+        let mut retry = Retry::default();
+        retry.retain_output(&mut first);
+        first.stop_for_restart().unwrap();
+        drop(first);
+        let mut next = fixture_terminal(&config, &host, None, true);
+        retry.restore_output(&mut next, true);
+        wait_until(&mut next, |t| {
+            t.ssh_channel.as_ref().unwrap().opened.is_some() && t.output().contains('$')
+        });
+        assert!(!next.output().contains("history-line-42"));
+        next.gpui_find_set_query("history-line-42".into());
+        assert!(next.output().contains("history-line-42"));
+        assert_eq!(next.take_selection().as_deref(), Some("history-line-42"));
+    }
+
     #[test]
     #[ignore = "requires WSL with OpenSSH server and public-key login to self"]
     fn direct_ssh_login_preserves_shell_request_and_reports_both_255_outcomes() {
@@ -367,24 +473,7 @@ mod openssh_tests {
             ..Default::default()
         });
         let id = crate::claude::uuid().unwrap();
-        let start = |automatic| {
-            let channel = Channel::new(automatic).unwrap();
-            let mut command = crate::launch::pane_command(
-                &host,
-                Path::new("."),
-                None,
-                None,
-                Some(&id),
-                Some(&channel),
-            )
-            .unwrap();
-            command
-                .get_argv_mut()
-                .splice(1..1, ["-F".into(), config.as_os_str().to_owned()]);
-            let mut terminal = Terminal::spawn_command(command).unwrap();
-            terminal.ssh_channel = Some(channel);
-            terminal
-        };
+        let start = |automatic| fixture_terminal(&config, &host, Some(&id), automatic);
         let pid = || {
             wsl(&[
                 "env",

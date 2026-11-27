@@ -19,6 +19,12 @@ impl Parser {
         }
     }
 
+    /// Move primary-screen rows into this terminal's bounded scrollback.
+    /// Parser state, cursor, drawing attributes and input modes stay local.
+    pub fn prepend_history(&mut self, previous: Self) {
+        self.screen.prepend_history(previous.screen);
+    }
+
     /// Processes the contents of the given byte string, and updates the
     /// in-memory terminal state.
     pub fn process(&mut self, bytes: &[u8]) {

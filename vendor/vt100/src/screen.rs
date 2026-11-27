@@ -83,6 +83,13 @@ pub struct Screen {
 }
 
 impl Screen {
+    pub(crate) fn prepend_history(&mut self, mut previous: Self) {
+        if previous.alternate_screen() {
+            previous.grid.set_scrollback(0);
+        }
+        self.grid.prepend_history(previous.grid);
+    }
+
     pub(crate) fn new(
         size: crate::grid::Size,
         scrollback_len: usize,

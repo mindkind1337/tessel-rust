@@ -18,6 +18,12 @@ switch for an old parser that is about to be discarded. Tessel copies alternate
 cells first, then reads the primary screen/history directly. This avoids parsing
 a synthetic escape while remote output may have left an unfinished OSC/DCS.
 
-Regression coverage lives in `tests/host_terminal_viewport.rs`, including a
+SSH reconnect uses `Parser::prepend_history` to move the previous primary
+screen and its scrollback into the replacement terminal. The new terminal
+enforces its own scrollback limit and retains its own live screen and modes.
+The SSH reconnect tests cover styled rows, intervening blank lines and the
+alternate screen.
+
+Viewport regression coverage lives in `tests/host_terminal_viewport.rs`, including a
 second screen replacement while scrolled into archived history. Keep explicit
 deep-scrollback row-count and content checks when upgrading this dependency.

@@ -546,7 +546,8 @@ impl Session {
                 Ok(Ok(())) => {
                     self.start_with_shell(pending.preferences, pending.preferred_shell);
                 }
-                Ok(Err((terminal, error))) => {
+                Ok(Err((mut terminal, error))) => {
+                    self.ssh_retry.restore_output(&mut terminal, false);
                     if self.ssh_retry.automatic() {
                         self.ssh_retry.give_up();
                     }
@@ -570,7 +571,8 @@ impl Session {
             changed = true;
             self.loading = None;
             match result {
-                Ok(t) => {
+                Ok(mut t) => {
+                    self.ssh_retry.restore_output(&mut t, true);
                     self.resume_required = self.conversation_id.is_some();
                     self.error.clear();
                     self.terminal = Some(t);
@@ -592,6 +594,7 @@ impl Session {
                     .ssh_retry
                     .due(std::time::Instant::now(), channel, t.exit_code())
                 {
+                    self.ssh_retry.retain_output(t);
                     self.stop_for_relaunch(None, None);
                     changed = true;
                 } else {

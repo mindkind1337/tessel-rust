@@ -259,10 +259,12 @@ impl State {
                 self.active_launch = Some(plan);
             }
         }
-        let can_retry = !self.exit_pending && !self.exit_failed && self.runtime.error().is_none();
+        let replaced = self.runtime.error().is_none();
+        let can_retry = !self.exit_pending && !self.exit_failed && replaced;
         let Some(terminal) = self.runtime.process() else {
             return;
         };
+        self.ssh_retry.restore_output(terminal, replaced);
         terminal.poll();
         if can_retry
             && let Some(plan) = &self.active_launch
@@ -275,7 +277,12 @@ impl State {
             // Restart the original host even after the user switches projects.
             // Worker admission failures leave the process in place; the next poll
             // schedules another bounded attempt.
-            let _ = self.runtime.restart(move || plan.spawn(true));
+            self.ssh_retry.retain_output(terminal);
+            if self.runtime.restart(move || plan.spawn(true)).is_err()
+                && let Some(original) = self.runtime.process()
+            {
+                self.ssh_retry.restore_output(original, false);
+            }
         }
     }
     #[cfg(all(test, feature = "visual-test"))]

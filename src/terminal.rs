@@ -875,6 +875,22 @@ impl Terminal {
             self.status = error;
         }
     }
+    pub(crate) fn take_history_for_reconnect(&mut self) -> vt100::Parser {
+        std::mem::replace(&mut self.parser, vt100::Parser::new(1, 1, 0))
+    }
+
+    pub(crate) fn restore_history_after_restart(
+        &mut self,
+        previous: vt100::Parser,
+        replaced: bool,
+    ) {
+        if replaced {
+            self.parser.prepend_history(previous);
+        } else {
+            self.parser = previous;
+        }
+    }
+
     pub(crate) fn ssh_transport_lost(&self) -> bool {
         self.exit_code == Some(255) && self.ssh_channel.as_ref().is_some_and(|c| !c.remote_255)
     }
@@ -2901,6 +2917,22 @@ while ($true) { Start-Sleep -Milliseconds 50 }"#).unwrap();
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("settings-text-field")));
         assert!(!terminal.has_focus(&ctx));
     }
+    #[test]
+    fn failed_ssh_relaunch_restores_the_exact_previous_view() {
+        let mut terminal = Terminal::spawn().unwrap();
+        terminal.parser = vt100::Parser::new(2, 16, 10);
+        terminal.process_output(b"one\r\ntwo\r\nthree");
+        terminal.parser.set_scrollback(1);
+        let before = terminal.output();
+        let mut retry = crate::ssh_reconnect::Retry::default();
+        retry.retain_output(&mut terminal);
+        retry.restore_output(&mut terminal, false);
+        assert_eq!(terminal.output(), before);
+        assert_eq!(terminal.parser.screen().scrollback(), 1);
+        retry.restore_output(&mut terminal, false);
+        assert_eq!(terminal.output(), before);
+    }
+
     #[test]
     fn exited_terminal_discards_pending_paste_and_rejects_new_input() {
         let mut terminal = Terminal::spawn().unwrap();
