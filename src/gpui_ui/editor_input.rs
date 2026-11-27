@@ -889,7 +889,7 @@ mod tests {
         let mut doc = Document::open(dir.path(), &path).unwrap();
         let id = doc.instance_id();
         doc.text = "my draft".into();
-        std::fs::write(&path, "disk edit").unwrap();
+        std::fs::write(&path, "\u{feff}disk edit").unwrap();
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
             root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
@@ -941,7 +941,7 @@ mod tests {
             let doc = root.app.gpui_editor_document().unwrap();
             assert_eq!(doc.text, "my draft");
             assert!(doc.dirty());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "disk edit");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "\u{feff}disk edit");
         })
         .unwrap();
     }

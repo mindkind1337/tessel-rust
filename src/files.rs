@@ -58,6 +58,26 @@ pub fn save_download(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+const UTF8_BOM: char = '\u{feff}';
+
+fn split_bom(mut text: String) -> (String, bool) {
+    let bom = text.starts_with(UTF8_BOM);
+    if bom {
+        text.drain(..UTF8_BOM.len_utf8());
+    }
+    (text, bom)
+}
+
+fn read_editor_text(path: &Path) -> Result<(String, bool)> {
+    let bytes = read(path)?;
+    if bytes.contains(&0) {
+        return Err("Binary file: text editing is disabled.".into());
+    }
+    String::from_utf8(bytes)
+        .map(split_bom)
+        .map_err(|_| "This file is not UTF-8 text.".into())
+}
+
 pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     fs::File::open(path)
@@ -389,6 +409,7 @@ pub struct Document {
     pub path: PathBuf,
     pub text: String,
     original: Vec<u8>,
+    utf8_bom: bool,
     pub error: String,
     pub preview_mode: bool,
     pub preview: Option<crate::preview::Preview>,
@@ -502,6 +523,7 @@ impl Document {
             path,
             text: diff_text,
             original: vec![],
+            utf8_bom: false,
             error: String::new(),
             preview_mode: false,
             preview: None,
@@ -539,6 +561,7 @@ impl Document {
             path,
             text,
             original: vec![],
+            utf8_bom: false,
             error: String::new(),
             preview_mode: markdown,
             preview,
@@ -569,6 +592,7 @@ impl Document {
             path,
             text: String::new(),
             original: vec![],
+            utf8_bom: false,
             error: String::new(),
             preview_mode: true,
             preview: None,
@@ -647,6 +671,7 @@ impl Document {
                 path,
                 text: String::new(),
                 original: bytes,
+                utf8_bom: false,
                 error: String::new(),
                 preview_mode: true,
                 preview: None,
@@ -668,12 +693,8 @@ impl Document {
                 sheet_cache: None,
             });
         }
-        let original = read(&path)?;
-        if original.contains(&0) {
-            return Err("Binary file: text editing is disabled.".into());
-        }
-        let text = String::from_utf8(original.clone())
-            .map_err(|_| "This file is not UTF-8 text.".to_string())?;
+        let (text, utf8_bom) = read_editor_text(&path)?;
+        let original = text.as_bytes().to_vec();
         let is_md = matches!(extension.as_str(), "md" | "markdown");
         let md_source_only = is_md
             && matches!(
@@ -687,6 +708,7 @@ impl Document {
             path,
             text,
             original,
+            utf8_bom,
             error: String::new(),
             preview_mode: !md_source_only
                 && matches!(
@@ -749,12 +771,12 @@ impl Document {
     pub fn dirty(&self) -> bool {
         !self.media && self.text.as_bytes() != self.original
     }
-    fn read_current_disk(&self) -> Result<Vec<u8>> {
+    fn read_current_disk(&self) -> Result<(String, bool)> {
         let actual = confined(&self.root, &self.path)?;
         if actual != self.path {
             return Err("File target changed since opening.".into());
         }
-        read(&actual)
+        read_editor_text(&actual)
     }
 
     pub(crate) fn observe_disk(&mut self, text: Option<String>) -> bool {
@@ -769,6 +791,8 @@ impl Document {
             }
             return changed;
         };
+        let (text, bom) = split_bom(text);
+        self.utf8_bom = bom;
         let restored = std::mem::take(&mut self.deleted_on_disk);
         if text.as_bytes() == self.original {
             if restored || self.tools.conflict_disk.is_some() {
@@ -809,14 +833,8 @@ impl Document {
         self.error.clear();
     }
 
-    fn remember_conflict(&mut self, disk: Vec<u8>) -> Result<()> {
-        self.tools.conflict_disk = None;
+    fn remember_conflict(&mut self, text: String) -> Result<()> {
         self.tools.comparison = None;
-        if disk.contains(&0) {
-            return Err("Binary file: text editing is disabled.".into());
-        }
-        let text =
-            String::from_utf8(disk).map_err(|_| "This file is not UTF-8 text.".to_owned())?;
         self.tools.conflict_disk = Some(text.into());
         Err(DISK_CHANGED.into())
     }
@@ -841,8 +859,9 @@ impl Document {
         {
             return Ok(());
         }
-        let disk = self.read_current_disk()?;
-        if disk != expected.as_bytes() {
+        let (disk, bom) = self.read_current_disk()?;
+        self.utf8_bom = bom;
+        if disk != expected.as_ref() {
             return self.remember_conflict(disk);
         }
         if matches!(action, ConflictAction::Compare) {
@@ -874,7 +893,7 @@ impl Document {
         if matches!(action, ConflictAction::Reload) {
             self.replace_from_disk(expected.to_string());
         } else {
-            self.original = disk;
+            self.original = disk.into_bytes();
             self.last_edited_at = self.dirty().then(std::time::Instant::now);
             self.tools.conflict_disk = None;
             self.tools.comparison = None;
@@ -899,7 +918,7 @@ impl Document {
             return Err("Text editor limit is 2 MiB.".into());
         }
         self.tools.disk_revision = self.tools.disk_revision.wrapping_add(1);
-        match fs::symlink_metadata(&self.path) {
+        let missing = match fs::symlink_metadata(&self.path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 self.deleted_on_disk = true;
                 self.tools.conflict_disk = None;
@@ -911,21 +930,35 @@ impl Document {
                 if confined(&self.root, parent)? != parent {
                     return Err("File target changed since opening.".into());
                 }
-                save_download(&self.path, self.text.as_bytes()).map_err(|err| err.to_string())?;
+                true
             }
             Err(err) => return Err(err.to_string()),
             Ok(_) => {
-                let disk = self.read_current_disk()?;
+                let (disk, bom) = self.read_current_disk()?;
+                self.utf8_bom = bom;
                 self.deleted_on_disk = false;
-                if disk != self.original {
+                if disk.as_bytes() != self.original {
                     return self.remember_conflict(disk);
                 }
-                atomic_write(&self.path, self.text.as_bytes())?;
+                false
             }
+        };
+        let encoded = if self.utf8_bom {
+            if self.text.len() > MAX_TEXT - UTF8_BOM.len_utf8() {
+                return Err("Text editor limit is 2 MiB.".into());
+            }
+            std::borrow::Cow::Owned(format!("{UTF8_BOM}{}", self.text))
+        } else {
+            std::borrow::Cow::Borrowed(self.text.as_str())
+        };
+        if missing {
+            save_download(&self.path, encoded.as_bytes()).map_err(|err| err.to_string())?;
+        } else {
+            atomic_write(&self.path, encoded.as_bytes())?;
         }
         self.deleted_on_disk = false;
         if let Some(profile) = profile {
-            let _ = crate::local_file_history::record(profile, &self.path, &self.text);
+            let _ = crate::local_file_history::record(profile, &self.path, &encoded);
         }
         self.tools.conflict_disk = None;
         self.tools.comparison = None;
@@ -1031,6 +1064,50 @@ mod tests {
         assert!(doc.save(None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else");
     }
+    #[test]
+    fn utf8_bom_stays_out_of_the_editor_and_round_trips_on_save_and_recreation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "\u{feff}\u{feff}one\r\n").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        assert_eq!(doc.text, "\u{feff}one\r\n");
+        assert!(!doc.dirty());
+        doc.text = "deux\r\n".into();
+        let profile = tempfile::tempdir().unwrap();
+        doc.save(Some(profile.path())).unwrap();
+        let saved = crate::local_file_history::list(profile.path(), &doc.path).unwrap();
+        assert!(
+            crate::local_file_history::diff(profile.path(), dir.path(), &doc.path, &saved[0].id)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\u{feff}deux\r\n");
+        fs::remove_file(&path).unwrap();
+        doc.save(None).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\u{feff}deux\r\n");
+    }
+
+    #[test]
+    fn utf8_bom_changes_do_not_conflict_with_a_draft_or_enter_a_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text = "draft".into();
+        fs::write(&path, "\u{feff}base").unwrap();
+        doc.save(None).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\u{feff}draft");
+        doc.text = "local".into();
+        fs::write(&path, "\u{feff}other").unwrap();
+        assert!(doc.observe_disk(Some(fs::read_to_string(&path).unwrap())));
+        let disk = doc.tools.conflict_disk.clone().unwrap();
+        assert_eq!(&*disk, "other");
+        doc.resolve_conflict(&disk, ConflictAction::Keep).unwrap();
+        fs::write(&path, "other").unwrap();
+        doc.save(None).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"local");
+    }
+
     #[test]
     fn deleted_draft_survives_auto_save_and_manual_save_recreates_it() {
         let dir = tempfile::tempdir().unwrap();
