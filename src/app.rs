@@ -50,6 +50,7 @@ struct Restart {
     preferences: Option<crate::agent_preferences::Preferences>,
 }
 struct Session {
+    ssh_tmux_id: Option<String>,
     native_host: Option<workspace::SavedHostTerminal>,
     last_model: Option<crate::pane_session_model::SavedPaneModel>,
     model_save_attempt: Option<std::time::Instant>,
@@ -375,6 +376,11 @@ impl Session {
             (Launch::Agent(id), Some(prefs)) => crate::launch_fingerprint::for_agent(id, prefs),
             _ => None,
         };
+        if let Err(error) = launch::prepare_ssh_tmux_id(&launch, &mut self.ssh_tmux_id) {
+            self.error = error;
+            return;
+        }
+        let ssh_tmux_id = self.ssh_tmux_id.clone();
         let cwd = self.cwd.clone();
         let scrollback = self.scrollback;
         let (sender, receiver) = mpsc::channel();
@@ -410,6 +416,7 @@ impl Session {
                     &cwd,
                     prefs.as_ref(),
                     preferred_shell.as_deref(),
+                    ssh_tmux_id.as_deref(),
                 )?;
                 if let Some(home) = &trust_home
                     && matches!(&launch, Launch::Agent(id) if id == "claude")
@@ -1039,6 +1046,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: saved.conversation_id.is_some(),
+                    ssh_tmux_id: saved.ssh_tmux_id.clone(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
                     codex_discovery: None,
@@ -1311,6 +1319,7 @@ impl Tessel {
                         profile_root: None,
                         profile_migration: None,
                         resume_required: false,
+                        ssh_tmux_id: None,
                         native_host: None,
                         restarting: None,
                         codex_discovery: None,
@@ -1406,6 +1415,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: false,
+                    ssh_tmux_id: None,
                     native_host: None,
                     restarting: None,
                     codex_discovery: None,
@@ -1495,6 +1505,7 @@ impl Tessel {
             .iter()
             .map(|s| workspace::SavedSession {
                 legacy_number: previous_numbers.get(&s.id).copied(),
+                ssh_tmux_id: s.ssh_tmux_id.clone(),
                 native_host: s.native_host.clone(),
                 last_model: s.last_model.clone(),
                 codex_seed: s.codex_seed.clone(),
@@ -2744,6 +2755,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -2958,6 +2970,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: resume.is_some(),
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -5535,6 +5548,7 @@ impl Tessel {
                 profile_root: None,
                 profile_migration: None,
                 resume_required: false,
+                ssh_tmux_id: None,
                 native_host: None,
                 restarting: None,
                 codex_discovery: None,
@@ -7737,6 +7751,7 @@ impl Tessel {
                 profile_root: None,
                 profile_migration: None,
                 resume_required: saved.conversation_id.is_some(),
+                ssh_tmux_id: saved.ssh_tmux_id.clone(),
                 native_host: saved.native_host.clone(),
                 restarting: None,
                 codex_discovery: None,
@@ -9894,6 +9909,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -15113,6 +15129,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -15200,6 +15217,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: Some(Restart {
                 switch_mode: false,
@@ -15287,6 +15305,7 @@ $lock.Dispose()
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -15674,6 +15693,7 @@ $lock.Dispose()
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -15737,6 +15757,7 @@ $lock.Dispose()
                 profile_root: None,
                 profile_migration: None,
                 resume_required: false,
+                ssh_tmux_id: None,
                 native_host,
                 restarting: None,
                 codex_discovery: None,
@@ -15801,6 +15822,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             codex_discovery: None,
             codex_restore: None,
@@ -15957,6 +15979,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             codex_seed: None,
             conversation_id: None,
@@ -16018,6 +16041,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -16066,6 +16090,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: None,
             restarting: None,
             codex_discovery: None,
@@ -16118,6 +16143,7 @@ if ($args.Count -eq 0 -or $args[0] -ne 'resume') {
         for id in [10_u64, 20] {
             ws.sessions.push(workspace::SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,

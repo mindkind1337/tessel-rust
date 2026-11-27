@@ -641,6 +641,8 @@ pub struct ProjectWorktreePrefs {
 pub struct SavedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_tmux_id: Option<String>,
     /// An explicit native marker suppresses the legacy SSH launch path. It is
     /// inert on restore/import; terminal authority is never stored here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1750,6 +1752,7 @@ mod tests {
         let id = crate::claude::uuid().unwrap();
         state.sessions.push(SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -1829,6 +1832,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -2006,6 +2010,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -2070,6 +2075,7 @@ mod tests {
         for id in 1..=2 {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -2112,6 +2118,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2144,6 +2151,7 @@ mod tests {
         for id in [10, 11] {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,
@@ -2164,6 +2172,7 @@ mod tests {
         }
         state.sessions.push(SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2234,6 +2243,7 @@ mod tests {
         let mut bad = state.clone();
         bad.sessions.push(SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -2273,6 +2283,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 id,
@@ -2351,6 +2362,7 @@ mod tests {
 
         state.sessions.push(SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

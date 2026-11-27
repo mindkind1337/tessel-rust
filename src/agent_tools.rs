@@ -1037,6 +1037,7 @@ mod tests {
         ] {
             state.sessions.push(SavedSession {
                 legacy_number: None,
+                ssh_tmux_id: None,
                 native_host: None,
                 last_model: None,
                 codex_seed: None,

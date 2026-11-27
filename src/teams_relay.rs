@@ -2430,6 +2430,7 @@ mod tests {
     fn sample_session(id: u64, project: u64, name: &str, agent: &str) -> SavedSession {
         SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

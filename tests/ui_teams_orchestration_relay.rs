@@ -91,6 +91,7 @@ mod workspace {
     #[derive(Clone, Debug)]
     pub struct SavedSession {
         pub legacy_number: Option<u32>,
+        pub ssh_tmux_id: Option<String>,
         pub native_host: Option<()>,
         pub last_model: Option<()>,
         pub codex_seed: Option<()>,
@@ -165,6 +166,7 @@ fn make_session(id: u64, project: u64, name: &str, agent: &str) -> SavedSession 
     SavedSession {
         legacy_number: None,
         profile_binding: None,
+        ssh_tmux_id: None,
         native_host: None,
         last_model: None,
         codex_seed: None,

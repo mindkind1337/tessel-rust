@@ -547,6 +547,7 @@ impl Tessel {
             profile_root: None,
             profile_migration: None,
             resume_required: false,
+            ssh_tmux_id: None,
             native_host: Some(workspace::SavedHostTerminal { identity }),
             restarting: None,
             codex_discovery: None,

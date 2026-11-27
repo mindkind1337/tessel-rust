@@ -1617,6 +1617,7 @@ impl Tessel {
                     profile_root: None,
                     profile_migration: None,
                     resume_required: saved.conversation_id.is_some(),
+                    ssh_tmux_id: saved.ssh_tmux_id.clone(),
                     native_host: saved.native_host.clone(),
                     restarting: None,
                     codex_discovery: None,

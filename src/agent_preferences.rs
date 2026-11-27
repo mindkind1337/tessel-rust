@@ -360,6 +360,7 @@ mod tests {
         let (store, mut state) = Store::open(dir.path()).unwrap();
         state.sessions.push(crate::workspace::SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,

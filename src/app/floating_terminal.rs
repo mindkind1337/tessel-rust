@@ -71,6 +71,7 @@ pub(super) struct State {
     runtime: Controller<Terminal>,
     title: String,
     pending_title: Option<String>,
+    ssh_tmux_id: Option<String>,
     toggle_id: Option<egui::Id>,
     pub(super) exit_pending: bool,
     pub(super) exit_failed: bool,
@@ -90,6 +91,7 @@ impl State {
             runtime: Controller::new(repaint),
             title: "Terminal".into(),
             pending_title: None,
+            ssh_tmux_id: None,
             toggle_id: None,
             exit_pending: false,
             exit_failed: false,
@@ -283,9 +285,19 @@ impl Tessel {
         let preferred_shell = matches!(launch, Launch::Shell)
             .then(|| self.state.launcher_prefs.preferred_shell.clone())
             .flatten();
+        if let Err(error) = launch::prepare_ssh_tmux_id(&launch, &mut self.floating.ssh_tmux_id) {
+            self.error = error;
+            return;
+        }
+        let ssh_tmux_id = self.floating.ssh_tmux_id.clone();
         let make = move || {
-            let command =
-                launch::command_with_shell(&launch, &cwd, None, preferred_shell.as_deref())?;
+            let command = launch::command_with_shell(
+                &launch,
+                &cwd,
+                None,
+                preferred_shell.as_deref(),
+                ssh_tmux_id.as_deref(),
+            )?;
             Terminal::spawn_command_with_scrollback(command, scrollback)
                 .map_err(|error| error.to_string())
         };

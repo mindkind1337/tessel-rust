@@ -191,7 +191,19 @@ pub fn command_with_preferences(
     cwd: &Path,
     prefs: Option<&crate::agent_preferences::Preferences>,
 ) -> Result<CommandBuilder> {
-    command_with_shell(launch, cwd, prefs, None)
+    let mut pane_id = None;
+    prepare_ssh_tmux_id(launch, &mut pane_id)?;
+    command_with_shell(launch, cwd, prefs, None, pane_id.as_deref())
+}
+
+/// Allocate once per pane. The SSH alias identifies the machine, not a terminal on it.
+pub(crate) fn prepare_ssh_tmux_id(launch: &Launch, id: &mut Option<String>) -> Result<()> {
+    if matches!(launch, Launch::Ssh(host) if host.persistent_sessions_enabled())
+        && !id.as_deref().is_some_and(crate::claude::valid_uuid)
+    {
+        *id = Some(crate::claude::uuid()?);
+    }
+    Ok(())
 }
 
 pub fn command_with_shell(
@@ -199,6 +211,7 @@ pub fn command_with_shell(
     cwd: &Path,
     prefs: Option<&crate::agent_preferences::Preferences>,
     preferred_shell: Option<&str>,
+    ssh_tmux_id: Option<&str>,
 ) -> Result<CommandBuilder> {
     if launch.native_chat().is_some() {
         return Err("Native chats do not launch a terminal.".into());
@@ -283,11 +296,16 @@ pub fn command_with_shell(
                 "--",
                 &host.alias,
             ]);
+            if host.persistent_sessions_enabled()
+                && !ssh_tmux_id.is_some_and(crate::claude::valid_uuid)
+            {
+                return Err("Missing persistent SSH pane identity.".into());
+            }
             if let Some(remote_script) = crate::ssh_tmux::build_ssh_launch_remote_script(
                 &host.alias,
                 &host.folder,
                 host.persistent_sessions_enabled(),
-                None,
+                ssh_tmux_id,
                 true,
             )? {
                 c.arg(remote_script);
@@ -325,6 +343,113 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persistent_ssh_panes_keep_distinct_tmux_targets_across_reconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Launch::Ssh(crate::workspace::Host {
+            alias: "fixture".into(),
+            ..Default::default()
+        });
+        let script = |id: &mut Option<String>| {
+            prepare_ssh_tmux_id(&host, id).unwrap();
+            let command = command_with_shell(&host, dir.path(), None, None, id.as_deref()).unwrap();
+            command
+                .get_argv()
+                .last()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let mut first = None;
+        let mut second = None;
+        let initial = script(&mut first);
+        let other = script(&mut second);
+        assert_ne!(first, second);
+        assert_ne!(initial, other);
+        assert!(initial.contains(&format!(
+            "new-session -A -D -s 'tessel-{}'",
+            first.as_ref().unwrap()
+        )));
+        assert_eq!(script(&mut first), initial);
+        assert!(command_with_shell(&host, dir.path(), None, None, None).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires WSL with tmux installed"]
+    fn persistent_ssh_panes_reattach_to_original_process_with_real_tmux() {
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let host = Launch::Ssh(crate::workspace::Host {
+            alias: "fixture".into(),
+            ..Default::default()
+        });
+        let mut setup = String::from(
+            r#"set -eu
+umask 077
+fixture_dir=$(mktemp -d /tmp/tessel-tmux-test.XXXXXXXX)
+export TMUX_TMPDIR="$fixture_dir" SHELL=/bin/sh TERM=xterm-256color
+cd "$fixture_dir"
+unset TMUX
+cleanup() {
+    tmux -L harness kill-server 2>/dev/null || :
+    tmux -L tessel kill-server 2>/dev/null || :
+    rm -f first.sh second.sh
+    cd /
+    rmdir "$fixture_dir/tmux-$(id -u)" "$fixture_dir" 2>/dev/null || :
+}
+trap cleanup EXIT
+tmux -L tessel -f /dev/null new-session -d -s fixture 'sleep 60'
+"#,
+        );
+        for name in ["first", "second"] {
+            let mut id = None;
+            prepare_ssh_tmux_id(&host, &mut id).unwrap();
+            let command = command_with_shell(&host, dir.path(), None, None, id.as_deref()).unwrap();
+            let script = command.get_argv().last().unwrap().to_str().unwrap();
+            setup.push_str(&format!(
+                "{name}=tessel-{}\ncat > {name}.sh <<'SCRIPT'\n{script}\nSCRIPT\n",
+                id.unwrap()
+            ));
+        }
+        setup.push_str(r#"
+attached() {
+    for attempt in $(seq 1 100); do
+        [ "$(tmux -L tessel display-message -p -t "=$1:" '#{session_attached}' 2>/dev/null)" = "$2" ] && return 0
+        sleep 0.05
+    done
+    return 1
+}
+tmux -L harness -f /dev/null new-session -d -s a 'env -u TMUX sh first.sh'
+attached "$first" 1
+pid=$(tmux -L tessel display-message -p -t "=$first:" '#{pane_pid}')
+tmux -L harness new-session -d -s b 'env -u TMUX sh second.sh'
+attached "$second" 1
+attached "$first" 1
+tmux -L harness kill-session -t '=a'
+attached "$first" 0
+tmux -L harness new-session -d -s c 'env -u TMUX sh first.sh'
+attached "$first" 1
+attached "$second" 1
+test "$(tmux -L tessel display-message -p -t "=$first:" '#{pane_pid}')" = "$pid"
+"#);
+        let mut child = Command::new("wsl.exe")
+            .args(["--exec", "/bin/sh", "-s"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(setup.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
     #[test]
     fn overrides_are_agent_only_and_invalid_environment_is_all_or_nothing() {
         let dir = tempfile::tempdir().unwrap();

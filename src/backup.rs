@@ -39,6 +39,7 @@ pub fn export(path: &Path, state: &Workspace) -> Result<()> {
         if let Some(native) = &mut pane.native_host {
             native.identity = None;
         }
+        pane.ssh_tmux_id = None;
         pane.codex_seed = None;
         pane.profile_binding = None;
         pane.launch_fingerprint = None;
@@ -104,6 +105,7 @@ pub fn import(path: &Path) -> Result<Workspace> {
         if let Some(native) = &mut pane.native_host {
             native.identity = None;
         }
+        pane.ssh_tmux_id = None;
         pane.codex_seed = None;
         pane.profile_binding = None;
         pane.launch_fingerprint = None;
@@ -131,6 +133,11 @@ mod tests {
             }))
             .unwrap(),
         );
+        let pane_id = crate::claude::uuid().unwrap();
+        state.sessions[0].ssh_tmux_id = Some(pane_id.clone());
+        let local: Workspace =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(local.sessions[0].ssh_tmux_id.as_ref(), Some(&pane_id));
         state.validate().unwrap();
         export(&path, &state).unwrap();
         assert!(
@@ -144,9 +151,16 @@ mod tests {
         let mut backup: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(backup["workspace"]["sessions"][0]["native_host"]["identity"].is_null());
+        assert!(
+            backup["workspace"]["sessions"][0]
+                .get("ssh_tmux_id")
+                .is_none()
+        );
+        backup["workspace"]["sessions"][0]["ssh_tmux_id"] = pane_id.into();
         backup["workspace"]["sessions"][0]["native_host"]["identity"] = identity;
         std::fs::write(&path, serde_json::to_vec(&backup).unwrap()).unwrap();
         let restored = import(&path).unwrap();
+        assert!(restored.sessions[0].ssh_tmux_id.is_none());
         assert!(
             restored.sessions[0]
                 .native_host
@@ -210,6 +224,7 @@ mod tests {
         };
         after.sessions.push(crate::workspace::SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
@@ -255,6 +270,7 @@ mod tests {
         );
         state.sessions.push(crate::workspace::SavedSession {
             legacy_number: None,
+            ssh_tmux_id: None,
             native_host: None,
             last_model: None,
             codex_seed: None,
