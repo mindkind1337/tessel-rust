@@ -21,8 +21,9 @@ use crate::{
     workspace::SideTab,
 };
 use gpui::{
-    Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    AppContext, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -212,9 +213,25 @@ fn render_view_tabs_bar(
             tab.title.clone()
         };
 
+        let close = match kind {
+            #[cfg(windows)]
+            crate::view_tabs::Kind::Browser => Some(GpuiAction::CloseBrowserTab),
+            _ => doc_index.map(GpuiAction::CloseDocumentTab),
+        }
+        .filter(|_| closable);
+        let mut hint = tab.hint.clone();
+        if tab.preview {
+            hint.push_str(if snapshot.french {
+                "\nAperçu : double-cliquez pour le garder ouvert"
+            } else {
+                "\nPreview: double-click to keep it open"
+            });
+        }
+        let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
         bar = bar.child(
             div()
                 .id(("view-tab", idx))
+                .debug_selector(move || format!("view-tab-{idx}"))
                 .relative()
                 .h_full()
                 .px(px(11.0))
@@ -226,20 +243,43 @@ fn render_view_tabs_bar(
                 .border_color(tokens.border)
                 .cursor_pointer()
                 .hover(|s| s.bg(tokens.surface))
-                .on_click(cx.listener(move |root, _, _, cx| match kind {
-                    crate::view_tabs::Kind::Terminal => {
-                        root.dispatch(GpuiAction::SelectWorkTab, cx)
-                    }
-                    #[cfg(windows)]
-                    crate::view_tabs::Kind::Browser => {
-                        root.dispatch(GpuiAction::SelectBrowserTab, cx)
-                    }
-                    crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
-                        if let Some(doc_idx) = doc_index {
-                            root.dispatch(GpuiAction::SelectDocumentTab(doc_idx), cx);
+                .tooltip(move |_, cx| {
+                    cx.new(|_| super::chrome::ToolbarTooltip {
+                        text: hint.clone().into(),
+                        bg,
+                        fg,
+                        border,
+                    })
+                    .into()
+                })
+                .when_some(close.clone(), |el, action| {
+                    el.on_aux_click(cx.listener(move |root, event: &gpui::ClickEvent, _, cx| {
+                        if !event.is_middle_click() {
+                            return;
                         }
-                    }
-                }))
+                        cx.stop_propagation();
+                        root.dispatch(action.clone(), cx);
+                    }))
+                })
+                .on_click(
+                    cx.listener(move |root, event: &gpui::ClickEvent, _, cx| match kind {
+                        crate::view_tabs::Kind::Terminal => {
+                            root.dispatch(GpuiAction::SelectWorkTab, cx)
+                        }
+                        #[cfg(windows)]
+                        crate::view_tabs::Kind::Browser => {
+                            root.dispatch(GpuiAction::SelectBrowserTab, cx)
+                        }
+                        crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
+                            if let Some(doc_idx) = doc_index {
+                                root.dispatch(GpuiAction::SelectDocumentTab(doc_idx), cx);
+                                if event.click_count() == 2 {
+                                    root.dispatch(GpuiAction::KeepDocumentTab(doc_idx), cx);
+                                }
+                            }
+                        }
+                    }),
+                )
                 .when(selected, |el| {
                     el.child(
                         div()
@@ -269,9 +309,11 @@ fn render_view_tabs_bar(
                         } else {
                             tokens.text_dim
                         })
+                        .when(tab.preview, |el| el.italic())
+                        .when(tab.deleted, |el| el.line_through())
                         .child(SharedString::from(title_str)),
                 )
-                .when(closable, |el| {
+                .when_some(close, |el, action| {
                     el.child(
                         div()
                             .id(("close-view-tab", idx))
@@ -279,14 +321,8 @@ fn render_view_tabs_bar(
                             .rounded(px(3.0))
                             .hover(|s| s.bg(tokens.surface_2))
                             .on_click(cx.listener(move |root, _, _, cx| {
-                                #[cfg(windows)]
-                                if kind == crate::view_tabs::Kind::Browser {
-                                    root.dispatch(GpuiAction::CloseBrowserTab, cx);
-                                    return;
-                                }
-                                if let Some(doc_idx) = doc_index {
-                                    root.dispatch(GpuiAction::CloseDocumentTab(doc_idx), cx);
-                                }
+                                cx.stop_propagation();
+                                root.dispatch(action.clone(), cx);
                             }))
                             .child(GpuiIcon::Close.render(10.5, tokens.text_dim)),
                     )

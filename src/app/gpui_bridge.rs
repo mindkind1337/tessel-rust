@@ -785,6 +785,7 @@ pub(crate) enum GpuiAction {
     FocusPaneDirection(FocusDir),
     SelectWorkTab,
     SelectDocumentTab(usize),
+    KeepDocumentTab(usize),
     CloseDocumentTab(usize),
     SelectBrowserTab,
     CloseBrowserTab,
@@ -5391,6 +5392,11 @@ impl Tessel {
                 if idx < self.documents.len() {
                     self.active_document = idx;
                     self.view = View::Files;
+                }
+            }
+            GpuiAction::KeepDocumentTab(idx) => {
+                if let Some(doc) = self.documents.get_mut(idx) {
+                    doc.unpinned_preview = false;
                 }
             }
             GpuiAction::CloseDocumentTab(idx) => {

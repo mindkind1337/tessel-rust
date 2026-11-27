@@ -18,6 +18,62 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn view_tab_mouse_gestures_keep_preview_and_confirm_dirty_close(cx: &mut gpui::TestAppContext) {
+    use crate::files::Document;
+    use gpui::MouseButton::{Left, Middle, Right};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preview.txt");
+    std::fs::write(&path, "original").unwrap();
+    let mut doc = Document::open(dir.path(), &path).unwrap();
+    doc.unpinned_preview = true;
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app.install_editor_input_fixture(vec![doc], 0);
+        root
+    });
+    let snapshot = |cx: &mut gpui::TestAppContext| {
+        view.update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+            .unwrap()
+    };
+    let click = |cx: &mut gpui::TestAppContext, selector: &'static str, button, click_count| {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let position = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_event(gpui::MouseDownEvent {
+            position,
+            button,
+            click_count,
+            ..Default::default()
+        });
+        visual.simulate_event(gpui::MouseUpEvent {
+            position,
+            button,
+            click_count,
+            ..Default::default()
+        });
+    };
+    click(cx, "view-tab-1", Left, 1);
+    assert!(snapshot(cx).view_tabs[1].preview);
+    click(cx, "view-tab-1", Left, 2);
+    assert!(!snapshot(cx).view_tabs[1].preview);
+    click(cx, "view-tab-0", Middle, 1);
+    click(cx, "view-tab-1", Right, 1);
+    assert_eq!(snapshot(cx).view_tabs.len(), 2);
+    view.update(cx, |root, _, _| {
+        let mut doc = Document::open(dir.path(), &path).unwrap();
+        doc.text.push('!');
+        root.app.install_editor_input_fixture(vec![doc], 0);
+    })
+    .unwrap();
+    click(cx, "view-tab-1", Middle, 1);
+    let result = snapshot(cx);
+    assert_eq!(result.view_tabs.len(), 2);
+    assert!(result.modals.confirm_modal.is_some());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn settings_search_edits_matching_rows_across_pages(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let view = cx.add_window(|_, cx| {
