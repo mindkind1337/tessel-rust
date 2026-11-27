@@ -1623,7 +1623,17 @@ fn render_side_browser(
                         (
                             "side-browser-reload",
                             if loading.is_some() { "■" } else { "⟳" },
-                            crate::i18n::tr(if loading.is_some() { "Stop" } else { "Reload" }),
+                            crate::i18n::tr(if loading.is_some() {
+                                "Stop"
+                            } else if snapshot
+                                .side_browser
+                                .as_ref()
+                                .is_some_and(|p| p.retry_available)
+                            {
+                                "Retry"
+                            } else {
+                                "Reload"
+                            }),
                             true,
                             loading.map_or(GpuiAction::SideBrowserReload(id), |navigation| {
                                 GpuiAction::BrowserStop {

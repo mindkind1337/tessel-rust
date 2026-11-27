@@ -32,8 +32,16 @@ enum Event {
     PlayingAudio(bool),
     Popup(String),
     Error(String),
-    Navigation { address: String, title: String },
+    Navigation {
+        address: String,
+        title: String,
+    },
     PageStateChanged,
+    LoadStarted,
+    LoadFailed {
+        address: String,
+        reason: &'static str,
+    },
 }
 
 use crate::app::gpui_bridge::DownloadSummaryRow;
@@ -105,6 +113,7 @@ pub struct Browser {
     pub(crate) focus_new_address: bool,
     popup: Option<String>,
     error: String,
+    failed_page: Option<(String, &'static str)>,
     cookie_import_status: String,
     downloads: VecDeque<downloads::Record>,
     download_tracker: downloads::Downloads,
@@ -153,6 +162,7 @@ impl Default for Browser {
             focus_new_address: false,
             popup: None,
             error: String::new(),
+            failed_page: None,
             cookie_import_status: String::new(),
             downloads: VecDeque::new(),
             download_tracker: Default::default(),
@@ -216,6 +226,7 @@ impl Browser {
                 });
             }
         }
+        self.failed_page = None;
         (self.sender, self.receiver) = mpsc::channel();
         self.popup = None;
         self.playing_audio = false;
@@ -486,6 +497,10 @@ impl Browser {
     }
 
     pub fn hard_reload(&self) {
+        if self.failed_page.is_some() {
+            self.reload_now();
+            return;
+        }
         use windows::core::HSTRING;
         use wry::WebViewExtWindows as _;
         let Some(view) = &self.view else { return };
@@ -528,7 +543,11 @@ impl Browser {
 
     pub fn reload_now(&self) {
         if let Some(view) = &self.view {
-            let _ = view.reload();
+            if let Some((address, _)) = &self.failed_page {
+                let _ = view.load_url(address);
+            } else {
+                let _ = view.reload();
+            }
         }
     }
 
@@ -547,7 +566,16 @@ impl Browser {
         self.popup = None;
     }
 
+    pub fn retry_available(&self) -> bool {
+        self.failed_page.is_some()
+    }
+
     pub fn error_str(&self) -> &str {
+        if self.error.is_empty()
+            && let Some((_, reason)) = &self.failed_page
+        {
+            return tr(reason);
+        }
         &self.error
     }
 
@@ -938,6 +966,8 @@ impl Browser {
             // Each controller owns its navigation IDs. A retired controller can finish
             // outstanding work after this browser tab moves to another panel.
             self.navigation = Default::default();
+            let target = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+            let started_target = target.clone();
             let loading = self.navigation.clone();
             let notify = self.sender.clone();
             view.webview()
@@ -947,13 +977,17 @@ impl Browser {
                             if let Some(args) = args {
                                 let mut id = 0;
                                 args.NavigationId(&mut id)?;
+                                let mut raw = windows::core::PWSTR::null();
+                                args.Uri(&mut raw)?;
+                                let address = webview2_com::take_pwstr(raw);
+                                *started_target.borrow_mut() = allowed(&address).then_some(address);
                                 if loading.get().is_none_or(|load| load.native_id != id) {
                                     loading.set(Some(PageLoad {
                                         native_id: id,
                                         generation: next_address_generation(),
                                     }));
                                 }
-                                let _ = notify.send(Event::PageStateChanged);
+                                let _ = notify.send(Event::LoadStarted);
                             }
                             Ok(())
                         },
@@ -973,6 +1007,31 @@ impl Browser {
                                 if loading.get().is_some_and(|load| load.native_id == id) {
                                     loading.set(None);
                                     let _ = notify.send(Event::PageStateChanged);
+                                    let mut success = windows::core::BOOL::default();
+                                    args.IsSuccess(&mut success)?;
+                                    if !success.as_bool() && let Some(address) = target.take() {
+                                        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+                                        use windows::core::Interface as _;
+                                        let mut http = 0;
+                                        if let Ok(details) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() {
+                                            details.HttpStatusCode(&mut http)?;
+                                        }
+                                        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
+                                        args.WebErrorStatus(&mut status)?;
+                                        if http < 400 && status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED && address != "about:blank" {
+                                            let reason = match status {
+                                                COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED => "The host name could not be resolved.",
+                                                COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT => "The connection timed out.",
+                                                COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT
+                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED
+                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID
+                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED
+                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => "The certificate could not be verified.",
+                                                _ => "Could not connect to this page.",
+                                            };
+                                            let _ = notify.send(Event::LoadFailed { address, reason });
+                                        }
+                                    }
                                 }
                             }
                             Ok(())
@@ -1137,6 +1196,12 @@ impl Browser {
                 Event::Title(title) => self.title = page_title(&title, &self.committed_address),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
+                Event::LoadStarted => self.failed_page = None,
+                Event::LoadFailed { address, reason } => {
+                    self.observe_navigation(address.clone());
+                    self.title = page_title("", &address);
+                    self.failed_page = Some((address, reason));
+                }
                 Event::PageStateChanged => {}
                 Event::Navigation { address, title } => {
                     self.title = page_title(&title, &address);
@@ -1200,6 +1265,7 @@ impl Browser {
             self.popups.close_all();
             self.popup = None;
             self.playing_audio = false;
+            self.failed_page = None;
             (self.sender, self.receiver) = mpsc::channel();
             drop(view);
             self.context.take();
@@ -1308,7 +1374,7 @@ impl Browser {
                     || i.consume_key(egui::Modifiers::NONE, egui::Key::F5)
             });
         ui.horizontal(|ui| {
-            if let Some(view) = &self.view {
+            if self.view.is_some() {
                 let (back, forward) = self.history_directions();
                 if ui.add_enabled(back, egui::Button::new("←")).clicked() {
                     self.go_back_now();
@@ -1318,7 +1384,13 @@ impl Browser {
                 }
                 let loading = self.loading_navigation();
                 let response = ui
-                    .button(tr(if loading.is_some() { "Stop" } else { "Reload" }))
+                    .button(tr(if loading.is_some() {
+                        "Stop"
+                    } else if self.retry_available() {
+                        "Retry"
+                    } else {
+                        "Reload"
+                    }))
                     .on_hover_text(tr("Right-click for reload options"));
                 if response.secondary_clicked() {
                     self.show_reload_menu();
@@ -1327,7 +1399,7 @@ impl Browser {
                 if clicked && let Some(id) = loading {
                     self.stop_navigation(id);
                 } else if clicked || reload_shortcut {
-                    let _ = view.reload();
+                    self.reload_now();
                 }
             }
             let mut shown = self.display_address().to_owned();
@@ -1375,8 +1447,8 @@ impl Browser {
                 }
             });
         }
-        if !self.error.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+        if !self.error_str().is_empty() {
+            ui.colored_label(egui::Color32::LIGHT_RED, self.error_str());
         }
         if self.agent_root.is_none() {
             ui.horizontal(|ui| {
@@ -1658,6 +1730,66 @@ mod tests {
         wait_for(view, "location.pathname === '/two' && window.version === 2");
         drop(stop);
         server.join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn connection_failure_retries_original_address_as_the_service_returns() {
+        use crate::webview_test_support::{hidden_parent, pump};
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = first.local_addr().unwrap();
+        drop(first);
+        let url = format!("http://{addr}/original?attempt=1");
+        let dir = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut browser = Browser::default();
+        browser
+            .create_with_profile(&parent, dir.path().join("profile"))
+            .unwrap();
+        browser.open_url(&url);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !browser.retry_available() {
+            assert!(Instant::now() < deadline, "no connection failure reported");
+            pump();
+            browser.poll();
+        }
+        assert!(!browser.error_str().is_empty());
+        assert_eq!(browser.address_str(), url);
+        let server = TcpListener::bind(addr).unwrap();
+        server.set_nonblocking(true).unwrap();
+        browser.reload_now();
+        let mut retried = false;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while browser.tab_label().0 != "Recovered" {
+            assert!(Instant::now() < deadline, "retry never completed");
+            pump();
+            browser.poll();
+            if let Ok((mut socket, _)) = server.accept() {
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut lines = BufReader::new(&socket).lines();
+                if let Some(Ok(request)) = lines.next() {
+                    retried |= request.starts_with("GET /original?attempt=1 ");
+                    if lines.map_while(Result::ok).any(|line| line.is_empty()) {
+                        let body = "<title>Recovered</title>";
+                        let _ = write!(
+                            socket,
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(retried);
+        assert!(!browser.retry_available());
+        assert!(browser.error_str().is_empty());
     }
 
     #[test]

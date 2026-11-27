@@ -473,6 +473,7 @@ pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<Str
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpuiBrowserSnapshot {
     pub loading_navigation: Option<u64>,
+    pub retry_available: bool,
     pub history: (bool, bool),
     pub tab_id: u64,
     pub started: bool,
@@ -492,6 +493,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
             history: page.history_directions(),
             started: page.is_started(),
             loading_navigation: page.loading_navigation(),
+            retry_available: page.retry_available(),
             address: page.display_address().to_owned(),
             popup_url: page.popup_url().map(str::to_owned),
             downloads_open: page.downloads_open(),
