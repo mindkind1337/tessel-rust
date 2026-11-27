@@ -1033,6 +1033,24 @@ impl SettingsPagesState {
             });
         });
 
+        ui.horizontal(|ui| {
+            ui.label(if french {
+                "Zoom par défaut"
+            } else {
+                "Default page zoom"
+            });
+            for (label, delta) in [("−", -1), ("+", 1)] {
+                if ui.button(label).clicked() {
+                    prefs.zoom_half_steps =
+                        prefs.zoom_half_steps.saturating_add(delta).clamp(-6, 10);
+                    changed = true;
+                }
+            }
+            ui.label(format!(
+                "{}%",
+                crate::workspace::BrowserPreferences::zoom_percent(prefs.zoom_half_steps)
+            ));
+        });
         ui.add_space(10.0);
         section_heading(
             ui,

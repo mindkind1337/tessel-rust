@@ -9,6 +9,7 @@ pub(crate) mod editor_page;
 pub(crate) mod html_trust;
 mod private_fill;
 mod project_page;
+mod zoom_keys;
 pub use private_fill::Reply as FillReply;
 pub mod smoke;
 pub mod vault_smoke;
@@ -25,6 +26,7 @@ use wry::{WebContext, WebView, WebViewBuilder};
 
 enum Event {
     Title(String),
+    Zoom(i8),
     Popup(String),
     Error(String),
     Navigation(String),
@@ -45,6 +47,8 @@ fn next_address_generation() -> u64 {
 pub struct Browser {
     pub(crate) tab_id: u64,
     title: String,
+    pub(crate) zoom_override: Option<i8>,
+    default_zoom: i8,
     project_pages: project_page::Pages,
     trusted_preview_folders: std::collections::HashSet<html_trust::Folder>,
     address_generation: u64,
@@ -85,6 +89,8 @@ impl Default for Browser {
         Self {
             tab_id: next_address_generation(),
             title: String::new(),
+            zoom_override: None,
+            default_zoom: crate::workspace::BrowserPreferences::default().zoom_half_steps,
             project_pages: Default::default(),
             trusted_preview_folders: Default::default(),
             address_generation: next_address_generation(),
@@ -117,6 +123,36 @@ impl Default for Browser {
 }
 
 impl Browser {
+    pub(crate) fn zoom_steps(&self) -> i8 {
+        self.zoom_override.unwrap_or(self.default_zoom)
+    }
+
+    fn apply_zoom(&mut self) {
+        if let Some(view) = &self.view
+            && let Err(error) = view.zoom(crate::workspace::BrowserPreferences::zoom_factor(
+                self.zoom_steps(),
+            ))
+        {
+            self.error = error.to_string();
+        }
+    }
+
+    pub(crate) fn set_default_zoom(&mut self, value: i8) {
+        let value = value.clamp(-6, 10);
+        if value != self.default_zoom {
+            self.default_zoom = value;
+            if self.zoom_override.is_none() {
+                self.apply_zoom();
+            }
+        }
+    }
+
+    pub(crate) fn change_zoom(&mut self, direction: i8) {
+        self.zoom_override =
+            (direction != 0).then(|| (self.zoom_steps() + direction.signum()).clamp(-6, 10));
+        self.apply_zoom();
+    }
+
     fn restorable_url(url: &str) -> Option<String> {
         if url.len() > 8192 {
             return None;
@@ -707,7 +743,13 @@ impl Browser {
         self.clip.reset();
         self.viewport = None;
         self.webview_had_focus = false;
+        if !agent {
+            zoom_keys::attach(&view, self.sender.clone())?;
+        }
         self.view = Some(view);
+        if !agent {
+            self.apply_zoom();
+        }
         Ok(())
     }
     fn navigate(&mut self) {
@@ -744,6 +786,7 @@ impl Browser {
         while let Ok(event) = self.receiver.try_recv() {
             changed = true;
             match event {
+                Event::Zoom(direction) => self.change_zoom(direction),
                 Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
@@ -1005,6 +1048,38 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn owner_zoom_changes_native_controller_and_resets_to_current_default() {
+        use wry::WebViewExtWindows;
+        let temp = tempfile::tempdir().unwrap();
+        let parent = crate::webview_test_support::hidden_parent();
+        let mut page = Browser::default();
+        page.create_with_profile(&parent, temp.path().to_owned())
+            .unwrap();
+        let controller = page.view.as_ref().unwrap().controller();
+        let percent = || {
+            let mut factor = 0.0;
+            unsafe { controller.ZoomFactor(&mut factor) }.unwrap();
+            (factor * 100.0).round() as i32
+        };
+        assert_eq!(percent(), 91);
+        page.change_zoom(1);
+        assert_eq!(percent(), 100);
+        page.set_default_zoom(2);
+        assert_eq!(percent(), 100);
+        page.change_zoom(0);
+        assert_eq!(percent(), 120);
+        for _ in 0..20 {
+            page.change_zoom(1);
+        }
+        assert_eq!(percent(), 249);
+        for _ in 0..20 {
+            page.change_zoom(-1);
+        }
+        assert_eq!(percent(), 58);
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn restart_loads_saved_owner_tab_in_webview() {

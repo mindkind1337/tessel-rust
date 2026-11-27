@@ -370,30 +370,9 @@ impl Default for TerminalPreferences {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenLinksTarget {
-    #[default]
-    Builtin,
-    System,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-pub struct BrowserPreferences {
-    pub open_links_in: OpenLinksTarget,
-    #[serde(default = "default_true")]
-    pub separate_agent_session: bool,
-}
-
-impl Default for BrowserPreferences {
-    fn default() -> Self {
-        Self {
-            open_links_in: OpenLinksTarget::Builtin,
-            separate_agent_session: true,
-        }
-    }
-}
+#[path = "workspace/browser_preferences.rs"]
+mod browser_preferences;
+pub use browser_preferences::{BrowserPreferences, OpenLinksTarget};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

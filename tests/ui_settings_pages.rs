@@ -1,3 +1,5 @@
+#[path = "../src/workspace/browser_preferences.rs"]
+mod browser_preferences;
 #[allow(dead_code)]
 #[path = "../src/settings_model.rs"]
 mod settings_model;
@@ -101,27 +103,7 @@ mod workspace {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub enum OpenLinksTarget {
-        #[default]
-        Builtin,
-        System,
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct BrowserPreferences {
-        pub open_links_in: OpenLinksTarget,
-        pub separate_agent_session: bool,
-    }
-
-    impl Default for BrowserPreferences {
-        fn default() -> Self {
-            Self {
-                open_links_in: OpenLinksTarget::Builtin,
-                separate_agent_session: true,
-            }
-        }
-    }
+    pub use crate::browser_preferences::{BrowserPreferences, OpenLinksTarget};
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub enum BranchPrefixMode {
@@ -518,6 +500,20 @@ fn terminal_browser_git_stats_and_updates_controls_mutate_preferences_and_emit_a
     assert!(changed_b);
     assert_eq!(br.open_links_in, OpenLinksTarget::System);
 
+    let out_b2 = ctx.run(raw_input_with_click(None), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = pages.show_browser(ui, &mut br, true, false);
+        });
+    });
+    let zoom_pos = find_label_center(&painted_texts(&out_b2.shapes), "+");
+    assert_eq!(br.zoom_half_steps, -1);
+    let _ = ctx.run(raw_input_with_click(Some(zoom_pos)), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (changed, _) = pages.show_browser(ui, &mut br, true, false);
+            assert!(changed);
+        });
+    });
+    assert_eq!(br.zoom_half_steps, 0);
     let out_b2 = ctx.run(raw_input_with_click(None), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let _ = pages.show_browser(ui, &mut br, true, false);

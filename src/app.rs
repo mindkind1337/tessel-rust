@@ -2610,6 +2610,8 @@ impl Tessel {
         self.finder.poll();
         #[cfg(windows)]
         {
+            self.browser
+                .set_default_zoom(self.state.browser_prefs.zoom_half_steps);
             native_changed |= self.browser.poll();
             for (browser, _) in self.background_browsers.values_mut() {
                 browser.poll();
@@ -4650,6 +4652,23 @@ impl Tessel {
                 );
             }
         }
+        #[cfg(windows)]
+        if self.view == View::Browser {
+            for (id, label) in [
+                ("browser:zoom-in", "Zoom in"),
+                ("browser:zoom-out", "Zoom out"),
+                ("browser:zoom-reset", "Reset zoom"),
+            ] {
+                commands.push(PaletteCommand::new(id, tr("Browser"), tr(label)).with_hint(
+                    format!(
+                        "{}%",
+                        crate::workspace::BrowserPreferences::zoom_percent(
+                            self.browser.zoom_steps()
+                        )
+                    ),
+                ));
+            }
+        }
         // Browser tabs.
         #[cfg(windows)]
         for (id, title, hint) in self.browser_labels() {
@@ -4837,6 +4856,17 @@ impl Tessel {
             }
             #[cfg(windows)]
             "browser" => self.new_browser_page(),
+            #[cfg(windows)]
+            "browser:zoom-in" | "browser:zoom-out" | "browser:zoom-reset"
+                if self.view == View::Browser =>
+            {
+                let direction = match id {
+                    "browser:zoom-in" => 1,
+                    "browser:zoom-out" => -1,
+                    _ => 0,
+                };
+                self.browser.change_zoom(direction);
+            }
             #[cfg(windows)]
             "vault" => {
                 self.overlay = Some(Overlay::Settings);

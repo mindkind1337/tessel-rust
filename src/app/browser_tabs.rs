@@ -27,6 +27,8 @@ impl Tessel {
         self.browser.close_popups();
         self.browser.cancel_native_address_edit();
         let previous = std::mem::replace(&mut self.browser, next);
+        self.browser
+            .set_default_zoom(self.state.browser_prefs.zoom_half_steps);
         self.browser.invalidate_address_input();
         self.editor_page = EditorPage::new(&self.browser);
         self.show_agent_browser = false;

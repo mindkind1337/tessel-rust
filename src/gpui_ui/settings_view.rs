@@ -913,6 +913,38 @@ fn render_browser_page(
                     cx,
                 )),
         )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(if french {
+                    "Zoom par défaut"
+                } else {
+                    "Default page zoom"
+                })
+                .children(
+                    [("gpui-br-z-minus", "−", -1i8), ("gpui-br-z-plus", "+", 1i8)]
+                        .into_iter()
+                        .map(|(id, label, delta)| {
+                            let mut next = bp;
+                            next.zoom_half_steps =
+                                bp.zoom_half_steps.saturating_add(delta).clamp(-6, 10);
+                            setting_btn(
+                                id,
+                                label.to_owned(),
+                                false,
+                                tokens,
+                                GpuiAction::UpdateBrowserPrefs(next),
+                                cx,
+                            )
+                        }),
+                )
+                .child(format!(
+                    "{}%",
+                    crate::workspace::BrowserPreferences::zoom_percent(bp.zoom_half_steps)
+                )),
+        )
         .children(page_toggles(SettingsPageId::Browser, s, french, tokens, cx))
         .child(setting_btn(
             "gpui-st-br-vault",

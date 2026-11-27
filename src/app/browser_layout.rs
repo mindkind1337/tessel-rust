@@ -7,11 +7,14 @@ const FILE: &str = "owner-browser-tabs.json";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
+struct SavedPage(String, String, #[serde(default)] Option<i8>);
+
+#[derive(Serialize, Deserialize)]
 struct Group {
     project: u64,
     root: PathBuf,
     selected: usize,
-    pages: Vec<(String, String)>,
+    pages: Vec<SavedPage>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,7 +51,13 @@ impl Tessel {
                 project: project.id,
                 root: project.path.clone(),
                 selected,
-                pages: pages.into_iter().map(Browser::restart_location).collect(),
+                pages: pages
+                    .into_iter()
+                    .map(|page| {
+                        let (url, title) = page.restart_location();
+                        SavedPage(url, title, page.zoom_override)
+                    })
+                    .collect(),
             });
         }
         Layout {
@@ -106,8 +115,9 @@ impl Tessel {
             {
                 continue;
             }
-            for (index, (url, title)) in group.pages.into_iter().enumerate() {
-                let page = Browser::from_restart_location(&url, &title);
+            for (index, SavedPage(url, title, zoom)) in group.pages.into_iter().enumerate() {
+                let mut page = Browser::from_restart_location(&url, &title);
+                page.zoom_override = zoom.map(|steps| steps.clamp(-6, 10));
                 if index != group.selected {
                     self.other_browser_pages.insert((owner, page.tab_id), page);
                 } else if owner == self.browser_project {
@@ -151,6 +161,7 @@ mod tests {
             ids.push(app.state.active_project.unwrap());
             app.new_browser_page();
             app.browser.open_url(&format!("https://{name}.example/"));
+            app.execute_palette_command(&eframe::egui::Context::default(), "browser:zoom-in");
             let first = app.browser.tab_id;
             app.new_browser_page();
             app.browser
@@ -171,6 +182,10 @@ mod tests {
         let mut app = start();
         assert!(app.view == View::Browser);
         assert!(!app.browser.is_started());
+        assert_eq!(app.browser.zoom_override, Some(0));
+        let legacy: SavedPage =
+            serde_json::from_str(r#"["https://example.org/", "Before zoom"]"#).unwrap();
+        assert_eq!(legacy.2, None);
         assert_eq!(app.browser.address_str(), "https://two.example/");
         assert_eq!(app.browser_labels().len(), 2);
         app.apply_gpui_action(GpuiAction::SelectProject(ids[0]));

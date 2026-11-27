@@ -80,7 +80,7 @@ dunce = "1"
 reqwest = { version="0.12", default-features=false, features=["blocking","json","rustls-tls"] }
 webbrowser = "1"
 winreg = "0.55"
-windows = { version = "0.62", features = ["Win32_Globalization", "Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_System_WindowsProgramming"] }
+windows = { version = "0.62", features = ["Win32_Globalization", "Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_System_WindowsProgramming"] }
 percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
