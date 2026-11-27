@@ -39,7 +39,7 @@ fn layout_constants_match_electron_reference_css_pixels() {
 
 #[test]
 fn all_embedded_gpui_icons_are_valid_self_contained_svgs() {
-    assert_eq!(icons::GpuiIcon::ALL.len(), 49);
+    assert_eq!(icons::GpuiIcon::ALL.len(), 50);
     for &icon in icons::GpuiIcon::ALL {
         let raw = std::str::from_utf8(icon.svg_bytes()).expect("icon SVG must be valid UTF-8");
         assert!(

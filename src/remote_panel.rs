@@ -846,6 +846,9 @@ impl RemotePanel {
         if let Some(doc) = &mut self.document {
             ui.separator();
             ui.strong(&doc.path);
+            if ui.small_button(crate::i18n::tr("Copy path")).clicked() {
+                ui.ctx().copy_text(doc.path.clone());
+            }
             let fr = crate::i18n::is_french();
             let ready = !busy && doc.git_history.pending.is_none();
             if ui

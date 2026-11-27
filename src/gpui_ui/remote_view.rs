@@ -497,6 +497,7 @@ pub(crate) fn render(
             );
     }
     if let Some((path, text, size)) = &remote.document {
+        body = body.child(super::chrome::copy_path_button(path.clone(), fr, *tokens));
         body = body.child(button(
             "remote-git-history",
             crate::file_timeline::Source::Git.label(fr),

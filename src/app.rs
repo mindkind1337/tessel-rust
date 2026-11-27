@@ -15451,6 +15451,10 @@ fn document_toolbar(
                 }
             }
             if d.external_available() {
+                if ui.small_button(crate::i18n::tr("Copy path")).clicked() {
+                    ui.ctx()
+                        .copy_text(dunce::simplified(&d.path).display().to_string());
+                }
                 open_external = ui
                     .button(tr("Open in VS Code"))
                     .on_hover_text(tr("Open in VS Code at the cursor position"))

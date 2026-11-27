@@ -256,7 +256,7 @@ impl SharePanel {
         if let Some(key) = self.guest_image.key.clone()
             && let Some(texture) = self.guest_image.texture(ui.ctx())
         {
-            ui.strong(&key.path);
+            guest_path_heading(ui, &key.path, french);
             let mut save = false;
             ui.add(
                 egui::Image::new(texture)
@@ -289,7 +289,7 @@ impl SharePanel {
         }
         if let Some(document) = self.guest_file_document() {
             ui.separator();
-            ui.strong(&document.key.path);
+            guest_path_heading(ui, &document.key.path, french);
             let busy = self.guest_file_editor.busy();
             ui.horizontal(|ui| {
                 if ui
@@ -483,4 +483,20 @@ impl SharePanel {
             ui.colored_label(Color32::LIGHT_RED, notice.text(french));
         }
     }
+}
+
+fn guest_path_heading(ui: &mut Ui, path: &str, french: bool) {
+    ui.horizontal(|ui| {
+        ui.strong(path);
+        if ui
+            .small_button(if french {
+                "Copier le chemin"
+            } else {
+                "Copy path"
+            })
+            .clicked()
+        {
+            ui.ctx().copy_text(path.to_owned());
+        }
+    });
 }

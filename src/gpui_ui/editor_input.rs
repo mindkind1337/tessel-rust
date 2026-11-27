@@ -192,6 +192,28 @@ mod tests {
     }
 
     #[gpui::test]
+    fn viewer_copies_the_open_file_path(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file with spaces.txt");
+        std::fs::write(&path, "fixture").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds("viewer-copy-path").unwrap().center();
+        visual.simulate_click(point, Default::default());
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some(dunce::simplified(&path).display().to_string())
+        );
+    }
+
+    #[gpui::test]
     fn outline_follows_the_native_caret_across_folded_ancestors(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("caret.json");

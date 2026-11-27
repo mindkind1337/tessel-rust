@@ -20,6 +20,40 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 
+/// Copy the path shown by the file viewer. Guest callers supply the shared relative path.
+pub(super) fn copy_path_button(
+    path: String,
+    french: bool,
+    colors: GpuiThemeTokens,
+) -> impl IntoElement {
+    let label = if french {
+        "Copier le chemin"
+    } else {
+        "Copy path"
+    };
+    div()
+        .id("viewer-copy-path")
+        .debug_selector(|| "viewer-copy-path".into())
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .cursor_pointer()
+        .px(px(5.))
+        .py(px(2.))
+        .child(GpuiIcon::CopyPath.render(14., colors.text_dim))
+        .tooltip(move |_, cx| {
+            cx.new(|_| ToolbarTooltip {
+                text: label.into(),
+                bg: colors.surface,
+                fg: colors.text,
+                border: colors.border,
+            })
+            .into()
+        })
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));
+        })
+}
+
 /// Plain text tooltip (the Live Share pill's full words, the `⋯` button's title).
 pub(crate) struct ToolbarTooltip {
     pub text: SharedString,

@@ -4012,7 +4012,7 @@ impl Tessel {
             syntax_highlighting: preferences.syntax_highlighting,
             doc_index,
             title,
-            path_display: doc.path.to_string_lossy().into_owned(),
+            path_display: dunce::simplified(&doc.path).to_string_lossy().into_owned(),
             external_available: doc.external_available(),
             extension,
             lang,

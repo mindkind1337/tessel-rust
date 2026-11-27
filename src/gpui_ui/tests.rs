@@ -996,7 +996,7 @@ fn gpui_theme_tokens_and_svg_icons_cover_all_palettes_and_glyphs() {
     assert!((mixed.color.red - 0.25).abs() < 1e-4);
     assert!((mixed.color.blue - 0.75).abs() < 1e-4);
 
-    assert_eq!(GpuiIcon::ALL.len(), 49);
+    assert_eq!(GpuiIcon::ALL.len(), 50);
     for icon in GpuiIcon::ALL {
         let svg_text = std::str::from_utf8(icon.svg_bytes()).expect("valid utf8 svg");
         assert!(svg_text.starts_with("<svg "));

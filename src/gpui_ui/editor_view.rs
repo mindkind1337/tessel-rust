@@ -600,6 +600,13 @@ fn render_editor_toolbar(
                 .items_center()
                 .gap(px(5.0))
                 .when(doc.external_available, |el| {
+                    el.child(super::chrome::copy_path_button(
+                        doc.path_display.clone(),
+                        french,
+                        *tokens,
+                    ))
+                })
+                .when(doc.external_available, |el| {
                     let id = doc.instance_id;
                     let colors = *tokens;
                     let title = if french {
