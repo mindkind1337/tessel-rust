@@ -90,7 +90,8 @@ fn workers_are_bounded_and_client_close_interrupts_silent_requests_before_their_
     let closing = Instant::now();
     cache.close();
     for worker in &workers {
-        worker.stop_sender().send(()).unwrap();
+        // Closing the cache may already have stopped this worker.
+        let _ = worker.stop_sender().send(());
     }
     client.close();
     for worker in workers {
