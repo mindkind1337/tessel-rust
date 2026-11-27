@@ -834,7 +834,6 @@ impl Browser {
         self.context = Some(WebContext::new(Some(profile)));
         let start = self.sender.clone();
         let popup = self.sender.clone();
-        let navigation = self.sender.clone();
         let titles = self.sender.clone();
         let destination = self.destination.clone();
         let agent_root = self.agent_root.clone();
@@ -862,13 +861,7 @@ impl Browser {
             })
             .with_devtools(false)
             .with_general_autofill_enabled(false)
-            .with_navigation_handler(move |address| {
-                let permit = allowed(&address);
-                if permit {
-                    let _ = navigation.send(Event::Navigation(address));
-                }
-                permit
-            })
+            .with_navigation_handler(|address| allowed(&address))
             .with_new_window_req_handler(move |address, features| {
                 let now_ms = crate::side_panels_model::now_unix_ms();
                 let has_size = features.size.is_some();
@@ -951,6 +944,23 @@ impl Browser {
                             Ok(())
                         },
                     )),
+                    &mut 0,
+                )
+                .map_err(|e| e.to_string())?;
+            let location = self.sender.clone();
+            view.webview()
+                .add_SourceChanged(
+                    &webview2_com::SourceChangedEventHandler::create(Box::new(move |source, _| {
+                        if let Some(source) = source {
+                            let mut raw = windows::core::PWSTR::null();
+                            source.Source(&mut raw)?;
+                            let address = webview2_com::take_pwstr(raw);
+                            if allowed(&address) {
+                                let _ = location.send(Event::Navigation(address));
+                            }
+                        }
+                        Ok(())
+                    })),
                     &mut 0,
                 )
                 .map_err(|e| e.to_string())?;
@@ -1215,6 +1225,16 @@ impl Browser {
                 self.go_forward_now();
             }
         }
+        let restore_url = crate::app::take_fresh_shortcut(
+            ui.ctx(),
+            ui.is_enabled() && ui.memory(|m| m.has_focus(address_id)),
+            egui::Modifiers::NONE,
+            egui::Key::Escape,
+        );
+        if restore_url {
+            self.cancel_native_address_edit();
+            self.error.clear();
+        }
         let focus_url =
             shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
         let hard_reload = crate::app::take_fresh_shortcut(
@@ -1264,9 +1284,19 @@ impl Browser {
                     .id(address_id)
                     .desired_width((ui.available_width() - 140.0).max(100.0)),
             );
-            if focus_url {
+            if focus_url || restore_url {
                 response.request_focus();
+                if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), address_id)
+                {
+                    let range = egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(self.address.chars().count()),
+                    );
+                    state.cursor.set_char_range(Some(range));
+                    state.store(ui.ctx(), address_id);
+                }
             }
+            self.address_editing = response.has_focus() || focus_url || restore_url;
             if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 || ui.button(tr("Go")).clicked()
             {
@@ -2128,6 +2158,18 @@ mod tests {
             app.side_browsers[&side].view.as_ref().unwrap(),
             "(history.pushState({side:true}, '', '#side'), true)",
         );
+        let page = app.side_browsers.get_mut(&side).unwrap();
+        page.poll();
+        assert!(page.address_str().ends_with("#side"));
+        page.set_native_address_draft("draft.example".into());
+        wait_for(
+            page.view.as_ref().unwrap(),
+            "(history.replaceState({side:true}, '', '#replaced'), true)",
+        );
+        page.poll();
+        assert_eq!(page.address_str(), "draft.example");
+        page.cancel_native_address_edit();
+        assert!(page.address_str().ends_with("#replaced"));
         assert!(
             app.gpui_snapshot(960., 640., 4.)
                 .side_browser
