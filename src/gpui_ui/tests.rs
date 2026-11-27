@@ -18,6 +18,51 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn notification_controls_change_the_badge_and_keep_the_inbox_open(cx: &mut gpui::TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root =
+            super::TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+        root.app.synthetic_native_profiles(temp.path());
+        root.dispatch(GpuiAction::AddProjectPath(temp.path().to_owned()), cx);
+        root.dispatch(GpuiAction::LaunchClaudeChat, cx);
+        let pane = root.app.gpui_snapshot(960., 640., 4.).tiles[0].session_id;
+        root.app.inject_claude_frame_for_test(
+            pane,
+            serde_json::json!({
+                "type":"control_request", "request_id":"approval", "request":{
+                    "subtype":"can_use_tool","tool_name":"Bash","input":{"command":"cargo test"}
+                }
+            }),
+        );
+        root.dispatch(GpuiAction::ToggleNotificationsPopover, cx);
+        root
+    });
+    for (name, expected) in [
+        ("gpui-notif-toggle-1", 0),
+        ("gpui-notif-toggle-1", 1),
+        ("gpui-notif-read-all", 0),
+        ("gpui-notif-clear", 0),
+    ] {
+        cx.refresh().unwrap();
+        let mut ui = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = ui.debug_bounds(name).unwrap().center();
+        ui.simulate_mouse_down(point, gpui::MouseButton::Left, Default::default());
+        ui.simulate_mouse_up(point, gpui::MouseButton::Left, Default::default());
+        let snap = view
+            .update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+            .unwrap();
+        assert!(snap.modals.notifications_popover_open);
+        assert_eq!(snap.toolbar.unread_notifications, expected, "{name}");
+        assert_eq!(
+            snap.modals.notifications_items.is_empty(),
+            name == "gpui-notif-clear"
+        );
+    }
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn arrow_navigation_routes_input_only_to_visible_panes_and_saves_focus(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1695,6 +1740,15 @@ fn gpui_native_chat_approvals_questions_and_mode_switch_roundtrip() {
     assert_eq!(chat3.questions.len(), 1);
     assert!(chat3.approval.is_some());
     assert_eq!(snap3.toolbar.waiting_agents_count, 1);
+    assert_eq!(snap3.toolbar.unread_notifications, 1);
+    assert_eq!(snap3.modals.notifications_items[0].pane_id, Some(pane_id));
+    assert_eq!(
+        app.gpui_snapshot(960.0, 640.0, 4.0)
+            .modals
+            .notifications_items[0]
+            .count,
+        1
+    );
 
     app.apply_gpui_action(GpuiAction::ChatSelectQuestionOption {
         pane_id,

@@ -188,6 +188,20 @@ fn github_json_parsers_and_fix_checks_prompt() {
 }
 
 #[test]
+fn notification_bursts_update_the_matching_pane_without_merging_old_events() {
+    let mut center = NotificationCenter::default();
+    for (title, pane) in [("first", 1), ("another", 2), ("updated", 1)] {
+        center.push_coalesced(NotificationKind::SystemNotice, title, "", Some(pane));
+    }
+    assert_eq!(center.items.len(), 2);
+    assert_eq!(center.items[0].title, "updated");
+    assert_eq!(center.items[0].count, 2);
+    center.items[0].timestamp_ms = 0;
+    center.push_coalesced(NotificationKind::SystemNotice, "updated", "", Some(1));
+    assert_eq!(center.items.len(), 3);
+}
+
+#[test]
 fn usage_thresholds_and_coalesced_notifications() {
     let now = 2_000_000_000_000_u64;
     let records = vec![

@@ -3414,8 +3414,9 @@ impl Tessel {
         }
 
         let mut any_agent_working = false;
-        let mut total_waiting_agents = 0usize;
-        let mut first_waiting_pane: Option<u64> = None;
+        let waiting = self.sync_waiting_notifications();
+        let total_waiting_agents = waiting.len();
+        let first_waiting_pane = waiting.first().map(|(id, _)| *id);
         let mut active_working_agents = 0usize;
         for s in &self.sessions {
             let is_agent = matches!(
@@ -3437,25 +3438,8 @@ impl Tessel {
                 }
                 _ => false,
             };
-            let is_waiting = match &s.launch {
-                Launch::CodexChat => self
-                    .chats
-                    .iter()
-                    .any(|c| c.pane == s.id && c.waiting_for_user()),
-                Launch::ClaudeChat => self
-                    .claude_chats
-                    .iter()
-                    .any(|c| c.pane == s.id && c.waiting_for_user()),
-                _ => false,
-            };
             if is_agent && is_working {
                 any_agent_working = true;
-            }
-            if is_waiting {
-                total_waiting_agents += 1;
-                if first_waiting_pane.is_none() {
-                    first_waiting_pane = Some(s.id);
-                }
             }
             if s.project == self.state.active_project && is_working {
                 active_working_agents += 1;
@@ -8178,6 +8162,14 @@ mod panel_snapshot_tests {
         );
         app.gpui_extra.notifications_popover_open = true;
         let notice = app.notifications.items[0].id;
+        for (unread, expected) in [(false, 2), (true, 3)] {
+            app.apply_gpui_action(GpuiAction::DialogsToolbar(
+                DialogsToolbarAction::SetNotificationUnread(notice, unread),
+            ));
+            assert_eq!(app.active_session, Some(other_shell));
+            assert!(app.gpui_extra.notifications_popover_open);
+            assert_eq!(app.notifications.unread_count(), expected);
+        }
         app.apply_gpui_action(GpuiAction::DialogsToolbar(
             DialogsToolbarAction::OpenNotification(notice),
         ));

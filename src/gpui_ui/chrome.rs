@@ -703,7 +703,7 @@ pub(crate) fn render_toolbar(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(tokens.text_strong)
-                                    .child(SharedString::from(tb.unread_notifications.to_string())),
+                                    .child(SharedString::from(crate::dialogs_toolbar_ui::notification_badge(tb.unread_notifications))),
                             )
                         }),
                 )

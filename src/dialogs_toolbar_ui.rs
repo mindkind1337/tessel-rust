@@ -83,6 +83,7 @@ pub enum DialogsToolbarAction {
     OpenAlertsSettings,
     FocusPane(u64),
     OpenNotification(u64),
+    SetNotificationUnread(u64, bool),
     MarkAllNotificationsRead,
     ClearNotifications,
 }
@@ -1091,14 +1092,11 @@ pub fn paint_notifications_toolbar_button(
         col,
     );
     if unread_count > 0 {
-        let txt = if unread_count > 9 {
-            "9+".to_owned()
-        } else {
-            unread_count.to_string()
-        };
+        let txt = notification_badge(unread_count);
+        let width = 7.0 + txt.len() as f32 * 4.5;
         let badge_rect = Rect::from_min_size(
-            Pos2::new(resp.rect.right() - 13.0_f32, resp.rect.top() + 2.0_f32),
-            Vec2::new(12.0_f32, 12.0_f32),
+            Pos2::new(resp.rect.right() - width, resp.rect.top() + 2.0_f32),
+            Vec2::new(width, 12.0_f32),
         );
         ui.painter().rect_filled(badge_rect, 6.0_f32, pal.accent);
         ui.painter().text(
@@ -1135,6 +1133,23 @@ pub fn paint_agent_request_pill(
     Some(resp)
 }
 
+pub(crate) fn notification_badge(count: usize) -> String {
+    if count > 99 {
+        "99+".into()
+    } else {
+        count.to_string()
+    }
+}
+
+pub(crate) fn notification_read_label(unread: bool, french: bool) -> &'static str {
+    match (unread, french) {
+        (true, true) => "Lu",
+        (false, true) => "Non lu",
+        (true, false) => "Read",
+        (false, false) => "Unread",
+    }
+}
+
 pub fn show_notifications_menu_contents(
     ui: &mut egui::Ui,
     pal: &UiPalette,
@@ -1166,24 +1181,28 @@ pub fn show_notifications_menu_contents(
             {
                 out = Some(DialogsToolbarAction::OpenAlertsSettings);
             }
-            if !center.items.is_empty() {
-                if ui
-                    .small_button(if french { "Effacer" } else { "Clear" })
-                    .clicked()
-                {
-                    out = Some(DialogsToolbarAction::ClearNotifications);
-                }
-                if center.unread_count() > 0
-                    && ui
-                        .small_button(if french {
-                            "Tout marquer lu"
-                        } else {
-                            "Mark read"
-                        })
-                        .clicked()
-                {
-                    out = Some(DialogsToolbarAction::MarkAllNotificationsRead);
-                }
+            if ui
+                .add_enabled(
+                    !center.items.is_empty(),
+                    egui::Button::new(if french { "Effacer" } else { "Clear" }).small(),
+                )
+                .clicked()
+            {
+                out = Some(DialogsToolbarAction::ClearNotifications);
+            }
+            if ui
+                .add_enabled(
+                    center.unread_count() > 0,
+                    egui::Button::new(if french {
+                        "Tout marquer comme lu"
+                    } else {
+                        "Mark all read"
+                    })
+                    .small(),
+                )
+                .clicked()
+            {
+                out = Some(DialogsToolbarAction::MarkAllNotificationsRead);
             }
         });
     });
@@ -1209,31 +1228,45 @@ pub fn show_notifications_menu_contents(
         .show(ui, |ui| {
             for item in center.items.iter().rev() {
                 let border = if item.unread { pal.accent } else { pal.border };
-                let resp = egui::Frame::NONE
-                    .fill(pal.surface_2)
-                    .stroke(Stroke::new(1.0_f32, border))
-                    .corner_radius(6.0_f32)
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        let title = if item.count > 1 {
-                            format!("{} (×{})", item.title, item.count)
-                        } else {
-                            item.title.clone()
-                        };
-                        ui.label(RichText::new(title).strong().size(12.0_f32));
-                        if !item.detail.is_empty() {
-                            ui.label(
-                                RichText::new(&item.detail)
-                                    .size(11.0_f32)
-                                    .color(pal.text_dim),
-                            );
-                        }
-                    })
-                    .response
-                    .interact(Sense::click());
-                if resp.clicked() {
-                    out = Some(DialogsToolbarAction::OpenNotification(item.id));
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button(notification_read_label(item.unread, french))
+                        .clicked()
+                    {
+                        out = Some(DialogsToolbarAction::SetNotificationUnread(
+                            item.id,
+                            !item.unread,
+                        ));
+                    }
+
+                    let resp = egui::Frame::NONE
+                        .fill(pal.surface_2)
+                        .stroke(Stroke::new(1.0_f32, border))
+                        .corner_radius(6.0_f32)
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                let title = if item.count > 1 {
+                                    format!("{} (×{})", item.title, item.count)
+                                } else {
+                                    item.title.clone()
+                                };
+                                ui.label(RichText::new(title).strong().size(12.0_f32));
+                                if !item.detail.is_empty() {
+                                    ui.label(
+                                        RichText::new(&item.detail)
+                                            .size(11.0_f32)
+                                            .color(pal.text_dim),
+                                    );
+                                }
+                            })
+                        })
+                        .response
+                        .interact(Sense::click());
+                    if resp.clicked() {
+                        out = Some(DialogsToolbarAction::OpenNotification(item.id));
+                    }
+                });
                 ui.add_space(4.0_f32);
             }
         });

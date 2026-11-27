@@ -735,15 +735,19 @@ impl NotificationCenter {
         let title = title.into();
         let detail = detail.into();
         let ts = now_ms();
-        if let Some(last) = self.items.last_mut()
-            && last.kind == kind
-            && last.pane_id == pane_id
-            && last.title == title
-        {
-            last.detail = detail;
-            last.timestamp_ms = ts;
-            last.unread = true;
-            last.count = last.count.saturating_add(1);
+        if title.is_empty() {
+            return;
+        }
+        if let Some(recent) = self.items.iter_mut().rev().find(|item| {
+            item.kind == kind
+                && item.pane_id == pane_id
+                && ts.saturating_sub(item.timestamp_ms) < 5_000
+        }) {
+            recent.title = title;
+            recent.detail = detail;
+            recent.timestamp_ms = ts;
+            recent.unread = true;
+            recent.count = recent.count.saturating_add(1);
             return;
         }
         self.next_id = self.next_id.saturating_add(1).max(1);

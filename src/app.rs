@@ -3700,6 +3700,37 @@ impl Tessel {
         self.select_workspace_project(next);
     }
 
+    fn sync_waiting_notifications(&mut self) -> Vec<(u64, &'static str)> {
+        let waiting_panes: Vec<_> = self
+            .chats
+            .iter()
+            .filter(|c| c.waiting_for_user())
+            .map(|c| (c.pane, "Codex chat waiting for input"))
+            .chain(
+                self.claude_chats
+                    .iter()
+                    .filter(|c| c.waiting_for_user())
+                    .map(|c| (c.pane, "Claude chat waiting for input")),
+            )
+            .collect();
+        self.notified_waiting_panes
+            .retain(|pid| waiting_panes.iter().any(|(id, _)| id == pid));
+        for (pid, detail) in &waiting_panes {
+            if self.notified_waiting_panes.insert(*pid)
+                && self.state.notification_prefs.notifications_enabled
+                && self.state.notification_prefs.in_app_alerts
+            {
+                self.notifications.push_coalesced(
+                    crate::dialogs_toolbar_model::NotificationKind::ApprovalNeeded,
+                    "Agent waiting for response",
+                    *detail,
+                    Some(*pid),
+                );
+            }
+        }
+        waiting_panes
+    }
+
     fn reveal_workspace_pane(&mut self, id: u64) {
         let Some(session) = self.sessions.iter().find(|session| session.id == id) else {
             return;
@@ -13439,6 +13470,16 @@ impl Tessel {
                     }
                 }
             }
+            DialogsToolbarAction::SetNotificationUnread(id, unread) => {
+                if let Some(item) = self
+                    .notifications
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == id)
+                {
+                    item.unread = unread;
+                }
+            }
             DialogsToolbarAction::MarkAllNotificationsRead => {
                 self.notifications.mark_all_read();
             }
@@ -14446,34 +14487,7 @@ impl eframe::App for Tessel {
                     self.floating_toolbar(ui);
                 }
                 secondary_w += ui.cursor().min.x - secondary_x0;
-                // Sync waiting-for-user notifications (non-focus-stealing)
-                let waiting_panes: Vec<(u64, String)> = self
-                    .chats
-                    .iter()
-                    .filter(|c| c.waiting_for_user())
-                    .map(|c| (c.pane, "Codex chat waiting for input".to_owned()))
-                    .chain(
-                        self.claude_chats
-                            .iter()
-                            .filter(|c| c.waiting_for_user())
-                            .map(|c| (c.pane, "Claude chat waiting for input".to_owned())),
-                    )
-                    .collect();
-                self.notified_waiting_panes
-                    .retain(|pid| waiting_panes.iter().any(|(id, _)| id == pid));
-                for (pid, detail) in &waiting_panes {
-                    if self.notified_waiting_panes.insert(*pid)
-                        && self.state.notification_prefs.notifications_enabled
-                        && self.state.notification_prefs.in_app_alerts
-                    {
-                        self.notifications.push_coalesced(
-                            crate::dialogs_toolbar_model::NotificationKind::ApprovalNeeded,
-                            "Agent waiting for response",
-                            detail.clone(),
-                            Some(*pid),
-                        );
-                    }
-                }
+                let waiting_panes = self.sync_waiting_notifications();
                 if self.state.notification_prefs.in_app_alerts
                     && let Some(pill_resp) = crate::dialogs_toolbar_ui::paint_agent_request_pill(
                         ui,
@@ -14531,6 +14545,7 @@ impl eframe::App for Tessel {
                     notif_open,
                 );
                 let notif_popup = egui::Popup::menu(&notif_btn)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .id(notif_popup_id)
                     .align(egui::RectAlign::BOTTOM_END)
                     .gap(6.0);
@@ -14541,8 +14556,10 @@ impl eframe::App for Tessel {
                         &self.notifications,
                         toolbar_french,
                     ) {
+                        if matches!(act, crate::dialogs_toolbar_ui::DialogsToolbarAction::OpenNotification(_) | crate::dialogs_toolbar_ui::DialogsToolbarAction::OpenAlertsSettings) {
+                            ui.close();
+                        }
                         toolbar_dlg_act = Some(act);
-                        ui.close();
                     }
                 });
                 self.toolbar_menu_open |= shown_notif.is_some();

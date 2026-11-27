@@ -2978,37 +2978,60 @@ fn render_notifications_popover(
         for item in m.notifications_items.iter().rev() {
             let nid = item.id;
             let has_pane = item.pane_id.is_some();
+            let entry = div()
+                .flex_1()
+                .min_w_0()
+                .id(("gpui-notif-item", nid))
+                .p(px(6.0))
+                .rounded(px(tokens.radius_px - 1.0))
+                .bg(if item.unread {
+                    tokens.surface_2
+                } else {
+                    tokens.surface
+                })
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch_action(
+                        GpuiAction::DialogsToolbar(DialogsToolbarAction::OpenNotification(nid)),
+                        cx,
+                    );
+                    if has_pane {
+                        this.set_focus_input(super::FocusInputTarget::None, window, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.text_strong)
+                        .child(SharedString::from(item.title.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(tokens.text_dim)
+                        .child(SharedString::from(item.detail.clone())),
+                );
             list = list.child(
                 div()
-                    .id(("gpui-notif-item", nid))
-                    .p(px(6.0))
-                    .rounded(px(tokens.radius_px - 1.0))
-                    .bg(tokens.surface)
                     .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch_action(
-                            GpuiAction::DialogsToolbar(DialogsToolbarAction::OpenNotification(nid)),
-                            cx,
-                        );
-                        if has_pane {
-                            this.set_focus_input(super::FocusInputTarget::None, window, cx);
-                        }
-                    }))
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(tokens.text_strong)
-                            .child(SharedString::from(item.title.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(tokens.text_dim)
-                            .child(SharedString::from(item.detail.clone())),
-                    ),
+                    .items_center()
+                    .gap(px(4.))
+                    .child(entry)
+                    .child(modal_btn(
+                        format!("gpui-notif-toggle-{nid}"),
+                        crate::dialogs_toolbar_ui::notification_read_label(item.unread, french)
+                            .to_owned(),
+                        false,
+                        tokens,
+                        GpuiAction::DialogsToolbar(DialogsToolbarAction::SetNotificationUnread(
+                            nid,
+                            !item.unread,
+                        )),
+                        cx,
+                    )),
             );
         }
     }
@@ -3036,14 +3059,53 @@ fn render_notifications_popover(
                             .text_color(tokens.text_strong)
                             .child("Notifications"),
                     )
-                    .child(modal_btn(
-                        "gpui-notif-read-all",
-                        "Mark read".to_owned(),
-                        false,
-                        tokens,
-                        GpuiAction::DialogsToolbar(DialogsToolbarAction::MarkAllNotificationsRead),
-                        cx,
-                    )),
+                    .child(
+                        div().flex().gap(px(4.)).children(
+                            [
+                                (
+                                    "gpui-notif-read-all",
+                                    if french {
+                                        "Tout marquer comme lu"
+                                    } else {
+                                        "Mark all read"
+                                    },
+                                    m.notifications_items.iter().any(|n| n.unread),
+                                    DialogsToolbarAction::MarkAllNotificationsRead,
+                                ),
+                                (
+                                    "gpui-notif-clear",
+                                    if french { "Effacer" } else { "Clear" },
+                                    !m.notifications_items.is_empty(),
+                                    DialogsToolbarAction::ClearNotifications,
+                                ),
+                            ]
+                            .into_iter()
+                            .map(|(id, label, enabled, action)| {
+                                div()
+                                    .id(id)
+                                    .debug_selector(move || id.to_string())
+                                    .role(gpui::Role::Button)
+                                    .aria_disabled(!enabled)
+                                    .aria_label(label)
+                                    .px(px(6.))
+                                    .py(px(4.))
+                                    .text_size(px(11.))
+                                    .text_color(tokens.text)
+                                    .when(!enabled, |el| el.opacity(0.45))
+                                    .when(enabled, |el| {
+                                        el.cursor_pointer()
+                                            .hover(|s| s.bg(tokens.surface_2))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.dispatch_action(
+                                                    GpuiAction::DialogsToolbar(action.clone()),
+                                                    cx,
+                                                );
+                                            }))
+                                    })
+                                    .child(label)
+                            }),
+                        ),
+                    ),
             )
             .child(list)
             .into_any_element(),
