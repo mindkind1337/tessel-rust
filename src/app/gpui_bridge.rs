@@ -5327,13 +5327,7 @@ impl Tessel {
                             _ => None,
                         });
                 if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == id) {
-                    if let Some(mut term) = sess.terminal.take() {
-                        thread::spawn(move || {
-                            let _ = term.stop_for_restart();
-                        });
-                    }
-                    sess.error.clear();
-                    sess.start_with_shell(prefs, preferred_shell);
+                    sess.retry_terminal(prefs, preferred_shell);
                 }
             }
             GpuiAction::SwitchSessionChatMode(pane_id) => {
@@ -8268,6 +8262,60 @@ mod panel_snapshot_tests {
     }
 
     #[test]
+    #[cfg(all(windows, feature = "visual-test"))]
+    fn restart_exited_ssh_waits_for_shutdown_and_ignores_replayed_clicks() {
+        use crate::terminal::Terminal;
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
+        let (id, _input) = app.install_terminal_find_fixture();
+        let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+        pane.launch = Launch::Ssh(crate::workspace::Host {
+            // Reaching alias validation proves the replacement launch was attempted
+            // without contacting any network host or using an SSH profile.
+            alias: "-fixture".into(),
+            ..Default::default()
+        });
+        let tmux_id = crate::claude::uuid().unwrap();
+        pane.ssh_tmux_id = Some(tmux_id.clone());
+        let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+        command.args(["/d", "/c", "exit 255"]);
+        pane.terminal = Some(Terminal::spawn_command(command).unwrap());
+        let action = GpuiAction::RestartSession(id);
+        // A stale click does not stop a pane still considered running.
+        app.apply_gpui_action(action.clone());
+        assert!(
+            app.sessions
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .terminal
+                .is_some()
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+            pane.poll();
+            if pane.terminal.as_ref().is_some_and(Terminal::exited) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.apply_gpui_action(action.clone());
+        app.apply_gpui_action(action);
+        let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+        assert!(pane.restarting.is_some() && pane.loading.is_none());
+        while pane.restarting.is_some() || pane.loading.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            pane.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(pane.error.contains("SSH config alias"), "{}", pane.error);
+        assert_eq!(pane.ssh_tmux_id.as_ref(), Some(&tmux_id));
+    }
+
+    #[test]
     fn native_mode_switch_waits_for_confirmed_cli_exit() {
         let temp = tempfile::tempdir().unwrap();
         let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
@@ -8281,6 +8329,7 @@ mod panel_snapshot_tests {
         app.claude_chats.clear();
         let (sender, result) = mpsc::channel();
         app.sessions[0].restarting = Some(super::super::Restart {
+            preferred_shell: None,
             switch_mode: true,
             result,
             preferences: None,
@@ -8295,6 +8344,7 @@ mod panel_snapshot_tests {
         assert!(app.sessions[0].error.contains("not confirmed"));
         let (sender, result) = mpsc::channel();
         app.sessions[0].restarting = Some(super::super::Restart {
+            preferred_shell: None,
             switch_mode: true,
             result,
             preferences: None,

@@ -45,6 +45,7 @@ fn same_worker_directory(a: &std::path::Path, b: &std::path::Path) -> bool {
 }
 
 struct Restart {
+    preferred_shell: Option<String>,
     switch_mode: bool,
     result: Receiver<Result<(), (Terminal, String)>>,
     preferences: Option<crate::agent_preferences::Preferences>,
@@ -161,11 +162,35 @@ impl Session {
         if !self.can_restart(prefs.as_ref()) {
             return;
         }
+        self.stop_for_relaunch(prefs, None);
+    }
+
+    fn retry_terminal(
+        &mut self,
+        prefs: Option<crate::agent_preferences::Preferences>,
+        preferred_shell: Option<String>,
+    ) {
+        if self.restarting.is_some() || self.loading.is_some() || self.native_host.is_some() {
+            return;
+        }
+        match &self.terminal {
+            Some(terminal) if terminal.exited() => self.stop_for_relaunch(prefs, preferred_shell),
+            None if !self.error.is_empty() => self.start_with_shell(prefs, preferred_shell),
+            _ => {}
+        }
+    }
+
+    fn stop_for_relaunch(
+        &mut self,
+        prefs: Option<crate::agent_preferences::Preferences>,
+        preferred_shell: Option<String>,
+    ) {
         let Some(mut terminal) = self.terminal.take() else {
             return;
         };
         let (sender, result) = mpsc::channel();
         self.restarting = Some(Restart {
+            preferred_shell,
             switch_mode: false,
             result,
             preferences: prefs,
@@ -487,7 +512,7 @@ impl Session {
             let pending = self.restarting.take().expect("pending restart");
             match result {
                 Ok(Ok(())) => {
-                    self.start(pending.preferences);
+                    self.start_with_shell(pending.preferences, pending.preferred_shell);
                 }
                 Ok(Err((terminal, error))) => {
                     self.terminal = Some(terminal);
@@ -6537,7 +6562,7 @@ impl Tessel {
                                             }
                                             _ => None,
                                         };
-                                        session.restart(prefs);
+                                        session.retry_terminal(prefs, self.state.launcher_prefs.preferred_shell.clone());
                                     }
                                     if do_close {
                                         close = Some(id);
@@ -7348,6 +7373,7 @@ impl Tessel {
         {
             let (sender, result) = mpsc::channel();
             session.restarting = Some(Restart {
+                preferred_shell: None,
                 switch_mode: true,
                 result,
                 preferences: None,
@@ -15220,6 +15246,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
             ssh_tmux_id: None,
             native_host: None,
             restarting: Some(Restart {
+                preferred_shell: None,
                 switch_mode: false,
                 result: receiver,
                 preferences: None,
@@ -15261,6 +15288,7 @@ Set-Content -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'observed.txt') -Valu
         session.terminal.take();
         let (sender, result) = mpsc::channel();
         session.restarting = Some(Restart {
+            preferred_shell: None,
             switch_mode: false,
             result,
             preferences: None,
