@@ -347,6 +347,7 @@ fn render_file_finder(
 
     let mut list = div()
         .id("gpui-finder-scroll")
+        .role(gpui::Role::ListBox)
         .debug_selector(|| "finder-list".into())
         .when_some(
             inputs.list_scroll(
@@ -358,8 +359,7 @@ fn render_file_finder(
         .max_h(px(360.0))
         .overflow_y_scroll()
         .flex()
-        .flex_col()
-        .gap(px(2.0));
+        .flex_col();
 
     for (idx, rel) in f.results.iter().enumerate() {
         let sel = idx == f.selected;
@@ -372,23 +372,26 @@ fn render_file_finder(
         list = list.child(
             div()
                 .id(("gpui-finder-row", idx as u64))
+                .role(gpui::Role::ListBoxOption)
+                .aria_selected(sel)
+                .aria_label(rel.clone())
+                .when(sel, |el| el.aria_active_descendant())
                 .flex_shrink_0()
                 .debug_selector(move || format!("finder-row-{idx}"))
                 .px(px(10.0))
-                .py(px(5.5))
+                .h(px(32.0))
                 .rounded(px(tokens.radius_px - 1.0))
                 .bg(if sel {
-                    tokens.accent_soft
+                    tokens.surface_3
                 } else {
                     gpui::rgba(0x0000_0000)
                 })
-                .font_family(mono_font_family())
-                .text_size(px(11.5))
+                .text_size(px(12.5))
                 .text_color(tokens.text_strong)
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .hover(|s| s.bg(tokens.surface_2))
+                .gap(px(10.))
+                .cursor_pointer()
                 .on_mouse_move(cx.listener(move |root, _, _, cx| {
                     if let Some(scope) = scope {
                         super::search_inputs::hover(
@@ -413,14 +416,20 @@ fn render_file_finder(
                         );
                     }
                 }))
-                .child(super::file_icons::render(rel, tokens, tokens.text_dim))
-                .child(div().min_w_0().truncate().child(name.to_owned()))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .mr(px(-4.))
+                        .child(super::file_icons::render(rel, tokens, tokens.text_dim)),
+                )
+                .child(div().flex_shrink_0().child(name.to_owned()))
                 .when(!dir.is_empty(), |el| {
                     el.child(
                         div()
                             .min_w_0()
                             .truncate()
                             .text_color(tokens.text_dim)
+                            .text_size(px(11.5))
                             .child(dir.to_owned()),
                     )
                 }),
@@ -475,6 +484,9 @@ fn render_file_finder(
                     };
                     div()
                         .debug_selector(|| "finder-message".into())
+                        .px(px(16.))
+                        .py(px(14.))
+                        .text_size(px(12.5))
                         .text_color(tokens.text_dim)
                         .child(message.to_owned())
                         .into_any_element()
@@ -482,28 +494,37 @@ fn render_file_finder(
                     list.into_any_element()
                 },
             )
-            .child(div().text_size(px(11.)).text_color(tokens.text_dim).child({
-                let mut hints = vec![if french {
-                    "Entrée : ouvrir"
-                } else {
-                    "Enter: open"
-                }];
-                if m.finder_can_insert {
-                    hints.push(if french {
-                        "Ctrl+Entrée : mettre son chemin dans le panneau actif"
-                    } else {
-                        "Ctrl+Enter: put its path in the active pane"
-                    });
-                }
-                if f.truncated {
-                    hints.push(if french {
-                        "liste partielle"
-                    } else {
-                        "partial file list"
-                    });
-                }
-                hints.join(" · ")
-            }))
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(tokens.border)
+                    .px(px(14.))
+                    .py(px(7.))
+                    .text_size(px(11.))
+                    .text_color(tokens.text_dim)
+                    .child({
+                        let mut hints = vec![if french {
+                            "Entrée : ouvrir"
+                        } else {
+                            "Enter: open"
+                        }];
+                        if m.finder_can_insert {
+                            hints.push(if french {
+                                "Ctrl+Entrée : mettre son chemin dans le panneau actif"
+                            } else {
+                                "Ctrl+Enter: put its path in the active pane"
+                            });
+                        }
+                        if f.truncated {
+                            hints.push(if french {
+                                "liste partielle"
+                            } else {
+                                "partial file list"
+                            });
+                        }
+                        hints.join(" · ")
+                    }),
+            )
             .into_any_element(),
         cx,
     )

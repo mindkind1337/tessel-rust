@@ -511,6 +511,7 @@ mod tests {
                     "palette-row-3"
                 })
                 .unwrap();
+            assert_eq!(row.size.height, gpui::px(32.));
             visual.simulate_mouse_move(row.center(), None, Default::default());
             assert_choice(cx, 3);
         }
