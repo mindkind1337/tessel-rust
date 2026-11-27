@@ -854,6 +854,10 @@ pub struct Tessel {
     #[cfg(windows)]
     browser_tab_open: bool,
     #[cfg(windows)]
+    browser_project: Option<u64>,
+    #[cfg(windows)]
+    background_browsers: std::collections::HashMap<Option<u64>, (crate::browser::Browser, bool)>,
+    #[cfg(windows)]
     pub(crate) browser: crate::browser::Browser,
     #[cfg(windows)]
     pub(crate) media_player: crate::files::playback::native::Player,
@@ -940,6 +944,8 @@ impl Tessel {
         let remote = crate::remote_panel::RemotePanel::with_profile(
             store.as_ref().map(|s| s.directory().to_owned()),
         );
+        #[cfg(windows)]
+        let browser_project = state.active_project;
         #[cfg(windows)]
         let browser = crate::browser::Browser::default();
         #[cfg(windows)]
@@ -1107,6 +1113,10 @@ impl Tessel {
             gpui_extra: Default::default(),
             #[cfg(windows)]
             browser_tab_open: false,
+            #[cfg(windows)]
+            browser_project,
+            #[cfg(windows)]
+            background_browsers: Default::default(),
             #[cfg(windows)]
             browser,
             #[cfg(windows)]
@@ -1755,7 +1765,38 @@ impl Tessel {
             ));
         });
     }
+    #[cfg(windows)]
+    fn switch_project_browser(&mut self) {
+        let target = self.state.active_project;
+        if self.browser_project == target {
+            return;
+        }
+        self.browser.visible(false);
+        self.browser.close_popups();
+        self.browser.cancel_native_address_edit();
+        let (next, open) = self.background_browsers.remove(&target).unwrap_or_default();
+        let previous = std::mem::replace(&mut self.browser, next);
+        let was_open = std::mem::replace(&mut self.browser_tab_open, open);
+        if (was_open || previous.is_started())
+            && self
+                .browser_project
+                .is_none_or(|id| self.state.projects.iter().any(|p| p.id == id))
+        {
+            self.background_browsers
+                .insert(self.browser_project, (previous, was_open));
+        }
+        self.browser_project = target;
+        self.browser.invalidate_address_input();
+        self.editor_page = crate::browser::editor_page::EditorPage::new(&self.browser);
+        self.show_agent_browser = false;
+        if self.view == View::Browser && !open {
+            self.view = View::Work;
+        }
+    }
+
     fn refresh_project(&mut self) {
+        #[cfg(windows)]
+        self.switch_project_browser();
         self.reconcile_editor_selection();
         self.gpui_extra.layout_menu_right = None;
         let visible = crate::terminal_layout::project_key(self.state.active_project);
@@ -2562,6 +2603,9 @@ impl Tessel {
         #[cfg(windows)]
         {
             self.browser.poll();
+            for (browser, _) in self.background_browsers.values_mut() {
+                browser.poll();
+            }
             self.account.poll();
             if let Some(ws) = self.account.take_restored_workspace() {
                 self.restore_preview = Some(ws);
@@ -5507,6 +5551,8 @@ impl Tessel {
             return;
         };
         self.state.projects.remove(pos);
+        #[cfg(windows)]
+        self.background_browsers.remove(&Some(id));
         self.state.project_worktrees.remove(&id);
         self.state.project_groups.remove(&id);
         self.worktree_state.retain_projects(&self.state.projects);
@@ -8490,6 +8536,13 @@ impl Tessel {
         {
             let _ = self.agent_browsers.sync_presentation(None, None, false);
             self.agent_browsers = Default::default();
+            self.background_browsers.clear();
+            self.browser.visible(false);
+            self.browser.close_popups();
+            self.browser = Default::default();
+            self.browser_project = state.active_project;
+            self.browser_tab_open = false;
+            self.editor_page = crate::browser::editor_page::EditorPage::new(&self.browser);
             self.show_agent_browser = false;
         }
         let (sender, receiver) = mpsc::channel();

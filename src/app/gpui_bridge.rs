@@ -1454,6 +1454,8 @@ impl Tessel {
             store.as_ref().map(|s| s.directory().to_owned()),
         );
         #[cfg(windows)]
+        let browser_project = state.active_project;
+        #[cfg(windows)]
         let browser = crate::browser::Browser::default();
         #[cfg(windows)]
         let editor_page = crate::browser::editor_page::EditorPage::new(&browser);
@@ -1632,6 +1634,10 @@ impl Tessel {
             #[cfg(windows)]
             browser_tab_open: false,
             #[cfg(windows)]
+            browser_project,
+            #[cfg(windows)]
+            background_browsers: Default::default(),
+            #[cfg(windows)]
             browser,
             #[cfg(windows)]
             media_player: Default::default(),
@@ -1751,8 +1757,6 @@ impl Tessel {
         let native_changed = self.poll();
         self.floating.poll();
         self.sync_live_share();
-        #[cfg(windows)]
-        self.browser.poll();
         self.flush_gpui_terminal_side_effects();
         refresh || native_changed
     }
@@ -6313,6 +6317,9 @@ impl Tessel {
                 {
                     if !trusted {
                         self.browser.revoke_preview_scripts(&folder);
+                        for (browser, _) in self.background_browsers.values_mut() {
+                            browser.revoke_preview_scripts(&folder);
+                        }
                     }
                     if let Err(error) = self.html_trust.decide(folder, trusted) {
                         self.error = error;
@@ -8557,6 +8564,56 @@ mod panel_snapshot_tests {
         assert!(app.documents[0].error.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "four");
     }
+    #[cfg(windows)]
+    #[test]
+    fn browser_tabs_restore_each_projects_page_and_download_drawer() {
+        use crate::view_tabs::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let mut ids = Vec::new();
+        for (name, address) in [
+            ("one", "https://one.example/"),
+            ("two", "https://two.example/"),
+        ] {
+            let dir = temp.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            app.apply_gpui_action(GpuiAction::AddProjectPath(dir));
+            ids.push(app.state.active_project.unwrap());
+            assert!(
+                app.gpui_snapshot(960., 640., 4.)
+                    .view_tabs
+                    .iter()
+                    .all(|t| t.kind != Kind::Browser)
+            );
+            app.open_tessel_url_headless(address.into());
+            if name == "one" {
+                app.browser.toggle_downloads_open();
+            }
+        }
+        app.apply_gpui_action(GpuiAction::SelectProject(ids[0]));
+        assert_eq!(app.browser.address_str(), "https://one.example/");
+        assert!(app.browser.downloads_open());
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .view_tabs
+                .iter()
+                .any(|t| t.kind == Kind::Browser)
+        );
+        app.apply_gpui_action(GpuiAction::CloseBrowserTab);
+        app.apply_gpui_action(GpuiAction::SelectProject(ids[1]));
+        assert_eq!(app.browser.address_str(), "https://two.example/");
+        assert!(!app.browser.downloads_open());
+        app.apply_gpui_action(GpuiAction::SelectProject(ids[0]));
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .view_tabs
+                .iter()
+                .all(|t| t.kind != Kind::Browser)
+        );
+        app.remove_project_immediate(ids[1]);
+        assert!(!app.background_browsers.contains_key(&Some(ids[1])));
+    }
+
     #[test]
     fn project_tabs_isolate_names_navigation_and_bulk_close_with_dirty_buffers() {
         let temp = tempfile::tempdir().unwrap();

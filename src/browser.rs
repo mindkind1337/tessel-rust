@@ -931,6 +931,169 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn project_switch_keeps_both_native_browser_documents_alive() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::{hidden_parent, wait_for};
+
+        let dir = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let profile = dir.path().join("test-owner");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut projects = Vec::new();
+        for name in ["one", "two"] {
+            let site = dir.path().join(name);
+            std::fs::create_dir(&site).unwrap();
+            let path = site.join("index.html");
+            std::fs::write(&path, format!("<title>{name}</title><input id='draft'>")).unwrap();
+            let doc = crate::files::Document::open(&site, &path).unwrap();
+            app.apply_gpui_action(GpuiAction::AddProjectPath(site));
+            projects.push(app.state.active_project.unwrap());
+            app.apply_gpui_action(GpuiAction::SelectBrowserTab);
+            app.browser
+                .create_with_profile(&parent, profile.clone())
+                .unwrap();
+            app.browser.open_project_page(&doc, false).unwrap();
+            let view = app.browser.view.as_ref().unwrap();
+            wait_for(
+                view,
+                &format!("document.title === '{name}' && !!document.querySelector('#draft')"),
+            );
+            wait_for(
+                view,
+                &format!(
+                    "(document.querySelector('#draft').value = '{name} draft') === '{name} draft'"
+                ),
+            );
+        }
+        for (id, name) in projects.into_iter().zip(["one", "two"]) {
+            app.apply_gpui_action(GpuiAction::SelectProject(id));
+            app.apply_gpui_action(GpuiAction::SelectBrowserTab);
+            wait_for(
+                app.browser.view.as_ref().unwrap(),
+                &format!(
+                    "document.title === '{name}' && document.querySelector('#draft').value === '{name} draft'"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn project_switch_finishes_in_flight_download_in_original_folder() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::{hidden_parent, pump};
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let temp = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(first.clone()));
+        let owner = app.state.active_project.unwrap();
+        app.apply_gpui_action(GpuiAction::SelectBrowserTab);
+        app.browser
+            .create_with_profile(&parent, temp.path().join("profile"))
+            .unwrap();
+        *app.browser.destination.lock().unwrap() = first.clone();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/transfer.bin", listener.local_addr().unwrap());
+        let (release, wait) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(25);
+            let mut stream = loop {
+                assert!(Instant::now() < deadline, "no attachment request received");
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("fixture accept failed: {e}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                let mut request = String::new();
+                if BufReader::new(&stream).read_line(&mut request).is_err() || request.is_empty() {
+                    continue;
+                }
+                if request.starts_with("GET ")
+                    && request
+                        .split_whitespace()
+                        .nth(1)
+                        .is_some_and(|path| path.ends_with("/transfer.bin"))
+                {
+                    break stream;
+                }
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            };
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=transfer.bin\r\nContent-Length: 32768\r\nConnection: close\r\n\r\n").unwrap();
+            stream.write_all(&[7; 16384]).unwrap();
+            wait.recv_timeout(Duration::from_secs(30)).unwrap();
+            stream.write_all(&[8; 16384]).unwrap();
+        });
+        app.browser.open_url(&url);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !app
+            .browser
+            .download_summaries()
+            .iter()
+            .any(|row| row.1 == "Downloading")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "WebView2 did not start the attachment"
+            );
+            pump();
+            app.poll_for_gpui();
+        }
+        let file = PathBuf::from(&app.browser.download_summaries()[0].4);
+        assert!(file.starts_with(first.canonicalize().unwrap()));
+        assert_eq!(file.file_name().unwrap(), "transfer.bin");
+        app.apply_gpui_action(GpuiAction::AddProjectPath(second));
+        assert!(app.browser.download_summaries().is_empty());
+        release.send(()).unwrap();
+        server.join().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let expected = [&[7; 16384][..], &[8; 16384][..]].concat();
+        while !std::fs::read(&file).is_ok_and(|bytes| bytes == expected) {
+            assert!(
+                Instant::now() < deadline,
+                "background transfer did not finish with the expected bytes"
+            );
+            pump();
+            app.poll_for_gpui();
+        }
+        app.apply_gpui_action(GpuiAction::SelectProject(owner));
+        loop {
+            pump();
+            app.poll_for_gpui();
+            if app
+                .browser
+                .download_summaries()
+                .iter()
+                .any(|row| row.1 == "Completed" && row.2 == 32768)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "owner did not receive the completed record"
+            );
+        }
+    }
+
+    #[test]
     fn address_bar_normalizes_without_opening_a_browser_or_leaking_credentials() {
         for (input, expected) in [
             ("localhost:5173/test", "http://localhost:5173/test"),
