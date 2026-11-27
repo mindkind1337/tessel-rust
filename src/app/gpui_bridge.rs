@@ -43,6 +43,8 @@ pub(crate) enum ExplorerCommand {
     Trash,
     CopyPath,
     CopyRelative,
+    #[cfg(windows)]
+    Reveal,
     Dotfiles,
     Compact,
 }
@@ -6521,6 +6523,8 @@ impl Tessel {
                             .ok()
                             .map(|rel| rel.display().to_string())
                     }
+                    #[cfg(windows)]
+                    Reveal => self.reveal_project_item(root, path),
                     Dotfiles => self.apply_gpui_action_inner(GpuiAction::ExplorerToggleDotfiles),
                     Compact => self.apply_gpui_action_inner(GpuiAction::ExplorerToggleCompact),
                     NewFile | NewFolder | Rename | Trash if self.file_actions_ready() => {

@@ -111,6 +111,14 @@ impl Menu {
                 ),
             ]);
         }
+        #[cfg(windows)]
+        choices.push((
+            Reveal,
+            translate(
+                "Reveal in File Explorer",
+                "Afficher dans l’explorateur de fichiers",
+            ),
+        ));
         choices.extend([
             (
                 Dotfiles,

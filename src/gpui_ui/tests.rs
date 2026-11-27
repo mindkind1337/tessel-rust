@@ -99,6 +99,7 @@ fn explorer_compact_parent_click_targets_that_folder_for_rename(test: &mut gpui:
         visual.simulate_mouse_up(point, gpui::MouseButton::Right, Default::default());
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("explorer-context-Reveal").is_some());
         let choice = visual
             .debug_bounds("explorer-context-Rename")
             .expect("right-click opens the explorer menu");

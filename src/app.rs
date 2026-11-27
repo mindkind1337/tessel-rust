@@ -615,6 +615,8 @@ enum Message {
         crate::side_panels_model::SessionHistoryEntry,
         Result<(), String>,
     ),
+    #[cfg(windows)]
+    RevealError(String),
     FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
     AddProjectPickedFolder(Option<PathBuf>),
@@ -2624,6 +2626,8 @@ impl Tessel {
                         Err(error) => self.error = error,
                     }
                 }
+                #[cfg(windows)]
+                Message::RevealError(error) => self.error = error,
                 Message::FileAction(result) => {
                     self.file_action_pending = false;
                     match result {
@@ -5390,6 +5394,10 @@ impl Tessel {
                 TreeAction::OpenContentHit { path, line } if !self.file_action_pending => {
                     self.open_explorer_content_hit(path, line)
                 }
+                #[cfg(windows)]
+                TreeAction::Reveal { root: owner, path } if root.as_ref() == Some(&owner) => {
+                    self.reveal_project_item(owner, path)
+                }
                 TreeAction::CopyPath(path) => {
                     ui.ctx().copy_text(path.display().to_string());
                 }
@@ -5435,6 +5443,20 @@ impl Tessel {
                 }
                 _ => {}
             }
+        }
+    }
+    #[cfg(windows)]
+    fn reveal_project_item(&mut self, root: PathBuf, path: PathBuf) {
+        let sender = self.sender.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("explorer-reveal".into())
+            .spawn(move || {
+                if let Err(error) = crate::native_reveal::reveal(&root, &path) {
+                    let _ = sender.send(Message::RevealError(error));
+                }
+            })
+        {
+            self.error = error.to_string();
         }
     }
     fn right_panel(&mut self, ctx: &egui::Context) {

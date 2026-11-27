@@ -200,6 +200,37 @@ fn egui_tree_expands_folders_opens_files_caches_rows_and_gates_context_actions()
         );
     }
 
+    #[cfg(windows)]
+    {
+        let (_, painted) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, false, vec![]);
+        let outer = find_text_center(&painted.shapes, "src").unwrap();
+        run_frame(
+            &ctx_fx,
+            &mut fixture_tree,
+            Some(root),
+            None,
+            false,
+            click_events(outer, egui::PointerButton::Secondary),
+        );
+        let (_, popup) = run_frame(&ctx_fx, &mut fixture_tree, Some(root), None, false, vec![]);
+        let reveal = find_text_center(&popup.shapes, "Reveal in File Explorer").unwrap();
+        let (result, _) = run_frame(
+            &ctx_fx,
+            &mut fixture_tree,
+            Some(root),
+            None,
+            false,
+            click_events(reveal, egui::PointerButton::Primary),
+        );
+        assert_eq!(
+            result,
+            Some(TreeAction::Reveal {
+                root: root.into(),
+                path: root.join("src")
+            })
+        );
+    }
+
     // Real async `ExplorerTree` driven through `egui::Context` frames:
     let mut tree = ExplorerTree::default();
     let ctx = egui::Context::default();

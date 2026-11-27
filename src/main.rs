@@ -108,6 +108,8 @@ pub mod native_host_manager;
 mod native_host_panel;
 pub mod native_host_transport;
 mod native_recycle;
+#[cfg(windows)]
+mod native_reveal;
 mod native_review;
 mod native_task_board;
 mod office;

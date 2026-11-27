@@ -271,6 +271,11 @@ pub enum TreeAction {
         line: usize,
     },
     CopyPath(PathBuf),
+    #[cfg(windows)]
+    Reveal {
+        root: PathBuf,
+        path: PathBuf,
+    },
     Context {
         kind: TreeContextKind,
         root: PathBuf,
@@ -1583,6 +1588,15 @@ impl ExplorerTree {
                         };
                         if ui.button(tr("Copy path")).clicked() {
                             emitted = Some(TreeAction::CopyPath(menu_path.clone()));
+                            ui.close();
+                            return;
+                        }
+                        #[cfg(windows)]
+                        if ui.button(tr("Reveal in File Explorer")).clicked() {
+                            emitted = Some(TreeAction::Reveal {
+                                root: root_path.clone(),
+                                path: menu_path.clone(),
+                            });
                             ui.close();
                             return;
                         }
