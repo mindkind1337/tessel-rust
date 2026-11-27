@@ -15,7 +15,10 @@ struct Binding {
     indentation: editor_indent::Options,
 }
 
-gpui::actions!(tessel_local_editor, [Indent, Outdent]);
+gpui::actions!(
+    tessel_local_editor,
+    [Indent, Outdent, CopyLinesUp, CopyLinesDown]
+);
 
 pub(crate) fn flush(root: &mut TesselGpuiRoot, id: u64, cx: &mut Context<TesselGpuiRoot>) -> bool {
     let Some(doc) = root.app.gpui_editor_document() else {
@@ -55,9 +58,17 @@ pub(crate) fn flush(root: &mut TesselGpuiRoot, id: u64, cx: &mut Context<TesselG
     false
 }
 
-fn apply_indent(
+#[derive(Clone, Copy)]
+enum LineCommand {
+    Indent,
+    Outdent,
+    CopyUp,
+    CopyDown,
+}
+
+fn apply_line_command(
     root: &mut TesselGpuiRoot,
-    outdent: bool,
+    command: LineCommand,
     window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) {
@@ -97,12 +108,19 @@ fn apply_indent(
             }
             source.len()
         };
-        let Some(edit) = editor_indent::plan(
-            source,
-            to_byte(selected.range.start)..to_byte(selected.range.end),
-            outdent,
-            options,
-        ) else {
+        let bytes = to_byte(selected.range.start)..to_byte(selected.range.end);
+        let edit = match command {
+            LineCommand::Indent | LineCommand::Outdent => editor_indent::plan(
+                source,
+                bytes,
+                matches!(command, LineCommand::Outdent),
+                options,
+            ),
+            LineCommand::CopyUp | LineCommand::CopyDown => {
+                editor_indent::copy_lines(source, bytes, matches!(command, LineCommand::CopyDown))
+            }
+        };
+        let Some(edit) = edit else {
             return;
         };
         if source.len() - edit.range.len() + edit.replacement.len()
@@ -112,7 +130,14 @@ fn apply_indent(
         }
         let range = source[..edit.range.start].encode_utf16().count()
             ..source[..edit.range.end].encode_utf16().count();
+        let copy = matches!(command, LineCommand::CopyUp | LineCommand::CopyDown);
+        if copy {
+            state.push_undo_stop();
+        }
         state.replace_text_in_range(Some(range), &edit.replacement, window, cx);
+        if copy {
+            state.push_undo_stop();
+        }
         let source = state.as_str();
         let start = source[..edit.selection.start].encode_utf16().count();
         let end = source[..edit.selection.end].encode_utf16().count();
@@ -133,6 +158,71 @@ mod tests {
     use super::*;
     use crate::files::Document;
     use gpui::{EntityInputHandler, TestAppContext};
+
+    #[gpui::test]
+    fn native_copy_lines_shortcuts_keep_backward_selection_and_separate_undo(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy.txt");
+        let original = "é😀\r\nz\r\n";
+        std::fs::write(&path, original).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                state.set_selected_text_range(std::ops::Range { start: 5, end: 0 }, window, cx)
+            });
+        })
+        .unwrap();
+        for (key, expected_range) in [
+            (
+                if cfg!(target_os = "linux") {
+                    "ctrl-alt-shift-down"
+                } else {
+                    "alt-shift-down"
+                },
+                5..10,
+            ),
+            (
+                if cfg!(target_os = "linux") {
+                    "ctrl-alt-shift-up"
+                } else {
+                    "alt-shift-up"
+                },
+                0..5,
+            ),
+        ] {
+            cx.simulate_keystrokes(view.into(), key);
+            view.update(cx, |root, window, cx| {
+                assert_eq!(
+                    root.app.gpui_editor_document().unwrap().text,
+                    "é😀\r\né😀\r\nz\r\n"
+                );
+                root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                    let selection = state.selected_text_range(false, window, cx).unwrap();
+                    assert_eq!(selection.range, expected_range);
+                    assert!(selection.reversed);
+                });
+            })
+            .unwrap();
+            cx.dispatch_action(view.into(), gpui_ce_elements::editable_text::actions::Undo);
+            cx.run_until_parked();
+            view.update(cx, |root, window, cx| {
+                assert_eq!(root.app.gpui_editor_document().unwrap().text, original);
+                root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                    state.set_selected_text_range(std::ops::Range { start: 5, end: 0 }, window, cx)
+                });
+            })
+            .unwrap();
+        }
+    }
 
     #[gpui::test]
     fn native_indent_shortcuts_preserve_selection_and_undo(cx: &mut TestAppContext) {
@@ -1635,12 +1725,18 @@ impl Input {
             .unwrap_or_else(|_| build())
             .accepts_input(!doc.media)
             .key_context("EditableText TesselLocalEditor")
-            .on_action(
-                cx.listener(|root, _: &Indent, window, cx| apply_indent(root, false, window, cx)),
-            )
-            .on_action(
-                cx.listener(|root, _: &Outdent, window, cx| apply_indent(root, true, window, cx)),
-            )
+            .on_action(cx.listener(|root, _: &Indent, window, cx| {
+                apply_line_command(root, LineCommand::Indent, window, cx)
+            }))
+            .on_action(cx.listener(|root, _: &Outdent, window, cx| {
+                apply_line_command(root, LineCommand::Outdent, window, cx)
+            }))
+            .on_action(cx.listener(|root, _: &CopyLinesUp, window, cx| {
+                apply_line_command(root, LineCommand::CopyUp, window, cx)
+            }))
+            .on_action(cx.listener(|root, _: &CopyLinesDown, window, cx| {
+                apply_line_command(root, LineCommand::CopyDown, window, cx)
+            }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|root, _, _, _| root.focus_input = super::FocusInputTarget::EditorBody),

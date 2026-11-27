@@ -264,9 +264,87 @@ pub(crate) fn column_offset(line: &str, one_based: i64, size: usize) -> usize {
     chars
 }
 
+pub(crate) fn copy_lines(text: &str, selected: Range<usize>, down: bool) -> Option<Edit> {
+    text.get(selected.clone())?;
+    let start = text[..selected.start]
+        .rfind(['\r', '\n'])
+        .map_or(0, |i| i + 1);
+    // A selection ending at column one excludes that final line.
+    let end = if selected.end > selected.start && text[..selected.end].ends_with(['\r', '\n']) {
+        let prefix = &text[..selected.end];
+        prefix
+            .strip_suffix("\r\n")
+            .map_or(selected.end - 1, str::len)
+    } else {
+        text[selected.end..]
+            .find(['\r', '\n'])
+            .map_or(text.len(), |i| selected.end + i)
+    };
+    let block = text.get(start..end)?;
+    let nearby = text[end..]
+        .chars()
+        .next()
+        .map(|_| end)
+        .or_else(|| text.rfind(['\r', '\n']));
+    let eol = match nearby {
+        Some(i) if text[i..].starts_with("\r\n") || text[..=i].ends_with("\r\n") => "\r\n",
+        Some(i) if text[i..].starts_with('\r') => "\r",
+        None if cfg!(windows) => "\r\n",
+        _ => "\n",
+    };
+    let size = block.len() + eol.len();
+    if size > crate::files::MAX_LOCAL_EDIT_BYTES.saturating_sub(text.len()) {
+        return None;
+    }
+    let (at, replacement, selection) = if down {
+        (
+            start,
+            format!("{block}{eol}"),
+            selected.start + size..selected.end + size,
+        )
+    } else {
+        (end, format!("{eol}{block}"), selected)
+    };
+    Some(Edit {
+        range: at..at,
+        replacement,
+        selection,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_lines_preserves_logical_lines_and_byte_selections() {
+        for (source, range, down, expected, selection) in [
+            ("a\r\nb\r\nc", 0..6, true, "a\r\nb\r\na\r\nb\r\nc", 6..12),
+            ("a\r\nb\r\nc", 0..6, false, "a\r\nb\r\na\r\nb\r\nc", 0..6),
+            ("x\n", 2..2, true, "x\n\n", 3..3),
+            ("a\n\nb", 2..2, false, "a\n\n\nb", 2..2),
+            ("a\rb", 3..3, true, "a\rb\rb", 5..5),
+            ("X\n😀é", 6..6, true, "X\n😀é\n😀é", 13..13),
+        ] {
+            let edit = copy_lines(source, range, down).unwrap();
+            let mut actual = source.to_owned();
+            actual.replace_range(edit.range, &edit.replacement);
+            assert_eq!(actual, expected);
+            assert_eq!(edit.selection, selection);
+        }
+        let empty = copy_lines("", 0..0, true).unwrap();
+        assert_eq!(empty.replacement, if cfg!(windows) { "\r\n" } else { "\n" });
+        assert_eq!(empty.selection.start, empty.replacement.len());
+        assert!(copy_lines("é", 1..1, false).is_none());
+        assert!(
+            copy_lines(
+                &"x".repeat(crate::files::MAX_LOCAL_EDIT_BYTES / 2),
+                0..0,
+                true
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn native_indent_block_edits_match_monaco_reference() {

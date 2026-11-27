@@ -8517,6 +8517,8 @@ impl Tessel {
                     } else {
                         f32::INFINITY
                     };
+                    let source_id = ui.make_persistent_id(("local-source", d.instance_id()));
+                    let copied = !d.media && copy_selected_editor_lines(ui, source_id, &mut d.text);
                     let Document {
                         text,
                         tools,
@@ -8542,6 +8544,7 @@ impl Tessel {
                             )
                         };
                     let mut out = egui::TextEdit::multiline(text)
+                        .id(source_id)
                         .code_editor()
                         .font(font.clone())
                         .desired_width(f32::INFINITY)
@@ -8593,7 +8596,7 @@ impl Tessel {
                             out.response.request_focus();
                         }
                     }
-                    if out.response.changed() {
+                    if copied || out.response.changed() {
                         *preview = None;
                         *sheet_cache = None;
                         *unpinned_preview = false;
@@ -16109,6 +16112,57 @@ pub fn shell_quote_path(path: &std::path::Path) -> String {
     }
 }
 
+fn copy_selected_editor_lines(ui: &egui::Ui, id: egui::Id, text: &mut String) -> bool {
+    use egui::text::{CCursor, CCursorRange};
+    if !ui.memory(|m| m.has_focus(id)) {
+        return false;
+    }
+    let mods = egui::Modifiers {
+        alt: true,
+        shift: true,
+        ctrl: cfg!(target_os = "linux"),
+        ..Default::default()
+    };
+    let direction = ui.input_mut(|i| {
+        if i.consume_key(mods, egui::Key::ArrowDown) {
+            Some(true)
+        } else if i.consume_key(mods, egui::Key::ArrowUp) {
+            Some(false)
+        } else {
+            None
+        }
+    });
+    let Some(down) = direction else { return false };
+    let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) else {
+        return false;
+    };
+    let Some(cursor) = state.cursor.char_range() else {
+        return false;
+    };
+    let selected = cursor.as_sorted_char_range();
+    let (start, end) = crate::files::char_range_to_byte_range(text, selected.start, selected.end);
+    let Some(edit) = crate::editor_indent::copy_lines(text, start..end, down) else {
+        return false;
+    };
+    let mut undo = state.undoer();
+    undo.add_undo(&(cursor, text.clone()));
+    text.replace_range(edit.range, &edit.replacement);
+    let shift = if down {
+        edit.replacement.chars().count()
+    } else {
+        0
+    };
+    let next = CCursorRange::two(
+        CCursor::new(cursor.secondary.index + shift),
+        CCursor::new(cursor.primary.index + shift),
+    );
+    undo.add_undo(&(next, text.clone()));
+    state.set_undoer(undo);
+    state.cursor.set_char_range(Some(next));
+    state.store(ui.ctx(), id);
+    true
+}
+
 fn show_editor_bars(ui: &mut egui::Ui, d: &mut Document) {
     if d.tools.goto_open {
         ui.horizontal(|ui| {
@@ -16485,6 +16539,49 @@ fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compatibility_copy_lines_moves_selection_and_restores_it_on_undo() {
+        use egui::text::{CCursor, CCursorRange};
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("copy fixture");
+        let mut text = "é😀\r\nz".to_owned();
+        let range = CCursorRange::two(CCursor::new(4), CCursor::new(0));
+        let mods = egui::Modifiers {
+            alt: true,
+            shift: true,
+            ctrl: cfg!(target_os = "linux"),
+            ..Default::default()
+        };
+        let input = egui::RawInput {
+            modifiers: mods,
+            events: vec![egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: mods,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.memory_mut(|m| m.request_focus(id));
+                let mut state = egui::text_edit::TextEditState::default();
+                state.cursor.set_char_range(Some(range));
+                state.store(ctx, id);
+                assert!(copy_selected_editor_lines(ui, id, &mut text));
+                assert_eq!(text, "é😀\r\né😀\r\nz");
+                let state = egui::text_edit::TextEditState::load(ctx, id).unwrap();
+                let current = state.cursor.char_range().unwrap();
+                assert_eq!((current.secondary.index, current.primary.index), (8, 4));
+                let mut undo = state.undoer();
+                let old = undo.undo(&(current, text.clone())).unwrap();
+                assert_eq!(old.1, "é😀\r\nz");
+                assert_eq!(old.0, range);
+            });
+        });
+    }
 
     #[test]
     fn task_preparation_prevents_settings_restore_until_worktree_result_is_drained() {

@@ -13,7 +13,8 @@ copyright and permission notices are reproduced in full.
 width rules from Microsoft Monaco Editor 0.57.0 (`indentationGuesser.js`,
 `shiftCommand.js`, `cursorTypeEditOperations.js`, `cursorColumns.js`, `strings.js`,
 `cursor.js` and `intervalTree.js`). The Go to Line parser in `src/files.rs` follows
-`gotoLineQuickAccess.js` from the same version.
+`gotoLineQuickAccess.js` from the same version. Local line duplication follows
+`copyLinesCommand.js` and the shortcuts in `linesOperations.js`.
 The synthetic detection vectors can be regenerated with
 `scripts/extract_editor_indent_reference.mjs` and
 `scripts/extract_editor_shift_reference.mjs` against that version. This is native

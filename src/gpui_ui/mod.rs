@@ -297,6 +297,24 @@ impl TesselGpuiRoot {
                 gpui_ce_elements::editable_text::actions::Enter,
                 Some("TesselChatComposer"),
             ),
+            gpui::KeyBinding::new(
+                if cfg!(target_os = "linux") {
+                    "ctrl-alt-shift-up"
+                } else {
+                    "alt-shift-up"
+                },
+                editor_input::CopyLinesUp,
+                Some("TesselLocalEditor"),
+            ),
+            gpui::KeyBinding::new(
+                if cfg!(target_os = "linux") {
+                    "ctrl-alt-shift-down"
+                } else {
+                    "alt-shift-down"
+                },
+                editor_input::CopyLinesDown,
+                Some("TesselLocalEditor"),
+            ),
             gpui::KeyBinding::new("tab", editor_input::Indent, Some("TesselLocalEditor")),
             gpui::KeyBinding::new(
                 "shift-tab",
