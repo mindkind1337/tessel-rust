@@ -5418,9 +5418,14 @@ impl Tessel {
         if old_prefs != self.state.editor_prefs {
             self.save();
         }
-        let tree_action =
-            self.explorer_tree
-                .show(ui, root.as_deref(), active.as_deref(), actions_enabled);
+        let can_insert = self.explorer_terminal_id().is_some();
+        let tree_action = self.explorer_tree.show(
+            ui,
+            root.as_deref(),
+            active.as_deref(),
+            actions_enabled,
+            can_insert,
+        );
         let new_dotfiles = self.explorer_tree.show_dotfiles();
         let new_compact = self.explorer_tree.compact_folders();
         if self.state.editor_prefs.show_git_ignored != new_dotfiles
@@ -5448,6 +5453,9 @@ impl Tessel {
                 }
                 TreeAction::Download { root: owner, path } if root.as_ref() == Some(&owner) => {
                     self.download_project_item(owner, path)
+                }
+                TreeAction::InsertPath { root: owner, path } => {
+                    self.insert_explorer_path(&owner, &path, Some(ui.ctx()))
                 }
                 TreeAction::TerminalHere { root: owner, path } => {
                     self.open_project_terminal_here(&owner, &path)
@@ -5510,6 +5518,68 @@ impl Tessel {
                 })
                 .map(|id| (id, crate::pane_grid::SplitDir::Col));
             self.new_session_placed(Launch::Ssh(host), split);
+        }
+    }
+
+    fn explorer_terminal_id(&self) -> Option<u64> {
+        if self.view != View::Work || self.floating.ui.is_open() {
+            return None;
+        }
+        let id = self.active_session?;
+        self.sessions
+            .iter()
+            .find(|s| {
+                s.id == id
+                    && s.project == self.state.active_project
+                    && s.terminal
+                        .as_ref()
+                        .is_some_and(|t| t.accepts_broadcast_input())
+            })
+            .map(|s| s.id)
+    }
+
+    fn insert_explorer_path(&mut self, root: &Path, path: &Path, ctx: Option<&egui::Context>) {
+        if self.state.active().is_none_or(|p| p.path != root) {
+            return;
+        }
+        let Ok(relative) = path.strip_prefix(root) else {
+            return;
+        };
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return;
+        }
+        let Some(raw) = relative
+            .to_str()
+            .filter(|s| !s.chars().any(char::is_control))
+        else {
+            return;
+        };
+        let text = if raw
+            .chars()
+            .any(|c| c.is_whitespace() || "&()^;,'\"".contains(c))
+        {
+            format!("\"{raw}\"")
+        } else {
+            raw.to_owned()
+        };
+        let Some(id) = self.explorer_terminal_id() else {
+            return;
+        };
+        if let Some(term) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == id)
+            .and_then(|s| s.terminal.as_mut())
+        {
+            term.paste_text(&text);
+            if let Some(ctx) = ctx {
+                term.request_focus(ctx);
+            }
+            self.view = View::Work;
         }
     }
 

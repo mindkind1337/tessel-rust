@@ -44,6 +44,7 @@ pub(crate) enum ExplorerCommand {
     CopyPath,
     CopyRelative,
     Download,
+    InsertPath,
     TerminalHere,
     #[cfg(windows)]
     Reveal,
@@ -480,6 +481,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
     pub explorer_editable: bool,
+    pub explorer_can_insert: bool,
     pub timeline: crate::file_timeline::Snapshot,
     pub outline_open: bool,
     pub outline_options_open: bool,
@@ -4455,6 +4457,7 @@ impl Tessel {
         }
         GpuiSidePanelsSnapshot {
             explorer_editable: self.file_actions_ready(),
+            explorer_can_insert: self.explorer_terminal_id().is_some(),
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
             outline_placeholder: self
                 .gpui_extra
@@ -6516,6 +6519,7 @@ impl Tessel {
                 match command {
                     Select => {}
                     Download if key.is_some() => self.download_project_item(root, path),
+                    InsertPath if key.is_some() => self.insert_explorer_path(&root, &path, None),
                     TerminalHere => self.open_project_terminal_here(&root, &path),
                     Open if !directory => self.open_document_preview(path),
                     CopyPath => {
@@ -7845,6 +7849,32 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn explorer_insert_path_pastes_relative_text_without_submitting_in_the_active_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(root));
+        let owner = app.state.active().unwrap().path.clone();
+        let (id, input) = app.install_terminal_find_fixture();
+        assert_eq!(app.explorer_terminal_id(), Some(id));
+        app.insert_explorer_path(&owner, &owner.join("docs & notes").join("report.txt"), None);
+        assert_eq!(input.try_recv().unwrap(), br#""docs & notes\report.txt""#);
+        app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
+        assert_eq!(input.try_recv().unwrap(), b"plain.txt");
+        app.insert_explorer_path(&owner, &owner.join("../outside"), None);
+        app.insert_explorer_path(&owner, &owner, None);
+        app.view = View::Files;
+        assert!(app.explorer_terminal_id().is_none());
+        app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
+        app.view = View::Work;
+        app.active_session = None;
+        app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
+        assert!(input.try_recv().is_err());
+    }
+
     #[test]
     fn explorer_download_dispatch_copies_the_selected_file_and_reports_its_path() {
         let dir = tempfile::tempdir().unwrap();

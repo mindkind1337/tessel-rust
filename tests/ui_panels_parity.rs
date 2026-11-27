@@ -506,7 +506,7 @@ fn explorer_tree_filter_dotfiles_git_badges_and_double_click_pin() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    action = tree.show(ui, Some(root.as_path()), None, true);
+                    action = tree.show(ui, Some(root.as_path()), None, true, false);
                 });
             },
         );

@@ -55,7 +55,7 @@ fn run_frame(
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                action = tree.show(ui, root, active, actions_enabled);
+                action = tree.show(ui, root, active, actions_enabled, false);
             });
         },
     );

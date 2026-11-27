@@ -72,9 +72,14 @@ fn choose(
     if let Some(menu) = dismiss(root, window, cx) {
         let previous = root.app.gpui_default_focus_target();
         root.dispatch(GpuiAction::ExplorerMenu(menu.scope, menu.key, cmd), cx);
-        if cmd == ExplorerCommand::TerminalHere {
+        if matches!(
+            cmd,
+            ExplorerCommand::TerminalHere | ExplorerCommand::InsertPath
+        ) {
             let target = root.app.gpui_default_focus_target();
-            if target != previous && matches!(target, FocusInputTarget::Terminal(Some(_))) {
+            if (cmd == ExplorerCommand::InsertPath || target != previous)
+                && matches!(target, FocusInputTarget::Terminal(Some(_)))
+            {
                 root.focus_input = target;
                 root.focus_handle.focus(window, cx);
             }
@@ -87,6 +92,7 @@ impl Menu {
         &self,
         fr: bool,
         editable: bool,
+        can_insert: bool,
         explorer: &crate::explorer_tree::ExplorerGpuiSnapshot,
         tokens: &GpuiThemeTokens,
         cx: &Context<TesselGpuiRoot>,
@@ -103,6 +109,15 @@ impl Menu {
         ));
         if self.key.is_some() {
             choices.push((Download, translate("Download…", "Télécharger…")));
+            if can_insert {
+                choices.push((
+                    InsertPath,
+                    translate(
+                        "Insert path in the active pane",
+                        "Insérer le chemin dans le volet actif",
+                    ),
+                ));
+            }
         }
         if editable {
             choices.push((NewFile, translate("New file", "Nouveau fichier")));

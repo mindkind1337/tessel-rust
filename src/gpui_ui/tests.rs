@@ -18,6 +18,56 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_insert_path_menu_pastes_selected_row_and_focuses_the_terminal(
+    cx: &mut gpui::TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("my report.txt"), "fixture").unwrap();
+    let mut channel = None;
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        channel = Some(root.app.install_terminal_find_fixture());
+        let snapshot = root.app.gpui_snapshot(960., 640., 4.);
+        if !snapshot.toolbar.right_open || snapshot.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        root
+    });
+    let (id, input) = channel.unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        if let Some(row) = visual.debug_bounds("explorer-file-row-0") {
+            visual.simulate_mouse_down(row.center(), gpui::MouseButton::Right, Default::default());
+            visual.simulate_mouse_up(row.center(), gpui::MouseButton::Right, Default::default());
+            break;
+        }
+        assert!(std::time::Instant::now() < end);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let choice = visual.debug_bounds("explorer-context-InsertPath").unwrap();
+    visual.simulate_click(choice.center(), Default::default());
+    assert_eq!(input.try_recv().unwrap(), br#""my report.txt""#);
+    view.update(cx, |root, window, _| {
+        assert_eq!(
+            root.focus_input,
+            super::FocusInputTarget::Terminal(Some(id))
+        );
+        assert!(root.focus_handle.is_focused(window));
+    })
+    .unwrap();
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_compact_parent_click_targets_that_folder_for_rename(test: &mut gpui::TestAppContext) {
     let platform = gpui_platform::current_platform(true);
     let cx = &mut gpui::TestAppContext::build_with_text_system(

@@ -1108,12 +1108,16 @@ fn render_explorer_tab(
         .child(toolbar)
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
         .child(scroll)
-        .children(
-            explorer_input
-                .menu
-                .as_ref()
-                .map(|menu| menu.render(french, sp.explorer_editable, ex, tokens, cx)),
-        )
+        .children(explorer_input.menu.as_ref().map(|menu| {
+            menu.render(
+                french,
+                sp.explorer_editable,
+                sp.explorer_can_insert,
+                ex,
+                tokens,
+                cx,
+            )
+        }))
         .child(outline)
         .child(render_timeline(&sp.timeline, french, tokens, cx))
         .into_any_element()

@@ -275,6 +275,10 @@ pub enum TreeAction {
         root: PathBuf,
         path: PathBuf,
     },
+    InsertPath {
+        root: PathBuf,
+        path: PathBuf,
+    },
     TerminalHere {
         root: PathBuf,
         path: PathBuf,
@@ -1100,6 +1104,7 @@ impl ExplorerTree {
         root: Option<&Path>,
         active: Option<&Path>,
         actions_enabled: bool,
+        can_insert: bool,
     ) -> Option<TreeAction> {
         self.set_root(root);
         self.poll();
@@ -1613,6 +1618,14 @@ impl ExplorerTree {
                         }
                         if ui.button(tr("Download…")).clicked() {
                             emitted = Some(TreeAction::Download {
+                                root: root_path.clone(),
+                                path: menu_path.clone(),
+                            });
+                            ui.close();
+                            return;
+                        }
+                        if can_insert && ui.button(tr("Insert path in the active pane")).clicked() {
+                            emitted = Some(TreeAction::InsertPath {
                                 root: root_path.clone(),
                                 path: menu_path.clone(),
                             });
@@ -2532,7 +2545,7 @@ mod native_filter_tests {
                 },
                 |cx| {
                     egui::CentralPanel::default().show(cx, |ui| {
-                        action = tree.show(ui, Some(dir.path()), None, true);
+                        action = tree.show(ui, Some(dir.path()), None, true, false);
                     });
                 },
             );
