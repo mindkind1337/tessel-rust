@@ -47,7 +47,7 @@ impl Tessel {
                 .map(|(_, page)| page)
                 .collect();
             pages.push(current);
-            pages.sort_unstable_by_key(|page| page.tab_id);
+            pages.sort_unstable_by_key(|page| page.tab_order);
             let selected = pages
                 .iter()
                 .position(|page| page.tab_id == current.tab_id)
@@ -259,6 +259,55 @@ mod tests {
         assert!(app.side_browsers.is_empty());
         assert_eq!(app.browser.address_str(), "https://side.example/");
         assert!(app.view == View::Browser);
+    }
+
+    #[test]
+    fn side_drop_order_and_selected_neighbor_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = || Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut app = start();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().to_owned()));
+        let initial = ["a", "b", "c"].map(|name| {
+            app.new_browser_page();
+            app.browser
+                .open_url(&format!("https://fixture.example/{name}"));
+            app.browser.tab_id
+        });
+        let names = |app: &Tessel| {
+            app.browser_labels()
+                .into_iter()
+                .map(|(_, _, url)| url.rsplit('/').next().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        for (name, anchor, before) in [
+            ("d", Some(initial[1]), true),
+            ("e", Some(initial[0]), false),
+            ("f", None, true),
+            ("g", None, false),
+        ] {
+            app.new_side_browser();
+            let id = app.selected_side_browser.unwrap();
+            app.side_browsers
+                .get_mut(&id)
+                .unwrap()
+                .open_url(&format!("https://fixture.example/{name}"));
+            app.undock_browser_at(id, Some(u64::MAX), before);
+            assert!(app.side_browsers.contains_key(&id));
+            app.apply_gpui_action(GpuiAction::UndockBrowserAt {
+                page: id,
+                anchor,
+                before,
+            });
+        }
+        assert_eq!(names(&app), ["f", "a", "e", "d", "b", "c", "g"]);
+        app.select_browser_page(initial[0]);
+        app.close_browser_page(initial[0]);
+        assert_eq!(app.browser.address_str(), "https://fixture.example/e");
+        app.save();
+        drop(app);
+        let app = start();
+        assert_eq!(names(&app), ["f", "e", "d", "b", "c", "g"]);
+        assert_eq!(app.browser.address_str(), "https://fixture.example/e");
     }
 
     #[test]

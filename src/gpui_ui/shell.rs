@@ -128,12 +128,44 @@ fn render_center_column(
     window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
+    let stage_bounds = std::rc::Rc::new(std::cell::Cell::new(gpui::Bounds::default()));
+    let painted = stage_bounds.clone();
+    #[cfg(windows)]
+    let anchor = snapshot
+        .view_tabs
+        .iter()
+        .find(|tab| tab.selected)
+        .and_then(|tab| tab.browser_id);
+    #[cfg(not(windows))]
+    let anchor: Option<u64> = None;
     div()
         .id("gpui-center-column")
         .debug_selector(|| "browser-center-drop".into())
-        .on_drop(cx.listener(|root, page: &SideBrowserDrag, _, cx| {
-            root.dispatch(GpuiAction::UndockBrowser(page.0), cx)
-        }))
+        .on_drop(
+            cx.listener(move |root, page: &SideBrowserDrag, window, cx| {
+                use crate::pane_grid::DropZone;
+                let bounds = stage_bounds.get();
+                let pos = window.mouse_position() - bounds.origin;
+                let (x, y, w, h) = (
+                    f32::from(pos.x),
+                    f32::from(pos.y),
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height),
+                );
+                let edge = DropZone::workspace_edge(x, y, w, h);
+                let zone = edge.or_else(|| anchor.and_then(|_| DropZone::at(x / w, y / h, false)));
+                let action = if let Some(zone) = zone {
+                    GpuiAction::UndockBrowserAt {
+                        page: page.0,
+                        anchor: if edge.is_some() { None } else { anchor },
+                        before: matches!(zone, DropZone::Left | DropZone::Top),
+                    }
+                } else {
+                    GpuiAction::UndockBrowser(page.0)
+                };
+                root.dispatch(action, cx)
+            }),
+        )
         .relative()
         .flex_1()
         .min_w_0()
@@ -146,6 +178,7 @@ fn render_center_column(
         .child(
             div()
                 .id("gpui-center-stage")
+                .on_prepaint(move |layout, _, _| painted.set(layout.bounds))
                 .capture_key_down(cx.listener(|root, event, window, cx| {
                     if matches!(
                         root.chat_inputs.focused(window, cx),

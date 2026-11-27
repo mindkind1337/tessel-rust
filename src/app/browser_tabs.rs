@@ -12,7 +12,7 @@ impl Tessel {
         if self.browser_tab_open || self.view == View::Browser {
             pages.push(&self.browser);
         }
-        pages.sort_unstable_by_key(|page| page.tab_id);
+        pages.sort_unstable_by_key(|page| page.tab_order);
         pages
             .into_iter()
             .map(|page| {
@@ -89,15 +89,11 @@ impl Tessel {
         }
         let page = if id == self.browser.tab_id {
             let owner = self.state.active_project;
+            let order = self.browser.tab_order;
             let key = self
                 .other_browser_pages
-                .range((owner, id)..=(owner, u64::MAX))
-                .next()
-                .or_else(|| {
-                    self.other_browser_pages
-                        .range((owner, 0)..=(owner, id))
-                        .next_back()
-                })
+                .range((owner, 0)..=(owner, u64::MAX))
+                .min_by_key(|(_, page)| (page.tab_order < order, page.tab_order.abs_diff(order)))
                 .map(|(key, _)| *key);
             let next = key.and_then(|key| self.other_browser_pages.remove(&key));
             self.browser_tab_open = next.is_some();
@@ -179,14 +175,48 @@ impl Tessel {
     }
 
     pub(super) fn undock_browser(&mut self, id: u64) {
+        let anchor = (self.view == View::Browser).then_some(self.browser.tab_id);
+        self.undock_browser_at(id, anchor, false);
+    }
+
+    pub(super) fn undock_browser_at(&mut self, id: u64, anchor: Option<u64>, before: bool) {
         if self.state.active_project.is_none()
             || self.view == View::GuestFiles
             || self.gpui_has_open_modal()
         {
             return;
         }
+        let owner = self.state.active_project;
+        let mut ordered: Vec<_> = self
+            .other_browser_pages
+            .range((owner, 0)..=(owner, u64::MAX))
+            .map(|(_, page)| (page.tab_order, page.tab_id))
+            .collect();
+        if self.browser_tab_open || self.view == View::Browser {
+            ordered.push((self.browser.tab_order, self.browser.tab_id));
+        }
+        ordered.sort_unstable();
+        let insert = match anchor {
+            Some(anchor) => {
+                let Some(index) = ordered.iter().position(|(_, id)| *id == anchor) else {
+                    return;
+                };
+                index + usize::from(!before)
+            }
+            None if before => 0,
+            None => ordered.len(),
+        };
         if let Some(mut page) = self.take_side_browser(id) {
             page.change_presentation(false);
+            page.tab_order = insert as u64;
+            for (index, (_, id)) in ordered.into_iter().enumerate() {
+                let order = (index + usize::from(index >= insert)) as u64;
+                if id == self.browser.tab_id {
+                    self.browser.tab_order = order;
+                } else if let Some(other) = self.other_browser_pages.get_mut(&(owner, id)) {
+                    other.tab_order = order;
+                }
+            }
             let was_open = self.browser_tab_open || self.view == View::Browser;
             let previous = self.replace_browser_page(page);
             if was_open {

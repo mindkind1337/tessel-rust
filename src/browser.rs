@@ -55,6 +55,7 @@ struct FinishingView {
 
 pub struct Browser {
     pub(crate) tab_id: u64,
+    pub(crate) tab_order: u64,
     title: String,
     pub(crate) zoom_override: Option<i8>,
     default_zoom: i8,
@@ -98,8 +99,10 @@ impl Default for Browser {
         let destination = directories::UserDirs::new()
             .and_then(|d| d.download_dir().map(|p| p.join("Tessel Rust")))
             .unwrap_or_else(|| crate::launch::default_directory().join("Downloads/Tessel Rust"));
+        let tab_id = next_address_generation();
         Self {
-            tab_id: next_address_generation(),
+            tab_id,
+            tab_order: tab_id,
             title: String::new(),
             zoom_override: None,
             muted: false,
@@ -193,6 +196,7 @@ impl Browser {
         self.title = self.title.trim().chars().take(200).collect();
         self.error.clear();
         self.tab_id = next_address_generation();
+        self.tab_order = self.tab_id;
         self.invalidate_address_input();
     }
 

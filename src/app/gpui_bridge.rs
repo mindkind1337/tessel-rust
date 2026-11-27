@@ -799,6 +799,11 @@ pub(crate) enum GpuiAction {
     NewSideBrowser,
     DockBrowser(u64),
     UndockBrowser(u64),
+    UndockBrowserAt {
+        page: u64,
+        anchor: Option<u64>,
+        before: bool,
+    },
     UndockBrowserToProject {
         page: u64,
         project: u64,
@@ -5522,6 +5527,16 @@ impl Tessel {
                 }
                 #[cfg(not(windows))]
                 let _ = (page, project);
+            }
+            GpuiAction::UndockBrowserAt {
+                page,
+                anchor,
+                before,
+            } => {
+                #[cfg(windows)]
+                self.undock_browser_at(page, anchor, before);
+                #[cfg(not(windows))]
+                let _ = (page, anchor, before);
             }
             GpuiAction::UndockBrowser(id) => {
                 #[cfg(windows)]

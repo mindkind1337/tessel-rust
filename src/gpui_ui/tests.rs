@@ -879,6 +879,65 @@ fn side_page_drops_on_expanded_project_and_collapsed_rail(cx: &mut gpui::TestApp
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn side_page_mouse_drop_before_selected_browser_preserves_other_tabs(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gpui::MouseButton::Left;
+    let dir = tempfile::tempdir().unwrap();
+    let mut initial = Vec::new();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+        for _ in 0..3 {
+            root.app
+                .execute_palette_command(&eframe::egui::Context::default(), "browser");
+            initial.push(root.app.browser.tab_id);
+        }
+        root.dispatch(GpuiAction::SelectBrowserPage(initial[1]), cx);
+        root.dispatch(GpuiAction::NewSideBrowser, cx);
+        root.right_width = 640.;
+        root
+    });
+    cx.simulate_window_resize(view.into(), gpui::size(gpui::px(1800.), gpui::px(900.)));
+    cx.refresh().unwrap();
+    let side = view
+        .update(cx, |root, _, _| root.app.selected_side_browser.unwrap())
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let tab = visual
+        .debug_bounds(Box::leak(
+            format!("side-browser-tab-{side}").into_boxed_str(),
+        ))
+        .unwrap();
+    let start = gpui::point(tab.origin.x + gpui::px(10.), tab.center().y);
+    let rect = visual.debug_bounds("browser-center-drop").unwrap();
+    let end = gpui::point(rect.origin.x + gpui::px(64.), rect.center().y);
+    visual.simulate_mouse_down(start, Left, Default::default());
+    visual.simulate_mouse_move(
+        start + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(end, Some(Left), Default::default());
+    visual.simulate_mouse_up(end, Left, Default::default());
+    view.update(cx, |root, _, _| {
+        let snapshot = root.app.gpui_snapshot(1800., 900., 4.);
+        let ids: Vec<_> = snapshot
+            .view_tabs
+            .iter()
+            .filter_map(|tab| tab.browser_id)
+            .collect();
+        assert!(snapshot.side_browser_tabs.is_empty());
+        assert_eq!(
+            ids,
+            [initial[0], root.app.browser.tab_id, initial[1], initial[2]]
+        );
+    })
+    .unwrap();
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn browser_tab_drags_into_right_panel_and_returns(cx: &mut gpui::TestAppContext) {
     use gpui::MouseButton::Left;
     let dir = tempfile::tempdir().unwrap();
