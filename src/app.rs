@@ -3154,20 +3154,40 @@ impl Tessel {
             }
         }
     }
+    fn document_tab_labels(&self, paths: &[String]) -> Vec<String> {
+        use crate::view_tabs_browser_model::{file_name_of, qualified_tab_name};
+        let keys: Vec<_> = paths
+            .iter()
+            .zip(&self.documents)
+            .map(|(path, doc)| (file_name_of(path).to_lowercase(), doc.diff_title.is_some()))
+            .collect();
+        let mut counts = std::collections::HashMap::new();
+        for key in &keys {
+            *counts.entry(key).or_insert(0usize) += 1;
+        }
+        paths
+            .iter()
+            .zip(&self.documents)
+            .zip(&keys)
+            .map(|((path, doc), key)| {
+                let label = qualified_tab_name(path, counts[key] > 1);
+                match &doc.diff_title {
+                    Some(title) => match title.strip_prefix(file_name_of(path)) {
+                        Some(suffix) if suffix.starts_with(" (") => format!("{label}{suffix}"),
+                        _ => title.clone(),
+                    },
+                    None => label,
+                }
+            })
+            .collect()
+    }
     fn center_tabs(&mut self, ui: &mut egui::Ui) {
-        use crate::view_tabs_browser_model::{OpenTabLabelInput, base_tab_label};
         let paths: Vec<_> = self
             .documents
             .iter()
             .map(|d| d.path.to_string_lossy().into_owned())
             .collect();
-        let inputs: Vec<_> = paths
-            .iter()
-            .map(|path| OpenTabLabelInput {
-                tab_path: path,
-                diff: None,
-            })
-            .collect();
+        let labels = self.document_tab_labels(&paths);
         let mut close = None;
         let mut keep_open = None;
         let mut close_others = None;
@@ -3219,11 +3239,7 @@ impl Tessel {
                         }
                     }
                     for (i, document) in self.documents.iter().enumerate() {
-                        let computed_label = base_tab_label(&inputs[i], &inputs);
-                        let title = document
-                            .diff_title
-                            .as_deref()
-                            .unwrap_or(computed_label.as_str());
+                        let title = &labels[i];
                         let kind = if document.diff_title.is_some() {
                             crate::view_tabs::Kind::Diff
                         } else {

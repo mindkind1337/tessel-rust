@@ -207,12 +207,6 @@ fn render_view_tabs_bar(
             crate::view_tabs::Kind::Diff => GpuiIcon::FileDiff,
             crate::view_tabs::Kind::Editor => GpuiIcon::FileCode,
         };
-        let title_str = if tab.dirty {
-            format!("● {}", tab.title)
-        } else {
-            tab.title.clone()
-        };
-
         let close = match kind {
             #[cfg(windows)]
             crate::view_tabs::Kind::Browser => Some(GpuiAction::CloseBrowserTab),
@@ -232,17 +226,26 @@ fn render_view_tabs_bar(
             div()
                 .id(("view-tab", idx))
                 .debug_selector(move || format!("view-tab-{idx}"))
+                .group("view-tab")
                 .relative()
                 .h_full()
-                .px(px(11.0))
+                .min_w_0()
+                .max_w(px(220.))
+                .pl(px(10.))
+                .pr(px(if closable { 4. } else { 12. }))
+                .when(!closable, |el| el.flex_shrink_0())
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .bg(if selected { tokens.term } else { tokens.chrome })
+                .bg(if selected {
+                    tokens.surface
+                } else {
+                    tokens.chrome
+                })
                 .border_r_1()
                 .border_color(tokens.border)
                 .cursor_pointer()
-                .hover(|s| s.bg(tokens.surface))
+                .when(!selected, |el| el.hover(|s| s.bg(tokens.surface_2)))
                 .tooltip(move |_, cx| {
                     cx.new(|_| super::chrome::ToolbarTooltip {
                         text: hint.clone().into(),
@@ -291,35 +294,62 @@ fn render_view_tabs_bar(
                             .bg(tokens.accent),
                     )
                 })
-                .child(icon.render(
-                    12.5,
-                    if selected {
-                        tokens.accent
-                    } else {
-                        tokens.text_dim
-                    },
-                ))
+                .child(
+                    icon.render(
+                        14.,
+                        if selected {
+                            tokens.accent
+                        } else {
+                            tokens.text_dim
+                        },
+                    )
+                    .flex_shrink_0(),
+                )
                 .child(
                     div()
-                        .text_size(px(11.5))
-                        .text_color(if tab.deleted {
-                            tokens.danger
-                        } else if selected {
+                        .min_w_0()
+                        .truncate()
+                        .debug_selector(move || format!("view-tab-label-{idx}"))
+                        .text_size(px(12.))
+                        .text_color(if selected {
                             tokens.text_strong
                         } else {
                             tokens.text_dim
                         })
                         .when(tab.preview, |el| el.italic())
                         .when(tab.deleted, |el| el.line_through())
-                        .child(SharedString::from(title_str)),
+                        .child(SharedString::from(tab.title.clone())),
                 )
+                .when(tab.dirty, |el| {
+                    el.child(
+                        div()
+                            .debug_selector(move || format!("view-tab-dirty-{idx}"))
+                            .size(px(7.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .opacity(0.85)
+                            .bg(if selected {
+                                tokens.text_strong
+                            } else {
+                                tokens.text_dim
+                            }),
+                    )
+                })
                 .when_some(close, |el, action| {
                     el.child(
                         div()
                             .id(("close-view-tab", idx))
-                            .p(px(2.0))
-                            .rounded(px(3.0))
-                            .hover(|s| s.bg(tokens.surface_2))
+                            .debug_selector(move || format!("view-tab-close-{idx}"))
+                            .size(px(18.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .when(!selected, |el| {
+                                el.invisible().group_hover("view-tab", |s| s.visible())
+                            })
+                            .hover(|s| s.bg(tokens.surface_3))
                             .on_click(cx.listener(move |root, _, _, cx| {
                                 cx.stop_propagation();
                                 root.dispatch(action.clone(), cx);

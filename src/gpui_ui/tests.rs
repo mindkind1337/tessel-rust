@@ -18,6 +18,77 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn view_tab_layout_keeps_long_unicode_titles_and_controls_separate(
+    test: &mut gpui::TestAppContext,
+) {
+    use crate::files::Document;
+    let platform = gpui_platform::current_platform(true);
+    let cx = &mut gpui::TestAppContext::build_with_text_system(
+        test.dispatcher.clone(),
+        None,
+        platform.text_system(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let name = format!("É{}.rs", "long".repeat(12));
+    let mut docs = Vec::new();
+    for (folder, filename) in [("alpha", name.clone()), ("beta", name.to_lowercase())] {
+        let parent = dir.path().join(folder);
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join(filename);
+        std::fs::write(&path, "original").unwrap();
+        docs.push(Document::open(dir.path(), &path).unwrap());
+    }
+    docs[0].text.push('!');
+    let path = docs[0].path.clone();
+    docs.push(Document::from_diff(
+        dir.path(),
+        path,
+        format!("{name} (diff)"),
+        "+line".into(),
+        false,
+    ));
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app.install_editor_input_fixture(docs, 0);
+        root
+    });
+    cx.refresh().unwrap();
+    let snapshot = view
+        .update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+        .unwrap();
+    assert_eq!(snapshot.view_tabs[1].title, format!("{name} · alpha"));
+    assert_eq!(
+        snapshot.view_tabs[2].title,
+        format!("{} · beta", name.to_lowercase())
+    );
+    assert_eq!(snapshot.view_tabs[3].title, format!("{name} (diff)"));
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let tab = visual.debug_bounds("view-tab-1").unwrap();
+    let label = visual.debug_bounds("view-tab-label-1").unwrap();
+    let dot = visual.debug_bounds("view-tab-dirty-1").unwrap();
+    let close = visual.debug_bounds("view-tab-close-1").unwrap();
+    assert!(tab.size.width <= gpui::px(220.) && label.size.width > gpui::px(0.));
+    assert_eq!(dot.size.width, gpui::px(7.));
+    assert_eq!(close.size.width, gpui::px(18.));
+    assert!(
+        label.right() <= dot.left() && dot.right() <= close.left() && close.right() <= tab.right()
+    );
+    let other = visual.debug_bounds("view-tab-2").unwrap();
+    visual.simulate_mouse_move(other.center(), None, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let other_close = visual.debug_bounds("view-tab-close-2").unwrap();
+    visual.simulate_click(other_close.center(), Default::default());
+    let after = view
+        .update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+        .unwrap();
+    assert_eq!(after.view_tabs.len(), 3);
+    assert_eq!(after.view_tabs[1].title, name);
+    assert!(after.view_tabs[1].selected);
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn view_tab_mouse_gestures_keep_preview_and_confirm_dirty_close(cx: &mut gpui::TestAppContext) {
     use crate::files::Document;
     use gpui::MouseButton::{Left, Middle, Right};

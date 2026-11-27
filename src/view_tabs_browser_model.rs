@@ -277,18 +277,23 @@ pub fn base_tab_label(
     all_open: &[OpenTabLabelInput<'_>],
 ) -> String {
     let doc = doc_path_of(target.tab_path, target.diff);
-    let name = file_name_of(doc);
     let is_diff = target.diff.is_some() || is_diff_tab_path(target.tab_path);
+    let name = file_name_of(doc).to_lowercase();
     let twins = all_open
         .iter()
-        .filter(|o| {
-            let o_doc = doc_path_of(o.tab_path, o.diff);
-            let o_diff = o.diff.is_some() || is_diff_tab_path(o.tab_path);
-            o_diff == is_diff && file_name_of(o_doc).eq_ignore_ascii_case(name)
+        .filter(|other| {
+            let other_diff = other.diff.is_some() || is_diff_tab_path(other.tab_path);
+            is_diff == other_diff
+                && file_name_of(doc_path_of(other.tab_path, other.diff)).to_lowercase() == name
         })
+        .take(2)
         .count();
+    qualified_tab_name(doc, twins > 1)
+}
 
-    if twins < 2 {
+pub fn qualified_tab_name(doc: &str, has_twin: bool) -> String {
+    let name = file_name_of(doc);
+    if !has_twin {
         return name.to_string();
     }
     let parts: Vec<&str> = doc.split(['/', '\\']).filter(|s| !s.is_empty()).collect();

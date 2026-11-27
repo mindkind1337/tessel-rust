@@ -3151,7 +3151,6 @@ impl Tessel {
     ) -> GpuiWorkspaceSnapshot {
         self.reconcile_native_task_board();
         use crate::status_metrics::should_keep_awake;
-        use crate::view_tabs_browser_model::{OpenTabLabelInput, base_tab_label};
 
         self.ensure_native_chat_instances();
 
@@ -3477,13 +3476,7 @@ impl Tessel {
             .iter()
             .map(|d| d.path.to_string_lossy().into_owned())
             .collect();
-        let tab_inputs: Vec<OpenTabLabelInput<'_>> = paths
-            .iter()
-            .map(|path| OpenTabLabelInput {
-                tab_path: path,
-                diff: None,
-            })
-            .collect();
+        let labels = self.document_tab_labels(&paths);
         let mut view_tabs = Vec::with_capacity(self.documents.len() + 2);
         view_tabs.push(GpuiViewTabItem {
             id: "work".into(),
@@ -3512,13 +3505,7 @@ impl Tessel {
                 deleted: false,
             });
         }
-        for (i, doc) in self.documents.iter().enumerate() {
-            let computed_label = base_tab_label(&tab_inputs[i], &tab_inputs);
-            let title = doc
-                .diff_title
-                .as_deref()
-                .unwrap_or(computed_label.as_str())
-                .to_owned();
+        for (i, (doc, title)) in self.documents.iter().zip(labels).enumerate() {
             let kind = if doc.diff_title.is_some() {
                 crate::view_tabs::Kind::Diff
             } else {
