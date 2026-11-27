@@ -32,11 +32,30 @@ enum Event {
     PlayingAudio(bool),
     Popup(String),
     Error(String),
-    Navigation(String),
+    Navigation { address: String, title: String },
     PageStateChanged,
 }
 
 use crate::app::gpui_bridge::DownloadSummaryRow;
+
+fn page_title(title: &str, address: &str) -> String {
+    if address.is_empty() || address == "about:blank" {
+        return String::new();
+    }
+    let title = title.trim();
+    let without_scheme = address
+        .strip_prefix("https://")
+        .or_else(|| address.strip_prefix("http://"));
+    if title.is_empty()
+        || title == address
+        || title == "about:blank"
+        || Some(title) == without_scheme
+    {
+        crate::view_tabs_browser_model::host_of(address)
+    } else {
+        title.chars().take(200).collect()
+    }
+}
 
 fn next_address_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -292,9 +311,7 @@ impl Browser {
         let url = Self::restorable_url(url).unwrap_or_else(|| "about:blank".into());
         page.open_url(&url);
         page.committed_address = url.clone();
-        if url != "about:blank" {
-            page.title = title.chars().take(200).collect();
-        }
+        page.title = page_title(title, &url);
         page
     }
 
@@ -385,7 +402,10 @@ impl Browser {
     #[cfg(all(test, feature = "visual-test"))]
     pub(crate) fn navigation_fixture(&mut self, address: &str) {
         self.sender
-            .send(Event::Navigation(address.to_owned()))
+            .send(Event::Navigation {
+                address: address.to_owned(),
+                title: String::new(),
+            })
             .unwrap();
         self.poll();
     }
@@ -964,17 +984,30 @@ impl Browser {
             let location = self.sender.clone();
             view.webview()
                 .add_SourceChanged(
-                    &webview2_com::SourceChangedEventHandler::create(Box::new(move |source, _| {
-                        if let Some(source) = source {
-                            let mut raw = windows::core::PWSTR::null();
-                            source.Source(&mut raw)?;
-                            let address = webview2_com::take_pwstr(raw);
-                            if allowed(&address) {
-                                let _ = location.send(Event::Navigation(address));
+                    &webview2_com::SourceChangedEventHandler::create(Box::new(
+                        move |source, args| {
+                            if let Some(source) = source {
+                                let mut raw = windows::core::PWSTR::null();
+                                source.Source(&mut raw)?;
+                                let address = webview2_com::take_pwstr(raw);
+                                if allowed(&address) {
+                                    let mut new_document = windows::core::BOOL::from(true);
+                                    if let Some(args) = args {
+                                        args.IsNewDocument(&mut new_document)?;
+                                    }
+                                    let title = if new_document.as_bool() {
+                                        String::new()
+                                    } else {
+                                        let mut raw = windows::core::PWSTR::null();
+                                        source.DocumentTitle(&mut raw)?;
+                                        webview2_com::take_pwstr(raw)
+                                    };
+                                    let _ = location.send(Event::Navigation { address, title });
+                                }
                             }
-                        }
-                        Ok(())
-                    })),
+                            Ok(())
+                        },
+                    )),
                     &mut 0,
                 )
                 .map_err(|e| e.to_string())?;
@@ -1101,11 +1134,14 @@ impl Browser {
             match event {
                 Event::PlayingAudio(playing) => self.playing_audio = playing,
                 Event::Zoom(direction) => self.change_zoom(direction),
-                Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
+                Event::Title(title) => self.title = page_title(&title, &self.committed_address),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
                 Event::PageStateChanged => {}
-                Event::Navigation(address) => self.observe_navigation(address),
+                Event::Navigation { address, title } => {
+                    self.title = page_title(&title, &address);
+                    self.observe_navigation(address);
+                }
             }
         }
         changed
@@ -1458,6 +1494,24 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restored_browser_titles_match_the_page_and_preserve_the_full_url_hint() {
+        let url = format!("http://localhost:3000/{}", "a".repeat(240));
+        let stripped = url.strip_prefix("http://").unwrap();
+        for title in ["", "about:blank", &url, stripped] {
+            let page = Browser::from_restart_location(&url, title);
+            assert_eq!(page.tab_label(), ("localhost:3000".into(), url.clone()));
+            assert_eq!(page.side_tab_title(), "localhost:3000");
+        }
+        assert_eq!(
+            Browser::from_restart_location(&url, "  Notes  ")
+                .tab_label()
+                .0,
+            "Notes"
+        );
+        assert_eq!(page_title("stale", "about:blank"), "");
+    }
+
     #[cfg(feature = "visual-test")]
     #[gpui::test]
     #[ignore = "requires installed Windows WebView2 runtime"]
@@ -2189,6 +2243,21 @@ mod tests {
         assert_eq!(page.address_str(), "draft.example");
         page.cancel_native_address_edit();
         assert!(page.address_str().ends_with("#replaced"));
+        wait_for(
+            page.view.as_ref().unwrap(),
+            "(document.title = location.href) === location.href",
+        );
+        let expected = crate::view_tabs_browser_model::host_of(page.address_str());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while page.side_tab_title() != expected {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "URL title did not become the host"
+            );
+            pump();
+            page.poll();
+        }
+        assert_eq!(page.tab_label().1, page.address_str());
         assert!(
             app.gpui_snapshot(960., 640., 4.)
                 .side_browser

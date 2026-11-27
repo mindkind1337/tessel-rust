@@ -202,6 +202,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Windows browser
 
+- Browser tabs show the page title or, when the title is empty or repeats its address, the host name and port. The center tab tooltip retains the full URL.
 - A new center or side browser tab focuses an empty address bar for immediate typing.
 - Back and Forward in the center and side browsers follow the current page’s history, including history entries added within a page. The address bar follows URL changes within a page, including Back and Forward through those changes. While you type, it preserves your draft. Escape restores the current page URL. Unavailable directions are disabled. In either address bar, Alt+Left and Alt+Right navigate that tab’s history, and Ctrl+R or F5 reloads its page. Ctrl+Shift+R or Ctrl+F5 reloads the page and its resources without using the HTTP cache. Right-click the reload button in either browser toolbar to choose **Reload** or **Hard Reload**. During navigation, the reload button changes to **Stop** and can interrupt the current page load.
 
