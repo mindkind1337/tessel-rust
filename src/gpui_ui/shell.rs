@@ -1537,6 +1537,44 @@ fn render_side_browser(
             div()
                 .flex()
                 .items_center()
+                .children(
+                    [
+                        (
+                            "side-browser-back",
+                            "←",
+                            snapshot.side_history.0,
+                            GpuiAction::SideBrowserBack(id),
+                        ),
+                        (
+                            "side-browser-forward",
+                            "→",
+                            snapshot.side_history.1,
+                            GpuiAction::SideBrowserForward(id),
+                        ),
+                        (
+                            "side-browser-reload",
+                            "⟳",
+                            true,
+                            GpuiAction::SideBrowserReload(id),
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(key, label, enabled, action)| {
+                        div()
+                            .id(key)
+                            .debug_selector(move || key.into())
+                            .px(px(5.))
+                            .flex_shrink_0()
+                            .when(!enabled, |el| el.opacity(0.4))
+                            .when(enabled, |el| {
+                                el.cursor_pointer()
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(action.clone(), cx);
+                                    }))
+                            })
+                            .child(label)
+                    }),
+                )
                 .child(address.render(french, tokens, cx))
                 .child(
                     div()

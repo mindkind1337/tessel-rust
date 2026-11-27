@@ -394,6 +394,15 @@ impl Browser {
         }
     }
 
+    pub(crate) fn history_directions(&self) -> (bool, bool) {
+        self.view.as_ref().map_or((false, false), |view| {
+            (
+                view.can_go_back().unwrap_or(false),
+                view.can_go_forward().unwrap_or(false),
+            )
+        })
+    }
+
     pub fn go_back_now(&self) {
         if let Some(view) = &self.view {
             let _ = view.go_back();
@@ -1673,8 +1682,34 @@ mod tests {
         );
         wait_for(
             app.side_browsers[&side].view.as_ref().unwrap(),
+            "(history.pushState({side:true}, '', '#side'), true)",
+        );
+        assert!(app.gpui_snapshot(960., 640., 4.).side_history.0);
+        app.apply_gpui_action(GpuiAction::SideBrowserBack(side));
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "!history.state",
+        );
+        assert!(app.gpui_snapshot(960., 640., 4.).side_history.1);
+        app.apply_gpui_action(GpuiAction::SideBrowserForward(side));
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "history.state?.side === true",
+        );
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
             "(document.querySelector('#draft').value = 'side draft') === 'side draft'",
         );
+        app.apply_gpui_action(GpuiAction::SideBrowserReload(side));
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "document.querySelector('#draft')?.value === ''",
+        );
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.querySelector('#draft').value === 'second!'",
+        );
+
         app.apply_gpui_action(GpuiAction::UndockBrowser(side));
         assert!(app.side_browsers.is_empty());
         assert_ne!(app.browser.tab_id, side);

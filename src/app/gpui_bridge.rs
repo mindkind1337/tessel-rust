@@ -758,6 +758,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub editor_font_size: u8,
     pub renderer: RendererPreference,
     pub side_browser_error: String,
+    pub side_history: (bool, bool),
     pub side_browser_tabs: Vec<(u64, String)>,
     pub selected_side_browser: Option<u64>,
     pub right_fullscreen: bool,
@@ -1017,6 +1018,9 @@ pub(crate) enum GpuiAction {
         navigate: bool,
     },
     BrowserNavigate,
+    SideBrowserBack(u64),
+    SideBrowserForward(u64),
+    SideBrowserReload(u64),
     BrowserBack,
     BrowserForward,
     BrowserReload,
@@ -3995,6 +3999,14 @@ impl Tessel {
             font_size,
             renderer: self.state.renderer,
             #[cfg(windows)]
+            side_history: self
+                .selected_side_browser
+                .and_then(|id| self.side_browsers.get(&id))
+                .map(|page| page.history_directions())
+                .unwrap_or_default(),
+            #[cfg(not(windows))]
+            side_history: (false, false),
+            #[cfg(windows)]
             side_browser_error: self
                 .selected_side_browser
                 .and_then(|id| self.side_browsers.get(&id))
@@ -6583,6 +6595,22 @@ impl Tessel {
             GpuiAction::BrowserNavigate => {
                 #[cfg(windows)]
                 self.browser.navigate_now();
+            }
+            GpuiAction::SideBrowserBack(id)
+            | GpuiAction::SideBrowserForward(id)
+            | GpuiAction::SideBrowserReload(id) => {
+                #[cfg(windows)]
+                if self.side_browser_visible(id)
+                    && let Some(page) = self.side_browsers.get(&id)
+                {
+                    match action {
+                        GpuiAction::SideBrowserBack(_) => page.go_back_now(),
+                        GpuiAction::SideBrowserForward(_) => page.go_forward_now(),
+                        _ => page.reload_now(),
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = id;
             }
             GpuiAction::BrowserBack => {
                 #[cfg(windows)]
