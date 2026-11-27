@@ -1830,18 +1830,10 @@ impl Tessel {
         alt: bool,
         shift: bool,
     ) -> Option<String> {
-        let copied = match session_id {
-            Some(sid) => self
-                .sessions
-                .iter_mut()
-                .find(|s| s.id == sid)
-                .and_then(|s| s.terminal.as_mut())
-                .and_then(|t| t.gpui_send_key(key, key_char, ctrl, alt, shift, false)),
-            None => self
-                .floating
-                .process_mut()
-                .and_then(|t| t.gpui_send_key(key, key_char, ctrl, alt, shift, true)),
-        };
+        let mut copied = None;
+        self.with_target_terminal(session_id, |terminal| {
+            copied = terminal.gpui_send_key(key, key_char, ctrl, alt, shift, session_id.is_none());
+        });
         self.flush_gpui_terminal_side_effects();
         copied
     }
@@ -5228,16 +5220,17 @@ impl Tessel {
         f: impl FnOnce(&mut crate::terminal::Terminal),
     ) {
         match session_id {
-            Some(sid) => {
+            Some(sid) if self.view == View::Work => {
                 if let Some(term) = self
                     .sessions
                     .iter_mut()
-                    .find(|s| s.id == sid)
+                    .find(|s| s.id == sid && s.project == self.state.active_project)
                     .and_then(|s| s.terminal.as_mut())
                 {
                     f(term);
                 }
             }
+            Some(_) => {}
             None => {
                 if let Some(term) = self.floating.process_mut() {
                     f(term);
@@ -5353,23 +5346,10 @@ impl Tessel {
                 }
                 self.right_fullscreen = !self.right_fullscreen;
             }
-            GpuiAction::SelectProject(id) => {
-                if self.state.projects.iter().any(|p| p.id == id)
-                    && self.state.active_project != Some(id)
-                {
-                    self.state.active_project = Some(id);
-                    self.active_session = self
-                        .sessions
-                        .iter()
-                        .find(|s| s.project == Some(id))
-                        .map(|s| s.id);
-                    self.view = View::Work;
-                    self.refresh_project();
-                    self.save();
-                }
-            }
+            GpuiAction::SelectProject(id) => self.select_workspace_project(id),
             GpuiAction::AddProjectPath(path) => match self.state.add_project(&path) {
                 Ok(_) => {
+                    self.active_session = self.active_project_work_pane();
                     self.view = View::Work;
                     self.refresh_project();
                     self.save();

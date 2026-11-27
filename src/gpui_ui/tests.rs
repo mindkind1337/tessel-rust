@@ -18,6 +18,87 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn ctrl_page_keys_cycle_workspaces_and_route_terminal_input(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panes = Vec::new();
+    let view = cx.add_window(|window, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        for name in ["first", "second", "empty"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            root.dispatch(GpuiAction::AddProjectPath(path), cx);
+            if name != "empty" {
+                panes.push(root.app.install_terminal_find_fixture());
+            }
+        }
+        assert_eq!(root.app.gpui_default_focus_target(), GpuiFocusTarget::None);
+        // A delayed key from the previous pane must not reach the hidden terminal.
+        root.app
+            .send_gpui_terminal_key(Some(panes[1].0), "z", Some("z"), false, false, false);
+        root.dispatch(
+            GpuiAction::TerminalPaste {
+                session_id: Some(panes[1].0),
+                text: "hidden".into(),
+            },
+            cx,
+        );
+        assert!(panes[1].1.try_recv().is_err());
+        root.focus_input = GpuiFocusTarget::Terminal(Some(panes[1].0));
+        root.focus_handle.focus(window, cx);
+        root
+    });
+    for (stroke, name, pane) in [
+        ("ctrl-pagedown", "first", Some(0)),
+        ("ctrl-pagedown", "second", Some(1)),
+        ("ctrl-pageup", "first", Some(0)),
+        ("ctrl-pageup", "empty", None),
+    ] {
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(view.into(), stroke);
+        view.update(cx, |root, _, _| {
+            assert_eq!(
+                root.app
+                    .gpui_snapshot(960., 640., 4.)
+                    .toolbar
+                    .active_project_name
+                    .as_deref(),
+                Some(name)
+            );
+            assert_eq!(
+                root.app.gpui_default_focus_target(),
+                pane.map_or(GpuiFocusTarget::None, |i: usize| GpuiFocusTarget::Terminal(
+                    Some(panes[i].0)
+                ))
+            );
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "x");
+        for (i, (_, input)) in panes.iter().enumerate() {
+            assert_eq!(
+                input.try_recv().ok(),
+                (pane == Some(i)).then(|| b"x".to_vec())
+            );
+        }
+    }
+    view.update(cx, |root, _, cx| root.dispatch(GpuiAction::OpenHelp, cx))
+        .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-pagedown");
+    view.update(cx, |root, _, _| {
+        assert_eq!(
+            root.app
+                .gpui_snapshot(960., 640., 4.)
+                .toolbar
+                .active_project_name
+                .as_deref(),
+            Some("empty")
+        );
+    })
+    .unwrap();
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_insert_path_menu_pastes_selected_row_and_focuses_the_terminal(
     cx: &mut gpui::TestAppContext,
 ) {

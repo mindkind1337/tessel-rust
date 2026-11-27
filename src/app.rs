@@ -2719,6 +2719,7 @@ impl Tessel {
 
                 Message::Folder(Some(path)) => match self.state.add_project(&path) {
                     Ok(project_id) => {
+                        self.active_session = self.active_project_work_pane();
                         self.save();
                         self.refresh_project();
                         if !self.sessions.iter().any(|s| s.project == Some(project_id))
@@ -3687,14 +3688,21 @@ impl Tessel {
                 }
             }
         };
-        if let Some(proj) = self.state.projects.get(next_idx)
-            && self.state.active_project != Some(proj.id)
+        let next = self.state.projects[next_idx].id;
+        self.select_workspace_project(next);
+    }
+
+    fn select_workspace_project(&mut self, id: u64) {
+        if self.state.active_project == Some(id)
+            || !self.state.projects.iter().any(|project| project.id == id)
         {
-            self.state.active_project = Some(proj.id);
-            self.view = View::Work;
-            self.refresh_project();
-            self.save();
+            return;
         }
+        self.state.active_project = Some(id);
+        self.active_session = self.active_project_work_pane();
+        self.view = View::Work;
+        self.refresh_project();
+        self.save();
     }
 
     fn zoom_font(&mut self, delta: i8) {
@@ -13168,6 +13176,7 @@ impl Tessel {
             }
         }
         if let Some(project_id) = last_id {
+            self.active_session = self.active_project_work_pane();
             self.save();
             self.refresh_project();
             if !self.sessions.iter().any(|s| s.project == Some(project_id))

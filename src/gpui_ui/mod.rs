@@ -442,6 +442,11 @@ impl TesselGpuiRoot {
             GpuiAction::ToggleCommandPalette | GpuiAction::OpenFinder
         );
         match &action {
+            GpuiAction::SelectProject(_) | GpuiAction::CycleWorkspace(_)
+                if matches!(self.focus_input, FocusInputTarget::Terminal(Some(_))) =>
+            {
+                self.focus_input = FocusInputTarget::None;
+            }
             GpuiAction::NativeTaskBoard {
                 command: crate::native_task_board::Command::BeginRename(_),
                 ..
@@ -919,9 +924,27 @@ impl TesselGpuiRoot {
                     self.dispatch(GpuiAction::ZoomFont(0), cx);
                     return;
                 }
-                "tab" => {
+                "tab" | "pageup" | "pagedown"
+                    if !self.app.gpui_has_open_modal()
+                        && native_target.is_none()
+                        && matches!(
+                            self.focus_input,
+                            FocusInputTarget::None
+                                | FocusInputTarget::Terminal(_)
+                                | FocusInputTarget::ExplorerTree
+                                | FocusInputTarget::OutlineTree
+                        )
+                        && (key == "tab"
+                            || (!shift && ks.modifiers.control && !ks.modifiers.platform)) =>
+                {
+                    window.prevent_default();
+                    cx.stop_propagation();
                     self.focus_input = FocusInputTarget::None;
-                    self.dispatch(GpuiAction::CycleWorkspace(if shift { -1 } else { 1 }), cx);
+                    let backwards = key == "pageup" || (key == "tab" && shift);
+                    self.dispatch(
+                        GpuiAction::CycleWorkspace(if backwards { -1 } else { 1 }),
+                        cx,
+                    );
                     return;
                 }
                 "s" if !shift && self.app.gpui_is_document_view() => {
