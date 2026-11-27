@@ -627,11 +627,13 @@ enum Message {
     CloneParentPicked(Option<PathBuf>),
     InitParentPicked(Option<PathBuf>),
     Document {
+        project: Option<u64>,
         path: PathBuf,
         request: std::sync::Arc<()>,
         result: Result<Box<Document>, String>,
     },
     DiffDocument {
+        project: Option<u64>,
         source_doc: Option<TimelineOrigin>,
         root: PathBuf,
         path: PathBuf,
@@ -721,7 +723,7 @@ pub struct Tessel {
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
-    document_pending: std::collections::HashMap<PathBuf, PendingDocument>,
+    document_pending: std::collections::HashMap<(Option<u64>, PathBuf), PendingDocument>,
     active_document: usize,
     view: View,
     overlay: Option<Overlay>,
@@ -1390,6 +1392,7 @@ impl Tessel {
                     {
                         app.error = e;
                     }
+                    document.project = app.state.active_project;
                     app.documents.push(document);
                     app.view = View::Files;
                 }
@@ -2087,6 +2090,12 @@ impl Tessel {
     fn open_document_at_mode(&mut self, root: PathBuf, path: PathBuf, pinned: bool) {
         self.open_document_at_position(root, path, pinned, None);
     }
+    fn replaceable_preview(&self, project: Option<u64>) -> Option<usize> {
+        self.documents
+            .iter()
+            .position(|doc| doc.project == project && doc.unpinned_preview && !doc.dirty())
+    }
+
     fn open_document_at_position(
         &mut self,
         root: PathBuf,
@@ -2094,12 +2103,11 @@ impl Tessel {
         pinned: bool,
         position: Option<crate::files::FilePosition>,
     ) {
+        let project = self.state.active_project;
         let key = dunce::simplified(&path);
-        if let Some(i) = self
-            .documents
-            .iter()
-            .position(|d| d.diff_title.is_none() && dunce::simplified(&d.path) == key)
-        {
+        if let Some(i) = self.documents.iter().position(|d| {
+            d.project == project && d.diff_title.is_none() && dunce::simplified(&d.path) == key
+        }) {
             if pinned {
                 self.documents[i].unpinned_preview = false;
             }
@@ -2108,25 +2116,22 @@ impl Tessel {
             self.view = View::Files;
             return;
         }
-        if let Some(pending) = self.document_pending.get_mut(key) {
+        let pending_key = (project, key.to_owned());
+        if let Some(pending) = self.document_pending.get_mut(&pending_key) {
             pending.pinned |= pinned;
             if position.is_some() {
                 pending.position = position;
             }
             return;
         }
-        let replaceable = !pinned
-            && self
-                .documents
-                .iter()
-                .any(|d| d.unpinned_preview && !d.dirty());
+        let replaceable = !pinned && self.replaceable_preview(project).is_some();
         if !replaceable && self.documents.len() + self.document_pending.len() >= 24 {
             self.error = "Close a document before opening more (24-tab limit)".into();
             return;
         }
         let request = std::sync::Arc::new(());
         self.document_pending.insert(
-            key.to_owned(),
+            pending_key,
             PendingDocument {
                 position,
                 request: request.clone(),
@@ -2137,6 +2142,7 @@ impl Tessel {
         thread::spawn(move || {
             let result = Document::open(&root, &path).map(Box::new);
             let _ = sender.send(Message::Document {
+                project,
                 path,
                 request,
                 result,
@@ -2273,6 +2279,7 @@ impl Tessel {
                 };
                 let profile = self.timeline.profile.clone();
                 let sender = self.sender.clone();
+                let project = self.state.active_project;
                 thread::spawn(move || {
                     let result = if let Some(id) =
                         commit.as_deref().and_then(|s| s.strip_prefix("local:"))
@@ -2285,6 +2292,7 @@ impl Tessel {
                         history.diff(commit.as_deref())
                     };
                     let _ = sender.send(Message::DiffDocument {
+                        project,
                         source_doc,
                         root,
                         path,
@@ -2321,15 +2329,15 @@ impl Tessel {
             ScmArea::Staged => DiffTabArea::Staged,
             ScmArea::Unstaged | ScmArea::Untracked => DiffTabArea::Unstaged,
         };
-        let existing = self
-            .documents
-            .iter()
-            .any(|d| d.path == full_path && d.diff_area.as_ref() == Some(&area));
+        let existing = self.documents.iter().any(|d| {
+            d.project == self.state.active_project
+                && d.path == full_path
+                && d.diff_area.as_ref() == Some(&area)
+        });
         let replaceable = !pinned
             && self
-                .documents
-                .iter()
-                .any(|d| d.unpinned_preview && !d.dirty());
+                .replaceable_preview(self.state.active_project)
+                .is_some();
         if !existing && !replaceable && self.documents.len() + self.document_pending.len() >= 24 {
             self.error = "Close a document before opening more (24-tab limit)".into();
             return;
@@ -2337,9 +2345,11 @@ impl Tessel {
         let old_rel = old_relative.or(entry_old_path);
         let rel = entry_path;
         let sender = self.sender.clone();
+        let project = self.state.active_project;
         thread::spawn(move || {
             let result = crate::git::file_diff(&root, &rel, old_rel.as_deref(), staged, untracked);
             let _ = sender.send(Message::DiffDocument {
+                project,
                 source_doc: None,
                 root,
                 path: full_path,
@@ -2757,13 +2767,14 @@ impl Tessel {
                 }
                 Message::InitParentPicked(None) => {}
                 Message::Document {
+                    project,
                     path,
                     request,
                     result,
                 } => {
                     let std::collections::hash_map::Entry::Occupied(entry) = self
                         .document_pending
-                        .entry(dunce::simplified(&path).to_owned())
+                        .entry((project, dunce::simplified(&path).to_owned()))
                     else {
                         continue;
                     };
@@ -2774,37 +2785,37 @@ impl Tessel {
                     let pinned = pending.pinned;
                     match result {
                         Ok(mut d) => {
+                            d.project = project;
                             d.unpinned_preview = !pinned;
                             let d = *d;
-                            if let Some(i) = self
-                                .documents
-                                .iter()
-                                .position(|old| old.diff_title.is_none() && old.path == d.path)
-                            {
+                            let index = if let Some(i) = self.documents.iter().position(|old| {
+                                old.project == project
+                                    && old.diff_title.is_none()
+                                    && old.path == d.path
+                            }) {
                                 if pinned {
                                     self.documents[i].unpinned_preview = false;
                                 }
-                                self.active_document = i;
-                            } else if !pinned
-                                && let Some(i) = self
-                                    .documents
-                                    .iter()
-                                    .position(|old| old.unpinned_preview && !old.dirty())
-                            {
+                                i
+                            } else if !pinned && let Some(i) = self.replaceable_preview(project) {
                                 self.documents[i] = d;
-                                self.active_document = i;
+                                i
                             } else if self.documents.len() >= 24 {
                                 self.error =
                                     "Close a document before opening more (24-tab limit)".into();
                                 continue;
                             } else {
                                 self.documents.push(d);
-                                self.active_document = self.documents.len() - 1;
+                                self.documents.len() - 1
+                            };
+                            self.documents[index].reveal_location(pending.position);
+                            if self.state.active_project == project {
+                                self.active_document = index;
+                                self.view = View::Files;
                             }
-                            self.documents[self.active_document].reveal_location(pending.position);
-                            self.view = View::Files;
                         }
-                        Err(e) => self.error = e,
+                        Err(e) if self.state.active_project == project => self.error = e,
+                        Err(_) => {}
                     }
                 }
                 Message::DiffDocument {
@@ -2827,6 +2838,7 @@ impl Tessel {
                         .get(self.active_document)
                         .is_none_or(|d| d.instance_id() != id) => {}
                 Message::DiffDocument {
+                    project,
                     source_doc: _,
                     root,
                     path,
@@ -2841,33 +2853,35 @@ impl Tessel {
                         let title = diff_label(&name, &area, locale);
                         let mut doc =
                             Document::from_diff(&root, path.clone(), title, diff_text, !pinned);
+                        doc.project = project;
                         doc.diff_area = Some(area);
-                        if let Some(i) = self
-                            .documents
-                            .iter()
-                            .position(|old| old.path == path && old.diff_area == doc.diff_area)
-                        {
+                        let index = if let Some(i) = self.documents.iter().position(|old| {
+                            old.project == project
+                                && old.path == path
+                                && old.diff_area == doc.diff_area
+                        }) {
                             let keep_pinned = !self.documents[i].unpinned_preview || pinned;
                             self.documents[i] = doc;
                             if keep_pinned {
                                 self.documents[i].unpinned_preview = false;
                             }
-                            self.active_document = i;
-                        } else if !pinned
-                            && let Some(i) = self
-                                .documents
-                                .iter()
-                                .position(|old| old.unpinned_preview && !old.dirty())
-                        {
+                            i
+                        } else if !pinned && let Some(i) = self.replaceable_preview(project) {
                             self.documents[i] = doc;
-                            self.active_document = i;
+                            i
                         } else if self.documents.len() < 24 {
                             self.documents.push(doc);
-                            self.active_document = self.documents.len() - 1;
+                            self.documents.len() - 1
+                        } else {
+                            continue;
+                        };
+                        if self.state.active_project == project {
+                            self.active_document = index;
+                            self.view = View::Files;
                         }
-                        self.view = View::Files;
                     }
-                    Err(e) => self.error = e,
+                    Err(e) if self.state.active_project == project => self.error = e,
+                    Err(_) => {}
                 },
             }
         }
@@ -8125,20 +8139,21 @@ impl Tessel {
             ),
         };
         let vpath = PathBuf::from(format!("tessel-notice://{title}"));
-        if let Some(idx) = self.documents.iter().position(|d| d.path == vpath) {
+        if let Some(idx) = self
+            .documents
+            .iter()
+            .position(|d| d.project == self.state.active_project && d.path == vpath)
+        {
             self.active_document = idx;
             self.overlay = None;
             self.view = View::Files;
             return;
         }
         if self.documents.len() >= 24 {
-            if let Some(idx) = self
-                .documents
-                .iter()
-                .position(|d| d.unpinned_preview && !d.dirty())
-            {
+            if let Some(idx) = self.replaceable_preview(self.state.active_project) {
                 self.documents[idx] =
                     Document::from_readonly_text(PathBuf::new(), vpath, title, content, markdown);
+                self.documents[idx].project = self.state.active_project;
                 self.active_document = idx;
                 self.overlay = None;
                 self.view = View::Files;
@@ -8155,6 +8170,7 @@ impl Tessel {
             markdown,
         ));
         self.active_document = self.documents.len() - 1;
+        self.documents[self.active_document].project = self.state.active_project;
         self.overlay = None;
         self.view = View::Files;
     }
@@ -13026,6 +13042,7 @@ impl Tessel {
                     let full_path = proj.path.join(&path);
                     let root = proj.path.clone();
                     let sender = self.sender.clone();
+                    let project = self.state.active_project;
                     thread::spawn(move || {
                         let result = crate::side_panels_model::load_commit_file_diff(
                             &root,
@@ -13033,6 +13050,7 @@ impl Tessel {
                             &path,
                         );
                         let _ = sender.send(Message::DiffDocument {
+                            project,
                             source_doc: None,
                             root,
                             path: full_path,
@@ -13136,6 +13154,7 @@ impl Tessel {
                     };
                     let root = proj.path;
                     let sender = self.sender.clone();
+                    let project = self.state.active_project;
                     thread::spawn(move || {
                         let result = crate::side_panels_model::load_review_file_diff(
                             &root,
@@ -13144,6 +13163,7 @@ impl Tessel {
                             &rel_path,
                         );
                         let _ = sender.send(Message::DiffDocument {
+                            project,
                             source_doc: None,
                             root,
                             path: full_path,

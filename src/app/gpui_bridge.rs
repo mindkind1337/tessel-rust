@@ -2459,6 +2459,9 @@ impl Tessel {
     ) {
         self.view = View::Files;
         self.documents = documents;
+        for doc in &mut self.documents {
+            doc.project = self.state.active_project;
+        }
         self.active_document = active;
     }
 
@@ -5887,7 +5890,8 @@ impl Tessel {
                         .map(|p| p.path.clone())
                 {
                     match crate::files::Document::open(&root, &path) {
-                        Ok(doc) => {
+                        Ok(mut doc) => {
+                            doc.project = Some(pid);
                             self.documents.push(doc);
                             self.active_document = self.documents.len() - 1;
                             self.view = View::Files;
@@ -8443,6 +8447,7 @@ mod panel_snapshot_tests {
         let deliver = |app: &mut Tessel, area, text: &str| {
             app.sender
                 .send(super::super::Message::DiffDocument {
+                    project: app.state.active_project,
                     source_doc: None,
                     root: dir.path().into(),
                     path: path.clone(),
@@ -8536,6 +8541,60 @@ mod panel_snapshot_tests {
         assert!(app.documents[0].error.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "four");
     }
+    #[test]
+    fn delayed_previews_and_diffs_leave_the_current_projects_editor_selected() {
+        use crate::view_tabs_browser_model::DiffTabArea;
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let a = root.join("one");
+        let b = root.join("two");
+        for project in [&a, &b] {
+            std::fs::create_dir(project).unwrap();
+            std::fs::write(project.join("notes.txt"), "original").unwrap();
+        }
+        let mut app = Tessel::new_for_gpui_in_dir(Some(root.join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(a.clone()));
+        let project_a = app.state.active_project;
+        app.open_document_at_mode(a.clone(), a.join("notes.txt"), false);
+        app.apply_gpui_action(GpuiAction::AddProjectPath(b.clone()));
+        app.apply_gpui_action(GpuiAction::OpenDocumentPath(b.join("notes.txt")));
+        app.documents[app.active_document].unpinned_preview = true;
+        let current = app.documents[app.active_document].instance_id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.document_pending.is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll_for_gpui();
+            std::thread::yield_now();
+        }
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.documents[app.active_document].instance_id(), current);
+        app.documents[app.active_document].text = "unsaved draft".into();
+        app.sender
+            .send(super::super::Message::DiffDocument {
+                project: project_a,
+                source_doc: None,
+                root: a.clone(),
+                path: a.join("notes.txt"),
+                area: DiffTabArea::Staged,
+                pinned: false,
+                result: Ok("patch".into()),
+            })
+            .unwrap();
+        app.poll();
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.documents[app.active_document].instance_id(), current);
+        assert_eq!(app.documents[app.active_document].text, "unsaved draft");
+        assert!(
+            app.documents
+                .iter()
+                .any(|doc| doc.root == a && doc.diff_area == Some(DiffTabArea::Staged))
+        );
+        assert_eq!(
+            std::fs::read_to_string(b.join("notes.txt")).unwrap(),
+            "original"
+        );
+    }
+
     #[test]
     fn preview_link_pins_target_while_explorer_is_still_loading_it() {
         let dir = tempfile::tempdir().unwrap();

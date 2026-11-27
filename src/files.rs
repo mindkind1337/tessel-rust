@@ -350,6 +350,7 @@ impl OutlineCursor {
 }
 
 pub struct Document {
+    pub project: Option<u64>,
     instance_id: u64,
     pub root: PathBuf,
     pub path: PathBuf,
@@ -462,6 +463,7 @@ impl Document {
         unpinned_preview: bool,
     ) -> Self {
         Self {
+            project: None,
             instance_id: Self::next_instance_id(),
             root: root.to_owned(),
             path,
@@ -498,6 +500,7 @@ impl Document {
     ) -> Self {
         let preview = markdown.then(|| crate::preview::Preview::parse(&text, true));
         Self {
+            project: None,
             instance_id: Self::next_instance_id(),
             root,
             path,
@@ -527,6 +530,7 @@ impl Document {
 
     fn binary_preview(root: &Path, path: PathBuf) -> Self {
         Self {
+            project: None,
             instance_id: Self::next_instance_id(),
             root: root.to_owned(),
             path,
@@ -604,6 +608,7 @@ impl Document {
             }
             let image = crate::raster_preview::decode(&extension, &bytes)?;
             return Ok(Self {
+                project: None,
                 instance_id: Self::next_instance_id(),
                 root: root.to_owned(),
                 path,
@@ -643,6 +648,7 @@ impl Document {
                 crate::rich_previews::MarkdownSizeDecision::SourceOnly { .. }
             );
         Ok(Self {
+            project: None,
             instance_id: Self::next_instance_id(),
             root: root.to_owned(),
             path,
