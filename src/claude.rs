@@ -969,12 +969,8 @@ impl Chat {
             });
         crate::chat::citations::latest_control(ui, &scroll, jump_id);
         ui.add_enabled_ui(self.ready && !self.active, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.composer)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
-            if ui.button(tr("Send")).clicked()
+            let enter = crate::chat::composer::edit(ui, self.composer_id, &mut self.composer);
+            if (ui.button(tr("Send")).clicked() || enter)
                 && let Err(e) = self.begin()
             {
                 self.error = e;

@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) mod blocks;
 pub(crate) mod citations;
+pub(crate) mod composer;
 mod questions;
 pub use questions::QuestionView;
 
@@ -1183,22 +1184,16 @@ impl Chat {
                     }
                 });
         });
-        ui.add(
-            egui::TextEdit::multiline(&mut self.composer)
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
+        let enter = composer::edit(ui, self.composer_id, &mut self.composer);
+        let send = ui.add_enabled(
+            self.ready && !self.starting_turn,
+            egui::Button::new(if self.turn.is_some() {
+                tr("Send follow-up")
+            } else {
+                tr("Send")
+            }),
         );
-        if ui
-            .add_enabled(
-                self.ready && !self.starting_turn,
-                egui::Button::new(if self.turn.is_some() {
-                    tr("Send follow-up")
-                } else {
-                    tr("Send")
-                }),
-            )
-            .clicked()
-        {
+        if send.clicked() || enter {
             self.send_message();
         }
         clicked
