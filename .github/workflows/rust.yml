@@ -73,6 +73,14 @@ jobs:
         run: "cargo test --locked -j 2 share:: -- --test-threads=1"
       - name: Test remaining targets
         run: "cargo test --locked -j 2 -- --skip share:: --test-threads=2"
+      - name: Verify remote file operations with OpenSSH SFTP
+        shell: pwsh
+        run: |
+          $gitRoot = git --exec-path
+          $gitRoot = (Resolve-Path (Join-Path $gitRoot '../../..')).Path
+          $env:TESSEL_TEST_SFTP_SERVER = Join-Path $gitRoot 'usr/lib/ssh/sftp-server.exe'
+          $env:Path = "$(Join-Path $gitRoot 'usr/bin');$env:Path"
+          cargo test --locked -j 2 --bin tessel-rust remote::tests::real_sftp_subsystem_preserves_files_conflicts_and_preview_scope -- --ignored --exact
       - run: cargo clippy --locked -j 2 --all-targets --all-features -- -D warnings
       - run: cargo build --locked -j 2
       - run: .\target\debug\tessel-rust.exe --self-test-pdf

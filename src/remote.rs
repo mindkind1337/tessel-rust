@@ -631,7 +631,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "requires TESSEL_TEST_SFTP_SERVER pointing to an OpenSSH sftp-server binary"]
-    fn preview_asset_reads_a_real_sftp_subsystem_scoped_to_the_original_root() {
+    fn real_sftp_subsystem_preserves_files_conflicts_and_preview_scope() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("pages")).unwrap();
         std::fs::write(dir.path().join("pages/index.html"), "page").unwrap();
@@ -667,8 +667,75 @@ mod tests {
                     writer: child.stdin.take().unwrap(),
                 };
                 let session = RawSftpSession::new(stream);
-                session.init().await.unwrap();
+                let version = session.init().await.unwrap();
                 let root = canonical(&session, ".").await.unwrap();
+                let atomic = version.extensions.contains_key("posix-rename@openssh.com");
+                let run = |action| operate(&session, &root, action, atomic);
+                let path = format!("{root}/notes.txt");
+                let create = || Action::Create {
+                    parent: root.clone(),
+                    name: "notes.txt".into(),
+                    directory: false,
+                };
+                assert!(matches!(
+                    run(create()).await.unwrap(),
+                    Reply::Created { .. }
+                ));
+                let payload = vec![b'x'; 70001];
+                let save = |original: &[u8], replacement: &[u8]| Action::Save {
+                    path: path.clone(),
+                    original: original.to_vec(),
+                    replacement: replacement.to_vec(),
+                };
+                assert!(atomic, "OpenSSH fixture must advertise atomic rename");
+                assert!(matches!(
+                    run(save(b"", &payload)).await.unwrap(),
+                    Reply::Saved
+                ));
+                assert!(run(create()).await.is_err());
+                assert!(run(save(b"", b"stale edit")).await.is_err());
+                let Reply::File { bytes, .. } = run(Action::Read(path.clone())).await.unwrap()
+                else {
+                    panic!("remote read did not return bytes");
+                };
+                assert_eq!(bytes, payload);
+                let rename = |name: &str| Action::Rename {
+                    path: path.clone(),
+                    name: name.into(),
+                };
+                assert!(run(rename("site.css")).await.is_err());
+                let Reply::Renamed { new, .. } = run(rename("final.txt")).await.unwrap() else {
+                    panic!("remote rename did not report its destination");
+                };
+                assert_eq!(
+                    std::fs::read(dir.path().join("final.txt")).unwrap(),
+                    payload
+                );
+                assert_eq!(
+                    std::fs::read(dir.path().join("site.css")).unwrap(),
+                    b"body{}"
+                );
+                assert!(!dir.path().join("notes.txt").exists());
+                let Reply::Listing { entries, .. } = run(Action::List(root.clone())).await.unwrap()
+                else {
+                    panic!("remote list did not return entries");
+                };
+                assert!(entries.iter().any(|entry| entry.path == new));
+                assert!(
+                    !entries
+                        .iter()
+                        .any(|entry| entry.name.starts_with(".tessel-save-"))
+                );
+                assert!(matches!(
+                    run(Action::Delete {
+                        path: new,
+                        directory: false
+                    })
+                    .await
+                    .unwrap(),
+                    Reply::Deleted { .. }
+                ));
+                assert!(!dir.path().join("final.txt").exists());
                 for (path, expected) in [
                     ("site.css", Some("body{}")),
                     ("pages", Some("page")),
