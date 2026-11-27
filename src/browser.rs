@@ -56,6 +56,7 @@ struct FinishingView {
 pub struct Browser {
     pub(crate) tab_id: u64,
     pub(crate) tab_order: u64,
+    pub(crate) view_worktree: Option<PathBuf>,
     title: String,
     pub(crate) zoom_override: Option<i8>,
     default_zoom: i8,
@@ -103,6 +104,7 @@ impl Default for Browser {
         Self {
             tab_id,
             tab_order: tab_id,
+            view_worktree: None,
             title: String::new(),
             zoom_override: None,
             muted: false,

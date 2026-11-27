@@ -3701,10 +3701,10 @@ impl Tessel {
                         },
                     );
                     if terminal.body.clicked() {
-                        self.view = View::Work;
+                        self.select_work_tab();
                     }
                     #[cfg(windows)]
-                    for (id, title, hint) in self.browser_labels() {
+                    for (id, title, hint) in self.browser_tab_labels(true) {
                         let browser = crate::view_tabs::show(
                             ui,
                             crate::view_tabs::Tab {
@@ -6453,8 +6453,55 @@ impl Tessel {
             && (has_pane || self.tab_can_start_grid())
     }
 
+    fn select_work_tab(&mut self) {
+        #[cfg(windows)]
+        if self.view == View::Browser
+            && let Some(target) = self.browser_grid_target()
+        {
+            self.active_session = Some(target);
+            self.remember_active_work_pane();
+        }
+        self.view = View::Work;
+    }
+
     fn split_active_shell(&mut self, dir: crate::pane_grid::SplitDir) {
         if matches!(self.view, View::GuestFiles | View::Remote) {
+            return;
+        }
+        #[cfg(windows)]
+        if self.view == View::Browser {
+            let path = self.browser.view_worktree.as_deref();
+            if let Some(target) = self.browser_grid_target() {
+                self.split_shell_beside(target, dir);
+            } else if let Some(path) = path {
+                let checkout = self
+                    .state
+                    .active_project
+                    .and_then(|id| self.worktree_state.summary(id))
+                    .and_then(|summary| {
+                        summary.worktrees.iter().find(|wt| {
+                            crate::sidebar_model::same_path(&wt.path, &path.to_string_lossy())
+                        })
+                    });
+                if let Some(wt) = checkout {
+                    let worktree = workspace::SavedWorktree {
+                        path: PathBuf::from(&wt.path),
+                        branch: wt.branch.clone(),
+                        base_branch: None,
+                    };
+                    self.new_session_in_worktree(
+                        self.state.active_project,
+                        Launch::Shell,
+                        None,
+                        false,
+                        Some(worktree),
+                    );
+                } else {
+                    self.error = tr("Worktree unavailable.").into();
+                }
+            } else {
+                self.new_session_placed(Launch::Shell, None);
+            }
             return;
         }
         if let Some(target) = self.active_project_work_pane() {

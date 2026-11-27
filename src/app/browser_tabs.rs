@@ -1,8 +1,35 @@
 use super::{Tessel, View};
 use crate::browser::{Browser, editor_page::EditorPage};
 
+fn same_view(a: Option<&std::path::Path>, b: Option<&std::path::Path>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            crate::sidebar_model::same_path(&a.to_string_lossy(), &b.to_string_lossy())
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 impl Tessel {
+    pub(super) fn browser_grid_target(&self) -> Option<u64> {
+        self.sessions
+            .iter()
+            .filter(|s| {
+                s.project == self.state.active_project
+                    && same_view(
+                        s.worktree.as_ref().map(|w| w.path.as_path()),
+                        self.browser.view_worktree.as_deref(),
+                    )
+            })
+            .min_by_key(|s| Some(s.id) != self.active_session)
+            .map(|s| s.id)
+    }
     pub(super) fn browser_labels(&self) -> Vec<(u64, String, String)> {
+        self.browser_tab_labels(false)
+    }
+
+    pub(super) fn browser_tab_labels(&self, visible_only: bool) -> Vec<(u64, String, String)> {
         let mut pages: Vec<_> = self
             .other_browser_pages
             .iter()
@@ -11,6 +38,10 @@ impl Tessel {
             .collect();
         if self.browser_tab_open || self.view == View::Browser {
             pages.push(&self.browser);
+        }
+        if visible_only {
+            let scope = self.browser_opening_worktree();
+            pages.retain(|p| same_view(scope.as_deref(), p.view_worktree.as_deref()));
         }
         pages.sort_unstable_by_key(|page| page.tab_order);
         pages
@@ -36,7 +67,9 @@ impl Tessel {
     }
 
     pub(super) fn new_browser_page(&mut self) {
-        let previous = self.replace_browser_page(Browser::default());
+        let mut page = Browser::default();
+        page.view_worktree = self.browser_opening_worktree();
+        let previous = self.replace_browser_page(page);
         if self.browser_tab_open || self.view == View::Browser {
             self.other_browser_pages
                 .insert((self.state.active_project, previous.tab_id), previous);
@@ -88,6 +121,13 @@ impl Tessel {
             return None;
         }
         let page = if id == self.browser.tab_id {
+            if self.view == View::Browser
+                && let Some(grid) = self.browser_grid_target()
+            {
+                self.active_session = Some(grid);
+                self.remember_active_work_pane();
+                self.view = View::Work;
+            }
             let owner = self.state.active_project;
             let order = self.browser.tab_order;
             let key = self
@@ -119,6 +159,7 @@ impl Tessel {
             return;
         }
         if let Some(mut page) = self.take_center_browser(id) {
+            page.view_worktree = None;
             page.change_presentation(true);
             let id = page.tab_id;
             self.side_browsers.insert(id, page);
@@ -174,6 +215,36 @@ impl Tessel {
         }
     }
 
+    fn browser_opening_worktree(&self) -> Option<std::path::PathBuf> {
+        if self.view == View::Browser {
+            return self.browser.view_worktree.clone();
+        }
+        let id = self.active_project_work_pane()?;
+        self.sessions
+            .iter()
+            .find(|s| s.id == id)?
+            .worktree
+            .as_ref()
+            .map(|wt| wt.path.clone())
+    }
+
+    pub(super) fn undock_browser_on_pane(&mut self, page: u64, pane: u64) {
+        if self.view != View::Work
+            || self.gpui_has_open_modal()
+            || !self.side_browsers.contains_key(&page)
+            || self.state.active_project.is_none()
+            || !self
+                .sessions
+                .iter()
+                .any(|s| s.id == pane && s.project == self.state.active_project)
+        {
+            return;
+        }
+        self.active_session = Some(pane);
+        self.remember_active_work_pane();
+        self.undock_browser_at(page, None, false);
+    }
+
     pub(super) fn undock_browser(&mut self, id: u64) {
         let anchor = (self.view == View::Browser).then_some(self.browser.tab_id);
         self.undock_browser_at(id, anchor, false);
@@ -207,6 +278,7 @@ impl Tessel {
             None => ordered.len(),
         };
         if let Some(mut page) = self.take_side_browser(id) {
+            page.view_worktree = self.browser_opening_worktree();
             page.change_presentation(false);
             page.tab_order = insert as u64;
             for (index, (_, id)) in ordered.into_iter().enumerate() {

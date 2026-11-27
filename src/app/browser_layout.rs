@@ -8,7 +8,12 @@ const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RESTORED_SIDE_PAGES: usize = 50;
 
 #[derive(Serialize, Deserialize)]
-struct SavedPage(String, String, #[serde(default)] Option<i8>);
+struct SavedPage(
+    String,
+    String,
+    #[serde(default)] Option<i8>,
+    #[serde(default)] Option<PathBuf>,
+);
 
 #[derive(Serialize, Deserialize)]
 struct Group {
@@ -60,7 +65,7 @@ impl Tessel {
                     .into_iter()
                     .map(|page| {
                         let (url, title) = page.restart_location();
-                        SavedPage(url, title, page.zoom_override)
+                        SavedPage(url, title, page.zoom_override, page.view_worktree.clone())
                     })
                     .collect(),
             });
@@ -71,7 +76,7 @@ impl Tessel {
                 .values()
                 .map(|page| {
                     let (url, title) = page.restart_location();
-                    SavedPage(url, title, page.zoom_override)
+                    SavedPage(url, title, page.zoom_override, None)
                 })
                 .collect(),
             selected_side: self
@@ -123,7 +128,7 @@ impl Tessel {
         let Ok(layout) = serde_json::from_slice::<Layout>(&bytes) else {
             return;
         };
-        for (index, SavedPage(url, title, zoom)) in layout
+        for (index, SavedPage(url, title, zoom, _)) in layout
             .side_pages
             .into_iter()
             .take(MAX_RESTORED_SIDE_PAGES)
@@ -147,9 +152,12 @@ impl Tessel {
             {
                 continue;
             }
-            for (index, SavedPage(url, title, zoom)) in group.pages.into_iter().enumerate() {
+            for (index, SavedPage(url, title, zoom, worktree)) in
+                group.pages.into_iter().enumerate()
+            {
                 let mut page = Browser::from_restart_location(&url, &title);
                 page.zoom_override = zoom.map(|steps| steps.clamp(-6, 10));
+                page.view_worktree = worktree;
                 if index != group.selected {
                     self.other_browser_pages.insert((owner, page.tab_id), page);
                 } else if owner == self.browser_project {
@@ -218,7 +226,14 @@ mod tests {
         std::fs::create_dir(&state).unwrap();
         let layout = Layout {
             side_pages: (0..51)
-                .map(|i| SavedPage(format!("https://page.example/{i}"), i.to_string(), None))
+                .map(|i| {
+                    SavedPage(
+                        format!("https://page.example/{i}"),
+                        i.to_string(),
+                        None,
+                        None,
+                    )
+                })
                 .collect(),
             selected_side: Some(50),
             groups: Vec::new(),

@@ -130,6 +130,12 @@ fn render_center_column(
 ) -> impl IntoElement {
     let stage_bounds = std::rc::Rc::new(std::cell::Cell::new(gpui::Bounds::default()));
     let painted = stage_bounds.clone();
+    let pane_targets: Vec<_> = snapshot
+        .tiles
+        .iter()
+        .filter(|_| snapshot.center_mode == GpuiCenterMode::WorkGrid)
+        .map(|tile| (tile.session_id, tile.rect_px))
+        .collect();
     #[cfg(windows)]
     let anchor = snapshot
         .view_tabs
@@ -159,6 +165,14 @@ fn render_center_column(
                         page: page.0,
                         anchor: if edge.is_some() { None } else { anchor },
                         before: matches!(zone, DropZone::Left | DropZone::Top),
+                    }
+                } else if let Some((pane, _)) = pane_targets.iter().find(|(_, r)| {
+                    (r.left..r.right()).contains(&f64::from(x))
+                        && (r.top..r.bottom()).contains(&f64::from(y))
+                }) {
+                    GpuiAction::UndockBrowserOnPane {
+                        page: page.0,
+                        pane: *pane,
                     }
                 } else {
                     GpuiAction::UndockBrowser(page.0)

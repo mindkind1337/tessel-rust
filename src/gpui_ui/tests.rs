@@ -879,6 +879,77 @@ fn side_page_drops_on_expanded_project_and_collapsed_rail(cx: &mut gpui::TestApp
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn side_page_mouse_drop_targets_the_terminal_under_pointer(cx: &mut gpui::TestAppContext) {
+    use gpui::MouseButton::Left;
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+        for _ in 0..2 {
+            root.dispatch(GpuiAction::LaunchClaudeChat, cx);
+        }
+        root.dispatch(GpuiAction::NewSideBrowser, cx);
+        root.right_width = 640.;
+        root
+    });
+    cx.simulate_window_resize(view.into(), gpui::size(gpui::px(1800.), gpui::px(900.)));
+    cx.refresh().unwrap();
+    let (side, pane) = view
+        .update(cx, |root, _, _| {
+            let snapshot = root.app.gpui_snapshot(1800., 900., 4.);
+            (
+                root.app.selected_side_browser.unwrap(),
+                snapshot
+                    .tiles
+                    .iter()
+                    .find(|tile| !tile.active)
+                    .unwrap()
+                    .session_id,
+            )
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let tab = visual
+        .debug_bounds(Box::leak(
+            format!("side-browser-tab-{side}").into_boxed_str(),
+        ))
+        .unwrap();
+    let start = gpui::point(tab.origin.x + gpui::px(10.), tab.center().y);
+    let end = visual
+        .debug_bounds(Box::leak(format!("pane-drop-{pane}").into_boxed_str()))
+        .unwrap()
+        .center();
+    visual.simulate_mouse_down(start, Left, Default::default());
+    visual.simulate_mouse_move(
+        start + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(end, Some(Left), Default::default());
+    visual.simulate_mouse_up(end, Left, Default::default());
+    view.update(cx, |root, _, cx| {
+        let snapshot = root.app.gpui_snapshot(1800., 900., 4.);
+        assert!(snapshot.side_browser_tabs.is_empty());
+        assert!(
+            snapshot
+                .view_tabs
+                .iter()
+                .any(|t| t.selected && t.browser_id.is_some())
+        );
+        root.dispatch(GpuiAction::SelectWorkTab, cx);
+        assert!(
+            root.app
+                .gpui_snapshot(1800., 900., 4.)
+                .tiles
+                .iter()
+                .any(|tile| tile.session_id == pane && tile.active)
+        );
+    })
+    .unwrap();
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn side_page_mouse_drop_before_selected_browser_preserves_other_tabs(
     cx: &mut gpui::TestAppContext,
 ) {

@@ -799,6 +799,10 @@ pub(crate) enum GpuiAction {
     NewSideBrowser,
     DockBrowser(u64),
     UndockBrowser(u64),
+    UndockBrowserOnPane {
+        page: u64,
+        pane: u64,
+    },
     UndockBrowserAt {
         page: u64,
         anchor: Option<u64>,
@@ -3754,7 +3758,7 @@ impl Tessel {
             deleted: false,
         });
         #[cfg(windows)]
-        for (id, title, hint) in self.browser_labels() {
+        for (id, title, hint) in self.browser_tab_labels(true) {
             view_tabs.push(GpuiViewTabItem {
                 #[cfg(windows)]
                 browser_id: Some(id),
@@ -5538,6 +5542,12 @@ impl Tessel {
                 #[cfg(not(windows))]
                 let _ = (page, anchor, before);
             }
+            GpuiAction::UndockBrowserOnPane { page, pane } => {
+                #[cfg(windows)]
+                self.undock_browser_on_pane(page, pane);
+                #[cfg(not(windows))]
+                let _ = (page, pane);
+            }
             GpuiAction::UndockBrowser(id) => {
                 #[cfg(windows)]
                 self.undock_browser(id);
@@ -5740,7 +5750,7 @@ impl Tessel {
                 }
             }
             GpuiAction::SelectWorkTab => {
-                self.view = View::Work;
+                self.select_work_tab();
             }
             GpuiAction::SelectDocumentTab(idx) => {
                 if self.project_document(idx) {
@@ -8274,6 +8284,80 @@ mod panel_snapshot_tests {
                 .rect_px,
             smaller.rect_px
         );
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn browser_drop_tracks_target_worktree_across_tab_switch_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let checkout = dir.path().join("feature");
+        for path in [&project, &checkout] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let start = || Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let mut app = start();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let main = app.active_session.unwrap();
+        app.new_browser_page();
+        let main_page = app.browser.tab_id;
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let feature = app.active_session.unwrap();
+        app.sessions.last_mut().unwrap().worktree = Some(crate::workspace::SavedWorktree {
+            path: checkout.clone(),
+            branch: "feature".into(),
+            base_branch: None,
+        });
+        app.apply_gpui_action(GpuiAction::FocusSession(main));
+        app.new_side_browser();
+        let page = app.selected_side_browser.unwrap();
+        app.apply_gpui_action(GpuiAction::UndockBrowserOnPane {
+            page,
+            pane: u64::MAX,
+        });
+        assert_eq!(app.selected_side_browser, Some(page));
+        app.apply_gpui_action(GpuiAction::UndockBrowserOnPane {
+            page,
+            pane: feature,
+        });
+        let moved = app.browser.tab_id;
+        assert_eq!(app.browser.view_worktree.as_ref(), Some(&checkout));
+        assert_eq!(
+            app.browser_tab_labels(true)
+                .iter()
+                .map(|t| t.0)
+                .collect::<Vec<_>>(),
+            [moved]
+        );
+        assert_eq!(app.browser_labels().len(), 2);
+        app.select_browser_page(main_page);
+        app.apply_gpui_action(GpuiAction::SelectWorkTab);
+        assert_eq!(app.active_session, Some(main));
+        app.select_browser_page(moved);
+        app.save();
+        drop(app);
+        let mut app = start();
+        assert_eq!(app.browser.view_worktree.as_ref(), Some(&checkout));
+        assert_eq!(app.browser_tab_labels(true).len(), 1);
+        app.apply_gpui_action(GpuiAction::SplitActiveShell(SplitDir::Row));
+        let shell = app.active_session.unwrap();
+        assert_eq!(app.sessions.last().unwrap().cwd, checkout);
+        assert_eq!(
+            app.sessions
+                .last()
+                .unwrap()
+                .worktree
+                .as_ref()
+                .unwrap()
+                .branch,
+            "feature"
+        );
+        let restored = app.browser.tab_id;
+        app.select_browser_page(restored);
+        app.close_browser_page(restored);
+        assert!(app.view == View::Work);
+        assert_eq!(app.active_session, Some(shell));
     }
 
     #[cfg(all(windows, feature = "visual-test"))]
