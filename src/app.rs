@@ -10479,6 +10479,12 @@ impl Tessel {
         })?;
         self.remote
             .saved_target_removed(index, expected, self.state.hosts.len());
+        self.disconnect_host_sessions(expected);
+        Ok(())
+    }
+
+    fn disconnect_host_sessions(&mut self, expected: &Host) {
+        self.remote.disconnect_target(expected);
         #[cfg(windows)]
         if self
             .pending_browser_launch
@@ -10509,7 +10515,6 @@ impl Tessel {
         }
         self.floating.close_for_target(expected);
         self.save();
-        Ok(())
     }
 
     fn change_hosts(

@@ -870,6 +870,7 @@ pub(crate) enum AddressCommand {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SshRowCommand {
     Test,
+    Disconnect,
     OpenTerminal,
     TogglePersistence,
     ToggleDaemon,
@@ -7918,6 +7919,10 @@ impl Tessel {
                 }
                 match command {
                     SshRowCommand::Test => self.test_ssh_host(expected.alias),
+                    SshRowCommand::Disconnect => {
+                        self.disconnect_host_sessions(&expected);
+                        self.host_notice = Some((tr("SSH connections closed").into(), false));
+                    }
                     SshRowCommand::OpenTerminal => {
                         self.overlay = None;
                         self.new_session_placed(Launch::ssh(expected), None);
@@ -11554,61 +11559,72 @@ mod panel_snapshot_tests {
     #[test]
     #[cfg(all(windows, feature = "visual-test"))]
     fn ssh_settings_removal_closes_owned_panes_including_subfolder_terminals() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
-        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
-        let first = crate::workspace::Host {
-            alias: "test-host".into(),
-            folder: "/srv".into(),
-            ..Default::default()
-        };
-        let nested = crate::workspace::Host {
-            folder: "/srv/tools".into(),
-            ..first.clone()
-        };
-        app.state.hosts = vec![first.clone(), nested.clone()];
-        let launches = [
-            Launch::ssh(first.clone()),
-            Launch::Ssh(crate::launch::SshLaunch {
-                target: first.clone(),
-                start_folder: Some(nested.folder.clone()),
-            }),
-            Launch::ssh(nested.clone()),
-            Launch::Shell,
-        ];
-        let ids = launches.map(|launch| {
-            let (id, _) = app.install_terminal_find_fixture();
-            let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
-            pane.terminal = None;
-            pane.launch = launch;
-            id
-        });
-        app.apply_gpui_action(GpuiAction::RemoveSshHost(1, first.clone()));
-        assert!(
-            ids.iter()
-                .all(|id| app.sessions.iter().any(|s| s.id == *id))
-        );
-        app.change_hosts(|hosts| {
-            crate::host_actions::save(
-                hosts,
-                Some((0, &first)),
-                crate::workspace::Host {
-                    alias: "renamed".into(),
-                    folder: "/new".into(),
-                    ..first.clone()
-                },
-            )
-        })
-        .unwrap();
-        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, first));
-        assert!(
-            ids.iter()
-                .all(|id| app.sessions.iter().any(|s| s.id == *id))
-        );
-        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, app.state.hosts[0].clone()));
-        assert_eq!(app.state.hosts, [nested]);
-        for (i, id) in ids.iter().enumerate() {
-            assert_eq!(app.sessions.iter().any(|s| s.id == *id), i >= 2);
+        for disconnect in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+            app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
+            let first = crate::workspace::Host {
+                alias: "test-host".into(),
+                folder: "/srv".into(),
+                ..Default::default()
+            };
+            let nested = crate::workspace::Host {
+                folder: "/srv/tools".into(),
+                ..first.clone()
+            };
+            app.state.hosts = vec![first.clone(), nested.clone()];
+            let launches = [
+                Launch::ssh(first.clone()),
+                Launch::Ssh(crate::launch::SshLaunch {
+                    target: first.clone(),
+                    start_folder: Some(nested.folder.clone()),
+                }),
+                Launch::ssh(nested.clone()),
+                Launch::Shell,
+            ];
+            let ids = launches.map(|launch| {
+                let (id, _) = app.install_terminal_find_fixture();
+                let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+                pane.terminal = None;
+                pane.launch = launch;
+                id
+            });
+            app.apply_gpui_action(GpuiAction::RemoveSshHost(1, first.clone()));
+            assert!(
+                ids.iter()
+                    .all(|id| app.sessions.iter().any(|s| s.id == *id))
+            );
+            app.change_hosts(|hosts| {
+                crate::host_actions::save(
+                    hosts,
+                    Some((0, &first)),
+                    crate::workspace::Host {
+                        alias: "renamed".into(),
+                        folder: "/new".into(),
+                        ..first.clone()
+                    },
+                )
+            })
+            .unwrap();
+            app.apply_gpui_action(GpuiAction::RemoveSshHost(0, first));
+            assert!(
+                ids.iter()
+                    .all(|id| app.sessions.iter().any(|s| s.id == *id))
+            );
+            let target = app.state.hosts[0].clone();
+            app.apply_gpui_action(if disconnect {
+                GpuiAction::SshRow(0, target.clone(), SshRowCommand::Disconnect)
+            } else {
+                GpuiAction::RemoveSshHost(0, target.clone())
+            });
+            if disconnect {
+                assert_eq!(app.state.hosts, [target, nested]);
+            } else {
+                assert_eq!(app.state.hosts, [nested]);
+            }
+            for (i, id) in ids.iter().enumerate() {
+                assert_eq!(app.sessions.iter().any(|s| s.id == *id), i >= 2);
+            }
         }
     }
 
@@ -11628,7 +11644,13 @@ mod panel_snapshot_tests {
         let changed = app.state.hosts[0].clone();
         assert_eq!(changed.persistent_sessions, Some(false));
         let pane_count = app.sessions.len();
-        for cmd in [Test, OpenTerminal, TogglePersistence, ToggleDaemon] {
+        for cmd in [
+            Test,
+            OpenTerminal,
+            Disconnect,
+            TogglePersistence,
+            ToggleDaemon,
+        ] {
             app.apply_gpui_action(GpuiAction::SshRow(0, original.clone(), cmd));
             assert!(matches!(app.host_notice, Some((_, true))));
             assert_eq!(app.sessions.len(), pane_count);

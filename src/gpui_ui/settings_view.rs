@@ -3214,11 +3214,11 @@ fn render_ssh_page(
                             GpuiAction::SshRow(idx, host.clone(), SshRowCommand::ToggleDaemon),
                             cx,
                         ))
-                        .child({
+                        .children([false, true].map(|disconnect| {
                             let expected = host.clone();
-                            let remove = if french { "Supprimer" } else { "Remove" };
+                            let remove = match (disconnect, french) { (true, true) => "Déconnecter", (true, false) => "Disconnect", (false, true) => "Supprimer", (false, false) => "Remove" };
                             div()
-                                .id(SharedString::from(format!("gpui-ssh-rm-{idx}")))
+                                .id(SharedString::from(format!("gpui-ssh-close-{idx}-{disconnect}")))
                                 .px(px(9.0))
                                 .py(px(4.5))
                                 .rounded(px(tokens.radius_px))
@@ -3229,7 +3229,9 @@ fn render_ssh_page(
                                 .hover(|style| style.bg(tokens.surface_2))
                                 .child(remove)
                                 .on_click(cx.listener(move |_, _, window, cx| {
-                                    let title = if french {
+                                    let title = if disconnect {
+                                        if french { "Déconnecter la cible SSH?" } else { "Disconnect SSH target?" }
+                                    } else if french {
                                         "Supprimer la cible SSH?"
                                     } else {
                                         "Remove SSH target?"
@@ -3256,7 +3258,7 @@ fn render_ssh_page(
                                         if matches!(answer.await, Ok(1)) {
                                             let _ = this.update(cx, |this, cx| {
                                                 this.dispatch_action(
-                                                    GpuiAction::RemoveSshHost(idx, target),
+                                                    if disconnect { GpuiAction::SshRow(idx, target, SshRowCommand::Disconnect) } else { GpuiAction::RemoveSshHost(idx, target) },
                                                     cx,
                                                 )
                                             });
@@ -3264,7 +3266,7 @@ fn render_ssh_page(
                                     })
                                     .detach();
                                 }))
-                        }),
+                        })),
                 ),
         );
         if edited_row == Some(idx) {

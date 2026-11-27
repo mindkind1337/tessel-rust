@@ -351,6 +351,7 @@
   "Git in progress": "Git en cours",
   "Git commands": "Commandes Git",
   "SSH target saved": "Cible SSH enregistr\u00e9e",
+  "SSH connections closed": "Connexions SSH fermées",
   "SSH target removed": "Cible SSH supprim\u00e9e",
   "SSH target changed; reopen its settings.": "La cible SSH a chang\u00e9; rouvrez ses param\u00e8tres.",
   "Rename agent": "Renommer l\u2019agent",

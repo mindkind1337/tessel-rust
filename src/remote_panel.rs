@@ -176,6 +176,11 @@ impl RemotePanel {
         } else {
             self.selected.min(remaining.saturating_sub(1))
         };
+        self.disconnect_target(target);
+        self.selected = selected;
+    }
+
+    pub(crate) fn disconnect_target(&mut self, target: &Host) {
         if self
             .host
             .as_ref()
@@ -183,9 +188,10 @@ impl RemotePanel {
         {
             // Drop the watch and response receiver along with the document. A late
             // reply from this target must never populate a later Files connection.
+            let selected = self.selected;
             *self = Self::with_profile(self.profile.take());
+            self.selected = selected;
         }
-        self.selected = selected;
     }
 
     #[cfg(windows)]
