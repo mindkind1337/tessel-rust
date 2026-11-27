@@ -769,6 +769,7 @@ fn render_work_grid(
             let r = tile.rect_px;
             (
                 tile.session_id,
+                SharedString::from(tile.title.clone()),
                 gpui::Bounds::new(
                     gpui::point(px(r.left as f32), px(r.top as f32)),
                     gpui::size(px(r.width.max(40.) as f32), px(r.height.max(40.) as f32)),
@@ -789,11 +790,11 @@ fn render_work_grid(
                 grid.size.width.into(),
                 grid.size.height.into(),
             ) {
-                return Some((None, zone, grid));
+                return Some((None, zone, grid, None));
             }
-            let (id, local) = tiles
+            let (id, title, local) = tiles
                 .iter()
-                .find(|(id, bounds)| *id != from && bounds.contains(&pos))?;
+                .find(|(id, _, bounds)| *id != from && bounds.contains(&pos))?;
             let pt = pos - local.origin;
             let zone = DropZone::at(
                 f32::from(pt.x) / f32::from(local.size.width),
@@ -804,6 +805,7 @@ fn render_work_grid(
                 Some(*id),
                 zone,
                 gpui::Bounds::new(grid.origin + local.origin, local.size),
+                Some(title.clone()),
             ))
         },
     );
@@ -815,7 +817,7 @@ fn render_work_grid(
         .size_full()
         .on_prepaint(move |layout, _, _| painted.set(layout.bounds))
         .on_drop(cx.listener(move |root, drag: &DraggedPane, window, cx| {
-            if let Some((to, zone, _)) =
+            if let Some((to, zone, _, _)) =
                 drop_at(grid_bounds.get(), window.mouse_position(), drag.id)
             {
                 root.dispatch(
@@ -842,6 +844,7 @@ fn render_work_grid(
         stage = stage.child(render_split_divider(div_idx, divider, tokens, cx));
     }
     let accent = tokens.accent;
+    let french = snapshot.french;
     let drop_preview = gpui::canvas(
         |_, _, _| (),
         move |grid, (), window, cx| {
@@ -852,7 +855,8 @@ fn render_work_grid(
             else {
                 return;
             };
-            let Some((to, zone, mut bounds)) = target_at(grid, window.mouse_position(), drag.id)
+            let Some((to, zone, mut bounds, title)) =
+                target_at(grid, window.mouse_position(), drag.id)
             else {
                 return;
             };
@@ -874,8 +878,8 @@ fn render_work_grid(
                     }
                 }
             }
-            window
-                .paint_quad(gpui::PaintQuad::new(bounds).background(rgba_with_alpha(accent, 0.24)));
+            let label = pane_drop_label(zone, title.as_deref(), french);
+            paint_drop_zone(bounds, label.into(), accent, window, cx);
         },
     )
     .absolute()
@@ -885,8 +889,89 @@ fn render_work_grid(
     stage.child(drop_preview)
 }
 
+fn pane_drop_label(zone: crate::pane_grid::DropZone, title: Option<&str>, french: bool) -> String {
+    use crate::pane_grid::DropZone::*;
+    if let Some(title) = title {
+        let prefix = match (zone, french) {
+            (Center, false) => "Swap with",
+            (Center, true) => "Échanger avec",
+            (Left, false) => "Place left of",
+            (Left, true) => "Placer à gauche de",
+            (Right, false) => "Place right of",
+            (Right, true) => "Placer à droite de",
+            (Top, false) => "Place above",
+            (Top, true) => "Placer au-dessus de",
+            (Bottom, false) => "Place below",
+            (Bottom, true) => "Placer sous",
+        };
+        return format!("{prefix} {title}");
+    }
+    match (zone, french) {
+        (Top, false) => "Place across the top",
+        (Top, true) => "Placer sur tout le haut",
+        (Bottom, false) => "Place across the bottom",
+        (Bottom, true) => "Placer sur tout le bas",
+        (Left, false) => "Place down the left side",
+        (Left, true) => "Placer sur tout le côté gauche",
+        (Right, false) => "Place down the right side",
+        (Right, true) => "Placer sur tout le côté droit",
+        (Center, _) => "",
+    }
+    .into()
+}
+
+fn paint_drop_zone(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    label: SharedString,
+    accent: gpui::Rgba,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    let mut font = gpui::font(super::theme::ui_font_family());
+    font.weight = gpui::FontWeight::SEMIBOLD;
+    let run = gpui::TextRun {
+        len: label.len(),
+        font,
+        color: gpui::rgb_to_hsla(gpui::rgb(0x0b1530)),
+        ..Default::default()
+    };
+    let line = window.text_system().shape_line(label, px(12.), &[run]);
+    window.paint_quad(
+        gpui::PaintQuad::new(bounds)
+            .background(rgba_with_alpha(accent, 0.16))
+            .border_widths(px(2.))
+            .border_color(accent)
+            .corner_radii(px(8.)),
+    );
+    let badge = gpui::Bounds::new(
+        bounds.center() - gpui::point(line.width / 2. + px(12.), px(14.)),
+        gpui::size(line.width + px(24.), px(28.)),
+    );
+    window.with_content_mask(
+        Some(gpui::ContentMask {
+            bounds,
+            ..Default::default()
+        }),
+        |window| {
+            window.paint_quad(
+                gpui::PaintQuad::new(badge)
+                    .background(accent)
+                    .corner_radii(px(7.)),
+            );
+            let _ = line.paint(
+                badge.origin + gpui::point(px(12.), px(6.)),
+                px(16.),
+                gpui::TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+        },
+    );
+}
+
 #[derive(Clone)]
-struct SideBrowserDrag(u64);
+pub(super) struct SideBrowserDrag(pub(super) u64);
 #[derive(Clone)]
 struct CenterBrowserDrag(u64);
 #[derive(Clone)]
@@ -1706,6 +1791,8 @@ fn render_right_panel(
         panel.w(px(right_width_px))
     };
 
+    let accent = tokens.accent;
+    let french = snapshot.french;
     panel
         .child(tab_strip)
         .child(
@@ -1733,6 +1820,37 @@ fn render_right_panel(
                     )
                     .into_any_element()
                 }),
+        )
+        .when(
+            cx.active_drag()
+                .is_some_and(|drag| drag.value.is::<CenterBrowserDrag>()),
+            |el| {
+                el.child(
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |bounds, (), window, cx| {
+                            if bounds.contains(&window.mouse_position()) {
+                                paint_drop_zone(
+                                    bounds,
+                                    if french {
+                                        "Ouvrir dans le panneau latéral"
+                                    } else {
+                                        "Open in the side panel"
+                                    }
+                                    .into(),
+                                    accent,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+            },
         )
         .when(!snapshot.right_fullscreen, |el| {
             el.child(

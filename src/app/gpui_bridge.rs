@@ -798,6 +798,10 @@ pub(crate) enum GpuiAction {
     NewSideBrowser,
     DockBrowser(u64),
     UndockBrowser(u64),
+    UndockBrowserToProject {
+        page: u64,
+        project: u64,
+    },
     CloseSideBrowser(u64),
     SelectSideBrowser(u64),
     ToggleRightFullscreen,
@@ -5494,6 +5498,18 @@ impl Tessel {
                 self.dock_browser(id);
                 #[cfg(not(windows))]
                 let _ = id;
+            }
+            GpuiAction::UndockBrowserToProject { page, project } => {
+                #[cfg(windows)]
+                if !self.gpui_has_open_modal()
+                    && self.side_browsers.contains_key(&page)
+                    && self.state.projects.iter().any(|item| item.id == project)
+                {
+                    self.select_workspace_project(project);
+                    self.undock_browser(page);
+                }
+                #[cfg(not(windows))]
+                let _ = (page, project);
             }
             GpuiAction::UndockBrowser(id) => {
                 #[cfg(windows)]

@@ -260,38 +260,21 @@ impl TerminalLayout {
         let Some(tree) = &self.tree else {
             return false;
         };
-        if pane_grid::find_leaf(Some(tree), &target.to_string()).is_none() {
-            return false;
-        }
-        // Keep persisted recursion bounded even after repeated splitting of one pane.
-        let mut candidate = pane_grid::split_leaf(
-            tree,
-            &target.to_string(),
-            dir,
+        let zone = match (dir, before) {
+            (SplitDir::Row, true) => pane_grid::DropZone::Left,
+            (SplitDir::Row, false) => pane_grid::DropZone::Right,
+            (SplitDir::Col, true) => pane_grid::DropZone::Top,
+            (SplitDir::Col, false) => pane_grid::DropZone::Bottom,
+        };
+        let Some(candidate) = pane_grid::place_leaf(
+            Some(tree),
+            Some(&target.to_string()),
+            zone,
             PaneLeaf::new(new.to_string(), LeafKind::Shell),
             format!("split-{}", self.next_split),
-        );
-        if before {
-            fn reverse_at(node: &mut PaneNode, split_id: &str) {
-                if let PaneNode::Split {
-                    id,
-                    children,
-                    sizes,
-                    ..
-                } = node
-                {
-                    if id == split_id {
-                        children.reverse();
-                        sizes.reverse();
-                    } else {
-                        for child in children {
-                            reverse_at(child, split_id);
-                        }
-                    }
-                }
-            }
-            reverse_at(&mut candidate, &format!("split-{}", self.next_split));
-        }
+        ) else {
+            return false;
+        };
         let allowed = pane_grid::tree_leaves(Some(&candidate), |_| true)
             .into_iter()
             .filter_map(|leaf| leaf.id.parse().ok())

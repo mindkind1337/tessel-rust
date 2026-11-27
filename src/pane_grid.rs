@@ -504,28 +504,50 @@ pub fn reposition_leaf(
         return Some(next);
     }
     let rest = without_leaves(tree, &HashSet::from([from.to_owned()]))?;
-    let dir = if matches!(zone, DropZone::Left | DropZone::Right) {
-        SplitDir::Row
-    } else {
-        SplitDir::Col
+    place_leaf(Some(&rest), to, zone, source.clone(), split_id)
+}
+
+/// Add a pane beside a target (50/50) or along a workspace edge (35/65).
+/// An empty workspace receives its first leaf without a redundant split.
+pub fn place_leaf(
+    tree: Option<&PaneNode>,
+    target: Option<&str>,
+    zone: DropZone,
+    leaf: PaneLeaf,
+    split_id: String,
+) -> Option<PaneNode> {
+    let Some(tree) = tree else {
+        return Some(PaneNode::Leaf(leaf));
     };
-    let before = matches!(zone, DropZone::Left | DropZone::Top);
+    if find_leaf(Some(tree), &leaf.id).is_some() {
+        return None;
+    }
+    let (dir, before) = match zone {
+        DropZone::Left => (SplitDir::Row, true),
+        DropZone::Right => (SplitDir::Row, false),
+        DropZone::Top => (SplitDir::Col, true),
+        DropZone::Bottom => (SplitDir::Col, false),
+        DropZone::Center => return None,
+    };
     let split = |other, percent| {
-        let source = PaneNode::Leaf(source.clone());
+        let page = PaneNode::Leaf(leaf);
         let (children, sizes) = if before {
-            (vec![source, other], vec![percent, 100. - percent])
+            (vec![page, other], vec![percent, 100. - percent])
         } else {
-            (vec![other, source], vec![100. - percent, percent])
+            (vec![other, page], vec![100. - percent, percent])
         };
         PaneNode::split(split_id, dir, children, sizes)
     };
     match target {
-        Some(leaf) => Some(replace_leaf(
-            &rest,
-            &leaf.id,
-            &split(PaneNode::Leaf(leaf.clone()), 50.),
-        )),
-        None => Some(split(rest, 35.)),
+        Some(id) => {
+            let previous = find_leaf(Some(tree), id)?;
+            Some(replace_leaf(
+                tree,
+                id,
+                &split(PaneNode::Leaf(previous.clone()), 50.),
+            ))
+        }
+        None => Some(split(tree.clone(), 35.)),
     }
 }
 
@@ -537,17 +559,12 @@ pub fn split_leaf(
     new_leaf: PaneLeaf,
     split_id: impl Into<String>,
 ) -> PaneNode {
-    let split_node = if let Some(target) = find_leaf(Some(node), target_id) {
-        PaneNode::split(
-            split_id,
-            dir,
-            vec![PaneNode::Leaf(target.clone()), PaneNode::Leaf(new_leaf)],
-            vec![50.0, 50.0],
-        )
-    } else {
-        return node.clone();
+    let zone = match dir {
+        SplitDir::Row => DropZone::Right,
+        SplitDir::Col => DropZone::Bottom,
     };
-    replace_leaf(node, target_id, &split_node)
+    place_leaf(Some(node), Some(target_id), zone, new_leaf, split_id.into())
+        .unwrap_or_else(|| node.clone())
 }
 
 /// Re-tiles one view's leaves (`in_view`) inside `tree` for a `room_w x room_h` room,
@@ -1495,6 +1512,64 @@ impl EditorTabStrip {
 #[cfg(test)]
 mod drop_tests {
     use super::*;
+    #[test]
+    fn placing_browser_leaves_preserves_nested_neighbors_and_page_flags() {
+        use DropZone::*;
+        let left = PaneNode::Leaf(PaneLeaf::new("shell", LeafKind::Shell));
+        let right = PaneNode::Leaf(PaneLeaf::new("agent", LeafKind::Agent));
+        let root = PaneNode::split(
+            "root",
+            SplitDir::Row,
+            vec![left.clone(), right.clone()],
+            vec![27., 73.],
+        );
+        let mut browser = PaneLeaf::new("page", LeafKind::Browser).with_view_path("worktree");
+        browser.live_share_page = true;
+        let page = PaneNode::Leaf(browser.clone());
+        let insert =
+            |tree, target, zone| place_leaf(tree, target, zone, browser.clone(), "new".into());
+        assert_eq!(insert(None, None, Right), Some(page.clone()));
+        for (zone, axis, before) in [
+            (Top, SplitDir::Col, true),
+            (Bottom, SplitDir::Col, false),
+            (Left, SplitDir::Row, true),
+            (Right, SplitDir::Row, false),
+        ] {
+            let pair = |other: PaneNode| {
+                if before {
+                    vec![page.clone(), other]
+                } else {
+                    vec![other, page.clone()]
+                }
+            };
+            let inner = PaneNode::split("new", axis, pair(right.clone()), vec![50., 50.]);
+            assert_eq!(
+                insert(Some(&root), Some("agent"), zone),
+                Some(PaneNode::split(
+                    "root",
+                    SplitDir::Row,
+                    vec![left.clone(), inner],
+                    vec![27., 73.]
+                ))
+            );
+            assert_eq!(
+                insert(Some(&root), None, zone),
+                Some(PaneNode::split(
+                    "new",
+                    axis,
+                    pair(root.clone()),
+                    if before {
+                        vec![35., 65.]
+                    } else {
+                        vec![65., 35.]
+                    }
+                ))
+            );
+        }
+        assert!(insert(Some(&root), Some("missing"), Left).is_none());
+        assert!(insert(Some(&root), Some("shell"), Center).is_none());
+        assert!(insert(Some(&page), None, Top).is_none());
+    }
     #[test]
     fn pane_drop_zones_match_inclusive_center_and_nearest_edge_ties() {
         use DropZone::*;

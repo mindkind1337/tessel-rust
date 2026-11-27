@@ -19,6 +19,27 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 
+fn project_drop_target(
+    row: gpui::Stateful<gpui::Div>,
+    project: u64,
+    accent: gpui::Rgba,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::Stateful<gpui::Div> {
+    use super::shell::SideBrowserDrag;
+    row.on_drag_over::<SideBrowserDrag>(move |style, _, _, _| {
+        style.bg(rgba_with_alpha(accent, 0.16))
+    })
+    .on_drop(cx.listener(move |root, drag: &SideBrowserDrag, _, cx| {
+        root.dispatch_action(
+            GpuiAction::UndockBrowserToProject {
+                page: drag.0,
+                project,
+            },
+            cx,
+        );
+    }))
+}
+
 pub(crate) fn render_left_sidebar_rail(
     snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
@@ -51,6 +72,8 @@ pub(crate) fn render_left_sidebar_rail(
         rail = rail.child(
             div()
                 .id(("gpui-rail-proj", pid))
+                .map(|row| project_drop_target(row, pid, tokens.accent, cx))
+                .debug_selector(move || format!("gpui-rail-proj-{pid}"))
                 .relative()
                 .w(px(36.0))
                 .h(px(36.0))
@@ -439,6 +462,8 @@ fn render_project_card(
     card = card.child(
         div()
             .id(("gpui-proj-header", pid))
+            .map(|row| project_drop_target(row, pid, tokens.accent, cx))
+            .debug_selector(move || format!("gpui-proj-header-{pid}"))
             .px(px(8.0))
             .py(px(if compact { 5.0 } else { 7.0 }))
             .flex()
