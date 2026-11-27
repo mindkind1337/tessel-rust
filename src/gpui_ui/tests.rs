@@ -430,7 +430,10 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let index = project.join("index.html");
-    std::fs::write(&index, r#"<p><a href="report.pdf">Report</a></p><p><a href="https://example.invalid/">Site</a></p>"#).unwrap();
+    let links = r#"<p><a href="report.pdf">Report</a></p><p><a href="https://example.invalid/">Site</a></p>"#;
+    // Exercise the upper end of the editor's HTML size range with links at EOF.
+    let padding = " ".repeat(crate::files::MAX_TEXT - links.len() - "<!---->".len());
+    std::fs::write(&index, format!("<!--{padding}-->{links}")).unwrap();
     let target = project.join("report.pdf");
     std::fs::write(&target, crate::pdf::fixture()).unwrap();
     let view = cx.add_window(|_, cx| {

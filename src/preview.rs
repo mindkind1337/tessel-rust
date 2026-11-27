@@ -14,13 +14,20 @@ pub struct Preview {
 }
 impl Preview {
     pub fn parse(source: &str, markdown: bool) -> Self {
-        if source.len() > 1024 * 1024 {
+        let limit = if markdown {
+            crate::rich_previews::MARKDOWN_PROMPT_MAX
+        } else {
+            crate::files::MAX_TEXT
+        };
+        if source.len() > limit {
             return Self {
                 blocks: vec![Block {
                     heading: false,
                     spans: vec![(
-                        "Readable preview limit is 1 MiB. Use Source to view the full document."
-                            .into(),
+                        format!(
+                            "Readable preview limit is {} MiB. Use Source to view the full document.",
+                            limit / (1024 * 1024)
+                        ),
                         None,
                     )],
                 }],
