@@ -421,6 +421,8 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub external_available: bool,
     pub title: String,
     pub path_display: String,
+    pub breadcrumb_path: Vec<String>,
+    pub breadcrumb_symbols: std::sync::Arc<[crate::json_outline_panel::EditorBreadcrumb]>,
     pub extension: String,
     pub lang: crate::syntax::SyntaxLang,
     pub is_diff: bool,
@@ -1098,6 +1100,7 @@ pub(crate) enum GpuiAction {
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
     Timeline(crate::file_timeline::Action),
+    RevealBreadcrumb(u64, usize, crate::outline_tree::Range),
     OutlineToggle,
     OutlineOptions(bool),
     OutlineFilterMode(bool),
@@ -2858,9 +2861,7 @@ impl Tessel {
             return false;
         }
         doc.tools.outline_cursor = cursor;
-        self.gpui_extra.outline_open
-            && self.state.editor_prefs.outline_follow_cursor
-            && crate::json_outline_panel::supported(doc)
+        !doc.preview_mode && crate::json_outline_panel::supported(doc)
     }
 
     pub(crate) fn take_outline_focus(&mut self, id: u64) -> Option<bool> {
@@ -3894,7 +3895,18 @@ impl Tessel {
         let active_doc_idx = self.active_document;
         let active_document = if self.gpui_is_document_view() {
             self.documents.get_mut(active_doc_idx).map(|doc| {
-                Self::build_document_summary(active_doc_idx, doc, self.state.editor_prefs)
+                let mut summary =
+                    Self::build_document_summary(active_doc_idx, doc, self.state.editor_prefs);
+                if !doc.preview_mode && crate::json_outline_panel::supported(doc) {
+                    let mut cache = crate::json_outline_panel::Cache::current(
+                        self.gpui_extra.outline_cache.take(),
+                        doc,
+                        self.state.editor_prefs.outline_sort,
+                    );
+                    summary.breadcrumb_symbols = cache.breadcrumbs(doc);
+                    self.gpui_extra.outline_cache = Some(cache);
+                }
+                summary
             })
         } else {
             None
@@ -4295,6 +4307,21 @@ impl Tessel {
             syntax_highlighting: preferences.syntax_highlighting,
             doc_index,
             title,
+            breadcrumb_path: {
+                let path = dunce::simplified(&doc.path);
+                path.strip_prefix(dunce::simplified(&doc.root))
+                    .unwrap_or(path)
+                    .components()
+                    .filter(|part| {
+                        !matches!(
+                            part,
+                            std::path::Component::RootDir | std::path::Component::CurDir
+                        )
+                    })
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect()
+            },
+            breadcrumb_symbols: Default::default(),
             path_display: dunce::simplified(&doc.path).to_string_lossy().into_owned(),
             external_available: doc.external_available(),
             extension,
@@ -4743,7 +4770,12 @@ impl Tessel {
         } else {
             None
         };
-        if outline.is_none() {
+        let editor_uses_symbols = self.gpui_is_document_view()
+            && self
+                .documents
+                .get(self.active_document)
+                .is_some_and(|doc| !doc.preview_mode && crate::json_outline_panel::supported(doc));
+        if outline.is_none() && !editor_uses_symbols {
             self.gpui_extra.outline_cache = None;
         }
         let mut open_editors = Vec::new();
@@ -6968,6 +7000,25 @@ impl Tessel {
                 }
             }
             GpuiAction::Timeline(action) => self.timeline_action(action),
+            GpuiAction::RevealBreadcrumb(id, depth, range) => {
+                if let Some(doc) = self.gpui_editor_document()
+                    && doc.instance_id() == id
+                    && let Some(cache) = self
+                        .gpui_extra
+                        .outline_cache
+                        .as_ref()
+                        .filter(|cache| cache.matches(doc))
+                    && cache
+                        .current_breadcrumbs(doc)
+                        .get(depth)
+                        .and_then(|c| c.range)
+                        == Some(range)
+                {
+                    let doc = &mut self.documents[self.active_document];
+                    crate::json_outline_panel::reveal(doc, range, false);
+                    doc.tools.outline_reveal_focus = Some(true);
+                }
+            }
             GpuiAction::OutlineToggle => {
                 self.gpui_extra.outline_open = !self.gpui_extra.outline_open;
                 self.gpui_extra.outline_options_open = false;

@@ -540,6 +540,55 @@ fn render_editor_toolbar(
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> impl IntoElement {
+    let mut crumbs = div()
+        .id("editor-breadcrumbs")
+        .role(gpui::Role::Navigation)
+        .aria_label(doc.path_display.clone())
+        .min_w_0()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .text_size(px(11.5));
+    let separator = || {
+        div()
+            .font_family("codicon")
+            .text_color(tokens.text_dim)
+            .child("\u{eab6}")
+    };
+    for (i, part) in doc.breadcrumb_path.iter().enumerate() {
+        if i != 0 {
+            crumbs = crumbs.child(separator());
+        }
+        if i + 1 == doc.breadcrumb_path.len() {
+            crumbs = crumbs.child(super::file_icons::render(part, tokens, tokens.text_dim));
+        }
+        crumbs = crumbs.child(div().flex_shrink_0().child(part.clone()));
+    }
+    for (depth, symbol) in doc.breadcrumb_symbols.iter().enumerate() {
+        let (icon, kind) = super::outline_icons::symbol(symbol.kind, french, tokens.text_dim);
+        let id = doc.instance_id;
+        crumbs = crumbs.child(separator()).child(
+            div()
+                .id(("editor-crumb", depth))
+                .debug_selector(move || format!("editor-crumb-{depth}"))
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .when_some(symbol.range, |el, range| {
+                    el.role(gpui::Role::Button)
+                        .aria_label(format!("{} ({kind})", symbol.name))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            root.dispatch_action(
+                                GpuiAction::RevealBreadcrumb(id, depth, range),
+                                cx,
+                            );
+                        }))
+                })
+                .child(icon)
+                .child(symbol.name.clone()),
+        );
+    }
     div()
         .h(px(30.0))
         .px(px(12.0))
@@ -556,18 +605,7 @@ fn render_editor_toolbar(
                 .items_center()
                 .gap(px(8.0))
                 .overflow_hidden()
-                .child(super::file_icons::render(
-                    &doc.path_display,
-                    tokens,
-                    tokens.text_dim,
-                ))
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(tokens.text)
-                        .truncate()
-                        .child(SharedString::from(doc.path_display.clone())),
-                )
+                .child(crumbs)
                 .child(
                     div()
                         .px(px(5.0))

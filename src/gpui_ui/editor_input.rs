@@ -875,6 +875,59 @@ mod tests {
     }
 
     #[gpui::test]
+    fn outline_breadcrumb_follows_caret_with_panel_closed_and_reveals_parent(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("nested");
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("trail.json");
+        let text = r#"{"parent":{"leaf":42}}"#;
+        std::fs::write(&path, text).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, _, cx| {
+            root.editor_input.get(id).unwrap().update(cx, |state, cx| {
+                state.move_to(text.find("42").unwrap(), cx);
+            });
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            assert!(visual.debug_bounds("editor-crumb-1").is_some());
+            let pos = visual.debug_bounds("editor-crumb-0").unwrap().center();
+            visual.simulate_click(pos, Default::default());
+        }
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            let snapshot = root.app.gpui_snapshot(800., 600., 2.);
+            assert_eq!(
+                snapshot.active_document.unwrap().breadcrumb_path,
+                ["nested", "trail.json"]
+            );
+            assert!(root.editor_input.focused(window, cx));
+            assert_eq!(
+                root.editor_input
+                    .get(id)
+                    .unwrap()
+                    .read(cx)
+                    .caret_byte_offset(),
+                1
+            );
+            assert_eq!(root.app.gpui_editor_document().unwrap().text, text);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn outline_full_range_returns_keyboard_to_editor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focus.json");

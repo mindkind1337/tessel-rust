@@ -5,6 +5,13 @@ use crate::{
 use eframe::egui;
 use std::sync::Arc;
 
+#[derive(Clone, Debug)]
+pub(crate) struct EditorBreadcrumb {
+    pub name: String,
+    pub kind: u8,
+    pub range: Option<crate::outline_tree::Range>,
+}
+
 #[derive(Clone)]
 pub(crate) struct Cache {
     document: u64,
@@ -13,6 +20,8 @@ pub(crate) struct Cache {
     failed: bool,
     sort: Sort,
     followed: Option<crate::files::OutlineCursor>,
+    breadcrumb_cursor: Option<crate::files::OutlineCursor>,
+    breadcrumb_trail: Arc<[EditorBreadcrumb]>,
     text: Arc<str>,
     pub(crate) symbols: Arc<Vec<Symbol>>,
 }
@@ -36,6 +45,50 @@ impl Cache {
             && self.provider == provider(doc)
             && *self.text == doc.text
     }
+    pub(crate) fn current_breadcrumbs(&self, doc: &Document) -> &[EditorBreadcrumb] {
+        let cursor = doc
+            .tools
+            .outline_cursor
+            .unwrap_or(crate::files::OutlineCursor::Bytes(0));
+        if self.breadcrumb_cursor == Some(cursor) {
+            &self.breadcrumb_trail
+        } else {
+            &[]
+        }
+    }
+    pub(crate) fn breadcrumbs(&mut self, doc: &Document) -> Arc<[EditorBreadcrumb]> {
+        let cursor = doc
+            .tools
+            .outline_cursor
+            .unwrap_or(crate::files::OutlineCursor::Bytes(0));
+        if self.breadcrumb_cursor == Some(cursor) {
+            return self.breadcrumb_trail.clone();
+        }
+        let position = cursor.position(&doc.text);
+        let mut siblings = self.symbols.as_slice();
+        let mut trail = Vec::new();
+        let at = (position.line, position.column);
+        while let Some(symbol) = siblings
+            .iter()
+            .filter(|s| {
+                let r = s.range;
+                (r.start_line_number, r.start_column) <= at
+                    && at <= (r.end_line_number, r.end_column)
+            })
+            .min_by_key(|s| s.range)
+        {
+            trail.push(EditorBreadcrumb {
+                name: symbol.name.clone(),
+                kind: symbol.kind,
+                range: symbol.selection_range,
+            });
+            siblings = &symbol.children;
+        }
+        self.breadcrumb_cursor = Some(cursor);
+        self.breadcrumb_trail = trail.into();
+        self.breadcrumb_trail.clone()
+    }
+
     pub(crate) fn follow(&mut self, doc: &mut Document, enabled: bool) -> bool {
         let cursor = doc.tools.outline_cursor.filter(|_| enabled);
         if self.followed == cursor {
@@ -86,6 +139,8 @@ impl Cache {
                     failed: false,
                     sort: Sort::Position,
                     followed: None,
+                    breadcrumb_cursor: None,
+                    breadcrumb_trail: Arc::default(),
                     text,
                     symbols: Arc::new(symbols),
                 }
@@ -99,6 +154,7 @@ impl Cache {
                 Err(()) => cache.failed = true,
             }
             cache.pending = None;
+            cache.breadcrumb_cursor = None;
             crate::outline_tree::sort_symbols(
                 Arc::make_mut(&mut cache.symbols).as_mut_slice(),
                 sort,
@@ -106,6 +162,7 @@ impl Cache {
             cache.sort = sort;
         }
         if cache.sort != sort {
+            cache.breadcrumb_cursor = None;
             crate::outline_tree::sort_symbols(
                 Arc::make_mut(&mut cache.symbols).as_mut_slice(),
                 sort,
