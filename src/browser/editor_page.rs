@@ -166,7 +166,7 @@ impl EditorPage {
             Some((x, y)) => {
                 GpuiAction::HtmlLinkMenu(active, href, (self.origin.0 + x, self.origin.1 + y))
             }
-            None => GpuiAction::FollowDocumentLink(href),
+            None => GpuiAction::FollowDocumentLink(active, href),
         })
     }
     pub(crate) fn sync(
@@ -686,7 +686,8 @@ mod tests {
                 );
             };
             match action {
-                GpuiAction::FollowDocumentLink(path) if button == "left" => {
+                GpuiAction::FollowDocumentLink(id, path) if button == "left" => {
+                    assert_eq!(id, doc.instance_id());
                     assert_eq!(path, "report.txt")
                 }
                 GpuiAction::HtmlLinkMenu(id, path, _) if button == "right" => {

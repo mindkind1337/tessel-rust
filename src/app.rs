@@ -1924,6 +1924,12 @@ impl Tessel {
         };
         self.open_document_at_mode(root, path, pinned);
     }
+    fn open_linked_document(&mut self, root: PathBuf, path: PathBuf) {
+        if let Some(source) = self.documents.get_mut(self.active_document) {
+            source.unpinned_preview = false;
+        }
+        self.open_document_at(root, path);
+    }
     fn open_document_at(&mut self, root: PathBuf, path: PathBuf) {
         self.open_document_at_mode(root, path, true);
     }
@@ -7163,7 +7169,9 @@ impl Tessel {
         }
         if let Some(result) = resolved {
             match result {
-                Ok((root, crate::preview::Link::File(path))) => self.open_document_at(root, path),
+                Ok((root, crate::preview::Link::File(path))) => {
+                    self.open_linked_document(root, path)
+                }
                 Ok((_, crate::preview::Link::Web(url))) => self.open_web_link(ui.ctx(), url),
                 Err(error) => self.error = error,
             }

@@ -938,7 +938,7 @@ pub(crate) enum GpuiAction {
     #[cfg(windows)]
     ResolveHtmlExternal(u64, url::Url, bool),
     OpenHtmlLinkMenuTarget(u64),
-    FollowDocumentLink(String),
+    FollowDocumentLink(u64, String),
     // Embedded Browser Tab actions
     BrowserSetAddress(String),
     BeginNativeBrowserAddress((u64, Option<u64>)),
@@ -6142,18 +6142,21 @@ impl Tessel {
                     && doc.preview_mode
                     && let Some((_, href, _)) = doc.tools.html_link_menu.take()
                 {
-                    self.apply_gpui_action_inner(GpuiAction::FollowDocumentLink(href));
+                    self.apply_gpui_action_inner(GpuiAction::FollowDocumentLink(id, href));
                 }
             }
-            GpuiAction::FollowDocumentLink(href) => {
-                if let Some((root, source)) = self
-                    .documents
-                    .get(self.active_document)
-                    .map(|d| (d.root.clone(), d.path.clone()))
+            GpuiAction::FollowDocumentLink(id, href) => {
+                if self.view == View::Files
+                    && !self.gpui_has_open_modal()
+                    && let Some((root, source)) = self
+                        .documents
+                        .get(self.active_document)
+                        .filter(|d| d.instance_id() == id && d.preview_mode)
+                        .map(|d| (d.root.clone(), d.path.clone()))
                 {
                     match crate::preview::resolve(&root, &source, &href) {
                         Ok(crate::preview::Link::File(target)) => {
-                            self.open_document_at(root, target);
+                            self.open_linked_document(root, target);
                         }
                         Ok(crate::preview::Link::Web(url)) => {
                             self.open_tessel_url_headless(url);
@@ -7782,7 +7785,15 @@ mod panel_snapshot_tests {
         }
         app.active_document = 0;
         app.documents[1].unpinned_preview = true;
-        app.apply_gpui_action(GpuiAction::FollowDocumentLink("report.txt".into()));
+        app.documents[0].unpinned_preview = true;
+        app.view = View::Files;
+        let source = app.documents[0].instance_id();
+        let other = app.documents[1].instance_id();
+        app.apply_gpui_action(GpuiAction::FollowDocumentLink(other, "report.txt".into()));
+        assert_eq!(app.active_document, 0);
+        assert!(app.documents[0].unpinned_preview && app.documents[1].unpinned_preview);
+        app.apply_gpui_action(GpuiAction::FollowDocumentLink(source, "report.txt".into()));
+        assert!(!app.documents[0].unpinned_preview);
         assert_eq!(app.documents.len(), 2);
         assert_eq!(app.active_document, 1);
         assert!(!app.documents[1].unpinned_preview);

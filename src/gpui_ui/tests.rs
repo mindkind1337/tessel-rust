@@ -438,8 +438,6 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
         root.app
             .apply_gpui_action(GpuiAction::AddProjectPath(project));
         root.app
-            .apply_gpui_action(GpuiAction::OpenDocumentPath(target));
-        root.app
             .apply_gpui_action(GpuiAction::OpenDocumentPath(index));
         root
     });
@@ -465,6 +463,20 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
         visual.simulate_keystrokes(if web { "escape" } else { "down enter" });
     }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while view
+        .update(cx, |root, _, _| {
+            root.app.poll_for_gpui();
+            root.app.gpui_document_ids().len() == 1
+        })
+        .unwrap()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "linked PDF did not open"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     cx.refresh().unwrap();
     view.update(cx, |root, _, _| {
         let report = root
@@ -474,7 +486,7 @@ fn html_link_context_menu_opens_local_target_and_keeps_index(cx: &mut gpui::Test
             .unwrap();
         assert!(report.title.ends_with("report.pdf") && report.pdf_summary.is_some());
         assert_eq!(root.app.gpui_document_ids().len(), 2);
-        root.app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
+        root.app.apply_gpui_action(GpuiAction::SelectDocumentTab(0));
         let index = root
             .app
             .gpui_snapshot(960., 640., 4.)

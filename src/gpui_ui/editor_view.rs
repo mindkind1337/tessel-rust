@@ -1122,6 +1122,7 @@ fn render_markdown_stage(
         .flex_col()
         .gap(px(12.0));
 
+    let document_id = doc.instance_id;
     let mut md_link_idx = 0usize;
     for segment in extract_markdown_segments(&doc.text) {
         match segment {
@@ -1147,7 +1148,10 @@ fn render_markdown_stage(
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |root, _, _, cx| {
                                         root.dispatch(
-                                            GpuiAction::FollowDocumentLink(link.clone()),
+                                            GpuiAction::FollowDocumentLink(
+                                                document_id,
+                                                link.clone(),
+                                            ),
                                             cx,
                                         );
                                     }))
@@ -1395,7 +1399,10 @@ fn render_readable_html_stage(
                         .underline()
                         .cursor_pointer()
                         .on_click(cx.listener(move |root, _, _, cx| {
-                            root.dispatch(GpuiAction::FollowDocumentLink(link.clone()), cx);
+                            root.dispatch(
+                                GpuiAction::FollowDocumentLink(document_id, link.clone()),
+                                cx,
+                            );
                         }))
                         .child(SharedString::from(txt.clone())),
                 );

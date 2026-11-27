@@ -6,6 +6,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ## Features
 
+- Following a local document link pins the source tab and opens the target in a pinned tab. The index stays available when you preview another file.
 - Local and SSH HTML previews show the project-relative page path with controls to reload, open in the browser, and manage folder trust.
 
 - Switching HTML editor tabs keeps recent drafts available to links in the same project preview. Opening that page in the owner browser preserves its address and linked drafts, including subsequent preview updates.
