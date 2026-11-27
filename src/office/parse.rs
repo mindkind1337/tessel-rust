@@ -132,6 +132,7 @@ fn text_page(
     title: String,
     odf: bool,
     styles: &HashMap<String, u8>,
+    document: bool,
 ) -> Result<Section, String> {
     let mut reader = Xml::from_str(source);
     let mut text = String::new();
@@ -139,6 +140,12 @@ fn text_page(
     let mut capture = 0usize;
     let mut heading = 0;
     let mut list_depth = 0u8;
+    let mut table_depth = 0usize;
+    let mut rows = Vec::<Vec<String>>::new();
+    let mut cell_open = false;
+    let mut cell_paragraphs = 0usize;
+    let mut row_open = false;
+    let mut cells = 0usize;
     let mut odf_depth = 0u8;
     let mut numbering = false;
     let mut total = 0usize;
@@ -154,12 +161,43 @@ fn text_page(
             Event::Start(e) | Event::Empty(e) => {
                 let n = e.name();
                 let n = n.as_ref();
+                if document && matches!(n, "w:tbl" | "table:table") && !empty {
+                    table_depth += 1;
+                } else if table_depth == 1 {
+                    if matches!(n, "w:tr" | "table:table-row") {
+                        if rows.len() >= 5000 {
+                            return Err("Office table row limit reached".into());
+                        }
+                        rows.push(Vec::new());
+                        row_open = !empty;
+                    } else if row_open
+                        && matches!(n, "w:tc" | "table:table-cell" | "table:covered-table-cell")
+                        && let Some(row) = rows.last_mut()
+                    {
+                        if row.len() >= 200 || cells >= 100000 {
+                            return Err("Office table cell limit reached".into());
+                        }
+                        row.push(String::new());
+                        cells += 1;
+                        cell_open = !empty;
+                        cell_paragraphs = 0;
+                    }
+                }
                 if odf && n == "text:list" && !empty {
                     odf_depth = odf_depth.saturating_add(1);
                 }
                 if matches!(n, "w:p" | "a:p" | "text:p" | "text:h") {
-                    if !text.trim().is_empty() {
+                    if cell_open && let Some(cell) = rows.last_mut().and_then(|row| row.last_mut())
+                    {
+                        if cell_paragraphs > 0 {
+                            cell.push('\n');
+                            total += 1;
+                        }
+                        cell_paragraphs += 1;
+                    }
+                    if table_depth == 0 && !text.trim().is_empty() {
                         paragraphs.push(Paragraph {
+                            table: None,
                             heading,
                             list_depth,
                             text: std::mem::take(&mut text),
@@ -221,6 +259,23 @@ fn text_page(
             Event::End(e) => {
                 let n = e.name();
                 let n = n.as_ref();
+                if document && matches!(n, "w:tbl" | "table:table") {
+                    table_depth = table_depth.saturating_sub(1);
+                    if table_depth == 0 {
+                        paragraphs.push(Paragraph {
+                            table: Some(std::mem::take(&mut rows)),
+                            ..Default::default()
+                        });
+                        row_open = false;
+                        cell_open = false;
+                    }
+                } else if table_depth == 1
+                    && matches!(n, "w:tc" | "table:table-cell" | "table:covered-table-cell")
+                {
+                    cell_open = false;
+                } else if table_depth == 1 && matches!(n, "w:tr" | "table:table-row") {
+                    row_open = false;
+                }
                 if n == "text:list" && odf {
                     odf_depth = odf_depth.saturating_sub(1);
                 }
@@ -230,8 +285,17 @@ fn text_page(
                 if matches!(n, "w:t" | "a:t") || odf && matches!(n, "text:p" | "text:h") {
                     capture = capture.saturating_sub(1);
                 }
-                if matches!(n, "w:p" | "a:p" | "text:p" | "text:h") && !text.trim().is_empty() {
+                if table_depth > 0 && matches!(n, "w:p" | "text:p" | "text:h") {
+                    if cell_open && let Some(cell) = rows.last_mut().and_then(|row| row.last_mut())
+                    {
+                        cell.push_str(&text);
+                    }
+                    text.clear();
+                } else if matches!(n, "w:p" | "a:p" | "text:p" | "text:h")
+                    && !text.trim().is_empty()
+                {
                     paragraphs.push(Paragraph {
+                        table: None,
                         heading,
                         list_depth,
                         text: std::mem::take(&mut text),
@@ -267,6 +331,7 @@ fn text_page(
     }
     if !text.trim().is_empty() {
         paragraphs.push(Paragraph {
+            table: None,
             heading,
             list_depth,
             text,
@@ -436,12 +501,14 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                 "Document".into(),
                 false,
                 &styles,
+                true,
             )?),
             "odt" => book.sections.push(text_page(
                 &xml(&mut zip, "content.xml")?,
                 "Document".into(),
                 true,
                 &styles,
+                true,
             )?),
             "pptx" => {
                 let relationships = xml(&mut zip, "ppt/_rels/presentation.xml.rels")?;
@@ -496,6 +563,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                                 title,
                                 false,
                                 &styles,
+                                false,
                             )?);
                         }
                         Event::DocType(_) => return Err("DTD refused".into()),
@@ -524,7 +592,8 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                         Event::Empty(e) if e.name().as_ref() == "draw:page" => {
                             let title = attribute(&e, "draw:name")
                                 .unwrap_or_else(|| format!("Slide {}", book.sections.len() + 1));
-                            book.sections.push(text_page("", title, true, &styles)?);
+                            book.sections
+                                .push(text_page("", title, true, &styles, false)?);
                         }
                         Event::Start(e) if e.name().as_ref() == "draw:page" => {
                             start = Some(offset);
@@ -539,6 +608,7 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
                                     title.clone(),
                                     true,
                                     &styles,
+                                    false,
                                 )?);
                             }
                         }

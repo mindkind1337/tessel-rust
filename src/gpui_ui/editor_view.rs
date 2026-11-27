@@ -1818,6 +1818,28 @@ pub(crate) fn render_office_summary(
     }
     if !workbook {
         let paragraph = |p: &crate::office::Paragraph| {
+            if let Some(rows) = &p.table {
+                let columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+                return div()
+                    .debug_selector(|| "office-document-table".into())
+                    .w_full()
+                    .mt(px(5.))
+                    .mb(px(13.))
+                    .text_size(px(12.5))
+                    .children(rows.iter().map(|row| {
+                        div().flex().children(row.iter().map(|cell| {
+                            div()
+                                .w(gpui::relative(1. / columns as f32))
+                                .min_w_0()
+                                .max_w(px(320.))
+                                .px(px(10.))
+                                .py(px(4.))
+                                .border_1()
+                                .border_color(tokens.border)
+                                .child(cell.clone())
+                        }))
+                    }));
+            }
             let heading = p.heading;
             div()
                 .mb(px(8.))

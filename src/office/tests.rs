@@ -402,3 +402,50 @@ fn office_list_depth_tracks_nested_items_and_resets_for_following_text() {
         );
     }
 }
+
+#[test]
+fn office_document_tables_preserve_rows_empty_cells_and_paragraph_order() {
+    let doc = archive(&[(
+        "word/document.xml",
+        r#"<w:document xmlns:w="urn:w"><w:p><w:t>Before</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>A</w:t></w:p><w:p/><w:p><w:t>B</w:t></w:p></w:tc><w:tc/></w:tr><w:tr><w:tc/><w:tc><w:p><w:t>C</w:t></w:p></w:tc></w:tr></w:tbl><w:p><w:t>After</w:t></w:p></w:document>"#,
+    )]);
+    let odt = archive(&[(
+        "content.xml",
+        r#"<doc xmlns:text="urn:t" xmlns:table="urn:table"><text:p>Before</text:p><table:table><table:table-row><table:table-cell><text:p>A</text:p><text:p/><text:p>B</text:p></table:table-cell><table:table-cell/></table:table-row><table:table-row><table:covered-table-cell/><table:table-cell><text:p>C</text:p></table:table-cell></table:table-row></table:table><text:p>After</text:p></doc>"#,
+    )]);
+    for (data, extension) in [(doc, "docx"), (odt, "odt")] {
+        let book = parse::parse(&data, extension).unwrap();
+        book.validate(extension).unwrap();
+        let blocks = &book.sections[0].paragraphs;
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].text, "Before");
+        assert_eq!(
+            blocks[1].table.as_ref().unwrap(),
+            &[["A\n\nB", ""], ["", "C"]]
+        );
+        assert_eq!(blocks[2].text, "After");
+    }
+}
+
+#[cfg(feature = "visual-test")]
+#[gpui::test]
+fn office_table_only_document_renders_a_grid(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grid.docx");
+    let xml = r#"<w:document xmlns:w="urn:w"><w:tbl><w:tr><w:tc><w:p><w:t>Example</w:t></w:p></w:tc><w:tc/></w:tr></w:tbl></w:document>"#;
+    let bytes = archive(&[("word/document.xml", xml)]);
+    std::fs::write(&path, &bytes).unwrap();
+    let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
+    doc.office.as_mut().unwrap().book = Some(parse::parse(&bytes, "docx").unwrap());
+    let window = cx.add_window(|_, cx| {
+        let mut root =
+            crate::gpui_ui::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.app.install_editor_input_fixture(vec![doc], 0);
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let table = visual.debug_bounds("office-document-table").unwrap();
+    assert!(f32::from(table.size.width) > 0. && f32::from(table.size.height) > 0.);
+    assert!(visual.debug_bounds("office-document-empty").is_none());
+}

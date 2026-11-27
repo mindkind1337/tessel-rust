@@ -164,7 +164,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 - GPUI uses the same Office content preview for local and SFTP documents, with sheet/section selection and visible loading, error and truncation states. Preview workers refresh the view when they finish; an unexpectedly disconnected worker reports an error instead of leaving it loading indefinitely.
 - GPUI spreadsheet previews virtualize rows up to the decoder's 5,000-row/200-column limits, with a shared horizontal scroll for column headings and cells. Data beyond the preview limits is indicated explicitly; the former silent 400-row/32-column display cutoff is removed. Native GPUI row filtering and cell inspection are still pending.
 - Completed Office summaries and decoded spreadsheet tables are shared across GPUI snapshots instead of copying every cell on each frame. Selecting an Office section or editing CSV/TSV source invalidates the corresponding cache.
-- Bounded document loading and up to 24 open or loading documents. Office previews accept DOCX/ODT readable paragraphs and headings, PPTX/ODP text in slide order, and XLSX/XLSM/ODS sheets with cached cell values. These are content previews, not layout-faithful Office renderers; document tables are flattened and embedded images/charts are not displayed.
+- Bounded document loading and up to 24 open or loading documents. Office previews accept DOCX/ODT readable paragraphs and headings, PPTX/ODP text in slide order, and XLSX/XLSM/ODS sheets with cached cell values. Word and ODT tables retain their position, rows and cells. The content preview omits embedded images and charts.
 
 ### Native Claude chat
 

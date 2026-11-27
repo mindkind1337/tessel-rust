@@ -17,8 +17,10 @@ use std::{
 mod parse;
 const MAX_INPUT: usize = 32 * 1024 * 1024;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Paragraph {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Vec<Vec<String>>>,
     pub heading: u8,
     pub list_depth: u8,
     pub text: String,
@@ -62,6 +64,13 @@ impl Book {
                     return Err("Invalid Office heading level".into());
                 }
                 bytes += paragraph.text.len();
+                if let Some(rows) = &paragraph.table {
+                    if rows.len() > 5000 || rows.iter().any(|row| row.len() > 200) {
+                        return Err("Invalid document table dimensions".into());
+                    }
+                    cells += rows.iter().map(Vec::len).sum::<usize>();
+                    bytes += rows.iter().flatten().map(String::len).sum::<usize>();
+                }
             }
             for row in &page.rows {
                 if row.len() > 200 {
@@ -389,8 +398,19 @@ impl OfficeView {
             egui::ScrollArea::both()
                 .id_salt(("office-content", self.selected))
                 .show(ui, |ui| {
-                    for paragraph in &page.paragraphs {
-                        if paragraph.heading > 0 {
+                    for (index, paragraph) in page.paragraphs.iter().enumerate() {
+                        if let Some(rows) = &paragraph.table {
+                            egui::Grid::new(("office-table", index))
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for row in rows {
+                                        for cell in row {
+                                            ui.label(cell);
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        } else if paragraph.heading > 0 {
                             ui.label(
                                 egui::RichText::new(&paragraph.text)
                                     .strong()
