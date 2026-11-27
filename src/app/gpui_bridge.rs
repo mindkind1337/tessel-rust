@@ -911,6 +911,10 @@ pub(crate) enum GpuiAction {
     SaveActiveDocument,
     OpenEditorExternally(u64),
     SaveGuestDocument(crate::guest_file_editor::Key),
+    RecoverGuestFile(
+        crate::guest_file_editor::Key,
+        crate::share_panel::guest_files::RecoveryAction,
+    ),
     CopyGuestFileText(crate::guest_file_editor::Key),
     SelectGuestDocument(crate::guest_file_editor::Key),
     #[cfg(windows)]
@@ -2895,7 +2899,7 @@ impl Tessel {
                     ));
                     return true;
                 }
-                let mut cur = self.share.gpui_snapshot(false).join_code;
+                let mut cur = self.share.gpui_snapshot(false, false).join_code;
                 if apply_singleline_edit(&mut cur, &lower, printable, pasted) {
                     self.apply_gpui_action(GpuiAction::Share(
                         crate::share_panel::ShareGpuiAction::SetJoinCode(cur),
@@ -3506,7 +3510,9 @@ impl Tessel {
         };
 
         let team_badges = self.teams_hub.session_badges(&self.state);
-        let share_snap = self.share.gpui_snapshot(french);
+        let share_snap = self
+            .share
+            .gpui_snapshot(french, self.overlay == Some(Overlay::Share));
         let joined_guest_initials: Vec<String> = share_snap
             .guests
             .iter()
@@ -4212,7 +4218,7 @@ impl Tessel {
         let team_badge = self.teams_hub.session_badges(&self.state).remove(&sess.id);
         let share_guests = if self.active_session == Some(sess.id) {
             self.share
-                .gpui_snapshot(false)
+                .gpui_snapshot(false, false)
                 .guests
                 .into_iter()
                 .filter(|g| g.joined)
@@ -5885,6 +5891,13 @@ impl Tessel {
                     .is_some_and(|doc| doc.key == key && doc.dirty())
                 {
                     self.share.save_guest_file(&key);
+                }
+            }
+            GpuiAction::RecoverGuestFile(key, action) => {
+                if self.overlay == Some(Overlay::Share)
+                    && let Some(text) = self.share.recover_file(&key, action)
+                {
+                    self.gpui_extra.copied_clipboard = Some(text);
                 }
             }
             GpuiAction::CopyGuestFileText(key) => {

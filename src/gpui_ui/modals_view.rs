@@ -1073,6 +1073,9 @@ fn render_share_modal(
                         .child(SharedString::from(st)),
                 )
             })
+            .when_some(sh.retained_files.as_ref(), |el, retained| {
+                el.child(render_retained_files(retained, french, tokens, cx))
+            })
             .when(
                 sh.guest_board.scope.is_none() && !sh.guest_board.draft.is_empty(),
                 |el| {
@@ -1400,6 +1403,100 @@ fn render_share_modal(
             .into_any_element(),
         cx,
     )
+}
+
+fn render_retained_files(
+    retained: &crate::share_panel::guest_files::RetainedFiles,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::Div {
+    use crate::share_panel::guest_files::RecoveryAction;
+    let doc = &retained.document;
+    let mut panel = div().flex().flex_col().gap(px(4.)).child(if french {
+        "Brouillons de fichiers conservés"
+    } else {
+        "Retained file drafts"
+    });
+    let mut files = div()
+        .id("retained-file-list")
+        .max_h(px(120.))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(3.));
+    for (index, key) in std::iter::once(&doc.key).chain(&retained.other).enumerate() {
+        let label = crate::share_panel::guest_files::retained_label(key, french);
+        files = files.child(modal_btn(
+            format!("retained-file-{index}"),
+            label,
+            key == &doc.key,
+            tokens,
+            GpuiAction::RecoverGuestFile(key.clone(), RecoveryAction::Select),
+            cx,
+        ));
+    }
+    panel = panel.child(files);
+    let (preview, partial) = doc.preview();
+    panel = panel.child(
+        div()
+            .id("retained-file-preview")
+            .max_h(px(100.))
+            .overflow_y_scroll()
+            .child(preview.to_owned()),
+    );
+    if partial {
+        panel = panel.child(if french {
+            "Aperçu partiel (64 Kio)."
+        } else {
+            "Partial preview (64 KiB)."
+        });
+    }
+    if let Some(notice) = &retained.notice {
+        panel = panel.child(div().text_color(tokens.warn).child(notice.text(french)));
+    }
+    let mut controls = div().flex().flex_wrap().gap(px(4.)).child(modal_btn(
+        "retained-file-copy",
+        if french {
+            "Copier le texte"
+        } else {
+            "Copy text"
+        }
+        .into(),
+        false,
+        tokens,
+        GpuiAction::RecoverGuestFile(doc.key.clone(), RecoveryAction::Copy),
+        cx,
+    ));
+    if retained.confirm_discard {
+        panel = panel.child(if french {
+            "Abandonner ce brouillon ?"
+        } else {
+            "Discard this draft?"
+        });
+        controls = controls.child(modal_btn(
+            "retained-file-keep",
+            if french { "Conserver" } else { "Keep" }.into(),
+            false,
+            tokens,
+            GpuiAction::RecoverGuestFile(doc.key.clone(), RecoveryAction::Keep),
+            cx,
+        ));
+    }
+    let action = if retained.confirm_discard {
+        RecoveryAction::Discard
+    } else {
+        RecoveryAction::AskDiscard
+    };
+    controls = controls.child(modal_btn(
+        "retained-file-discard",
+        if french { "Abandonner" } else { "Discard" }.into(),
+        false,
+        tokens,
+        GpuiAction::RecoverGuestFile(doc.key.clone(), action),
+        cx,
+    ));
+    panel.child(controls)
 }
 
 fn render_share_ask_modal(

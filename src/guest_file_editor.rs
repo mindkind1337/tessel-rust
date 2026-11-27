@@ -139,6 +139,22 @@ impl Editor {
         self.parked.iter().any(|draft| draft.document.key == *key)
     }
 
+    pub(crate) fn other_drafts(&self) -> impl Iterator<Item = &Key> {
+        self.parked.iter().map(|d| &d.document.key)
+    }
+
+    pub(crate) fn select_retained(&mut self, key: &Key) -> bool {
+        if self.scope.is_some() || self.busy() {
+            return false;
+        }
+        let Some(index) = self.parked.iter().position(|d| &d.document.key == key) else {
+            return false;
+        };
+        self.leave_document();
+        self.restore_draft(index);
+        true
+    }
+
     fn restore_draft(&mut self, index: usize) {
         let draft = self.parked.remove(index);
         self.document = Some(draft.document);

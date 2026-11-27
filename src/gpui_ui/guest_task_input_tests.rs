@@ -606,6 +606,121 @@ fn native_guest_copy_text_includes_the_part_beyond_preview(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn native_guest_recovers_file_drafts_after_host_disconnect(cx: &mut TestAppContext) {
+    use crate::share_panel::guest_files::RecoveryAction;
+    let (dir, host, _cards, view, scope) = joined_guest(cx);
+    let key = |name: &str| crate::guest_file_editor::Key {
+        scope,
+        path: name.into(),
+    };
+    let first = "ligne de texte\n".repeat(5300) + "fin du brouillon";
+    view.update(cx, |root, _, cx| {
+        root.dispatch(
+            GpuiAction::Share(ShareGpuiAction::GuestFilesTab(scope, true)),
+            cx,
+        );
+    })
+    .unwrap();
+    for (name, draft) in [("a.txt", first.as_str()), ("b.txt", "brouillon B")] {
+        let file = key(name);
+        std::fs::write(dir.path().join("project-1").join(name), "original").unwrap();
+        view.update(cx, |root, _, cx| {
+            root.dispatch(
+                GpuiAction::Share(ShareGpuiAction::GuestOpenFile(file.clone())),
+                cx,
+            );
+        })
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let edited = view
+                .update(cx, |root, _, cx| {
+                    if root.poll_backend(cx) {
+                        cx.notify();
+                    }
+                    let loaded = root
+                        .app
+                        .gpui_snapshot(1100., 850., 4.)
+                        .modals
+                        .share
+                        .guest_files
+                        .and_then(|f| f.document)
+                        .is_some_and(|d| d.key == file);
+                    if !loaded {
+                        return false;
+                    }
+                    root.dispatch(GpuiAction::SelectGuestDocument(file.clone()), cx);
+                    let doc = root.app.gpui_guest_editor().unwrap();
+                    root.app.gpui_edit_guest_document(&doc, draft.to_owned())
+                })
+                .unwrap();
+            if edited {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::OpenLiveShare, cx);
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("unchanged".into()));
+        root.dispatch(
+            GpuiAction::RecoverGuestFile(key("b.txt"), RecoveryAction::Copy),
+            cx,
+        );
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("unchanged")
+        );
+    })
+    .unwrap();
+    drop(host);
+    for (selector, expected) in [
+        ("retained-file-copy", Some("brouillon B")),
+        ("retained-file-1", None),
+        ("retained-file-copy", Some(first.as_str())),
+        ("retained-file-discard", None),
+        ("retained-file-keep", None),
+        ("retained-file-copy", Some(first.as_str())),
+        ("retained-file-discard", None),
+        ("retained-file-discard", None),
+        ("retained-file-copy", Some("brouillon B")),
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(rect) = visual.debug_bounds(selector) {
+                visual.simulate_click(rect.center(), Default::default());
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Some(text) = expected {
+            assert!(
+                cx.update(
+                    |cx| cx.read_from_clipboard().and_then(|i| i.text()).as_deref() == Some(text)
+                ),
+                "wrong draft after {selector}"
+            );
+        }
+    }
+    for name in ["a.txt", "b.txt"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("project-1").join(name)).unwrap(),
+            "original"
+        );
+    }
+}
+
+#[gpui::test]
 fn native_guest_workspace_saves_to_selected_host_file(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler;
     let (dir, _host, _cards, view, _) = joined_guest(cx);

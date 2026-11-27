@@ -1130,10 +1130,22 @@ fn compatibility_guest_file_disconnect_keeps_draft_and_requires_confirmed_discar
     panel.open_guest_file(key.clone());
     await_guest_document(&mut panel, &key);
     panel.edit_guest_file(&key, "Keep this draft".into());
+    let second = guest_file_editor::Key {
+        scope,
+        path: "b.txt".into(),
+    };
+    panel.open_guest_file(second.clone());
+    await_guest_document(&mut panel, &second);
+    panel.edit_guest_file(&second, "Other draft".into());
     panel.apply_gpui_share_action(share_panel::ShareGpuiAction::DisconnectGuest, &[]);
     panel.poll_guest_requests();
     let ctx = egui::Context::default();
     let _ = draw_guest_files(&ctx, &mut panel, vec![]);
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(has_text_containing(&output.shapes, "Other draft"));
+    let label = share_panel::guest_files::retained_label(&key, false);
+    let select = find_text_center(&output.shapes, &label).unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(select));
     let output = draw_guest_files(&ctx, &mut panel, vec![]);
     assert!(has_text_containing(&output.shapes, "Keep this draft"));
     let close = find_text_center(&output.shapes, "Close file").unwrap();
@@ -1155,7 +1167,10 @@ fn compatibility_guest_file_disconnect_keeps_draft_and_requires_confirmed_discar
     let output = draw_guest_files(&ctx, &mut panel, vec![]);
     let discard = find_text_center(&output.shapes, "Discard draft").unwrap();
     draw_guest_files(&ctx, &mut panel, click_events(discard));
-    assert!(panel.guest_file_document().is_none());
+    assert_eq!(
+        panel.guest_file_document().unwrap().text.as_str(),
+        "Other draft"
+    );
 }
 
 #[test]

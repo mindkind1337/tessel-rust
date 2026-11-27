@@ -20,7 +20,83 @@ pub(crate) struct GuestFilesView {
     pub more: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedFiles {
+    pub document: crate::guest_file_editor::Document,
+    pub other: Vec<FileKey>,
+    pub confirm_discard: bool,
+    pub notice: Option<crate::guest_file_editor::Notice>,
+}
+
+pub(crate) fn retained_label(key: &FileKey, french: bool) -> String {
+    let project = if french { "projet" } else { "project" };
+    format!(
+        "{} · {project} {} · session {}",
+        key.path, key.scope.project, key.scope.session
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RecoveryAction {
+    Select,
+    Copy,
+    AskDiscard,
+    Keep,
+    Discard,
+}
+
 impl SharePanel {
+    pub(super) fn retained_files(&self) -> Option<RetainedFiles> {
+        if self.tab != DialogTab::Join
+            || self.guest_files_scope.is_some()
+            || !self.guest_file_editor.has_draft()
+        {
+            return None;
+        }
+        Some(RetainedFiles {
+            document: self.guest_file_document()?,
+            other: self.guest_file_editor.other_drafts().cloned().collect(),
+            confirm_discard: self.confirm_guest_file_discard,
+            notice: self.guest_file_notice(),
+        })
+    }
+
+    pub(crate) fn recover_file(&mut self, key: &FileKey, action: RecoveryAction) -> Option<String> {
+        self.poll_guest_scope();
+        if self.tab != DialogTab::Join
+            || self.guest_files_scope.is_some()
+            || self
+                .guest_session
+                .as_ref()
+                .is_some_and(|s| !matches!(s.snapshot().phase, GuestPhase::Ended { .. }))
+            || !self.guest_file_editor.has_draft()
+        {
+            return None;
+        }
+        if matches!(action, RecoveryAction::Select) {
+            if self.guest_file_editor.select_retained(key) {
+                self.confirm_guest_file_discard = false;
+            }
+            return None;
+        }
+        let doc = self
+            .guest_file_editor
+            .document
+            .as_ref()
+            .filter(|d| &d.key == key)?;
+        match action {
+            RecoveryAction::Copy => return Some(doc.text.as_ref().clone()),
+            RecoveryAction::AskDiscard => self.confirm_guest_file_discard = true,
+            RecoveryAction::Keep => self.confirm_guest_file_discard = false,
+            RecoveryAction::Discard if self.confirm_guest_file_discard => {
+                self.confirm_guest_file_discard = false;
+                self.guest_file_editor.discard();
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub(super) fn guest_files_view(&self, french: bool) -> Option<GuestFilesView> {
         let scope = self.guest_files_scope?;
         if self.guest_sub_view != GuestSubView::Files {

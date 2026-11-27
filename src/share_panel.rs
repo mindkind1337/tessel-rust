@@ -2703,14 +2703,41 @@ impl SharePanel {
                 ui.colored_label(Color32::LIGHT_RED, notice.text(french));
             }
         }
+        let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
         if self.guest_files_scope.is_none() {
+            if guest_snap
+                .as_ref()
+                .is_none_or(|g| matches!(g.phase, GuestPhase::Ended { .. }))
+                && let Some(retained) = self.retained_files()
+                && !retained.other.is_empty()
+            {
+                ui.label(if french {
+                    "Brouillons de fichiers conservés"
+                } else {
+                    "Retained file drafts"
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("retained-file-list")
+                    .max_height(120.)
+                    .show(ui, |ui| {
+                        for key in std::iter::once(&retained.document.key).chain(&retained.other) {
+                            if ui
+                                .selectable_label(
+                                    key == &retained.document.key,
+                                    guest_files::retained_label(key, french),
+                                )
+                                .clicked()
+                            {
+                                self.recover_file(key, guest_files::RecoveryAction::Select);
+                            }
+                        }
+                    });
+            }
             self.render_guest_file_editor(ui, french);
             if self.guest_git.snapshot().draft_scope.is_some() {
                 self.render_guest_git(ui, french);
             }
         }
-        let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
-
         match guest_snap.as_ref().map(|g| &g.phase) {
             None | Some(GuestPhase::Ended { .. }) => {
                 if let Some(GuestSnapshotPhaseBanner { text }) = guest_snap
@@ -3382,6 +3409,7 @@ pub(crate) struct ShareGpuiSnapshot {
     pub guest_board: crate::guest_task_board::Snapshot,
     pub guest_projects: Vec<(u64, String)>,
     pub guest_files: Option<guest_files::GuestFilesView>,
+    pub retained_files: Option<guest_files::RetainedFiles>,
     pub follow_host: bool,
     pub require_knock: bool,
     pub invites: Vec<ShareGpuiInviteRow>,
@@ -3442,7 +3470,7 @@ pub(crate) enum ShareGpuiAction {
 
 #[allow(dead_code)]
 impl SharePanel {
-    pub(crate) fn gpui_snapshot(&self, french: bool) -> ShareGpuiSnapshot {
+    pub(crate) fn gpui_snapshot(&self, french: bool, dialog_open: bool) -> ShareGpuiSnapshot {
         let host_snap = self.host.as_ref().map(Host::snapshot);
         let guest_snap = self.guest_session.as_ref().map(GuestSession::snapshot);
         let mut invites = Vec::new();
@@ -3573,6 +3601,11 @@ impl SharePanel {
             guest_active,
             guest_board: self.guest_task_snapshot(),
             guest_files: self.guest_files_view(french),
+            retained_files: if !dialog_open || guest_active {
+                None
+            } else {
+                self.retained_files()
+            },
             guest_projects: guest_snap
                 .as_ref()
                 .filter(|g| matches!(g.phase, GuestPhase::Joined { .. }))
