@@ -66,7 +66,7 @@ fn files_read_is_scoped_and_late_reply_cannot_load_a_different_project() {
     assert_eq!(editor.document.as_ref().unwrap().text.as_str(), "B");
 }
 #[test]
-fn opening_another_file_clears_loaded_text_and_unsaved_drafts_require_explicit_discard() {
+fn switching_tabs_preserves_independent_drafts_and_disconnect_recovery() {
     let now = Instant::now();
     let mut editor = Editor::default();
     let a = key(1, "a.txt");
@@ -77,11 +77,18 @@ fn opening_another_file_clears_loaded_text_and_unsaved_drafts_require_explicit_d
     tx.send(Ok(json!({"data":B64.encode("B")}))).unwrap();
     editor.poll(now);
     editor.edit(&b, "Edited B".into());
-    editor.open(key(1, "c.txt"), now, |_| {
-        panic!("unsaved draft must not be overwritten")
-    });
-    assert_eq!(editor.notice, Some(Notice::UnsavedDraft));
+    let c = key(1, "c.txt");
+    loaded(&mut editor, c.clone(), "C", now);
+    editor.edit(&c, "Edited C".into());
+    editor.open(b.clone(), now, |_| panic!("local draft should be reused"));
     assert_eq!(editor.document.as_ref().unwrap().text.as_str(), "Edited B");
+    assert!(editor.parked_draft(&c));
+    editor.bind(None, false);
+    assert!(editor.tabs.is_empty());
+    assert!(!editor.editable());
+    assert!(editor.discard());
+    assert_eq!(editor.document.as_ref().unwrap().text.as_str(), "Edited C");
+    assert!(!editor.editable());
     assert!(editor.discard());
     assert!(editor.document.is_none());
 }
@@ -98,6 +105,23 @@ fn project_change_preserves_dirty_text_but_blocks_saving_to_new_project() {
     assert_eq!(editor.document.as_ref().unwrap().text.as_str(), "Draft");
     editor.bind(Some(a.scope), true);
     assert!(editor.editable());
+}
+#[test]
+fn matching_paths_in_two_projects_restore_only_the_selected_projects_draft() {
+    let now = Instant::now();
+    let mut editor = Editor::default();
+    let a = key(1, "shared.txt");
+    let b = key(2, "shared.txt");
+    loaded(&mut editor, a.clone(), "A", now);
+    editor.edit(&a, "draft A".into());
+    loaded(&mut editor, b.clone(), "B", now);
+    editor.edit(&b, "draft B".into());
+    for (key, text) in [(&a, "draft A"), (&b, "draft B")] {
+        editor.bind(Some(key.scope), true);
+        assert_eq!(editor.tabs, vec![key.clone()]);
+        assert_eq!(editor.document.as_ref().unwrap().key, *key);
+        assert_eq!(editor.document.as_ref().unwrap().text.as_str(), text);
+    }
 }
 #[test]
 fn save_ack_keeps_newer_edits_and_retains_exact_target() {
@@ -278,10 +302,14 @@ fn conflict_preserves_draft_and_saves_use_the_acknowledged_baseline() {
         "later draft"
     );
     assert!(editor.document.as_ref().unwrap().dirty());
-    editor.open(key(1, "other.txt"), now, |_| {
-        panic!("must keep conflicted draft")
+    loaded(&mut editor, key(1, "other.txt"), "Other", now);
+    editor.open(a.clone(), now, |_| panic!("restore conflict locally"));
+    assert_eq!(editor.notice, Some(Notice::Conflict));
+    editor.save(&a, now, |p| {
+        assert_eq!(p["expectHash"], hash("first draft"));
+        assert_eq!(p["data"], B64.encode("later draft"));
+        Err("busy".into())
     });
-    assert_eq!(editor.notice, Some(Notice::UnsavedDraft));
 }
 
 #[test]

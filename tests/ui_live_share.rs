@@ -774,7 +774,24 @@ fn verify_guest_image(filename: &str) {
     await_guest_document(&mut panel, &text);
     panel.edit_guest_file(&text, "draft".into());
     panel.open_guest_file(key);
+    assert!(panel.guest_file_document().is_none());
+    while panel.guest_requests_busy() {
+        panel.poll_guest_requests();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestCloseTab(text.clone()),
+        &[],
+    );
     assert_eq!(panel.guest_file_document().unwrap().text.as_str(), "draft");
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    assert!(has_text_containing(&output.shapes, "Keep draft"));
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestConfirmClose(text.clone(), false),
+        &[],
+    );
+    assert_eq!(panel.guest_file_document().unwrap().key, text);
 }
 #[test]
 fn guest_download_context_and_binary_transfer_preserve_original_bytes() {

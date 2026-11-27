@@ -723,11 +723,35 @@ fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) 
         ("guest-doc-tab-1", None),
         ("guest-copy-text", Some("b.txt")),
         ("guest-open-workspace", None),
+        ("edit-b", None),
+        ("view-tab-1", None),
+        ("guest-copy-text", Some("a.txt")),
+        ("view-tab-2", None),
+        ("guest-copy-text", Some("unsaved B")),
+        ("restore-b", None),
         ("view-tab-1", None),
         ("guest-copy-text", Some("a.txt")),
         ("view-tab-close-1", None),
         ("guest-copy-text", Some("b.txt")),
     ] {
+        if matches!(selector, "edit-b" | "restore-b") {
+            use gpui::EntityInputHandler;
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                let state = root.editor_input.guest.state().unwrap().clone();
+                state.update(cx, |s, cx| {
+                    let end = s.as_str().encode_utf16().count();
+                    let next = if selector == "edit-b" {
+                        "unsaved B"
+                    } else {
+                        "b.txt"
+                    };
+                    s.replace_text_in_range(Some(0..end), next, window, cx);
+                });
+            })
+            .unwrap();
+            continue;
+        }
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             view.update(cx, |root, _, cx| {

@@ -143,13 +143,9 @@ impl SharePanel {
             return true;
         }
         self.confirm_guest_file_discard = false;
-        if self.guest_files_scope == Some(key.scope)
-            && crate::guest_file_editor::valid_path(&key.path)
-            && !self.guest_file_editor.busy()
-            && !self.guest_file_editor.has_draft()
-        {
+        if self.guest_file_editor.may_switch(&key) {
             if super::guest_image::ImagePreview::supports(&key.path) {
-                self.guest_file_editor.clear_active_document();
+                self.guest_file_editor.leave_document();
                 self.guest_image.open(key, session);
                 return true;
             }
@@ -192,6 +188,7 @@ impl SharePanel {
             .document
             .as_ref()
             .is_some_and(|doc| &doc.key == key && doc.dirty())
+            || self.guest_file_editor.parked_draft(key)
     }
 
     pub(crate) fn guest_tab_active(&self, key: &FileKey) -> bool {
@@ -281,6 +278,12 @@ impl SharePanel {
         else {
             return;
         };
+        if self.guest_file_editor.parked_draft(key) {
+            if self.open_guest_file(key.clone()) && self.guest_tab_active(key) {
+                self.confirm_guest_file_discard = true;
+            }
+            return;
+        }
         if self.guest_image.key.as_ref() == Some(key) {
             self.guest_image = Default::default();
             self.guest_file_editor.tabs.remove(index);

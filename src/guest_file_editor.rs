@@ -72,7 +72,7 @@ impl Notice {
             (Self::Unavailable,true)=>"Le fichier est indisponible.", (Self::Unavailable,false)=>"The file is unavailable.",
             (Self::Invalid,true)=>"Réponse invalide ou fichier non textuel UTF-8.", (Self::Invalid,false)=>"Invalid response or non-UTF-8 text file.",
             (Self::Unknown,true)=>"Résultat inconnu. Le brouillon est conservé; vérifiez le fichier avant de réessayer.", (Self::Unknown,false)=>"Outcome unknown. Your draft is kept; verify the file before retrying.",
-            (Self::UnsavedDraft,true)=>"Un brouillon non enregistré est conservé. Revenez à son projet pour l’enregistrer, copiez-le ou abandonnez-le avant d’ouvrir un autre fichier.", (Self::UnsavedDraft,false)=>"An unsaved draft is kept. Return to its project to save it, copy it, or discard it before opening another file.",
+            (Self::UnsavedDraft,true)=>"Un brouillon non enregistré est conservé. Revenez à son projet pour l’enregistrer. Vous pouvez aussi le copier ou l’abandonner.", (Self::UnsavedDraft,false)=>"An unsaved draft is kept. Return to its project to save it. You can also copy or discard it.",
             (Self::ReadOnly,true)=>"Ce fichier ou cette action n’est plus accessible.", (Self::ReadOnly,false)=>"This file or action is no longer available.",
             (Self::TooLarge,true)=>"L’édition invitée est limitée à 180 Kio par enregistrement.", (Self::TooLarge,false)=>"Guest editing is limited to 180 KiB per save.",
             (Self::Conflict,true)=>"Le fichier a changé chez l’hôte. Votre brouillon est conservé. Copiez-le avant de recharger le fichier.", (Self::Conflict,false)=>"The host file changed. Your draft is kept. Copy it before reloading the file.",
@@ -90,12 +90,20 @@ struct Pending {
     deadline: Instant,
     receiver: Receiver<Reply>,
 }
+struct ParkedDraft {
+    document: Document,
+    notice: Option<Notice>,
+    oversized_edit: bool,
+    uncertain_write: bool,
+}
+
 #[derive(Default)]
 pub struct Editor {
     scope: Option<Scope>,
     writable: bool,
     pub(crate) tabs: Vec<Key>,
     pub document: Option<Document>,
+    parked: Vec<ParkedDraft>,
     pending: Option<Pending>,
     pub notice: Option<Notice>,
     oversized_edit: bool,
@@ -127,6 +135,36 @@ impl Editor {
         }
     }
 
+    pub(crate) fn parked_draft(&self, key: &Key) -> bool {
+        self.parked.iter().any(|draft| draft.document.key == *key)
+    }
+
+    fn restore_draft(&mut self, index: usize) {
+        let draft = self.parked.remove(index);
+        self.document = Some(draft.document);
+        self.notice = draft.notice;
+        self.oversized_edit = draft.oversized_edit;
+        self.uncertain_write = draft.uncertain_write;
+    }
+
+    pub(crate) fn leave_document(&mut self) {
+        if self.has_draft()
+            && let Some(document) = self.document.take()
+        {
+            self.parked.push(ParkedDraft {
+                document,
+                notice: self.notice.take(),
+                oversized_edit: self.oversized_edit,
+                uncertain_write: self.uncertain_write,
+            });
+        }
+        self.clear_active_document();
+    }
+
+    pub(crate) fn may_switch(&self, key: &Key) -> bool {
+        Some(key.scope) == self.scope && !self.busy() && valid_path(&key.path)
+    }
+
     pub fn editable(&self) -> bool {
         self.writable
             && self.document.as_ref().is_some_and(|d| {
@@ -144,20 +182,54 @@ impl Editor {
             self.uncertain_write |= uncertain;
             self.pending = None;
             if self.has_draft() {
-                self.notice = Some(if self.uncertain_write {
-                    Notice::Unknown
-                } else {
-                    Notice::UnsavedDraft
-                });
+                if self.uncertain_write {
+                    self.notice = Some(Notice::Unknown);
+                } else if self.notice.is_none() || self.notice == Some(Notice::Saved) {
+                    self.notice = Some(Notice::UnsavedDraft);
+                }
             } else {
                 self.document = None;
                 self.oversized_edit = false;
                 self.notice = None;
             }
+            if self
+                .document
+                .as_ref()
+                .is_some_and(|d| Some(d.key.scope) != scope)
+                && self
+                    .parked
+                    .iter()
+                    .any(|d| Some(d.document.key.scope) == scope)
+            {
+                self.leave_document();
+            }
+            if self.document.is_none() && !self.parked.is_empty() {
+                // Keep disconnected drafts available in the recovery view, one at a time.
+                let index = self
+                    .parked
+                    .iter()
+                    .position(|d| Some(d.document.key.scope) == scope)
+                    .unwrap_or(0);
+                self.restore_draft(index);
+            }
+            self.tabs.extend(
+                self.parked
+                    .iter()
+                    .filter(|d| Some(d.document.key.scope) == scope)
+                    .map(|d| d.document.key.clone()),
+            );
             if let Some(doc) = &self.document
                 && Some(doc.key.scope) == scope
             {
                 self.tabs.push(doc.key.clone());
+            }
+            if self.notice == Some(Notice::UnsavedDraft)
+                && self
+                    .document
+                    .as_ref()
+                    .is_some_and(|d| Some(d.key.scope) == scope)
+            {
+                self.notice = None;
             }
             self.scope = scope;
         }
@@ -199,10 +271,13 @@ impl Editor {
             self.tabs.retain(|key| key != &doc.key);
         }
         self.clear_active_document();
+        if self.tabs.is_empty() && !self.parked.is_empty() {
+            self.restore_draft(0);
+        }
         true
     }
 
-    pub(crate) fn clear_active_document(&mut self) {
+    fn clear_active_document(&mut self) {
         self.document = None;
         self.uncertain_write = false;
         self.oversized_edit = false;
@@ -217,24 +292,22 @@ impl Editor {
         if Some(key.scope) != self.scope || self.pending.is_some() {
             return false;
         }
-        if self.has_draft() {
-            self.notice = Some(if self.uncertain_write {
-                Notice::Unknown
-            } else {
-                Notice::UnsavedDraft
-            });
+        if self.has_draft() && self.document.as_ref().is_some_and(|doc| doc.key == key) {
             return true;
         }
         if !valid_path(&key.path) {
             self.notice = Some(Notice::Invalid);
             return true;
         }
+        if let Some(index) = self.parked.iter().position(|d| d.document.key == key) {
+            self.leave_document();
+            self.restore_draft(index);
+            return true;
+        }
         let payload = json!({"op":"files.read","projectId":key.scope.project,"path":key.path});
         match send(payload) {
             Ok(receiver) => {
-                self.document = None;
-                self.oversized_edit = false;
-                self.notice = None;
+                self.leave_document();
                 self.pending = Some(Pending {
                     operation: Operation::Read(key),
                     deadline: now + Duration::from_secs(20),
