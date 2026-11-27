@@ -11,8 +11,36 @@ pub(crate) struct Citations {
     pub links: Vec<(Range<usize>, PathBuf)>,
 }
 
+pub(crate) fn show_message(
+    ui: &mut eframe::egui::Ui,
+    role: &str,
+    text: &str,
+    clicked: &mut Option<PathBuf>,
+) {
+    if let Some(message) = parse(role, text) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let mut end = 0;
+            for (range, path) in message.links {
+                if end < range.start {
+                    ui.label(&message.text[end..range.start]);
+                }
+                if ui.link(&message.text[range.clone()]).clicked() {
+                    *clicked = Some(path);
+                }
+                end = range.end;
+            }
+            if end < message.text.len() {
+                ui.label(&message.text[end..]);
+            }
+        });
+    } else {
+        ui.add(eframe::egui::Label::new(text).selectable(true));
+    }
+}
+
 pub(crate) fn parse(role: &str, source: &str) -> Option<Citations> {
-    if !(role == "Codex" || role.starts_with("Codex · "))
+    if !(matches!(role, "Codex" | "Claude") || role.starts_with("Codex · "))
         || !(source.contains(":codex-file-citation{") || source.contains("]("))
     {
         return None;

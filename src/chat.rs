@@ -1141,26 +1141,7 @@ impl Chat {
             .show(ui, |ui| {
                 for (role, text) in self.history.iter().chain(self.transcript.iter()) {
                     ui.strong(role);
-                    if let Some(message) = citations::parse(role, text) {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let mut end = 0;
-                            for (range, path) in message.links {
-                                if end < range.start {
-                                    ui.label(&message.text[end..range.start]);
-                                }
-                                if ui.link(&message.text[range.clone()]).clicked() {
-                                    clicked = Some(path);
-                                }
-                                end = range.end;
-                            }
-                            if end < message.text.len() {
-                                ui.label(&message.text[end..]);
-                            }
-                        });
-                    } else {
-                        ui.add(egui::Label::new(text).selectable(true));
-                    }
+                    citations::show_message(ui, role, text, &mut clicked);
                     ui.separator();
                 }
             });

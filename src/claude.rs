@@ -841,7 +841,8 @@ impl Chat {
         }
         changed
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+        let mut clicked = None;
         ui.heading(tr("Native Claude chat"));
         ui.label(tr("Uses your installed Claude CLI sign-in and permission controls. Project hooks, customizations and external MCP servers are disabled in this native connection."));
         ui.horizontal_wrapped(|ui| {
@@ -961,7 +962,7 @@ impl Chat {
             .show(ui, |ui| {
                 for (role, text) in &self.transcript {
                     ui.strong(tr(role));
-                    ui.add(egui::Label::new(text).selectable(true));
+                    crate::chat::citations::show_message(ui, role, text, &mut clicked);
                     ui.separator();
                 }
             });
@@ -991,6 +992,7 @@ impl Chat {
         if self.active || self.initializing.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
+        clicked
     }
 }
 impl crate::initial_turn::Native for Chat {

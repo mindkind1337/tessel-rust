@@ -2022,7 +2022,7 @@ impl Tessel {
             return;
         };
         let Some(session) = self.sessions.iter().find(|s| {
-            s.id == pane && s.project == Some(project.id) && matches!(s.launch, Launch::CodexChat)
+            s.id == pane && s.project == Some(project.id) && s.launch.native_chat().is_some()
         }) else {
             return;
         };
@@ -6532,7 +6532,7 @@ impl Tessel {
                                                     .find(|c| c.pane == id)
                                                 {
                                                     chat.defaults = self.state.agent_model_defaults.get("claude").and_then(crate::agent_model_defaults::Defaults::values);
-                                                    chat.show(ui);
+                                                    if let Some(path) = chat.show(ui) { chat_citation = Some((id, path)); }
                                                     if std::mem::take(&mut chat.options_commit) && chat.options.value() != session.session_options {
                                                         session.session_options = chat.options.value();
                                                         native_options_changed = true;

@@ -212,7 +212,7 @@ pub(crate) fn render_native_chat_pane_body(
                     .child(
                         div()
                             .when(citations.is_some(), |el| {
-                                el.debug_selector(|| "codex-citation-body".into())
+                                el.debug_selector(|| "chat-citation-body".into())
                             })
                             .text_size(px(font_size - 0.5))
                             .line_height(px((font_size * 1.42).round()))

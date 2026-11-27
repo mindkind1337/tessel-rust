@@ -798,17 +798,36 @@ fn gpui_vt_styled_lines_and_key_encoder_preserve_ansi_unicode_and_modes() {
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
 fn codex_file_citation_opens_the_project_document_in_a_tab(test: &mut gpui::TestAppContext) {
-    check_chat_file_click(test, ":codex-file-citation{path='my report.txt'}");
+    check_chat_file_click(
+        test,
+        GpuiAction::LaunchCodexChat,
+        ":codex-file-citation{path='my report.txt'}",
+    );
 }
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
 fn markdown_file_link_opens_the_project_document_in_a_tab(test: &mut gpui::TestAppContext) {
-    check_chat_file_click(test, "[Read the report](<my report.txt>)");
+    check_chat_file_click(
+        test,
+        GpuiAction::LaunchCodexChat,
+        "[Read the report](<my report.txt>)",
+    );
 }
 
 #[cfg(all(windows, feature = "visual-test"))]
-fn check_chat_file_click(test: &mut gpui::TestAppContext, reply: &str) {
+#[gpui::test]
+fn claude_markdown_file_link_opens_the_project_document_in_a_tab(test: &mut gpui::TestAppContext) {
+    check_chat_file_click(
+        test,
+        GpuiAction::LaunchClaudeChat,
+        "[Read the report](<my report.txt>)",
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, reply: &str) {
+    let claude = matches!(launch, GpuiAction::LaunchClaudeChat);
     let cx = &mut gpui::TestAppContext::build_with_text_system(
         test.dispatcher.clone(),
         None,
@@ -823,19 +842,23 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, reply: &str) {
         let app = &mut root.app;
         app.synthetic_native_profiles(temp.path());
         app.apply_gpui_action(GpuiAction::AddProjectPath(project));
-        app.apply_gpui_action(GpuiAction::LaunchCodexChat);
+        app.apply_gpui_action(launch);
         let pane = app.gpui_snapshot(960.,640.,4.).tiles[0].session_id;
         let _receiver = app.gpui_chat_sender_for_test(pane);
         let composer = app.gpui_chat_composer(pane).unwrap().0;
         app.apply_gpui_action(GpuiAction::ApplyNativeChatEdit {pane_id:pane,instance_id:composer,base:String::new(),text:"begin".into()});
         app.apply_gpui_action(GpuiAction::NativeChatSend {pane_id:pane,instance_id:composer,text:"begin".into()});
+        if claude {
+            app.inject_claude_frame_for_test(pane,json!({"type":"assistant","session_id":"synthetic-session","message":{"id":"reply","content":[{"type":"text","text":reply}]}}));
+        } else {
         app.inject_codex_frame_for_test(pane,json!({"method":"turn/started","params":{"threadId":"synthetic-thread","turn":{"id":"turn-1"}}}));
         app.inject_codex_frame_for_test(pane,json!({"method":"item/agentMessage/delta","params":{"threadId":"synthetic-thread","turnId":"turn-1","itemId":"reply","delta":reply}}));
+        }
         root
     });
     cx.refresh().unwrap();
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
-    let bounds = visual.debug_bounds("codex-citation-body").unwrap();
+    let bounds = visual.debug_bounds("chat-citation-body").unwrap();
     let click = gpui::point(bounds.origin.x + gpui::px(5.), bounds.center().y);
     visual.simulate_mouse_move(click, None, Default::default());
     visual.simulate_click(click, Default::default());
