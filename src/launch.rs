@@ -385,6 +385,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let host = Launch::Ssh(crate::workspace::Host {
             alias: "fixture".into(),
+            folder: "~/".into(),
             ..Default::default()
         });
         let mut setup = String::from(
@@ -427,6 +428,7 @@ attached() {
 }
 tmux -L harness -f /dev/null new-session -d -s a 'env -u TMUX sh first.sh'
 attached "$first" 1
+test "$(tmux -L tessel display-message -p -t "=$first:" '#{pane_current_path}')" = "$(cd ~ && pwd -P)"
 test "$(tmux -L tessel show-options -gv history-limit)" = 50000
 test "$(tmux -L tessel display-message -p -t "=$first:" '#{history_limit}')" = 50000
 test "$(tmux -L tessel show-options -gv mouse)" = on

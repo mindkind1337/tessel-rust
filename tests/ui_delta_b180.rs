@@ -93,6 +93,22 @@ fn lot_b180_tmux_options_and_fresh_vs_reattach_commands() {
         .unwrap()
         .unwrap();
     assert!(!plain.contains("tmux"));
+    for persistent in [false, true] {
+        let home = build_ssh_launch_remote_script("dev", "~", persistent, Some("p2"), true)
+            .unwrap()
+            .unwrap();
+        assert!(home.starts_with("cd -- ~ "));
+        let nested = build_ssh_launch_remote_script(
+            "dev",
+            "~/Client's project/$archive",
+            persistent,
+            Some("p2"),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(nested.starts_with(r"cd -- ~/'Client'\''s project/$archive' "));
+    }
     let wrapped = build_ssh_launch_remote_script("dev", "/srv", true, Some("p2"), true)
         .unwrap()
         .unwrap();

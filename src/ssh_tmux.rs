@@ -259,6 +259,17 @@ fn validate_binary_expr(binary_expr: &str) -> Result<(), String> {
     }
 }
 
+// Leave only the leading home marker for the remote shell to expand.
+fn remote_folder_operand(folder: &str) -> String {
+    if folder == "~" || folder == "~/" {
+        "~".into()
+    } else if let Some(relative) = folder.strip_prefix("~/") {
+        format!("~/{}", posix_quote(relative))
+    } else {
+        posix_quote(folder)
+    }
+}
+
 fn validate_remote_folder_arg(folder: &str) -> Result<(), String> {
     if folder.len() > 8192
         || folder.chars().any(char::is_control)
@@ -285,7 +296,10 @@ pub fn build_tmux_wrap_command(
     if folder.is_empty() {
         Ok(start)
     } else {
-        Ok(format!("cd -- {} || exit 1; {start}", posix_quote(folder)))
+        Ok(format!(
+            "cd -- {} || exit 1; {start}",
+            remote_folder_operand(folder)
+        ))
     }
 }
 
@@ -340,14 +354,14 @@ pub fn build_ssh_launch_remote_script(
         }
         return Ok(Some(format!(
             "cd -- {} && exec \"${{SHELL:-/bin/sh}}\" -l",
-            posix_quote(folder)
+            remote_folder_operand(folder)
         )));
     }
 
     let cd_prefix = if folder.is_empty() {
         String::new()
     } else {
-        format!("cd -- {} || exit 1; ", posix_quote(folder))
+        format!("cd -- {} || exit 1; ", remote_folder_operand(folder))
     };
     let options = tmux_server_options(None).join(r" \; ");
     let attach_step = tmux_start(

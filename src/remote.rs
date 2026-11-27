@@ -172,7 +172,7 @@ pub fn execute(host: Host, action: Action) -> Result<Reply, String> {
         let session=RawSftpSession::new_with_config(stream,Config{max_concurrent_reads:1,max_concurrent_writes:1,..Default::default()});
         let setup=tokio::time::timeout(Duration::from_secs(30),async {
             let version=session.init().await.map_err(|_|"SSH/SFTP connection failed. Confirm the host key and key-based login in a terminal first.")?;
-            let root=canonical(&session,if host.folder.is_empty(){"."}else{&host.folder}).await?;
+            let root=canonical_project_root(&session,&host.folder).await?;
             Ok::<_,String>((root,version.extensions.contains_key("posix-rename@openssh.com")))
         }).await.map_err(|_|"SFTP connection setup exceeded 30 seconds".to_string()).and_then(|r|r);
         let result=match setup {
@@ -187,6 +187,18 @@ pub fn execute(host: Host, action: Action) -> Result<Reply, String> {
 fn remote_error(error: Error) -> String {
     format!("SFTP request failed: {error}")
 }
+// SFTP REALPATH takes a filesystem path. The initial directory corresponds
+// to the SSH login directory and the server does not expand shell syntax.
+async fn canonical_project_root(session: &RawSftpSession, folder: &str) -> Result<String, String> {
+    match folder {
+        "" | "~" | "~/" => canonical(session, ".").await,
+        _ => match folder.strip_prefix("~/") {
+            Some(relative) => canonical(session, &format!("./{relative}")).await,
+            None => canonical(session, folder).await,
+        },
+    }
+}
+
 async fn canonical(session: &RawSftpSession, path: &str) -> Result<String, String> {
     if !clean(path) {
         return Err("Invalid remote path".into());
@@ -669,6 +681,27 @@ mod tests {
                 let session = RawSftpSession::new(stream);
                 let version = session.init().await.unwrap();
                 let root = canonical(&session, ".").await.unwrap();
+                for folder in ["", "~", "~/"] {
+                    assert_eq!(
+                        canonical_project_root(&session, folder).await.unwrap(),
+                        root
+                    );
+                }
+                let nested = canonical_project_root(&session, "~/pages").await.unwrap();
+                assert_eq!(nested, format!("{root}/pages"));
+                let Reply::File { bytes, .. } =
+                    operate(&session, &nested, Action::Read("index.html".into()), false)
+                        .await
+                        .unwrap()
+                else {
+                    panic!("expected the file in the home-relative project");
+                };
+                assert_eq!(bytes, b"page");
+                assert!(
+                    canonical_project_root(&session, "~/../outside")
+                        .await
+                        .is_err()
+                );
                 let atomic = version.extensions.contains_key("posix-rename@openssh.com");
                 let run = |action| operate(&session, &root, action, atomic);
                 let path = format!("{root}/notes.txt");
