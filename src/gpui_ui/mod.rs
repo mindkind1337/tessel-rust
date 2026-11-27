@@ -44,6 +44,8 @@ mod terminal_find_inputs;
 pub(crate) mod terminal_view;
 pub mod theme;
 
+#[cfg(all(test, feature = "visual-test"))]
+mod pdf_tests;
 #[cfg(test)]
 mod styled_input_tests;
 #[cfg(test)]
@@ -1998,23 +2000,22 @@ impl Render for TesselGpuiRoot {
             GpuiCenterMode::RemoteSftp => snapshot.remote.pdf.as_ref().map(|(_, pdf)| pdf),
             _ => None,
         };
-        let pages = pdf.into_iter().flat_map(|summary| {
+        let guest_preview = snapshot.modals.share.guest_files.as_ref().filter(|_| {
+            snapshot.center_mode == GpuiCenterMode::GuestFiles || snapshot.modals.share_modal_open
+        });
+        let guest_pdf = guest_preview.and_then(|files| files.pdf.as_ref().map(|(_, _, pdf)| pdf));
+        let pages = pdf.into_iter().chain(guest_pdf).flat_map(|summary| {
             summary
                 .visible
                 .iter()
                 .filter_map(|page| page.pixels.clone())
         });
-        for retired in self.presented_images.replace(
-            media.into_iter().chain(pages).chain(
-                snapshot
-                    .modals
-                    .share
-                    .guest_files
-                    .as_ref()
-                    .filter(|_| snapshot.modals.share_modal_open)
-                    .and_then(|f| f.image.as_ref().map(|(_, img)| img.clone())),
-            ),
-        ) {
+        let guest_image =
+            guest_preview.and_then(|files| files.image.as_ref().map(|(_, image)| image.clone()));
+        for retired in self
+            .presented_images
+            .replace(media.into_iter().chain(pages).chain(guest_image))
+        {
             cx.drop_image(retired, Some(window));
         }
         if snapshot.toolbar.layout_menu_right.is_some()

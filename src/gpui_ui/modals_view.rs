@@ -3830,7 +3830,11 @@ pub(super) fn render_guest_document(
             .enumerate()
             .filter(|_| workspace.is_none())
         {
-            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key)
+            let active = files
+                .pdf
+                .as_ref()
+                .is_some_and(|(pdf_key, _, _)| pdf_key == key)
+                || files.document.as_ref().is_some_and(|doc| doc.key == *key)
                 || files
                     .image
                     .as_ref()
@@ -3883,6 +3887,7 @@ pub(super) fn render_guest_document(
                 .document
                 .as_ref()
                 .map(|doc| &doc.key)
+                .or_else(|| files.pdf.as_ref().map(|(key, _, _)| key))
                 .or_else(|| files.image.as_ref().map(|(key, _)| key))
         {
             tabs = tabs.child(modal_btn(
@@ -3900,6 +3905,20 @@ pub(super) fn render_guest_document(
             ));
         }
         content = content.child(tabs);
+    }
+    if let Some((key, id, pdf)) = &files.pdf {
+        content = content.child(key.path.clone()).child(
+            div()
+                .h(px(workspace.map_or(270., |(_, h)| h)))
+                .w_full()
+                .child(super::editor_view::render_pdf_stage(
+                    pdf,
+                    super::editor_view::PdfTarget::Guest(*id),
+                    french,
+                    tokens,
+                    cx,
+                )),
+        );
     }
     if let Some((key, pixels)) = &files.image {
         let size = pixels.size(0);

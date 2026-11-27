@@ -199,7 +199,7 @@ pub struct SharePanel {
     pub guest_term_input: String,
     guest_file_editor: crate::guest_file_editor::Editor,
     guest_file_listing: crate::guest_file_listing::Listing,
-    guest_image: guest_image::ImagePreview,
+    guest_preview: guest_preview::FilePreview,
     guest_download: guest_download::Download,
     guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
@@ -257,7 +257,7 @@ impl Default for SharePanel {
             guest_term_input: String::new(),
             guest_file_editor: Default::default(),
             guest_file_listing: Default::default(),
-            guest_image: Default::default(),
+            guest_preview: Default::default(),
             guest_download: Default::default(),
             guest_versions: Default::default(),
             guest_history: Default::default(),
@@ -399,7 +399,7 @@ impl SharePanel {
         self.guest_file_listing.bind(None);
         self.guest_history.bind(None);
         self.guest_versions.bind(None);
-        self.guest_image = Default::default();
+        self.guest_preview = Default::default();
         self.guest_git.bind(None, false);
         self.confirm_guest_git_discard = false;
         self.next_guest_file = None;
@@ -417,11 +417,24 @@ impl SharePanel {
         }
         self.guest_task_board.input()
     }
+    pub(crate) fn guest_pdf_mut(&mut self, id: u64) -> Option<&mut crate::pdf::PdfView> {
+        self.guest_preview
+            .pdf
+            .as_mut()
+            .filter(|(instance, _)| *instance == id)
+            .map(|(_, pdf)| pdf.get_mut())
+    }
+
     pub fn guest_requests_busy(&self) -> bool {
         self.guest_task_board.busy()
             || self.guest_file_editor.busy()
             || self.guest_file_listing.busy()
-            || self.guest_image.busy()
+            || self
+                .guest_preview
+                .pdf
+                .as_ref()
+                .is_some_and(|(_, pdf)| pdf.borrow().is_rendering())
+            || self.guest_preview.busy()
             || self.guest_download.busy()
             || self.guest_versions.busy()
             || self.guest_history.busy()
@@ -475,15 +488,15 @@ impl SharePanel {
             changed = true;
             self.finish_guest_save_then_close();
         }
-        if self.guest_image.poll() {
+        if self.guest_preview.poll() {
             changed = true;
-            if !self.guest_image.failed
-                && let Some(image_key) = &self.guest_image.key
+            if !self.guest_preview.failed
+                && let Some(key) = &self.guest_preview.key
             {
-                self.guest_file_editor.remember_tab(image_key);
+                self.guest_file_editor.remember_tab(key);
             }
         }
-        if !self.guest_image.busy()
+        if !self.guest_preview.busy()
             && !self.guest_file_editor.busy()
             && let Some(next) = self.next_guest_file.take()
         {
@@ -551,7 +564,7 @@ impl SharePanel {
         if self.guest_files_scope != scope {
             self.next_guest_file = None;
             self.save_then_close = None;
-            self.guest_image = Default::default();
+            self.guest_preview = Default::default();
             self.guest_download = Default::default();
             self.guest_history.bind(None);
             self.guest_versions.bind(None);
@@ -3440,6 +3453,8 @@ pub(crate) enum ShareGpuiAction {
     GuestDraftTouch(crate::guest_task_board::Scope),
     GuestFilesTab(crate::guest_task_board::Scope, bool),
     GuestDirectory(crate::guest_task_board::Scope, String),
+    GuestPdfZoom(u64, f32),
+    GuestPdfFit(u64),
     GuestFileMenu(crate::guest_file_editor::Key, Option<(f32, f32, f32)>),
     GuestImageMenu(crate::guest_file_editor::Key, Option<(f32, f32, f32)>),
     GuestDownload(crate::guest_file_editor::Key),
@@ -3709,12 +3724,22 @@ impl SharePanel {
                     self.list_guest_files(path);
                 }
             }
+            ShareGpuiAction::GuestPdfFit(id) => {
+                if let Some(pdf) = self.guest_pdf_mut(id) {
+                    pdf.fit_width();
+                }
+            }
+            ShareGpuiAction::GuestPdfZoom(id, delta) => {
+                if let Some(pdf) = self.guest_pdf_mut(id) {
+                    pdf.step_zoom(delta);
+                }
+            }
             ShareGpuiAction::GuestFileMenu(key, position) => {
                 self.poll_guest_scope();
                 if let Some(position) = position
                     && self.downloadable(&key)
                 {
-                    self.guest_image.menu = None;
+                    self.guest_preview.menu = None;
                     self.guest_download.native_menu = Some((key, position));
                 } else if self
                     .guest_download
@@ -3727,13 +3752,13 @@ impl SharePanel {
             }
             ShareGpuiAction::GuestImageMenu(key, position) => {
                 self.poll_guest_scope();
-                if self.guest_image.key.as_ref() == Some(&key) {
+                if self.guest_preview.key.as_ref() == Some(&key) {
                     self.guest_download.native_menu = None;
-                    self.guest_image.menu = position;
+                    self.guest_preview.menu = position;
                 }
             }
             ShareGpuiAction::GuestDownload(key) => {
-                self.guest_image.menu = None;
+                self.guest_preview.menu = None;
                 self.choose_guest_download(&key);
             }
 
@@ -3872,8 +3897,8 @@ mod guest_download;
 pub(crate) mod guest_files;
 #[path = "share_panel/guest_history.rs"]
 mod guest_history;
-#[path = "share_panel/guest_image.rs"]
-mod guest_image;
+#[path = "share_panel/guest_preview.rs"]
+mod guest_preview;
 #[path = "share_panel/guest_versions.rs"]
 pub(crate) mod guest_versions;
 

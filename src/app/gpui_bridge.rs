@@ -2921,6 +2921,11 @@ impl Tessel {
                 .is_some_and(|pdf| pdf.set_native_viewport(viewport))
     }
 
+    pub(crate) fn set_guest_pdf_viewport(&mut self, id: u64, viewport: eframe::egui::Rect) -> bool {
+        self.share
+            .guest_pdf_mut(id)
+            .is_some_and(|pdf| pdf.set_native_viewport(viewport))
+    }
     pub(crate) fn set_remote_pdf_viewport(
         &mut self,
         id: u64,

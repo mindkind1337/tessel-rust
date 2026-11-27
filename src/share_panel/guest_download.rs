@@ -108,7 +108,7 @@ fn prepare(value: serde_json::Value, dest: &Path) -> Option<NamedTempFile> {
 impl SharePanel {
     pub(super) fn downloadable(&self, key: &Key) -> bool {
         self.guest_files_scope == Some(key.scope)
-            && (self.guest_image.key.as_ref() == Some(key)
+            && (self.guest_preview.key.as_ref() == Some(key)
                 || self
                     .guest_file_listing
                     .entries

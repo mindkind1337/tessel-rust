@@ -1,4 +1,5 @@
 //! Original-page PDF rasterization in a disposable, deadline-bound worker.
+#[path = "pdf/continuous.rs"]
 mod continuous;
 use crate::i18n::tr;
 use eframe::egui;
@@ -94,14 +95,6 @@ fn raster(bytes: Vec<u8>, index: usize, scale: f32) -> Result<Raster, String> {
     })
 }
 pub fn worker() -> Result<(), String> {
-    // Parent attaches resource limits before releasing this gate.
-    let mut gate = [0];
-    std::io::stdin()
-        .read_exact(&mut gate)
-        .map_err(|_| "Worker gate closed")?;
-    if gate != [1] {
-        return Err("Invalid worker gate".into());
-    }
     let args: Vec<_> = std::env::args_os().collect();
     if args.len() != 6 {
         return Err("Invalid worker arguments".into());
@@ -114,8 +107,20 @@ pub fn worker() -> Result<(), String> {
         .to_str()
         .and_then(|s| s.parse::<f32>().ok())
         .ok_or("Invalid zoom")?;
+    worker_page(Path::new(&args[2]), Path::new(&args[3]), index, scale)
+}
+
+fn worker_page(input: &Path, output: &Path, index: usize, scale: f32) -> Result<(), String> {
+    // Parent attaches resource limits before releasing this gate.
+    let mut gate = [0];
+    std::io::stdin()
+        .read_exact(&mut gate)
+        .map_err(|_| "Worker gate closed")?;
+    if gate != [1] {
+        return Err("Invalid worker gate".into());
+    }
     let mut bytes = Vec::new();
-    File::open(&args[2])
+    File::open(input)
         .map_err(|_| "Missing PDF snapshot")?
         .take((MAX_INPUT + 1) as u64)
         .read_to_end(&mut bytes)
@@ -124,7 +129,7 @@ pub fn worker() -> Result<(), String> {
     let mut output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&args[3])
+        .open(output)
         .map_err(|_| "Cannot create rendering")?;
     for n in [raster.size[0], raster.size[1], raster.page_sizes.len()] {
         output
@@ -212,12 +217,22 @@ fn render(bytes: &[u8], index: usize, scale: f32, cancel: &AtomicBool) -> Result
     let mut command =
         Command::new(std::env::current_exe().map_err(|_| "Cannot locate PDF worker")?);
     crate::agent_env::clean_command(&mut command);
+    #[cfg(not(test))]
     command
         .arg("--pdf-worker")
         .arg(&input)
         .arg(&output)
         .arg(index.to_string())
-        .arg(scale.to_string())
+        .arg(scale.to_string());
+    // Unit tests are launched through libtest rather than the application's main().
+    #[cfg(test)]
+    command
+        .args(["--ignored", "--exact", "pdf::tests::isolated_worker_entry"])
+        .env("TESSEL_TEST_PDF_INPUT", &input)
+        .env("TESSEL_TEST_PDF_OUTPUT", &output)
+        .env("TESSEL_TEST_PDF_INDEX", index.to_string())
+        .env("TESSEL_TEST_PDF_SCALE", scale.to_string());
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -359,6 +374,10 @@ impl PdfView {
             .take((MAX_INPUT + 1) as u64)
             .read_to_end(&mut bytes)
             .map_err(|_| "Cannot read PDF")?;
+        Self::from_bytes(bytes)
+    }
+
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
         if bytes.len() > MAX_INPUT {
             return Err("PDF limit is 32 MiB".into());
         }
@@ -380,6 +399,29 @@ impl PdfView {
             cancel: Arc::new(AtomicBool::new(false)),
             error: String::new(),
         })
+    }
+
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn test_pending_page(&mut self) -> mpsc::Sender<Result<Rendered, String>> {
+        let (sender, receiver) = mpsc::channel();
+        self.pending = Some(receiver);
+        sender
+    }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn seed_test_pages(&mut self, source: Vec<u8>) {
+        self.fit = false;
+        self.scale = 1.;
+        for index in 0..2 {
+            let raster = raster(source.clone(), index, 1.).unwrap();
+            let image = egui::ColorImage::from_rgba_unmultiplied(raster.size, &raster.rgba);
+            self.widest = 300.;
+            self.pages = raster.page_sizes.len();
+            self.native_sizes = raster.page_sizes;
+            self.native_pages.insert(
+                index,
+                (1., crate::gpui_pixels::from_color_image(&image).unwrap()),
+            );
+        }
     }
 
     fn take_completed(&mut self) -> Option<Result<Rendered, String>> {
@@ -592,6 +634,28 @@ pub fn smoke() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "subprocess entry for PDF rendering tests"]
+    fn isolated_worker_entry() {
+        let Some(input) = std::env::var_os("TESSEL_TEST_PDF_INPUT") else {
+            return;
+        };
+        let output = std::env::var_os("TESSEL_TEST_PDF_OUTPUT").unwrap();
+        worker_page(
+            Path::new(&input),
+            Path::new(&output),
+            std::env::var("TESSEL_TEST_PDF_INDEX")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            std::env::var("TESSEL_TEST_PDF_SCALE")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+    }
     #[test]
     fn gpui_keeps_original_page_pixels_and_reports_worker_disconnect() {
         let dir = tempfile::tempdir().unwrap();
@@ -731,122 +795,6 @@ mod tests {
         assert_eq!(view.effective_scale(), 1.5);
         view.set_viewport(20.);
         assert_eq!(view.effective_scale(), 0.2);
-    }
-
-    #[cfg(feature = "visual-test")]
-    #[gpui::test]
-    fn unreadable_pdf_replaces_reading_notice_inside_viewport(cx: &mut gpui::TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("damaged.pdf");
-        let bytes = b"%PDF-1.7\ntruncated".to_vec();
-        std::fs::write(&path, &bytes).unwrap();
-        let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
-        let (sender, receiver) = mpsc::channel();
-        doc.pdf.as_mut().unwrap().pending = Some(receiver);
-        let window = cx.add_window(|_, cx| {
-            let mut root = crate::gpui_ui::TesselGpuiRoot::new_in_dir(
-                Some(dir.path().join("state")),
-                false,
-                cx,
-            );
-            root.app
-                .apply_gpui_action(crate::app::gpui_bridge::GpuiAction::AddProjectPath(
-                    dir.path().into(),
-                ));
-            root.app.install_editor_input_fixture(vec![doc], 0);
-            root
-        });
-        cx.refresh().unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        let viewport = visual.debug_bounds("pdf-page-viewport").unwrap();
-        assert!(viewport.contains(&visual.debug_bounds("pdf-reading").unwrap().center()));
-        let error = raster(bytes, 0, 1.)
-            .err()
-            .expect("damaged fixture should fail");
-        sender.send(Err(error)).unwrap();
-        window
-            .update(cx, |root, _, cx| {
-                assert!(root.app.poll_for_gpui());
-                cx.notify();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("pdf-reading").is_none());
-        assert_eq!(visual.debug_bounds("pdf-page-viewport").unwrap(), viewport);
-        assert!(viewport.contains(&visual.debug_bounds("pdf-read-error").unwrap().center()));
-    }
-
-    #[cfg(feature = "visual-test")]
-    #[gpui::test]
-    fn native_pdf_fits_and_scrolls_between_original_pages(cx: &mut gpui::TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fixture.pdf");
-        let mut source = fixture();
-        let offset = source.windows(7).rposition(|v| v == b"300 180").unwrap();
-        source[offset..offset + 7].copy_from_slice(b"300 980");
-        std::fs::write(&path, &source).unwrap();
-        let mut doc = crate::files::Document::open(dir.path(), &path).unwrap();
-        let pdf = doc.pdf.as_mut().unwrap();
-        pdf.fit = false;
-        pdf.scale = 1.;
-        for index in 0..2 {
-            let raster = raster(source.clone(), index, 1.).unwrap();
-            let image = egui::ColorImage::from_rgba_unmultiplied(raster.size, &raster.rgba);
-            pdf.widest = 300.;
-            pdf.pages = raster.page_sizes.len();
-            pdf.native_sizes = raster.page_sizes;
-            pdf.native_pages.insert(
-                index,
-                (1., crate::gpui_pixels::from_color_image(&image).unwrap()),
-            );
-        }
-        let window = cx.add_window(|_, cx| {
-            let mut root = crate::gpui_ui::TesselGpuiRoot::new_in_dir(
-                Some(dir.path().join("state")),
-                false,
-                cx,
-            );
-            root.app
-                .apply_gpui_action(crate::app::gpui_bridge::GpuiAction::AddProjectPath(
-                    dir.path().into(),
-                ));
-            root.app.install_editor_input_fixture(vec![doc], 0);
-            root
-        });
-        cx.refresh().unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        let before = visual.debug_bounds("pdf-page-image-0").unwrap();
-        assert_eq!(f32::from(before.size.width), 300.);
-        let position = visual.debug_bounds("pdf-fit").unwrap().center();
-        visual.simulate_click(position, Default::default());
-        cx.refresh().unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        let expected = (f32::from(visual.debug_bounds("pdf-page-viewport").unwrap().size.width)
-            - 48.)
-            .clamp(60., 1200.);
-        let actual = f32::from(visual.debug_bounds("pdf-page-image-0").unwrap().size.width);
-        assert!(
-            (expected - actual).abs() < 2.,
-            "expected {expected}, got {actual}"
-        );
-        let pane = visual.debug_bounds("pdf-page-viewport").unwrap();
-        visual.simulate_event(gpui::ScrollWheelEvent {
-            position: pane.center(),
-            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-2500.))),
-            modifiers: Default::default(),
-            touch_phase: gpui::TouchPhase::Moved,
-        });
-        cx.refresh().unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("pdf-page-image-0").is_none());
-        let next = visual
-            .debug_bounds("pdf-page-image-1")
-            .expect("second PDF page");
-        assert!(next.origin.y < pane.origin.y);
-        assert!(
-            ((f32::from(next.size.height) / f32::from(next.size.width)) - 980. / 300.).abs() < 0.03
-        );
     }
 
     #[test]

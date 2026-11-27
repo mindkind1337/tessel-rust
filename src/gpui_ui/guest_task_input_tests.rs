@@ -310,6 +310,82 @@ fn native_guest_task_input_scopes_edits_and_keeps_newer_draft_after_ack(cx: &mut
 }
 
 #[gpui::test]
+fn guest_pdf_opens_with_rendered_pages_in_the_workspace(cx: &mut TestAppContext) {
+    let (dir, _host, _cards, view, _) = joined_guest(cx);
+    std::fs::write(
+        dir.path().join("project-1/report.PDF"),
+        crate::pdf::fixture(),
+    )
+    .unwrap();
+    for selector in [
+        "guest-tab-files",
+        "guest-entry-0",
+        "guest-open-workspace",
+        "pdf-page-image-0",
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(25);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(bounds) = visual.debug_bounds(selector) {
+                if selector != "pdf-page-image-0" {
+                    visual.simulate_click(bounds.center(), Default::default());
+                }
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    }
+    view.update(cx, |root, _, cx| {
+        let snapshot = root.app.gpui_snapshot(1100., 850., 4.);
+        let (key, id, pdf) = snapshot.modals.share.guest_files.unwrap().pdf.unwrap();
+        assert_eq!(key.path, "report.PDF");
+        assert_eq!(pdf.pages, 2);
+        assert!(pdf.layout.fit);
+        root.dispatch(
+            GpuiAction::Share(ShareGpuiAction::GuestPdfZoom(id, 0.25)),
+            cx,
+        );
+        assert!(
+            !root
+                .app
+                .gpui_snapshot(1100., 850., 4.)
+                .modals
+                .share
+                .guest_files
+                .unwrap()
+                .pdf
+                .unwrap()
+                .2
+                .layout
+                .fit
+        );
+        root.dispatch(GpuiAction::Share(ShareGpuiAction::GuestPdfFit(id)), cx);
+        assert!(
+            root.app
+                .gpui_snapshot(1100., 850., 4.)
+                .modals
+                .share
+                .guest_files
+                .unwrap()
+                .pdf
+                .unwrap()
+                .2
+                .layout
+                .fit
+        );
+    })
+    .unwrap();
+}
+
+#[gpui::test]
 fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppContext) {
     let (dir, _host, _cards, view, scope) = joined_guest(cx);
     let file = dir.path().join("project-1/poster.PNG");

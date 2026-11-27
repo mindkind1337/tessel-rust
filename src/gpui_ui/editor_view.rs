@@ -1741,6 +1741,7 @@ fn flatten_json_preview(
 
 #[derive(Clone)]
 pub(super) enum PdfTarget {
+    Guest(u64),
     Local(u64),
     Remote(u64),
 }
@@ -1799,10 +1800,16 @@ pub(super) fn render_pdf_stage(
             .child(label)
     };
     let zoom = |delta| match target {
+        PdfTarget::Guest(id) => {
+            GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestPdfZoom(id, delta))
+        }
         PdfTarget::Local(id) => GpuiAction::StepPdfZoom(id, delta),
         PdfTarget::Remote(id) => GpuiAction::Remote(Command::PdfZoom(id, delta)),
     };
     let fit = match &target {
+        PdfTarget::Guest(id) => {
+            GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestPdfFit(*id))
+        }
         PdfTarget::Local(id) => GpuiAction::PdfFit(*id),
         PdfTarget::Remote(id) => GpuiAction::Remote(Command::PdfFit(*id)),
     };
@@ -1853,6 +1860,7 @@ pub(super) fn render_pdf_stage(
     let owner = cx.weak_entity();
     let previous = layout.viewport;
     let stage_id = match &target {
+        PdfTarget::Guest(id) => format!("guest-pdf-scroll-{id}"),
         PdfTarget::Local(id) => format!("local-pdf-scroll-{id}"),
         PdfTarget::Remote(id) => format!("remote-pdf-scroll-{id}"),
     };
@@ -1876,6 +1884,7 @@ pub(super) fn render_pdf_stage(
                 cx.defer(move |cx| {
                     let _ = owner.update(cx, |root, cx| {
                         let changed = match &target {
+                            PdfTarget::Guest(id) => root.app.set_guest_pdf_viewport(*id, viewport),
                             PdfTarget::Local(id) => root.app.set_local_pdf_viewport(*id, viewport),
                             PdfTarget::Remote(id) => {
                                 root.app.set_remote_pdf_viewport(*id, viewport)

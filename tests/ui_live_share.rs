@@ -23,6 +23,9 @@ mod guest_git;
 #[path = "../src/guest_task_board.rs"]
 mod guest_task_board;
 #[allow(dead_code)]
+#[path = "../src/i18n.rs"]
+mod i18n;
+#[allow(dead_code)]
 #[path = "../src/icons.rs"]
 mod icons;
 #[allow(dead_code)]
@@ -34,6 +37,9 @@ mod native_recycle;
 #[allow(dead_code)]
 #[path = "../src/pane_grid.rs"]
 mod pane_grid;
+#[allow(dead_code)]
+#[path = "../src/pdf.rs"]
+mod pdf;
 #[cfg(windows)]
 #[allow(dead_code)]
 #[path = "../src/process_job.rs"]

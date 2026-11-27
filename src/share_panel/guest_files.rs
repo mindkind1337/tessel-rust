@@ -3,6 +3,7 @@ use crate::guest_file_editor::Key as FileKey;
 #[derive(Clone, Debug)]
 pub(crate) struct GuestFilesView {
     pub image: Option<(FileKey, std::sync::Arc<gpui::RenderImage>)>,
+    pub pdf: Option<(FileKey, u64, crate::pdf::PdfSummary)>,
     pub image_menu: Option<(f32, f32, f32)>,
     pub download_menu: Option<(FileKey, (f32, f32, f32))>,
     pub directory: String,
@@ -141,12 +142,22 @@ impl SharePanel {
             );
         }
         notices.extend(self.guest_download.status(french));
-        if self.guest_image.failed {
-            notices.push(super::guest_image::ImagePreview::error(french).into());
+        if self.guest_preview.failed {
+            notices.push(self.guest_preview.error(french).into());
         }
         Some(GuestFilesView {
-            image: self.guest_image.key.clone().zip(self.guest_image.native()),
-            image_menu: self.guest_image.menu,
+            image: self
+                .guest_preview
+                .key
+                .clone()
+                .zip(self.guest_preview.native()),
+            pdf: self
+                .guest_preview
+                .key
+                .clone()
+                .zip(self.guest_preview.pdf.as_ref())
+                .map(|(key, (id, pdf))| (key, *id, pdf.borrow_mut().gpui_poll_summary())),
+            image_menu: self.guest_preview.menu,
             download_menu: self.guest_download.native_menu.clone(),
             versions: self.guest_versions.rows.clone(),
             version_diff: self.guest_versions.diff.clone(),
@@ -160,7 +171,7 @@ impl SharePanel {
             entries: self.guest_file_listing.entries.clone(),
             document: doc,
             notices,
-            busy: self.guest_image.busy()
+            busy: self.guest_preview.busy()
                 || self.guest_file_listing.busy()
                 || self.guest_file_editor.busy()
                 || self.guest_versions.busy()
@@ -202,8 +213,8 @@ impl SharePanel {
             return false;
         };
         let loading = self.guest_file_editor.reading().or_else(|| {
-            if self.guest_image.busy() {
-                self.guest_image.key.as_ref()
+            if self.guest_preview.busy() {
+                self.guest_preview.key.as_ref()
             } else {
                 None
             }
@@ -220,12 +231,12 @@ impl SharePanel {
         }
         self.confirm_guest_file_discard = false;
         if self.guest_file_editor.may_switch(&key) {
-            if super::guest_image::ImagePreview::supports(&key.path) {
+            if super::guest_preview::FilePreview::supports(&key.path) {
                 self.guest_file_editor.leave_document();
-                self.guest_image.open(key, session);
+                self.guest_preview.open(key, session);
                 return true;
             }
-            self.guest_image = Default::default();
+            self.guest_preview = Default::default();
         }
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
@@ -272,7 +283,7 @@ impl SharePanel {
             .document
             .as_ref()
             .is_some_and(|doc| &doc.key == key)
-            || (!self.guest_image.failed && self.guest_image.key.as_ref() == Some(key))
+            || (!self.guest_preview.failed && self.guest_preview.key.as_ref() == Some(key))
     }
 
     pub(super) fn select_guest_tab(&mut self, key: FileKey) {
@@ -342,7 +353,7 @@ impl SharePanel {
         self.poll_guest_scope();
         if self.guest_files_scope != Some(key.scope)
             || self.guest_file_editor.busy()
-            || self.guest_image.busy()
+            || self.guest_preview.busy()
         {
             return;
         }
@@ -360,8 +371,8 @@ impl SharePanel {
             }
             return;
         }
-        if self.guest_image.key.as_ref() == Some(key) {
-            self.guest_image = Default::default();
+        if self.guest_preview.key.as_ref() == Some(key) {
+            self.guest_preview = Default::default();
             self.guest_file_editor.tabs.remove(index);
             self.open_neighbor_tab(index);
             return;
@@ -579,15 +590,24 @@ impl SharePanel {
     }
 
     pub(crate) fn render_guest_document(&mut self, ui: &mut Ui, french: bool, workspace: bool) {
-        if self.guest_image.busy() {
+        if self.guest_preview.busy() {
             ui.spinner();
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
-        if self.guest_image.failed {
-            ui.label(super::guest_image::ImagePreview::error(french));
+        if self.guest_preview.failed {
+            ui.label(self.guest_preview.error(french));
         }
-        if let Some(key) = self.guest_image.key.clone()
-            && let Some(texture) = self.guest_image.texture(ui.ctx())
+        if let Some((key, (_, pdf))) = self
+            .guest_preview
+            .key
+            .as_ref()
+            .zip(self.guest_preview.pdf.as_mut())
+        {
+            guest_path_heading(ui, &key.path, french);
+            pdf.get_mut().show(ui);
+        }
+        if let Some(key) = self.guest_preview.key.clone()
+            && let Some(texture) = self.guest_preview.texture(ui.ctx())
         {
             guest_path_heading(ui, &key.path, french);
             let mut save = false;
