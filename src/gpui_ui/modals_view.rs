@@ -1268,7 +1268,7 @@ fn render_share_modal(
                             }
                         }
                     }
-                    content = render_guest_document(content, files, french, tokens, None, cx);
+                    content = render_guest_document(content, files, french, tokens, None, None, cx);
                     return el.child(content);
                 }
                 content = content.child(projects).child(
@@ -3465,6 +3465,7 @@ pub(super) fn render_guest_document(
     french: bool,
     tokens: &GpuiThemeTokens,
     workspace: Option<(f32, f32)>,
+    input: Option<&gpui::Entity<gpui_ce_elements::editable_text::EditableTextState>>,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> gpui::Stateful<gpui::Div> {
     if !files.tabs.is_empty() {
@@ -3625,20 +3626,51 @@ pub(super) fn render_guest_document(
                 ));
             }
         }
-        let (preview, partial) = doc.preview();
-        content = content.child(
-            div()
-                .id("guest-file-preview")
-                .max_h(px(workspace.map_or(160., |(_, height)| height)))
-                .overflow_y_scroll()
-                .child(preview.to_owned()),
-        );
-        if partial {
-            content = content.child(if french {
-                "Aperçu partiel (64 Kio)."
-            } else {
-                "Partial preview (64 KiB)."
-            });
+        if let Some(state) = input {
+            if doc.dirty() && !files.busy {
+                content = content.child(modal_btn(
+                    "guest-save-text",
+                    if french { "Enregistrer" } else { "Save" }.into(),
+                    false,
+                    tokens,
+                    GpuiAction::SaveGuestDocument(doc.key.clone()),
+                    cx,
+                ));
+            }
+            content = content.child(
+                div()
+                    .id("guest-editor-scroll")
+                    .max_h(px(workspace.map_or(160., |(_, h)| h)))
+                    .overflow_y_scroll()
+                    .child(
+                        gpui_ce_elements::editable_text::editable_text("guest-editor-text")
+                            .state(state.downgrade())
+                            .multiline(true)
+                            .accepts_input(true)
+                            .caret_color(gpui::rgb_to_hsla(tokens.text))
+                            .selection_color(gpui::rgb_to_hsla(tokens.accent_soft_bg))
+                            .w_full()
+                            .px(px(8.))
+                            .py(px(5.))
+                            .bg(tokens.surface),
+                    ),
+            );
+        } else {
+            let (preview, partial) = doc.preview();
+            content = content.child(
+                div()
+                    .id("guest-file-preview")
+                    .max_h(px(workspace.map_or(160., |(_, height)| height)))
+                    .overflow_y_scroll()
+                    .child(preview.to_owned()),
+            );
+            if partial {
+                content = content.child(if french {
+                    "Aperçu partiel (64 Kio)."
+                } else {
+                    "Partial preview (64 KiB)."
+                });
+            }
         }
         if !files.busy {
             content = content.child(modal_btn(

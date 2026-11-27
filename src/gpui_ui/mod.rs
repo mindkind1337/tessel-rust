@@ -15,6 +15,7 @@ pub mod editor_view;
 mod explorer_input;
 mod explorer_menu;
 mod file_icons;
+mod guest_document_input;
 pub mod icons;
 mod image_menu;
 mod issues_menu;
@@ -379,6 +380,7 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        guest_document_input::flush(self, cx);
         if !matches!(
             &action,
             GpuiAction::NativeModalQuery { .. }
@@ -510,13 +512,27 @@ impl TesselGpuiRoot {
         cx.notify();
     }
 
-    fn close_document_shortcut(
+    fn workspace_document_shortcut(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "s"
+            && modifiers.control
+            && !modifiers.platform
+            && !modifiers.shift
+            && !modifiers.alt
+            && let Some(doc) = self.app.gpui_guest_editor()
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            if !event.is_held {
+                self.dispatch(GpuiAction::SaveGuestDocument(doc.key), cx);
+            }
+            return true;
+        }
         if event.keystroke.key != "w"
             || !modifiers.control
             || modifiers.platform
@@ -604,6 +620,10 @@ impl TesselGpuiRoot {
             cx.stop_propagation();
             return;
         }
+        if self.editor_input.guest.focused(window, cx) {
+            self.workspace_document_shortcut(event, window, cx);
+            return;
+        }
         let native_target = self
             .search_inputs
             .focused(window, cx)
@@ -666,7 +686,7 @@ impl TesselGpuiRoot {
                     | FocusInputTarget::EditorReplace
                     | FocusInputTarget::EditorGoto
             )
-        ) && self.close_document_shortcut(event, window, cx)
+        ) && self.workspace_document_shortcut(event, window, cx)
         {
             return;
         }
@@ -1215,6 +1235,9 @@ impl Render for TesselGpuiRoot {
         }
 
         let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        self.editor_input
+            .guest
+            .sync(self.app.gpui_guest_editor(), cx);
         self.settings_controls.sync(
             snapshot.settings.as_ref().map(|s| &s.editor_prefs),
             window,

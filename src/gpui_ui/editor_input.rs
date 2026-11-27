@@ -1394,6 +1394,7 @@ mod tests {
 
 #[derive(Default)]
 pub(crate) struct Input {
+    pub(super) guest: super::guest_document_input::Input,
     pub tools: super::editor_tool_inputs::Inputs,
     bindings: HashMap<u64, Binding>,
     plain: Option<(std::sync::Arc<str>, Entity<EditableTextState>)>,

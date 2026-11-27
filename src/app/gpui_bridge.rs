@@ -910,6 +910,7 @@ pub(crate) enum GpuiAction {
     OpenDocumentPath(PathBuf),
     SaveActiveDocument,
     OpenEditorExternally(u64),
+    SaveGuestDocument(crate::guest_file_editor::Key),
     CopyGuestFileText(crate::guest_file_editor::Key),
     SelectGuestDocument(crate::guest_file_editor::Key),
     #[cfg(windows)]
@@ -2288,6 +2289,24 @@ impl Tessel {
             || self.pending_transcript_trash.is_some()
             || self.file_action.is_some()
             || self.dev_update_dialog_open
+    }
+
+    pub(crate) fn gpui_guest_editor(&self) -> Option<crate::guest_file_editor::Document> {
+        if self.view != View::GuestFiles || self.gpui_has_open_modal() || self.floating.ui.is_open()
+        {
+            return None;
+        }
+        self.share.editable_workspace_document()
+    }
+
+    pub(crate) fn gpui_edit_guest_document(
+        &mut self,
+        base: &crate::guest_file_editor::Document,
+        text: String,
+    ) -> bool {
+        self.gpui_guest_editor()
+            .is_some_and(|doc| doc.key == base.key && std::sync::Arc::ptr_eq(&doc.text, &base.text))
+            && self.share.edit_guest_file(&base.key, text)
     }
 
     pub(crate) fn gpui_close_document_action(&self) -> Option<GpuiAction> {
@@ -5858,6 +5877,14 @@ impl Tessel {
                 if self.share.select_workspace_file(key) {
                     self.overlay = None;
                     self.view = View::GuestFiles;
+                }
+            }
+            GpuiAction::SaveGuestDocument(key) => {
+                if self
+                    .gpui_guest_editor()
+                    .is_some_and(|doc| doc.key == key && doc.dirty())
+                {
+                    self.share.save_guest_file(&key);
                 }
             }
             GpuiAction::CopyGuestFileText(key) => {

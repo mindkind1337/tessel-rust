@@ -102,6 +102,14 @@ impl SharePanel {
             .map(|doc| doc.text.as_ref().clone())
     }
 
+    pub(crate) fn editable_workspace_document(&self) -> Option<crate::guest_file_editor::Document> {
+        if self.guest_sub_view != GuestSubView::Files || !self.guest_file_editor.editable() {
+            return None;
+        }
+        self.guest_file_document()
+            .filter(|d| self.active_workspace_file() == Some(&d.key))
+    }
+
     pub fn guest_file_document(&self) -> Option<crate::guest_file_editor::Document> {
         self.guest_file_editor.document.clone()
     }

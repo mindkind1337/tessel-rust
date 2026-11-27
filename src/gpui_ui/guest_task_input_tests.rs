@@ -606,6 +606,110 @@ fn native_guest_copy_text_includes_the_part_beyond_preview(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn native_guest_workspace_saves_to_selected_host_file(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let (dir, _host, _cards, view, _) = joined_guest(cx);
+    let path = dir.path().join("project-1/a.txt");
+    let other = dir.path().join("project-2/a.txt");
+    std::fs::write(&path, "original").unwrap();
+    std::fs::write(&other, "other project").unwrap();
+    std::fs::write(dir.path().join("project-1/AGENTS.md"), "protected").unwrap();
+    for selector in ["guest-tab-files", "guest-entry-0", "guest-open-workspace"] {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            view.update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+            })
+            .unwrap();
+            cx.refresh().unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+            if let Some(rect) = visual.debug_bounds(selector) {
+                visual.simulate_click(rect.center(), Default::default());
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {selector}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    cx.refresh().unwrap();
+    let old_input = view
+        .update(cx, |root, w, cx| {
+            let input = root.editor_input.guest.state().unwrap().clone();
+            input.read(cx).focus_handle(cx).focus(w, cx);
+            input.update(cx, |s, cx| {
+                s.replace_text_in_range(Some(0..8), "partagé", w, cx)
+            });
+            input
+        })
+        .unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-s");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let saved = view
+            .update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+                root.app
+                    .gpui_guest_editor()
+                    .is_some_and(|d| !d.dirty() && d.text.as_str() == "partagé")
+            })
+            .unwrap();
+        if saved {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "host did not acknowledge the workspace save"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "partagé");
+    assert_eq!(std::fs::read_to_string(other).unwrap(), "other project");
+    view.update(cx, |root, _, cx| {
+        let mut key = root.app.gpui_guest_editor().unwrap().key;
+        key.path = "AGENTS.md".into();
+        root.dispatch(GpuiAction::Share(ShareGpuiAction::GuestOpenFile(key)), cx);
+    })
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let loaded = view
+            .update(cx, |root, _, cx| {
+                if root.poll_backend(cx) {
+                    cx.notify();
+                }
+                root.app
+                    .gpui_snapshot(1100., 850., 4.)
+                    .modals
+                    .share
+                    .guest_files
+                    .and_then(|f| f.document)
+                    .is_some_and(|d| d.key.path == "AGENTS.md")
+            })
+            .unwrap();
+        if loaded {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    cx.refresh().unwrap();
+    view.update(cx, |root, w, cx| {
+        assert!(root.editor_input.guest.state().is_none());
+        old_input.update(cx, |s, cx| s.replace_text_in_range(None, "stale", w, cx));
+    })
+    .unwrap();
+    cx.simulate_keystrokes(view.into(), "ctrl-s");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("project-1/AGENTS.md")).unwrap(),
+        "protected"
+    );
+}
+
+#[gpui::test]
 fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) {
     let (dir, _host, _cards, view, _) = joined_guest(cx);
     for name in ["a.txt", "b.txt"] {

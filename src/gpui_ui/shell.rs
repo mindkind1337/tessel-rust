@@ -138,7 +138,7 @@ fn render_center_column(
             div()
                 .id("gpui-center-stage")
                 .capture_key_down(cx.listener(|root, event, window, cx| {
-                    root.close_document_shortcut(event, window, cx);
+                    root.workspace_document_shortcut(event, window, cx);
                 }))
                 .relative()
                 .flex_1()
@@ -187,6 +187,7 @@ fn render_center_column(
                                 snapshot.french,
                                 tokens,
                                 Some((stage_width_px, (stage_height_px - 80.).max(1.))),
+                                editor_input.guest.state(),
                                 cx,
                             )
                             .into_any_element()
