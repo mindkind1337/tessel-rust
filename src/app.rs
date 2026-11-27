@@ -8239,6 +8239,7 @@ impl Tessel {
             ui.label(tr("File operation in progress…"));
             return;
         }
+        let allow_panel_shortcut = !self.gpui_has_open_modal();
         let mut close = None;
         let Some(d) = self.documents.get_mut(self.active_document) else {
             ui.label(tr("Choose a UTF-8 file in the explorer."));
@@ -8264,6 +8265,13 @@ impl Tessel {
                     | "jsonl"
                     | "ndjson"
             );
+        // Handle the workspace chord before the toolbar checks Ctrl+G for Go to Line.
+        let source_id = egui::Id::new(("local-source", d.instance_id()));
+        let requested_tool = if allow_panel_shortcut && ui.memory(|m| m.has_focus(source_id)) {
+            take_side_panel_shortcut(ui.ctx())
+        } else {
+            None
+        };
         let (close_clicked, prefs_changed, open_external) = document_toolbar(
             ui,
             d,
@@ -8517,7 +8525,6 @@ impl Tessel {
                     } else {
                         f32::INFINITY
                     };
-                    let source_id = ui.make_persistent_id(("local-source", d.instance_id()));
                     let copied = !d.media && copy_selected_editor_lines(ui, source_id, &mut d.text);
                     let Document {
                         text,
@@ -8610,6 +8617,10 @@ impl Tessel {
             crate::preview::resolve(&d.root, &d.path, &href).map(|link| (d.root.clone(), link))
         });
         let external_id = open_external.then(|| d.instance_id());
+        if let Some(tab) = requested_tool {
+            self.toggle_right_tool(tab);
+            self.save();
+        }
         if let Some(id) = external_id {
             self.open_active_file_externally(id);
         }
@@ -14963,16 +14974,8 @@ impl eframe::App for Tessel {
                         }
                     }
                 }
-                for (key, tab) in [
-                    (egui::Key::X, RightTab::Files),
-                    (egui::Key::G, RightTab::Changes),
-                    (egui::Key::K, RightTab::Tasks),
-                ] {
-                    if ctx.input_mut(|i| {
-                        i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, key)
-                    }) {
-                        self.toggle_right_tool(tab);
-                    }
+                if let Some(tab) = take_side_panel_shortcut(ctx) {
+                    self.toggle_right_tool(tab);
                 }
                 if ctx.input_mut(|i| {
                     i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
@@ -16020,6 +16023,35 @@ fn normalize_session_names(sessions: &mut [Session]) {
     for (session, pane) in sessions.iter_mut().zip(panes) {
         session.pane_name = pane.name;
     }
+}
+
+fn take_side_panel_shortcut(ctx: &egui::Context) -> Option<RightTab> {
+    let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+    ctx.input_mut(|input| {
+        let (index, tab) = input.events.iter().enumerate().find_map(|(index, event)| {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers: actual,
+                ..
+            } = event
+            else {
+                return None;
+            };
+            if !actual.matches_exact(modifiers) {
+                return None;
+            }
+            let tab = match key {
+                egui::Key::X => RightTab::Files,
+                egui::Key::G => RightTab::Changes,
+                egui::Key::K => RightTab::Tasks,
+                _ => return None,
+            };
+            Some((index, tab))
+        })?;
+        input.events.remove(index);
+        Some(tab)
+    })
 }
 
 fn take_close_pane_shortcut(ctx: &egui::Context, allowed: bool) -> bool {
@@ -17086,6 +17118,75 @@ $lock.Dispose()
             ]);
         }
         assert!(egui::Popup::is_any_open(&ctx));
+    }
+
+    #[test]
+    fn compatibility_editor_panel_shortcuts_keep_source_and_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("panels.txt");
+        std::fs::write(&path, "alpha\nbeta").unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let mut doc = Document::open(temp.path(), &path).unwrap();
+        doc.tools.pending_char_range = Some((2, 4));
+        app.documents.push(doc);
+        app.active_document = 0;
+        app.state.panels.right_open = false;
+        let ctx = egui::Context::default();
+        let frame = |app: &mut Tessel, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.editor(ui));
+                },
+            );
+        };
+        frame(&mut app, vec![]);
+        let source = ctx.memory(|m| m.focused()).unwrap();
+        assert_eq!(
+            source,
+            egui::Id::new(("local-source", app.documents[0].instance_id()))
+        );
+        assert!(!app.gpui_has_open_modal());
+        for (key, tab) in [
+            (egui::Key::K, RightTab::Tasks),
+            (egui::Key::X, RightTab::Files),
+            (egui::Key::G, RightTab::Changes),
+        ] {
+            for open in [true, false] {
+                frame(
+                    &mut app,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                    }],
+                );
+                assert_eq!(
+                    app.state.panels.right_open,
+                    open,
+                    "{key:?}, focus {:?}, tab {:?}",
+                    ctx.memory(|m| m.focused()),
+                    app.state.panels.right_tab
+                );
+                assert_eq!(app.state.panels.right_tab, tab);
+                assert_eq!(app.documents[0].text, "alpha\nbeta");
+                let cursor = egui::text_edit::TextEditState::load(&ctx, source)
+                    .unwrap()
+                    .cursor
+                    .char_range()
+                    .unwrap();
+                assert_eq!(cursor.as_sorted_char_range(), 2..4);
+            }
+        }
     }
 
     #[test]

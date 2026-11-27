@@ -160,6 +160,58 @@ mod tests {
     use gpui::{EntityInputHandler, TestAppContext};
 
     #[gpui::test]
+    fn editor_panel_shortcuts_keep_source_and_selection(cx: &mut TestAppContext) {
+        use crate::workspace::SideTab;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("panels.txt");
+        std::fs::write(&path, "alpha\nbeta").unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            window.focus(
+                &root.editor_input.get(id).unwrap().read(cx).focus_handle(cx),
+                cx,
+            );
+            root.editor_input
+                .get(id)
+                .unwrap()
+                .update(cx, |s, cx| s.set_selected_text_range(2..4, window, cx));
+        })
+        .unwrap();
+        for (key, tab) in [
+            ("ctrl-shift-k", SideTab::Tasks),
+            ("ctrl-shift-x", SideTab::Files),
+            ("ctrl-shift-g", SideTab::Changes),
+        ] {
+            for open in [true, false] {
+                cx.simulate_keystrokes(view.into(), key);
+                cx.refresh().unwrap();
+                view.update(cx, |root, window, cx| {
+                    let snapshot =
+                        root.app
+                            .gpui_snapshot(960., 640., super::super::theme::SPLIT_DIVIDER_PX);
+                    assert_eq!(snapshot.toolbar.right_open, open, "{key}");
+                    assert_eq!(snapshot.right_tab, tab, "{key}");
+                    assert_eq!(root.app.gpui_editor_document().unwrap().text, "alpha\nbeta");
+                    root.editor_input.get(id).unwrap().update(cx, |s, cx| {
+                        assert_eq!(
+                            s.selected_text_range(false, window, cx).unwrap().range,
+                            2..4
+                        )
+                    });
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    #[gpui::test]
     fn native_copy_lines_shortcuts_keep_backward_selection_and_separate_undo(
         cx: &mut TestAppContext,
     ) {
