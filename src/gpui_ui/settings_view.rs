@@ -3081,6 +3081,29 @@ fn render_ssh_page(
                 )),
         );
 
+    if s.importing_ssh {
+        col = col.child(div().child(if french {
+            "Importation en cours…"
+        } else {
+            "Importing…"
+        }));
+    } else if s.can_import_ssh {
+        col = col.child(
+            div().flex().child(setting_btn(
+                "gpui-ssh-import",
+                if french {
+                    "Importer la configuration SSH"
+                } else {
+                    "Import SSH config"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::ImportSshConfig,
+                cx,
+            )),
+        );
+    }
     if let Some((text, bad)) = &s.ssh_notice {
         col = col.child(
             div()

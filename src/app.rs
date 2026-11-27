@@ -10324,19 +10324,7 @@ impl Tessel {
             {
                 self.test_ssh_host(host.alias)
             }
-            Some(SshHostsAction::ImportConfig) if self.host_import.is_none() => {
-                if let Some(base) = directories::BaseDirs::new() {
-                    let home = base.home_dir().to_owned();
-                    let (sender, receiver) = mpsc::channel();
-                    self.host_import = Some(receiver);
-                    self.host_notice = None;
-                    thread::spawn(move || {
-                        let _ = sender.send(crate::ssh_config::discover(&home));
-                    });
-                } else {
-                    self.host_notice = Some((tr("User home directory unavailable").into(), true));
-                }
-            }
+            Some(SshHostsAction::ImportConfig) => self.import_ssh_config(),
             Some(SshHostsAction::Save {
                 original,
                 replacement,
@@ -10405,6 +10393,35 @@ impl Tessel {
                 &alias,
                 Err(crate::ssh_connection_test::Failure::Failed),
                 self.state.language == crate::i18n::Language::French,
+            ));
+        }
+    }
+
+    fn import_ssh_config(&mut self) {
+        if self.store.is_none() || self.host_import.is_some() {
+            return;
+        }
+        let Some(base) = directories::BaseDirs::new() else {
+            self.host_notice = Some((tr("User home directory unavailable").into(), true));
+            return;
+        };
+        self.start_ssh_import(base.home_dir().to_owned());
+    }
+
+    fn start_ssh_import(&mut self, home: PathBuf) {
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("ssh-config-import".into())
+            .spawn(move || {
+                let _ = sender.send(crate::ssh_config::discover(&home));
+            });
+        if worker.is_ok() {
+            self.host_import = Some(receiver);
+            self.host_notice = None;
+        } else {
+            self.host_notice = Some((
+                tr("SSH configuration import stopped without a result.").into(),
+                true,
             ));
         }
     }

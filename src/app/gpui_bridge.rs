@@ -642,6 +642,8 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub new_quick_cmd_name: String,
     pub new_quick_cmd_text: String,
     pub new_quick_cmd_enter: bool,
+    pub can_import_ssh: bool,
+    pub importing_ssh: bool,
     pub ssh_tests: std::collections::HashSet<String>,
     pub ssh_notice: Option<(String, bool)>,
     pub ssh_hosts: Vec<crate::workspace::Host>,
@@ -1286,6 +1288,7 @@ pub(crate) enum GpuiAction {
         alias: String,
         folder: String,
     },
+    ImportSshConfig,
     TestSshHost(String),
     AddSshHostFromDraft,
     RemoveSshHost(usize),
@@ -1898,6 +1901,7 @@ impl Tessel {
                 .as_ref()
                 .is_some_and(|c| c.loading())
             || self.gpui_extra.session_discovery.busy()
+            || self.host_import.is_some()
             || !self.host_tests.is_empty()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
@@ -5230,6 +5234,8 @@ impl Tessel {
             new_quick_cmd_name: self.gpui_extra.new_quick_cmd_name.clone(),
             new_quick_cmd_text: self.gpui_extra.new_quick_cmd_text.clone(),
             new_quick_cmd_enter: self.gpui_extra.new_quick_cmd_enter,
+            can_import_ssh: self.store.is_some(),
+            importing_ssh: self.host_import.is_some(),
             ssh_tests: self.host_tests.clone(),
             ssh_notice: self.host_notice.clone(),
             ssh_hosts: self.state.hosts.clone(),
@@ -7838,6 +7844,7 @@ impl Tessel {
                 self.gpui_extra.new_ssh_alias = alias;
                 self.gpui_extra.new_ssh_folder = folder;
             }
+            GpuiAction::ImportSshConfig => self.import_ssh_config(),
             GpuiAction::TestSshHost(alias) => self.test_ssh_host(alias),
             GpuiAction::AddSshHostFromDraft => {
                 let alias = self.gpui_extra.new_ssh_alias.trim().to_owned();
@@ -11493,6 +11500,50 @@ mod panel_snapshot_tests {
         let prefs = open().state.editor_prefs;
         assert_eq!(prefs.outline_sort, Sort::Kind);
         assert!(!prefs.outline_follow_cursor);
+    }
+
+    #[test]
+    fn ssh_settings_show_import_progress_and_persist_the_discovered_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".ssh");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::write(
+            config.join("config"),
+            "Host lab office\n  HostName localhost\nHost *\n  Port 22\n",
+        )
+        .unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        app.overlay = Some(Overlay::Settings);
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "lab".into(),
+            folder: "/srv/app".into(),
+        });
+        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        app.start_ssh_import(dir.path().into());
+        // A second click must not start a scan of the real user's home.
+        app.apply_gpui_action(GpuiAction::ImportSshConfig);
+        let settings = app.gpui_snapshot(960., 640., 4.).settings.unwrap();
+        assert!(settings.can_import_ssh && settings.importing_ssh);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.host_import.is_some() {
+            app.poll_for_gpui();
+            assert!(std::time::Instant::now() < end);
+            std::thread::yield_now();
+        }
+        let settings = app.gpui_snapshot(960., 640., 4.).settings.unwrap();
+        assert!(!settings.importing_ssh);
+        assert!(matches!(settings.ssh_notice, Some((_, false))));
+        drop(app);
+        let restored = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        let hosts = &restored.state.hosts;
+        assert_eq!(hosts.len(), 2);
+        assert!(hosts.iter().any(|h| h.alias == "office"));
+        assert!(
+            hosts
+                .iter()
+                .any(|h| h.alias == "lab" && h.folder == "/srv/app")
+        );
     }
 
     #[test]
