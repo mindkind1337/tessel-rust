@@ -202,7 +202,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Windows browser
 
-- Open Downloads in a browser tab to see file names, transfer progress, status and saved paths. Cancel an active transfer or use **Show in folder** to select a downloaded file in Windows Explorer.
+- Open Downloads in a center or side-panel browser tab to see file names, transfer progress, status and saved paths. Cancel an active transfer or use **Show in folder** to select a downloaded file in Windows Explorer.
 
 - Embedded WebView2, back/forward/reload (`Ctrl+R` / `F5`), address bar (`Ctrl+L`), separate persistent Rust-app profile and no website-to-native IPC bridge.
 - The address bar accepts bare domains, local development addresses such as `localhost:5173`, and Google search terms. Navigation rejects URLs containing usernames/passwords and native schemes; agent navigation still requires an explicit URL.

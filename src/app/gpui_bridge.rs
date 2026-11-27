@@ -467,6 +467,8 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub error: String,
 }
 
+pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<String>);
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpuiBrowserSnapshot {
@@ -475,9 +477,25 @@ pub(crate) struct GpuiBrowserSnapshot {
     pub address: String,
     pub popup_url: Option<String>,
     pub downloads_open: bool,
-    pub downloads: Vec<crate::browser::DownloadSummaryRow>,
+    pub downloads: Vec<DownloadSummaryRow>,
     pub error: String,
     pub cookie_import_status: String,
+}
+
+#[cfg(windows)]
+impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
+    fn from(page: &crate::browser::Browser) -> Self {
+        Self {
+            tab_id: page.tab_id,
+            started: page.is_started(),
+            address: page.address_str().to_owned(),
+            popup_url: page.popup_url().map(str::to_owned),
+            downloads_open: page.downloads_open(),
+            downloads: page.download_summaries(),
+            error: page.error_str().to_owned(),
+            cookie_import_status: page.cookie_import_status().to_owned(),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -790,7 +808,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub font_size: f32,
     pub editor_font_size: u8,
     pub renderer: RendererPreference,
-    pub side_browser_error: String,
+    pub side_browser: Option<GpuiBrowserSnapshot>,
     pub side_history: (bool, bool),
     pub side_browser_tabs: Vec<(u64, String)>,
     pub selected_side_browser: Option<u64>,
@@ -1071,7 +1089,7 @@ pub(crate) enum GpuiAction {
     BrowserImportCookies,
     BrowserAcceptPopup,
     BrowserDismissPopup,
-    BrowserToggleDownloads,
+    BrowserToggleDownloads(u64),
     BrowserCancelDownload {
         tab: u64,
         id: u64,
@@ -2345,6 +2363,17 @@ impl Tessel {
                 });
         }
         false
+    }
+
+    #[cfg(windows)]
+    fn download_browser_mut(&mut self, tab: u64) -> Option<&mut crate::browser::Browser> {
+        if self.browser.tab_id == tab {
+            Some(&mut self.browser)
+        } else if self.selected_side_browser == Some(tab) {
+            self.side_browsers.get_mut(&tab)
+        } else {
+            None
+        }
     }
 
     #[cfg(windows)]
@@ -3977,16 +4006,7 @@ impl Tessel {
             .is_some_and(|comparison| comparison.patch.get().is_none());
 
         #[cfg(windows)]
-        let browser = GpuiBrowserSnapshot {
-            tab_id: self.browser.tab_id,
-            started: self.browser.is_started(),
-            address: self.browser.address_str().to_owned(),
-            popup_url: self.browser.popup_url().map(str::to_owned),
-            downloads_open: self.browser.downloads_open(),
-            downloads: self.browser.download_summaries(),
-            error: self.browser.error_str().to_owned(),
-            cookie_import_status: self.browser.cookie_import_status().to_owned(),
-        };
+        let browser = GpuiBrowserSnapshot::from(&self.browser);
         #[cfg(not(windows))]
         let browser = GpuiBrowserSnapshot::default();
 
@@ -4138,13 +4158,12 @@ impl Tessel {
             #[cfg(not(windows))]
             side_history: (false, false),
             #[cfg(windows)]
-            side_browser_error: self
+            side_browser: self
                 .selected_side_browser
                 .and_then(|id| self.side_browsers.get(&id))
-                .map(|page| page.error_str().to_owned())
-                .unwrap_or_default(),
+                .map(GpuiBrowserSnapshot::from),
             #[cfg(not(windows))]
-            side_browser_error: String::new(),
+            side_browser: None,
             #[cfg(windows)]
             side_browser_tabs: self
                 .side_browsers
@@ -6899,22 +6918,26 @@ impl Tessel {
                 #[cfg(windows)]
                 self.browser.dismiss_popup_now();
             }
-            GpuiAction::BrowserToggleDownloads => {
+            GpuiAction::BrowserToggleDownloads(tab) => {
                 #[cfg(windows)]
-                self.browser.toggle_downloads_open();
+                if let Some(page) = self.download_browser_mut(tab) {
+                    page.toggle_downloads_open();
+                }
+                #[cfg(not(windows))]
+                let _ = tab;
             }
             GpuiAction::BrowserCancelDownload { tab, id } => {
                 #[cfg(windows)]
-                if self.browser.tab_id == tab {
-                    self.browser.cancel_download_now(id);
+                if let Some(page) = self.download_browser_mut(tab) {
+                    page.cancel_download_now(id);
                 }
                 #[cfg(not(windows))]
                 let _ = (tab, id);
             }
             GpuiAction::BrowserRevealDownload { tab, id } => {
                 #[cfg(windows)]
-                if self.browser.tab_id == tab {
-                    self.browser.reveal_download(id);
+                if let Some(page) = self.download_browser_mut(tab) {
+                    page.reveal_download(id);
                 }
                 #[cfg(not(windows))]
                 let _ = (tab, id);

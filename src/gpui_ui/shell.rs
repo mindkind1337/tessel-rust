@@ -1634,6 +1634,13 @@ fn render_side_browser(
                     }),
                 )
                 .child(address.render(french, tokens, cx))
+                .when_some(
+                    snapshot
+                        .side_browser
+                        .as_ref()
+                        .filter(|page| !page.downloads.is_empty()),
+                    |el, page| el.child(editor_view::download_toggle(page, tokens, cx)),
+                )
                 .child(
                     div()
                         .id("side-browser-return")
@@ -1652,13 +1659,20 @@ fn render_side_browser(
                         }),
                 ),
         )
-        .when(!snapshot.side_browser_error.is_empty(), |el| {
-            el.child(
-                div()
-                    .text_color(tokens.warn)
-                    .child(snapshot.side_browser_error.clone()),
-            )
-        });
+        .when_some(
+            snapshot
+                .side_browser
+                .as_ref()
+                .filter(|page| page.downloads_open && !page.downloads.is_empty()),
+            |el, page| el.child(editor_view::download_list(page, tokens, cx)),
+        )
+        .when_some(
+            snapshot
+                .side_browser
+                .as_ref()
+                .filter(|page| !page.error.is_empty()),
+            |el, page| el.child(div().text_color(tokens.warn).child(page.error.clone())),
+        );
     #[cfg(windows)]
     let page = {
         let entity = cx.weak_entity();

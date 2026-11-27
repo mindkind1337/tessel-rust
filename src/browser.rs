@@ -34,7 +34,7 @@ enum Event {
     Navigation(String),
 }
 
-pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<String>);
+use crate::app::gpui_bridge::DownloadSummaryRow;
 
 fn next_address_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1606,8 +1606,21 @@ mod tests {
             app.apply_gpui_action(GpuiAction::DockBrowser(app.browser.tab_id));
             let side = app.selected_side_browser.unwrap();
             assert_eq!(app.side_browsers[&side].finishing_views.len(), 1);
+            app.apply_gpui_action(GpuiAction::BrowserToggleDownloads(side));
+            let snapshot = app.gpui_snapshot(960., 640., 4.);
+            let drawer = snapshot.side_browser.unwrap();
+            assert!(drawer.downloads_open);
+            assert_eq!(drawer.tab_id, side);
+            assert_eq!(drawer.downloads.len(), 1);
+            assert_eq!(drawer.downloads[0].1, "Downloading");
+            assert_eq!(PathBuf::from(&drawer.downloads[0].4), file);
+            assert!(snapshot.browser.downloads.is_empty());
+            assert!(!snapshot.browser.downloads_open);
             app.apply_gpui_action(GpuiAction::UndockBrowser(side));
             assert_eq!(app.browser.finishing_views.len(), 1);
+            app.apply_gpui_action(GpuiAction::BrowserToggleDownloads(side));
+            assert!(app.browser.downloads_open());
+            assert!(app.gpui_snapshot(960., 640., 4.).side_browser.is_none());
         }
         app.apply_gpui_action(GpuiAction::AddProjectPath(second));
         assert!(app.browser.download_summaries().is_empty());
