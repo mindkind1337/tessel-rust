@@ -747,6 +747,7 @@ pub struct Tessel {
     next_session: u64,
     active_session: Option<u64>,
     documents: Vec<Document>,
+    document_watch: crate::document_watch::DocumentWatch,
     document_pending: std::collections::HashMap<(Option<u64>, PathBuf), PendingDocument>,
     active_document: usize,
     view: View,
@@ -1001,6 +1002,7 @@ impl Tessel {
             next_session,
             active_session: None,
             documents: vec![],
+            document_watch: Default::default(),
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
@@ -3049,7 +3051,9 @@ impl Tessel {
                 },
             }
         }
-        native_changed |= self.auto_save_documents(std::time::Instant::now());
+        let now = std::time::Instant::now();
+        native_changed |= self.document_watch.poll(&mut self.documents, now);
+        native_changed |= self.auto_save_documents(now);
         if let Some((sid, ref text, press_enter)) = self.pending_quick_command {
             let text_owned = text.clone();
             if let Some(sess) = self.sessions.iter_mut().find(|s| s.id == sid) {

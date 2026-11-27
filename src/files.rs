@@ -7,6 +7,8 @@ use std::{
 
 #[path = "playback.rs"]
 pub mod playback;
+const DISK_CHANGED: &str =
+    "File changed on disk. Compare the versions, reload the file, or keep your edits.";
 pub const MAX_TEXT: usize = 2 * 1024 * 1024;
 
 pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -56,7 +58,7 @@ pub fn save_download(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-fn read(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     fs::File::open(path)
         .map_err(|e| e.to_string())?
@@ -104,6 +106,8 @@ pub(crate) struct DiskComparison {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
+    pub(crate) disk_revision: u64,
+    pub(crate) disk_reload: u64,
     pub(crate) conflict_disk: Option<std::sync::Arc<str>>,
     comparison: Option<std::sync::Arc<DiskComparison>>,
     #[cfg(windows)]
@@ -753,6 +757,58 @@ impl Document {
         read(&actual)
     }
 
+    pub(crate) fn observe_disk(&mut self, text: Option<String>) -> bool {
+        let Some(text) = text else {
+            let changed = !self.deleted_on_disk || self.tools.conflict_disk.is_some();
+            self.deleted_on_disk = true;
+            self.tools.conflict_disk = None;
+            self.tools.comparison = None;
+            self.last_edited_at = None;
+            if changed {
+                self.error.clear();
+            }
+            return changed;
+        };
+        let restored = std::mem::take(&mut self.deleted_on_disk);
+        if text.as_bytes() == self.original {
+            if restored || self.tools.conflict_disk.is_some() {
+                self.tools.conflict_disk = None;
+                self.tools.comparison = None;
+                self.error.clear();
+                self.last_edited_at = self.dirty().then(std::time::Instant::now);
+                return true;
+            }
+            return false;
+        }
+        if self.dirty() && self.text != text {
+            if self.tools.conflict_disk.as_deref() == Some(&text) {
+                return restored;
+            }
+            self.tools.conflict_disk = Some(text.into());
+            self.tools.comparison = None;
+            self.last_edited_at = None;
+            self.error = DISK_CHANGED.into();
+        } else {
+            self.replace_from_disk(text);
+        }
+        true
+    }
+
+    fn replace_from_disk(&mut self, text: String) {
+        self.tools.disk_reload = self.tools.disk_reload.wrapping_add(1);
+        self.original = text.as_bytes().to_vec();
+        self.text = text;
+        self.preview = None;
+        self.sheet_cache = None;
+        if self.tools.html_plain_text.is_some() {
+            self.tools.html_plain_text = Some(crate::preview::html_plain_text(&self.text).into());
+        }
+        self.tools.conflict_disk = None;
+        self.tools.comparison = None;
+        self.last_edited_at = None;
+        self.error.clear();
+    }
+
     fn remember_conflict(&mut self, disk: Vec<u8>) -> Result<()> {
         self.tools.conflict_disk = None;
         self.tools.comparison = None;
@@ -762,10 +818,7 @@ impl Document {
         let text =
             String::from_utf8(disk).map_err(|_| "This file is not UTF-8 text.".to_owned())?;
         self.tools.conflict_disk = Some(text.into());
-        Err(
-            "File changed on disk. Compare the versions, reload the file, or keep your edits."
-                .into(),
-        )
+        Err(DISK_CHANGED.into())
     }
 
     pub(crate) fn comparison(&self) -> Option<&std::sync::Arc<DiskComparison>> {
@@ -817,17 +870,16 @@ impl Document {
             }
             return Ok(());
         }
-        self.original = disk;
+        self.tools.disk_revision = self.tools.disk_revision.wrapping_add(1);
         if matches!(action, ConflictAction::Reload) {
-            self.text = expected.to_string();
-            self.preview = None;
-            self.sheet_cache = None;
-            self.tools.html_plain_text = None;
+            self.replace_from_disk(expected.to_string());
+        } else {
+            self.original = disk;
+            self.last_edited_at = self.dirty().then(std::time::Instant::now);
+            self.tools.conflict_disk = None;
+            self.tools.comparison = None;
+            self.error.clear();
         }
-        self.last_edited_at = self.dirty().then(std::time::Instant::now);
-        self.tools.conflict_disk = None;
-        self.tools.comparison = None;
-        self.error.clear();
         Ok(())
     }
 
@@ -846,6 +898,7 @@ impl Document {
         if self.text.len() > MAX_TEXT {
             return Err("Text editor limit is 2 MiB.".into());
         }
+        self.tools.disk_revision = self.tools.disk_revision.wrapping_add(1);
         match fs::symlink_metadata(&self.path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 self.deleted_on_disk = true;

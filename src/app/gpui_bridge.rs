@@ -426,6 +426,7 @@ pub(crate) struct GpuiActiveDocumentSummary {
     pub conflict_disk: Option<std::sync::Arc<str>>,
     pub comparison: Option<std::sync::Arc<crate::files::DiskComparison>>,
     pub deleted_on_disk: bool,
+    pub disk_reload: u64,
     pub breadcrumb_path: Vec<String>,
     pub breadcrumb_symbols: std::sync::Arc<[crate::json_outline_panel::EditorBreadcrumb]>,
     pub extension: String,
@@ -1554,6 +1555,7 @@ impl Tessel {
             next_session,
             active_session: None,
             documents: vec![],
+            document_watch: Default::default(),
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
@@ -4322,6 +4324,7 @@ impl Tessel {
             conflict_disk: doc.tools.conflict_disk.clone(),
             comparison: doc.comparison().cloned(),
             deleted_on_disk: doc.deleted_on_disk,
+            disk_reload: doc.tools.disk_reload,
             breadcrumb_path: {
                 let path = dunce::simplified(&doc.path);
                 path.strip_prefix(dunce::simplified(&doc.root))

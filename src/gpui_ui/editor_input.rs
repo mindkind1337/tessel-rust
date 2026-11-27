@@ -8,6 +8,7 @@ use std::collections::HashMap;
 struct Binding {
     state: Entity<EditableTextState>,
     synced: String,
+    disk_reload: u64,
     _changed: Subscription,
     _caret: Subscription,
     indentation: editor_indent::Options,
@@ -876,6 +877,12 @@ mod tests {
 
     #[gpui::test]
     fn disk_conflict_buttons_compare_then_reload_the_original_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            use gpui_ce_elements::editable_text::actions::{
+                DEFAULT_INPUT_CONTEXT, default_bindings,
+            };
+            cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+        });
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("report.txt");
         std::fs::write(&path, "base").unwrap();
@@ -921,6 +928,20 @@ mod tests {
                 root.editor_input.get(id).unwrap().read(cx).as_str(),
                 "disk edit"
             );
+        })
+        .unwrap();
+        view.update(cx, |root, window, cx| {
+            let input = root.editor_input.get(id).unwrap().read(cx);
+            window.focus(&input.focus_handle(cx), cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "ctrl-z");
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            let doc = root.app.gpui_editor_document().unwrap();
+            assert_eq!(doc.text, "my draft");
+            assert!(doc.dirty());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "disk edit");
         })
         .unwrap();
     }
@@ -1756,15 +1777,37 @@ impl Input {
         self.bindings.retain(|id, _| open.contains(id));
         let Some(doc) = doc else { return };
         let id = doc.instance_id;
-        if let Some(binding) = self.bindings.get(&id)
-            && binding.state.read(cx).as_str() == doc.text
-        {
-            if restore_focus {
-                window.focus(&binding.state.read(cx).focus_handle(cx), cx);
+        if let Some(binding) = self.bindings.get_mut(&id) {
+            if binding.disk_reload != doc.disk_reload
+                && !doc.dirty
+                && !doc.media
+                && binding.state.read(cx).as_str() == binding.synced
+                && let Some(edit) =
+                    crate::view_tabs_browser_model::minimal_edit(&binding.synced, &doc.text)
+            {
+                use gpui::EntityInputHandler;
+                let from = binding.synced[..edit.start_byte].encode_utf16().count();
+                let to = from
+                    + binding.synced[edit.start_byte..edit.end_before_byte]
+                        .encode_utf16()
+                        .count();
+                binding.state.update(cx, |state, cx| {
+                    state.push_undo_stop();
+                    state.replace_text_in_range(Some(from..to), &edit.replacement, window, cx);
+                    state.push_undo_stop();
+                });
+                binding.synced.clone_from(&doc.text);
+                binding.indentation = editor_indent::Options::detect(&doc.text);
             }
-            return;
+            binding.disk_reload = doc.disk_reload;
+            if binding.state.read(cx).as_str() == doc.text {
+                if restore_focus {
+                    window.focus(&binding.state.read(cx).focus_handle(cx), cx);
+                }
+                return;
+            }
         }
-        // External replace/reload or rejected edits retire the prior undo history.
+        // Rejected or unrelated model replacements retire the prior undo history.
         let state = cx.new(|cx| EditableTextState::new(StringStorage::from(doc.text.as_str()), cx));
         if restore_focus {
             window.focus(&state.read(cx).focus_handle(cx), cx);
@@ -1820,6 +1863,7 @@ impl Input {
             Binding {
                 state,
                 synced: doc.text.clone(),
+                disk_reload: doc.disk_reload,
                 _changed: changed,
                 _caret: caret,
                 indentation: editor_indent::Options::detect(&doc.text),
