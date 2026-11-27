@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
-#[cfg(windows)]
+pub(crate) mod folder_download;
 pub(crate) const MAX_PREVIEW_BYTES: usize = 50 * 1024 * 1024;
 const MAX_FILE: usize = 16 * 1024 * 1024;
 #[derive(Clone)]
@@ -38,6 +38,11 @@ pub enum Action {
     },
     List(String),
     Read(String),
+    DownloadFolder {
+        path: String,
+        parent: std::path::PathBuf,
+        progress: folder_download::Progress,
+    },
     Download {
         path: String,
         destination: std::path::PathBuf,
@@ -76,6 +81,7 @@ pub enum Reply {
     #[cfg(windows)]
     PreviewTooLarge,
     Downloaded(std::path::PathBuf),
+    FolderDownloaded(folder_download::Report),
     Saved,
     Created {
         parent: String,
@@ -327,6 +333,16 @@ async fn operate_with_timeout(
     posix_rename: bool,
     deadline: Duration,
 ) -> Result<Reply, String> {
+    if let Action::DownloadFolder {
+        path,
+        parent,
+        progress,
+    } = action
+    {
+        return folder_download::download(session, root, &path, &parent, &progress, deadline)
+            .await
+            .map(Reply::FolderDownloaded);
+    }
     // Kept outside the cancellable future: a deadline must not skip save cleanup.
     let pending = std::cell::RefCell::new(None);
     let mut result = tokio::time::timeout(
@@ -550,6 +566,9 @@ async fn operate_inner(
                 bytes,
             })
         }
+        Action::DownloadFolder { .. } => {
+            unreachable!("folder transfers have per-operation deadlines")
+        }
         Action::Download { path, destination } => {
             let path = scoped(session, root, &path).await?;
             let (bytes, _) = read_bounded(session, &path, MAX_PREVIEW_BYTES)
@@ -679,6 +698,8 @@ mod tests {
                 let mut child = tokio::process::Command::new(
                     std::env::var_os("TESSEL_TEST_SFTP_SERVER").unwrap(),
                 )
+                // Git for Windows otherwise implements SFTP symlink requests as file copies.
+                .env("MSYS", "winsymlinks:lnk")
                 .current_dir(dir.path())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -712,6 +733,57 @@ mod tests {
                 assert_eq!(bytes, b"page");
                 let target_dir = tempfile::tempdir().unwrap();
                 let target = target_dir.path().join("original.bin");
+                let progress = folder_download::Progress::default();
+                std::fs::create_dir(target_dir.path().join("pages")).unwrap();
+                std::fs::write(dir.path().join("pages/.hidden"), [0, 255, 1]).unwrap();
+                std::fs::create_dir(dir.path().join("pages/nested")).unwrap();
+                std::fs::write(dir.path().join("pages/nested/file"), b"nested").unwrap();
+                std::fs::File::create(dir.path().join("pages/too-large.bin"))
+                    .unwrap()
+                    .set_len((MAX_PREVIEW_BYTES + 1) as u64)
+                    .unwrap();
+                // Exercise the subsystem's link metadata, including links targeting a sibling.
+                // OpenSSH uses target first for SSH_FXP_SYMLINK (v3 interoperability).
+                session
+                    .symlink(format!("{root}/site.css"), format!("{nested}/sibling-link"))
+                    .await
+                    .unwrap();
+                assert!(
+                    session
+                        .lstat(format!("{nested}/sibling-link"))
+                        .await
+                        .unwrap()
+                        .attrs
+                        .is_symlink()
+                );
+                let Reply::FolderDownloaded(report) = operate(
+                    &session,
+                    &root,
+                    Action::DownloadFolder {
+                        path: nested.clone(),
+                        parent: target_dir.path().into(),
+                        progress: progress.clone(),
+                    },
+                    false,
+                )
+                .await
+                .unwrap() else {
+                    panic!("expected folder report")
+                };
+                assert_eq!(report.path.file_name().unwrap(), "pages (2)");
+                assert_eq!(
+                    std::fs::read(report.path.join(".hidden")).unwrap(),
+                    [0, 255, 1]
+                );
+                assert_eq!(
+                    std::fs::read(report.path.join("nested/file")).unwrap(),
+                    b"nested"
+                );
+                assert!(!report.path.join("too-large.bin").exists());
+                assert!(!report.path.join("sibling-link").exists());
+                assert!(report.message(false).contains("1 skipped"));
+                assert!(report.message(false).contains("1 over 50 MiB"));
+                assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 3);
                 let download = |name: &str| Action::Download {
                     path: name.into(),
                     destination: target.clone(),

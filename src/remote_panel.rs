@@ -153,6 +153,8 @@ pub struct RemotePanel {
     document: Option<RemoteDocument>,
     error: String,
     downloaded: Option<std::path::PathBuf>,
+    folder_report: Option<remote::folder_download::Report>,
+    folder_progress: Option<remote::folder_download::Progress>,
     file_menu: Option<(String, (f32, f32))>,
     tree_watch: crate::remote_tree_watch::Watch,
     tree_attempted_alias: Option<String>,
@@ -254,7 +256,10 @@ impl RemotePanel {
         };
         // A replacement watcher must agree with the authoritative SFTP listing
         // before its deltas can update the displayed directory.
-        if !matches!(action, Action::Read(_) | Action::Download { .. }) {
+        if !matches!(
+            action,
+            Action::Read(_) | Action::Download { .. } | Action::DownloadFolder { .. }
+        ) {
             self.tree_watch.invalidate();
             self.tree_live = false;
             self.tree_trusted = false;
@@ -426,6 +431,7 @@ impl RemotePanel {
         });
         if let Some(result) = result {
             self.pending = None;
+            self.folder_progress = None;
             let (result, preview, versions) = match result {
                 Ok((reply, preview, versions)) => (
                     Ok(reply),
@@ -511,6 +517,7 @@ impl RemotePanel {
                 }
                 #[cfg(windows)]
                 Ok(Reply::PreviewTooLarge) => self.error = "Remote preview exceeds 50 MiB".into(),
+                Ok(Reply::FolderDownloaded(report)) => self.folder_report = Some(report),
                 Ok(Reply::Downloaded(path)) => self.downloaded = Some(path),
                 Ok(Reply::Saved) => {
                     if let Some(bytes) = self.submitted.take()
@@ -650,6 +657,9 @@ impl RemotePanel {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
+        if let Some(message) = self.folder_status(crate::i18n::is_french()) {
+            ui.label(message);
+        }
         if let Some(path) = &self.downloaded {
             ui.label(format!("{} {}", tr("File downloaded."), path.display()));
         }
@@ -732,7 +742,7 @@ impl RemotePanel {
                                 }
                             ));
                             response.context_menu(|ui| {
-                                if !entry.directory && ui.button(tr("Download…")).clicked() {
+                                if ui.button(tr("Download…")).clicked() {
                                     download_entry = Some(entry.path.clone());
                                     ui.close();
                                 }

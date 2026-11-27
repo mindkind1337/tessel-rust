@@ -66,6 +66,7 @@ pub(crate) struct Snapshot {
     pub dirty: bool,
     pub error: String,
     pub downloaded: Option<std::path::PathBuf>,
+    pub folder_status: Option<String>,
     pub file_menu: Option<(String, (f32, f32))>,
     pub entries: Vec<(String, String, bool, u64)>,
     pub new_name: String,
@@ -92,6 +93,17 @@ pub(crate) fn is_html(path: &str) -> bool {
 }
 
 impl RemotePanel {
+    pub(super) fn folder_status(&self, fr: bool) -> Option<String> {
+        if let Some(progress) = &self.folder_progress {
+            let n = progress.load(std::sync::atomic::Ordering::Relaxed);
+            return Some(if fr {
+                format!("Téléchargement du dossier… Fichiers enregistrés : {n}")
+            } else {
+                format!("Downloading folder… Files saved: {n}")
+            });
+        }
+        self.folder_report.as_ref().map(|r| r.message(fr))
+    }
     pub(crate) fn input_snapshot(&self) -> Snapshot {
         Snapshot {
             connected: self.host.as_ref().map(|host| host.alias.clone()),
@@ -246,6 +258,7 @@ impl RemotePanel {
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             error: self.error.clone(),
             downloaded: self.downloaded.clone(),
+            folder_status: self.folder_status(crate::i18n::is_french()),
             file_menu: self.file_menu.clone(),
             entries: self
                 .entries
@@ -419,6 +432,7 @@ impl RemotePanel {
                     self.tree_attempted_alias = None;
                     self.tree_alignment_attempted = false;
                     self.selected = index;
+                    self.folder_report = None;
                     self.downloaded = None;
                     self.host = Some(host.clone());
                     self.root.clear();
@@ -429,6 +443,7 @@ impl RemotePanel {
                 }
             }
             Command::Disconnect => {
+                self.folder_report = None;
                 self.downloaded = None;
                 self.host = None;
                 self.root.clear();
@@ -454,7 +469,7 @@ impl RemotePanel {
                 position,
             } => {
                 if self.host.as_ref().is_some_and(|h| h.alias == host)
-                    && self.entries.iter().any(|e| !e.directory && e.path == path)
+                    && self.entries.iter().any(|e| e.path == path)
                 {
                     self.file_menu = Some((path, position));
                 }
@@ -467,13 +482,32 @@ impl RemotePanel {
                 {
                     return;
                 }
-                let Some(entry) = self.entries.iter().find(|e| !e.directory && e.path == path)
-                else {
+                let Some(entry) = self.entries.iter().find(|e| e.path == path) else {
                     return;
                 };
+                if entry.directory {
+                    if let Some(parent) = rfd::FileDialog::new()
+                        .set_title(tr("Download the folder into"))
+                        .pick_folder()
+                    {
+                        let progress = remote::folder_download::Progress::default();
+                        self.downloaded = None;
+                        self.folder_report = None;
+                        self.request(Action::DownloadFolder {
+                            path,
+                            parent,
+                            progress: progress.clone(),
+                        });
+                        if self.pending.is_some() {
+                            self.folder_progress = Some(progress);
+                        }
+                    }
+                    return;
+                }
                 let name = crate::download_name::suggest(&entry.name);
                 if let Some(destination) = crate::files::choose_download_destination(name.as_ref())
                 {
+                    self.folder_report = None;
                     self.downloaded = None;
                     self.request(Action::Download { path, destination });
                 }
@@ -804,6 +838,38 @@ mod tests {
         );
         panel.command(Command::Disconnect, &[]);
         assert!(panel.snapshot(&[]).document.is_none());
+    }
+
+    #[test]
+    fn folder_download_menu_accepts_only_current_rows_and_host() {
+        let mut panel = RemotePanel {
+            host: Some(Host {
+                alias: "fixture".into(),
+                ..Default::default()
+            }),
+            entries: vec![Entry {
+                path: "/root/folder".into(),
+                name: "folder".into(),
+                directory: true,
+                size: 0,
+            }],
+            ..Default::default()
+        };
+        for (host, path, expected) in [
+            ("fixture", "/root/folder", true),
+            ("other", "/root/folder", false),
+            ("fixture", "/stale", false),
+        ] {
+            panel.command(
+                Command::FileMenu {
+                    host: host.into(),
+                    path: path.into(),
+                    position: (4., 8.),
+                },
+                &[],
+            );
+            assert_eq!(panel.file_menu.is_some(), expected);
+        }
     }
 
     #[test]

@@ -209,6 +209,9 @@ pub(crate) fn render(
     if !remote.error.is_empty() {
         body = body.child(SharedString::from(remote.error.clone()));
     }
+    if let Some(message) = &remote.folder_status {
+        body = body.child(message.clone());
+    }
     if let Some(path) = &remote.downloaded {
         body = body.child(format!(
             "{} {}",
@@ -336,7 +339,7 @@ pub(crate) fn render(
                                         el.child(div().flex_shrink_0().child(format!("· {size} B")))
                                     }),
                             )
-                            .when(!*directory && free, |row| {
+                            .when(free, |row| {
                                 let path = path.clone();
                                 let host = connected_alias.clone();
                                 row.on_mouse_down(
