@@ -1550,6 +1550,7 @@ impl Tessel {
             tasks_board: Default::default(),
             tasks_board_project: None,
             pending_close: None,
+            remaining_close_requests: Vec::new(),
             pending_exit: false,
             restore_preview: None,
             file_action: None,
@@ -2371,7 +2372,7 @@ impl Tessel {
             return None;
         }
         match self.view {
-            View::Files if self.active_document < self.documents.len() => {
+            View::Files if self.project_document(self.active_document) => {
                 Some(GpuiAction::CloseDocumentTab(self.active_document))
             }
             View::GuestFiles => self.share.active_workspace_file().cloned().map(|key| {
@@ -2382,7 +2383,7 @@ impl Tessel {
     }
 
     pub(crate) fn gpui_is_document_view(&self) -> bool {
-        self.view == View::Files && !self.documents.is_empty()
+        self.view == View::Files && self.project_document(self.active_document)
     }
 
     pub(crate) fn gpui_remote_input_snapshot(
@@ -3688,7 +3689,13 @@ impl Tessel {
                 deleted: false,
             });
         }
-        for (i, (doc, title)) in self.documents.iter().zip(labels).enumerate() {
+        for (i, (doc, title)) in self
+            .documents
+            .iter()
+            .zip(labels)
+            .enumerate()
+            .filter(|(_, (doc, _))| doc.project == self.state.active_project)
+        {
             let kind = if doc.diff_title.is_some() {
                 crate::view_tabs::Kind::Diff
             } else {
@@ -3729,7 +3736,9 @@ impl Tessel {
         }
         let center_mode = match self.view {
             View::GuestFiles => GpuiCenterMode::GuestFiles,
-            View::Files if !self.documents.is_empty() => GpuiCenterMode::DocumentEditor,
+            View::Files if self.project_document(self.active_document) => {
+                GpuiCenterMode::DocumentEditor
+            }
             View::Remote => GpuiCenterMode::RemoteSftp,
             #[cfg(windows)]
             View::Browser => GpuiCenterMode::BrowserTab,
@@ -3745,7 +3754,7 @@ impl Tessel {
         };
 
         let active_doc_idx = self.active_document;
-        let active_document = if self.view == View::Files {
+        let active_document = if self.gpui_is_document_view() {
             self.documents.get_mut(active_doc_idx).map(|doc| {
                 Self::build_document_summary(active_doc_idx, doc, self.state.editor_prefs)
             })
@@ -5558,18 +5567,22 @@ impl Tessel {
                 self.view = View::Work;
             }
             GpuiAction::SelectDocumentTab(idx) => {
-                if idx < self.documents.len() {
+                if self.project_document(idx) {
                     self.active_document = idx;
                     self.view = View::Files;
                 }
             }
             GpuiAction::KeepDocumentTab(idx) => {
-                if let Some(doc) = self.documents.get_mut(idx) {
+                if self.project_document(idx)
+                    && let Some(doc) = self.documents.get_mut(idx)
+                {
                     doc.unpinned_preview = false;
                 }
             }
             GpuiAction::CloseDocumentTab(idx) => {
-                self.request_document_close(idx);
+                if self.project_document(idx) {
+                    self.request_document_close(idx);
+                }
             }
             GpuiAction::SelectBrowserTab => {
                 #[cfg(windows)]
@@ -5587,11 +5600,8 @@ impl Tessel {
                     self.browser.close_popups();
                     self.browser.visible(false);
                     if self.view == View::Browser {
-                        self.view = if self.documents.is_empty() {
-                            View::Work
-                        } else {
-                            View::Files
-                        };
+                        self.view = View::Files;
+                        self.reconcile_editor_selection();
                     }
                 }
             }
@@ -7614,6 +7624,7 @@ impl Tessel {
                 self.share.close_pill_popover();
                 self.rename_project_modal = None;
                 self.rename_agent = None;
+                self.remaining_close_requests.clear();
                 self.pending_close = None;
                 self.pending_close_session = None;
                 self.pending_remove_project = None;
@@ -7853,10 +7864,13 @@ impl Tessel {
                 self.file_action = None;
             }
             GpuiAction::ConfirmModalPrimary => {
-                if let Some(idx) = self.pending_close.take() {
+                if let Some(idx) = self.pending_close {
                     if let Some(doc) = self.documents.get_mut(idx) {
                         match doc.save(self.store.as_ref().map(|s| s.directory())) {
-                            Ok(()) => self.remove_document(idx),
+                            Ok(()) => {
+                                self.remove_document(idx);
+                                self.advance_close_requests();
+                            }
                             Err(e) => self.error = e,
                         }
                     }
@@ -7903,8 +7917,9 @@ impl Tessel {
                 }
             }
             GpuiAction::ConfirmModalSecondary => {
-                if let Some(idx) = self.pending_close.take() {
+                if let Some(idx) = self.pending_close {
                     self.remove_document(idx);
+                    self.advance_close_requests();
                 }
             }
             GpuiAction::CancelConfirmModal => {
@@ -7915,6 +7930,7 @@ impl Tessel {
                         &self.state.tasks,
                     );
                 }
+                self.remaining_close_requests.clear();
                 self.pending_close = None;
                 self.pending_close_session = None;
                 self.pending_remove_project = None;
@@ -8541,6 +8557,57 @@ mod panel_snapshot_tests {
         assert!(app.documents[0].error.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "four");
     }
+    #[test]
+    fn project_tabs_isolate_names_navigation_and_bulk_close_with_dirty_buffers() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let mut owners = Vec::new();
+        for name in ["one", "two"] {
+            let dir = temp.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            app.apply_gpui_action(GpuiAction::AddProjectPath(dir.clone()));
+            owners.push(app.state.active_project.unwrap());
+            for filename in ["notes.txt", "draft.txt"] {
+                let path = dir.join(filename);
+                std::fs::write(&path, "original").unwrap();
+                app.apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+            }
+        }
+        app.documents[1].text = "project one draft".into();
+        app.documents[3].text = "project two draft".into();
+        let tabs = app.gpui_snapshot(960., 640., 4.).view_tabs;
+        let files: Vec<_> = tabs
+            .iter()
+            .filter_map(|tab| Some((tab.doc_index?, tab.title.as_str())))
+            .collect();
+        assert_eq!(files, [(2, "notes.txt"), (3, "draft.txt")]);
+        app.cycle_project_document(true);
+        assert_eq!(app.active_document, 2);
+        app.cycle_project_document(false);
+        assert_eq!(app.active_document, 3);
+        app.apply_gpui_action(GpuiAction::CloseDocumentTab(0));
+        assert_eq!(app.documents.len(), 4);
+        app.documents[2].text = "second dirty file".into();
+        app.close_project_documents(Some(3));
+        assert_eq!(app.pending_close, Some(2));
+        app.apply_gpui_action(GpuiAction::CancelConfirmModal);
+        assert!(app.remaining_close_requests.is_empty());
+        assert_eq!(app.documents.len(), 4);
+        app.close_project_documents(None);
+        assert_eq!(app.pending_close, Some(2));
+        assert_eq!(app.documents[2].text, "second dirty file");
+        app.apply_gpui_action(GpuiAction::ConfirmModalSecondary);
+        assert_eq!(app.pending_close, Some(2));
+        assert_eq!(app.documents[2].text, "project two draft");
+        app.apply_gpui_action(GpuiAction::ConfirmModalSecondary);
+        assert_eq!(app.documents.len(), 2);
+        assert!(app.view == View::Work);
+        app.apply_gpui_action(GpuiAction::SelectProject(owners[0]));
+        app.apply_gpui_action(GpuiAction::SelectDocumentTab(1));
+        assert_eq!(app.documents[app.active_document].text, "project one draft");
+        assert!(app.gpui_is_document_view());
+    }
+
     #[test]
     fn delayed_previews_and_diffs_leave_the_current_projects_editor_selected() {
         use crate::view_tabs_browser_model::DiffTabArea;

@@ -791,6 +791,7 @@ pub struct Tessel {
     tasks_board: crate::tasks_board_panel::TasksBoard,
     tasks_board_project: Option<u64>,
     pending_close: Option<usize>,
+    remaining_close_requests: Vec<u64>,
     pending_exit: bool,
     restore_preview: Option<Workspace>,
     file_action: Option<crate::file_actions::Action>,
@@ -1024,6 +1025,7 @@ impl Tessel {
             tasks_board: Default::default(),
             tasks_board_project: None,
             pending_close: None,
+            remaining_close_requests: Vec::new(),
             pending_exit: false,
             restore_preview: None,
             file_action: None,
@@ -1754,6 +1756,7 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        self.reconcile_editor_selection();
         self.gpui_extra.layout_menu_right = None;
         let visible = crate::terminal_layout::project_key(self.state.active_project);
         for (key, layout) in &mut self.state.terminal_layouts {
@@ -2728,9 +2731,8 @@ impl Tessel {
                                     self.active_document = self
                                         .active_document
                                         .min(self.documents.len().saturating_sub(1));
-                                    if self.documents.is_empty() && self.view == View::Files {
-                                        self.view = View::Work;
-                                    }
+                                    self.reconcile_editor_selection();
+                                    self.remaining_close_requests.clear();
                                     self.pending_close = None;
                                 }
                             }
@@ -3396,18 +3398,106 @@ impl Tessel {
             }
         }
     }
+    fn project_document(&self, index: usize) -> bool {
+        self.documents
+            .get(index)
+            .is_some_and(|doc| doc.project == self.state.active_project)
+    }
+
+    fn reconcile_editor_selection(&mut self) {
+        if self.project_document(self.active_document) {
+            return;
+        }
+        let mut indices = self
+            .documents
+            .iter()
+            .enumerate()
+            .filter(|(_, doc)| doc.project == self.state.active_project)
+            .map(|(index, _)| index);
+        if let Some(index) = indices
+            .clone()
+            .find(|i| *i >= self.active_document)
+            .or_else(|| indices.next_back())
+        {
+            self.active_document = index;
+        } else if self.view == View::Files {
+            self.view = View::Work;
+        }
+    }
+
+    fn cycle_project_document(&mut self, forward: bool) {
+        let mut indices = self
+            .documents
+            .iter()
+            .enumerate()
+            .filter(|(_, doc)| doc.project == self.state.active_project)
+            .map(|(i, _)| i);
+        let next = if forward {
+            indices
+                .clone()
+                .find(|i| *i > self.active_document)
+                .or_else(|| indices.next())
+        } else {
+            indices
+                .clone()
+                .rfind(|i| *i < self.active_document)
+                .or_else(|| indices.next_back())
+        };
+        if let Some(i) = next {
+            self.active_document = i;
+        }
+    }
+
+    fn close_project_documents(&mut self, keep: Option<usize>) {
+        self.remaining_close_requests.clear();
+        for i in (0..self.documents.len()).rev() {
+            if self.project_document(i) && keep != Some(i) {
+                if self.documents[i].dirty() {
+                    self.remaining_close_requests
+                        .push(self.documents[i].instance_id());
+                } else {
+                    self.remove_document(i);
+                }
+            }
+        }
+        self.advance_close_requests();
+    }
+
+    fn advance_close_requests(&mut self) {
+        self.pending_close = None;
+        while let Some(id) = self.remaining_close_requests.pop() {
+            if let Some(i) = self
+                .documents
+                .iter()
+                .position(|doc| doc.instance_id() == id)
+            {
+                if self.documents[i].dirty() {
+                    self.pending_close = Some(i);
+                    break;
+                }
+                self.remove_document(i);
+            }
+        }
+    }
+
     fn remove_document(&mut self, index: usize) {
         if index >= self.documents.len() {
             return;
         }
+        self.pending_close = self
+            .pending_close
+            .and_then(|pending| match pending.cmp(&index) {
+                std::cmp::Ordering::Less => Some(pending),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(pending - 1),
+            });
         self.documents.remove(index);
         self.active_document =
             active_after_close(self.active_document, index, self.documents.len());
-        if self.documents.is_empty() && self.view == View::Files {
-            self.view = View::Work;
-        }
+        self.reconcile_editor_selection();
     }
     fn request_document_close(&mut self, index: usize) {
+        self.remaining_close_requests.clear();
         if let Some(document) = self.documents.get(index) {
             if document.dirty() {
                 self.pending_close = Some(index);
@@ -3446,7 +3536,13 @@ impl Tessel {
             .map(|tab| (file_name_of(&tab.path).to_lowercase(), false))
             .collect();
         let mut counts = std::collections::HashMap::new();
-        for key in keys.iter().chain(&guest_keys) {
+        for key in keys
+            .iter()
+            .zip(&self.documents)
+            .filter(|(_, doc)| doc.project == self.state.active_project)
+            .map(|(key, _)| key)
+            .chain(&guest_keys)
+        {
             *counts.entry(key).or_insert(0usize) += 1;
         }
         let local = paths
@@ -3454,7 +3550,8 @@ impl Tessel {
             .zip(&self.documents)
             .zip(&keys)
             .map(|((path, doc), key)| {
-                let label = qualified_tab_name(path, counts[key] > 1);
+                let label =
+                    qualified_tab_name(path, counts.get(key).copied().unwrap_or_default() > 1);
                 if let Some(area) = &doc.diff_area {
                     return diff_label(&label, area, self.tab_language());
                 }
@@ -3553,7 +3650,12 @@ impl Tessel {
                             self.view = View::Browser;
                         }
                     }
-                    for (i, document) in self.documents.iter().enumerate() {
+                    for (i, document) in self
+                        .documents
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, doc)| doc.project == self.state.active_project)
+                    {
                         let title = &labels[i];
                         let kind = if document.diff_title.is_some() {
                             crate::view_tabs::Kind::Diff
@@ -3630,11 +3732,8 @@ impl Tessel {
             self.browser_tab_open = false;
             self.browser.close_popups();
             if self.view == View::Browser {
-                self.view = if self.documents.is_empty() {
-                    View::Work
-                } else {
-                    View::Files
-                };
+                self.view = View::Files;
+                self.reconcile_editor_selection();
             }
         }
         if let Some(index) = keep_open
@@ -3642,29 +3741,8 @@ impl Tessel {
         {
             doc.unpinned_preview = false;
         }
-        if let Some(keep_idx) = close_others {
-            for idx in (0..self.documents.len()).rev() {
-                if idx == keep_idx {
-                    continue;
-                }
-                if self.documents[idx].dirty() {
-                    if self.pending_close.is_none() {
-                        self.pending_close = Some(idx);
-                    }
-                } else {
-                    self.remove_document(idx);
-                }
-            }
-        } else if close_all {
-            for idx in (0..self.documents.len()).rev() {
-                if self.documents[idx].dirty() {
-                    if self.pending_close.is_none() {
-                        self.pending_close = Some(idx);
-                    }
-                } else {
-                    self.remove_document(idx);
-                }
-            }
+        if close_others.is_some() || close_all {
+            self.close_project_documents(close_others);
         } else if let Some(index) = close {
             self.request_document_close(index);
         }
@@ -4754,6 +4832,19 @@ impl Tessel {
                     .and_then(|s| s.parse::<usize>().ok())
                     && index < self.documents.len()
                 {
+                    let owner = self.documents[index].project;
+                    if owner != self.state.active_project {
+                        if owner.is_none()
+                            || self.state.projects.iter().any(|p| Some(p.id) == owner)
+                        {
+                            self.state.active_project = owner;
+                            self.refresh_project();
+                            self.save();
+                        } else {
+                            // The global palette can recover an open buffer whose project was removed.
+                            self.documents[index].project = self.state.active_project;
+                        }
+                    }
                     self.active_document = index;
                     self.view = View::Files;
                 } else if let Some((pid, path)) = id
@@ -5448,7 +5539,12 @@ impl Tessel {
         egui::CollapsingHeader::new(tr("Open editors"))
             .default_open(true)
             .show(ui, |ui| {
-                for (i, document) in self.documents.iter().enumerate() {
+                for (i, document) in self
+                    .documents
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, doc)| doc.project == self.state.active_project)
+                {
                     ui.horizontal(|ui| {
                         let base_name = document.diff_title.clone().unwrap_or_else(|| {
                             document
@@ -8382,6 +8478,7 @@ impl Tessel {
         self.document_pending.clear();
         self.active_session = None;
         self.active_document = 0;
+        self.remaining_close_requests.clear();
         self.pending_close = None;
         self.pending_scm_discard = None;
         self.rename_project_modal = None;
@@ -11920,6 +12017,7 @@ impl Tessel {
                 ui.label(self.documents[index].path.display().to_string());
                 ui.horizontal(|ui| {
                     if ui.button(tr("Cancel")).clicked() {
+                        self.remaining_close_requests.clear();
                         self.pending_close = None;
                     }
                     if ui.button(tr("Save and close")).clicked() {
@@ -11927,14 +12025,14 @@ impl Tessel {
                         {
                             Ok(()) => {
                                 self.remove_document(index);
-                                self.pending_close = None;
+                                self.advance_close_requests();
                             }
                             Err(e) => self.error = e,
                         }
                     }
                     if ui.button(tr("Discard changes")).clicked() {
                         self.remove_document(index);
-                        self.pending_close = None;
+                        self.advance_close_requests();
                     }
                 });
             });
@@ -14143,13 +14241,11 @@ impl eframe::App for Tessel {
                 if self.view == View::Files && self.documents.len() > 1 {
                     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowLeft))
                     {
-                        let len = self.documents.len();
-                        self.active_document = (self.active_document + len - 1) % len;
+                        self.cycle_project_document(false);
                     } else if ctx
                         .input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowRight))
                     {
-                        let len = self.documents.len();
-                        self.active_document = (self.active_document + 1) % len;
+                        self.cycle_project_document(true);
                     }
                 }
             }
