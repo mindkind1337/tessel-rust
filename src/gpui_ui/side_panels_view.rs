@@ -539,6 +539,43 @@ fn render_open_editors(
     section.into_any_element()
 }
 
+fn explorer_sash(
+    pane: crate::app::gpui_bridge::ExplorerPane,
+    height: u16,
+    room: std::rc::Rc<std::cell::Cell<f32>>,
+    tokens: &GpuiThemeTokens,
+    cx: &Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let id = match pane {
+        crate::app::gpui_bridge::ExplorerPane::Outline => "outline-sash",
+        crate::app::gpui_bridge::ExplorerPane::Timeline => "timeline-sash",
+    };
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .w_full()
+        .h(px(4.))
+        .flex_shrink_0()
+        .cursor_row_resize()
+        .hover(|s| s.bg(tokens.accent))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |root, event: &gpui::MouseDownEvent, window, cx| {
+                // Leave three section headers and 66px of working room, as in Vue's paneResize.
+                let max_height = (room.get() - 150.).clamp(44., 2000.) as u16;
+                root.active_drag = Some(super::DragTarget::ExplorerPane {
+                    pane,
+                    start_y: event.position.y.into(),
+                    start_height: height,
+                    height,
+                    max_height,
+                });
+                window.prevent_default();
+                cx.stop_propagation();
+            }),
+        )
+}
+
 fn render_explorer_tab(
     sp: &GpuiSidePanelsSnapshot,
     explorer_input: &super::explorer_input::Input,
@@ -563,6 +600,7 @@ fn render_explorer_tab(
             .into_any_element();
     }
 
+    let explorer_height = std::rc::Rc::new(std::cell::Cell::new(0.));
     let toolbar = div()
         .flex()
         .items_center()
@@ -1083,14 +1121,25 @@ fn render_explorer_tab(
         .when(!sp.folder_shown && sp.outline_open, |el| {
             el.flex_1().min_h_0()
         })
+        .when(sp.folder_shown && sp.outline_open, |el| {
+            el.h(px(f32::from(sp.outline_height) + 28.))
+                .min_h(px(28.))
+                .child(explorer_sash(
+                    crate::app::gpui_bridge::ExplorerPane::Outline,
+                    sp.outline_height,
+                    explorer_height.clone(),
+                    tokens,
+                    cx,
+                ))
+        })
         .child(heading);
     if sp.outline_open {
         let mut reveal_index = None;
         let mut body = div()
             .id("explorer-outline-scroll")
             .track_scroll(&explorer_input.outline_scroll)
-            .when(sp.folder_shown, |el| el.max_h(px(160.0)))
-            .when(!sp.folder_shown, |el| el.flex_1().min_h_0())
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col();
@@ -1295,7 +1344,17 @@ fn render_explorer_tab(
         }
     }
 
+    let measure = explorer_height.clone();
     div()
+        .relative()
+        .child(
+            canvas(
+                move |bounds, _, _| measure.set(f32::from(bounds.size.height)),
+                |_, (), _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        )
         .size_full()
         .p(px(8.0))
         .flex()
@@ -1343,13 +1402,7 @@ fn render_explorer_tab(
                 }),
         )
         .child(outline)
-        .child(render_timeline(
-            &sp.timeline,
-            !sp.folder_shown,
-            french,
-            tokens,
-            cx,
-        ))
+        .child(render_timeline(sp, explorer_height, french, tokens, cx))
         .into_any_element()
 }
 
@@ -2983,17 +3036,30 @@ fn render_chip(
 }
 
 fn render_timeline(
-    snap: &crate::file_timeline::Snapshot,
-    fill: bool,
+    sp: &GpuiSidePanelsSnapshot,
+    room: std::rc::Rc<std::cell::Cell<f32>>,
     fr: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     use crate::file_timeline::Action;
+    let snap = &sp.timeline;
+    let fill = !sp.folder_shown;
     let mut section = div()
         .flex()
         .flex_col()
-        .when(fill && snap.shown, |el| el.flex_1().min_h_0());
+        .when(fill && snap.shown, |el| el.flex_1().min_h_0())
+        .when(!fill && snap.shown, |el| {
+            el.h(px(f32::from(sp.timeline_height) + 28.))
+                .min_h(px(28.))
+                .child(explorer_sash(
+                    crate::app::gpui_bridge::ExplorerPane::Timeline,
+                    sp.timeline_height,
+                    room,
+                    tokens,
+                    cx,
+                ))
+        });
     section = section.child(render_chip(
         "timeline-toggle",
         if fr { "Chronologie" } else { "Timeline" }.into(),
@@ -3089,8 +3155,8 @@ fn render_timeline(
     if let (Some(file), Some(Ok(history))) = (&snap.file, &snap.data) {
         let mut list = div()
             .id("timeline-entries")
-            .when(!fill, |el| el.max_h(px(160.)))
-            .when(fill, |el| el.flex_1().min_h_0())
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col();

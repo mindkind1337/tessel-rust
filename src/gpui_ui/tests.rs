@@ -414,6 +414,80 @@ fn ctrl_page_keys_cycle_workspaces_and_route_terminal_input(cx: &mut gpui::TestA
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_sashes_resize_independently_and_save_on_release(cx: &mut gpui::TestAppContext) {
+    use gpui::MouseButton::Left;
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(state.clone()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project));
+        let snap = root.app.gpui_snapshot(960., 640., 4.);
+        if !snap.toolbar.right_open || snap.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        if !root
+            .app
+            .gpui_snapshot(960., 640., 4.)
+            .side_panels
+            .outline_open
+        {
+            root.app.apply_gpui_action(GpuiAction::OutlineToggle);
+        }
+        root
+    });
+    for (sash, delta, expected) in [("outline-sash", 60., 160), ("timeline-sash", 40., 180)] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let start = visual.debug_bounds(sash).unwrap().center();
+        let end = gpui::point(start.x, start.y + gpui::px(delta));
+        visual.simulate_mouse_down(start, Left, Default::default());
+        visual.simulate_mouse_move(end, Some(Left), Default::default());
+        view.update(cx, |root,_,_| {
+            assert!(matches!(root.active_drag,Some(super::DragTarget::ExplorerPane {height,..}) if height == expected));
+            let prefs = &root.app.state.editor_prefs;
+            assert_eq!(if sash == "outline-sash" {prefs.explorer_outline_height} else {prefs.explorer_timeline_height},220);
+        }).unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        visual.simulate_mouse_up(end, Left, Default::default());
+        view.update(cx, |root, _, cx| {
+            if sash == "outline-sash" {
+                assert_eq!(root.app.state.editor_prefs.explorer_outline_height, 160);
+                root.dispatch(GpuiAction::OutlineToggle, cx);
+                root.dispatch(
+                    GpuiAction::Timeline(crate::file_timeline::Action::Toggle),
+                    cx,
+                );
+            }
+        })
+        .unwrap();
+    }
+    let saved: crate::workspace::Workspace =
+        serde_json::from_slice(&std::fs::read(state.join("workspace.json")).unwrap()).unwrap();
+    assert_eq!(
+        (
+            saved.editor_prefs.explorer_outline_height,
+            saved.editor_prefs.explorer_timeline_height
+        ),
+        (160, 180)
+    );
+    view.update(cx, |root, _, cx| {
+        root.dispatch(GpuiAction::ExplorerToggleFolder, cx)
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("timeline-sash")
+            .is_none()
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_folder_fold_persists_and_header_creation_reopens_the_project_root(
     cx: &mut gpui::TestAppContext,
 ) {

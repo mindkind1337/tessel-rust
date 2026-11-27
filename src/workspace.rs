@@ -271,6 +271,8 @@ pub struct EditorPreferences {
     pub open_editors_shown: bool,
     #[serde(default = "default_true")]
     pub explorer_folder_shown: bool,
+    pub explorer_outline_height: u16,
+    pub explorer_timeline_height: u16,
     pub timeline_shown: bool,
     pub timeline_git: bool,
     pub timeline_local: bool,
@@ -295,6 +297,8 @@ impl Default for EditorPreferences {
             outline_filter_on_type: true,
             open_editors_shown: true,
             explorer_folder_shown: true,
+            explorer_outline_height: 220,
+            explorer_timeline_height: 220,
             timeline_shown: false,
             timeline_git: true,
             timeline_local: true,

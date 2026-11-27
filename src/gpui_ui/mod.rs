@@ -88,6 +88,13 @@ pub(crate) enum DragTarget {
         start_width: f32,
     },
     RightPanel,
+    ExplorerPane {
+        pane: crate::app::gpui_bridge::ExplorerPane,
+        start_y: f32,
+        start_height: u16,
+        max_height: u16,
+        height: u16,
+    },
     FloatingTerminal {
         stage_height_px: f32,
     },
@@ -1271,6 +1278,27 @@ impl TesselGpuiRoot {
                     cx.notify();
                 }
             }
+            DragTarget::ExplorerPane {
+                pane,
+                start_y,
+                start_height,
+                max_height,
+                height,
+            } => {
+                let next = (f32::from(start_height) + start_y - f32::from(event.position.y))
+                    .round()
+                    .clamp(44., f32::from(max_height)) as u16;
+                if height != next {
+                    self.active_drag = Some(DragTarget::ExplorerPane {
+                        pane,
+                        start_y,
+                        start_height,
+                        max_height,
+                        height: next,
+                    });
+                    cx.notify();
+                }
+            }
             DragTarget::RightPanel => {
                 let next = (viewport_w - f32::from(event.position.x))
                     .clamp(RIGHT_PANEL_MIN_WIDTH_PX, RIGHT_PANEL_MAX_WIDTH_PX);
@@ -1394,7 +1422,25 @@ impl Render for TesselGpuiRoot {
             self.app.browser.visible(false);
         }
 
-        let snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        let mut snapshot = self.app.gpui_snapshot(grid_w, grid_h, SPLIT_DIVIDER_PX);
+        if let Some(DragTarget::ExplorerPane { pane, height, .. }) = self.active_drag {
+            use crate::app::gpui_bridge::ExplorerPane;
+            if snapshot.right_tab == SideTab::Files
+                && snapshot.toolbar.right_open
+                && snapshot.side_panels.folder_shown
+                && match pane {
+                    ExplorerPane::Outline => snapshot.side_panels.outline_open,
+                    ExplorerPane::Timeline => snapshot.side_panels.timeline.shown,
+                }
+            {
+                match pane {
+                    ExplorerPane::Outline => snapshot.side_panels.outline_height = height,
+                    ExplorerPane::Timeline => snapshot.side_panels.timeline_height = height,
+                }
+            } else {
+                self.active_drag = None;
+            }
+        }
         self.editor_input
             .guest
             .sync(self.app.gpui_guest_editor(), cx);
@@ -1912,7 +1958,11 @@ impl Render for TesselGpuiRoot {
             .on_key_down(cx.listener(Self::handle_key_down))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .capture_any_mouse_up(cx.listener(|root, _: &MouseUpEvent, _, cx| {
-                if root.active_drag.take().is_some() {
+                if let Some(drag) = root.active_drag.take() {
+                    if let DragTarget::ExplorerPane { pane, height, .. } = drag {
+                        root.app
+                            .apply_gpui_action(GpuiAction::ExplorerPaneHeight(pane, height));
+                    }
                     cx.notify();
                 }
             }))

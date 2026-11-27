@@ -485,6 +485,12 @@ pub(crate) struct GpuiSidePanelSummary {
     pub explorer_root_name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExplorerPane {
+    Outline,
+    Timeline,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ExplorerOpenEditor {
     pub title: String,
@@ -509,6 +515,8 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub editor_project: Option<u64>,
     pub open_editors_shown: bool,
     pub folder_shown: bool,
+    pub outline_height: u16,
+    pub timeline_height: u16,
     pub explorer_editable: bool,
     pub explorer_can_insert: bool,
     pub timeline: crate::file_timeline::Snapshot,
@@ -1080,6 +1088,7 @@ pub(crate) enum GpuiAction {
     ExplorerToggleSearchMode,
     ExplorerSetSearchMode(bool),
     ExplorerToggleFolder,
+    ExplorerPaneHeight(ExplorerPane, u16),
     ExplorerCollapseFolders,
     ExplorerToggleEditors,
     ExplorerActivateDocument(u64),
@@ -4794,6 +4803,16 @@ impl Tessel {
             editor_project: self.state.active_project,
             open_editors_shown: self.state.editor_prefs.open_editors_shown,
             folder_shown: self.state.editor_prefs.explorer_folder_shown,
+            outline_height: self
+                .state
+                .editor_prefs
+                .explorer_outline_height
+                .clamp(44, 2000),
+            timeline_height: self
+                .state
+                .editor_prefs
+                .explorer_timeline_height
+                .clamp(44, 2000),
             explorer_editable: self.file_actions_ready(),
             explorer_can_insert: self.explorer_terminal_id().is_some(),
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
@@ -6914,6 +6933,17 @@ impl Tessel {
             }
             GpuiAction::ExplorerSetSearchMode(content) => {
                 self.explorer_tree.gpui_set_search_mode(content);
+            }
+            GpuiAction::ExplorerPaneHeight(pane, height) => {
+                let stored = match pane {
+                    ExplorerPane::Outline => &mut self.state.editor_prefs.explorer_outline_height,
+                    ExplorerPane::Timeline => &mut self.state.editor_prefs.explorer_timeline_height,
+                };
+                let height = height.clamp(44, 2000);
+                if *stored != height {
+                    *stored = height;
+                    self.save();
+                }
             }
             GpuiAction::ExplorerToggleFolder => {
                 self.state.editor_prefs.explorer_folder_shown =
