@@ -576,6 +576,28 @@ impl Browser {
         self.popup = None;
     }
 
+    pub fn https_recovery_url(&self) -> Option<String> {
+        let (address, reason) = self.failed_page.as_ref()?;
+        if *reason == CERTIFICATE_FAILURE || !crate::view_tabs_browser_model::is_local_url(address)
+        {
+            return None;
+        }
+        let mut url = url::Url::parse(address).ok()?;
+        if url.scheme() != "http" {
+            return None;
+        }
+        url.set_scheme("https").ok()?;
+        Some(url.into())
+    }
+
+    pub fn try_https(&mut self, expected: &str) {
+        if let Some(url) = self.https_recovery_url()
+            && url == expected
+        {
+            self.open_url(&url);
+        }
+    }
+
     pub fn failed_address(&self) -> Option<&str> {
         self.failed_page.as_ref().map(|(url, _)| url.as_str())
     }
@@ -696,6 +718,8 @@ impl Browser {
         self.sync_presentation(can_show, overlay, reclaim_parent_focus)
     }
 }
+
+const CERTIFICATE_FAILURE: &str = "The certificate could not be verified.";
 
 fn allowed(address: &str) -> bool {
     address.len() <= 8192
@@ -1036,7 +1060,7 @@ impl Browser {
                                                 | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED
                                                 | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID
                                                 | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED
-                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => "The certificate could not be verified.",
+                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => CERTIFICATE_FAILURE,
                                                 _ => "Could not connect to this page.",
                                             };
                                             let _ = notify.send(Event::LoadFailed { address, reason });
@@ -1460,6 +1484,11 @@ impl Browser {
         if !self.error_str().is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(egui::Color32::LIGHT_RED, self.error_str());
+                if let Some(url) = self.https_recovery_url()
+                    && ui.button(tr("Try HTTPS")).clicked()
+                {
+                    self.try_https(&url);
+                }
                 if let Some(address) = self.failed_address()
                     && ui.button(tr("Copy Address")).clicked()
                 {
@@ -1747,6 +1776,37 @@ mod tests {
         wait_for(view, "location.pathname === '/two' && window.version === 2");
         drop(stop);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn https_recovery_only_upgrades_failed_local_http_connections() {
+        let mut page = Browser::default();
+        for (url, expected) in [
+            (
+                "http://[::1]:5173/app?a=b#top",
+                Some("https://[::1]:5173/app?a=b#top"),
+            ),
+            (
+                "http://abc.localhost:444/index",
+                Some("https://abc.localhost:444/index"),
+            ),
+            ("http://127.3.2.1/", Some("https://127.3.2.1/")),
+            ("http://localhost.example/", None),
+            ("https://localhost/", None),
+        ] {
+            page.failed_page = Some((url.into(), "Could not connect to this page."));
+            assert_eq!(page.https_recovery_url().as_deref(), expected);
+        }
+        page.failed_page = Some(("http://localhost/".into(), CERTIFICATE_FAILURE));
+        assert!(page.https_recovery_url().is_none());
+        page.failed_page = Some((
+            "http://localhost/b".into(),
+            "Could not connect to this page.",
+        ));
+        page.try_https("https://localhost/a");
+        assert_ne!(page.address_str(), "https://localhost/a");
+        page.try_https("https://localhost/b");
+        assert_eq!(page.address_str(), "https://localhost/b");
     }
 
     #[test]

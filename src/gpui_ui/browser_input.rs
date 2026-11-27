@@ -286,9 +286,9 @@ mod tests {
         });
     }
     #[gpui::test]
-    fn click_copies_failed_address_from_its_own_browser_pane(cx: &mut TestAppContext) {
+    fn failed_page_actions_target_their_own_browser_pane(cx: &mut TestAppContext) {
         const CENTER: &str = "https://center.example/report?format=pdf&year=2025";
-        const SIDE: &str = "https://side.example/files/a%20b?download=1";
+        const SIDE: &str = "http://localhost:5173/files/a%20b?download=1";
         let dir = tempfile::tempdir().unwrap();
         let view = cx.add_window(|_, cx| {
             let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
@@ -321,6 +321,18 @@ mod tests {
                 Some(expected)
             );
         }
+        assert!(visual.debug_bounds("browser-try-https").is_none());
+        let upgrade = visual.debug_bounds("side-browser-try-https").unwrap();
+        visual.simulate_click(upgrade.center(), Default::default());
+        view.update(cx, |root, _, _| {
+            let id = root.app.selected_side_browser.unwrap();
+            assert_eq!(
+                root.app.side_browsers[&id].address_str(),
+                "https://localhost:5173/files/a%20b?download=1"
+            );
+            assert_eq!(root.app.browser.failed_address(), Some(CENTER));
+        })
+        .unwrap();
     }
 
     #[gpui::test]

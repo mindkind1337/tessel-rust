@@ -2496,12 +2496,30 @@ pub(super) fn browser_error_notice(
     page: &crate::app::gpui_bridge::GpuiBrowserSnapshot,
     tokens: &GpuiThemeTokens,
     selector: &'static str,
+    https_selector: &'static str,
+    cx: &mut Context<TesselGpuiRoot>,
 ) -> gpui::Div {
+    let tab = page.tab_id;
     div()
         .flex()
         .items_center()
         .gap(px(8.))
+        .flex_wrap()
         .child(page.error.clone())
+        .when_some(page.https_recovery_url.clone(), |row, url| {
+            row.child(
+                div()
+                    .id(https_selector)
+                    .debug_selector(move || https_selector.into())
+                    .cursor_pointer()
+                    .text_color(tokens.accent)
+                    .aria_label(crate::i18n::tr("Try HTTPS"))
+                    .child(crate::i18n::tr("Try HTTPS"))
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.dispatch(GpuiAction::BrowserTryHttps(tab, url.clone()), cx);
+                    })),
+            )
+        })
         .when_some(page.failed_address.clone(), |row, address| {
             row.child(
                 div()
@@ -2821,6 +2839,8 @@ pub(crate) fn render_browser_stage(
                         b,
                         tokens,
                         "browser-copy-failed-address",
+                        "browser-try-https",
+                        cx,
                     )),
             )
         })

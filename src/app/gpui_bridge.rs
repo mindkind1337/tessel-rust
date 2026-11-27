@@ -474,6 +474,7 @@ pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<Str
 pub(crate) struct GpuiBrowserSnapshot {
     pub loading_navigation: Option<u64>,
     pub failed_address: Option<String>,
+    pub https_recovery_url: Option<String>,
     pub history: (bool, bool),
     pub tab_id: u64,
     pub started: bool,
@@ -493,6 +494,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
             history: page.history_directions(),
             started: page.is_started(),
             loading_navigation: page.loading_navigation(),
+            https_recovery_url: page.https_recovery_url(),
             failed_address: page.failed_address().map(str::to_owned),
             address: page.display_address().to_owned(),
             popup_url: page.popup_url().map(str::to_owned),
@@ -1104,6 +1106,7 @@ pub(crate) enum GpuiAction {
     BrowserForward(u64),
     BrowserReload(u64),
     BrowserReloadMenu(u64),
+    BrowserTryHttps(u64, String),
     BrowserStop {
         tab: u64,
         navigation: u64,
@@ -6951,6 +6954,18 @@ impl Tessel {
                 }
                 #[cfg(not(windows))]
                 let _ = tab;
+            }
+            GpuiAction::BrowserTryHttps(tab, url) => {
+                #[cfg(windows)]
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.try_https(&url);
+                } else if self.side_browser_visible(tab)
+                    && let Some(page) = self.side_browsers.get_mut(&tab)
+                {
+                    page.try_https(&url);
+                }
+                #[cfg(not(windows))]
+                let _ = (tab, url);
             }
             GpuiAction::BrowserReloadMenu(tab) => {
                 #[cfg(windows)]

@@ -1715,6 +1715,8 @@ fn render_side_browser(
                         page,
                         tokens,
                         "side-browser-copy-failed-address",
+                        "side-browser-try-https",
+                        cx,
                     ),
                 ))
             },
