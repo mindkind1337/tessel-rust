@@ -32,6 +32,7 @@ enum Event {
     Popup(String),
     Error(String),
     Navigation(String),
+    HistoryChanged,
 }
 
 use crate::app::gpui_bridge::DownloadSummaryRow;
@@ -410,13 +411,17 @@ impl Browser {
     }
 
     pub fn go_back_now(&self) {
-        if let Some(view) = &self.view {
+        if let Some(view) = &self.view
+            && view.can_go_back().unwrap_or(false)
+        {
             let _ = view.go_back();
         }
     }
 
     pub fn go_forward_now(&self) {
-        if let Some(view) = &self.view {
+        if let Some(view) = &self.view
+            && view.can_go_forward().unwrap_or(false)
+        {
             let _ = view.go_forward();
         }
     }
@@ -837,6 +842,16 @@ impl Browser {
         // `dispatch_handler` invokes `with_new_window_req_handler` on the next message-loop tick.
         unsafe {
             use wry::WebViewExtWindows as _;
+            let history = self.sender.clone();
+            view.webview()
+                .add_HistoryChanged(
+                    &webview2_com::HistoryChangedEventHandler::create(Box::new(move |_, _| {
+                        let _ = history.send(Event::HistoryChanged);
+                        Ok(())
+                    })),
+                    &mut 0,
+                )
+                .map_err(|e| e.to_string())?;
             let _ = view.webview().add_NewWindowRequested(
                 &webview2_com::NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
                     if let Some(args) = args {
@@ -953,6 +968,7 @@ impl Browser {
                 Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
+                Event::HistoryChanged => {}
                 Event::Navigation(address) => self.observe_navigation(address),
             }
         }
@@ -1078,11 +1094,12 @@ impl Browser {
             });
         ui.horizontal(|ui| {
             if let Some(view) = &self.view {
-                if ui.button("←").clicked() {
-                    let _ = view.go_back();
+                let (back, forward) = self.history_directions();
+                if ui.add_enabled(back, egui::Button::new("←")).clicked() {
+                    self.go_back_now();
                 }
-                if ui.button("→").clicked() {
-                    let _ = view.go_forward();
+                if ui.add_enabled(forward, egui::Button::new("→")).clicked() {
+                    self.go_forward_now();
                 }
                 if ui.button(tr("Reload")).clicked() || reload_shortcut {
                     let _ = view.reload();
@@ -1712,6 +1729,16 @@ mod tests {
             app.browser.view.as_ref().unwrap(),
             "(localStorage.setItem('move-fixture','session retained'),history.pushState({old:true},''),true)",
         );
+        assert!(app.gpui_snapshot(960., 640., 4.).browser.history.0);
+        app.apply_gpui_action(GpuiAction::BrowserBack(ids[0]));
+        wait_for(app.browser.view.as_ref().unwrap(), "!history.state");
+        assert!(app.gpui_snapshot(960., 640., 4.).browser.history.1);
+        app.apply_gpui_action(GpuiAction::BrowserForward(ids[0]));
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "history.state?.old === true",
+        );
+        assert!(!app.gpui_snapshot(960., 640., 4.).browser.history.1);
         app.apply_gpui_action(GpuiAction::DockBrowser(ids[0]));
         assert_eq!(app.browser.tab_id, ids[1]);
         let side = app.selected_side_browser.unwrap();
@@ -1732,13 +1759,25 @@ mod tests {
             app.side_browsers[&side].view.as_ref().unwrap(),
             "(history.pushState({side:true}, '', '#side'), true)",
         );
-        assert!(app.gpui_snapshot(960., 640., 4.).side_history.0);
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .side_browser
+                .unwrap()
+                .history
+                .0
+        );
         app.apply_gpui_action(GpuiAction::SideBrowserBack(side));
         wait_for(
             app.side_browsers[&side].view.as_ref().unwrap(),
             "!history.state",
         );
-        assert!(app.gpui_snapshot(960., 640., 4.).side_history.1);
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .side_browser
+                .unwrap()
+                .history
+                .1
+        );
         app.apply_gpui_action(GpuiAction::SideBrowserForward(side));
         wait_for(
             app.side_browsers[&side].view.as_ref().unwrap(),

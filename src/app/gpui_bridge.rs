@@ -472,6 +472,7 @@ pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<Str
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpuiBrowserSnapshot {
+    pub history: (bool, bool),
     pub tab_id: u64,
     pub started: bool,
     pub address: String,
@@ -487,6 +488,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
     fn from(page: &crate::browser::Browser) -> Self {
         Self {
             tab_id: page.tab_id,
+            history: page.history_directions(),
             started: page.is_started(),
             address: page.address_str().to_owned(),
             popup_url: page.popup_url().map(str::to_owned),
@@ -809,7 +811,6 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub editor_font_size: u8,
     pub renderer: RendererPreference,
     pub side_browser: Option<GpuiBrowserSnapshot>,
-    pub side_history: (bool, bool),
     pub side_browser_tabs: Vec<(u64, String)>,
     pub selected_side_browser: Option<u64>,
     pub right_fullscreen: bool,
@@ -1083,8 +1084,8 @@ pub(crate) enum GpuiAction {
     SideBrowserBack(u64),
     SideBrowserForward(u64),
     SideBrowserReload(u64),
-    BrowserBack,
-    BrowserForward,
+    BrowserBack(u64),
+    BrowserForward(u64),
     BrowserReload,
     BrowserImportCookies,
     BrowserAcceptPopup,
@@ -4150,14 +4151,6 @@ impl Tessel {
             font_size,
             renderer: self.state.renderer,
             #[cfg(windows)]
-            side_history: self
-                .selected_side_browser
-                .and_then(|id| self.side_browsers.get(&id))
-                .map(|page| page.history_directions())
-                .unwrap_or_default(),
-            #[cfg(not(windows))]
-            side_history: (false, false),
-            #[cfg(windows)]
             side_browser: self
                 .selected_side_browser
                 .and_then(|id| self.side_browsers.get(&id))
@@ -6894,13 +6887,21 @@ impl Tessel {
                 #[cfg(not(windows))]
                 let _ = id;
             }
-            GpuiAction::BrowserBack => {
+            GpuiAction::BrowserBack(tab) => {
                 #[cfg(windows)]
-                self.browser.go_back_now();
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.go_back_now();
+                }
+                #[cfg(not(windows))]
+                let _ = tab;
             }
-            GpuiAction::BrowserForward => {
+            GpuiAction::BrowserForward(tab) => {
                 #[cfg(windows)]
-                self.browser.go_forward_now();
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.go_forward_now();
+                }
+                #[cfg(not(windows))]
+                let _ = tab;
             }
             GpuiAction::BrowserReload => {
                 #[cfg(windows)]

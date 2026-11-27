@@ -2607,31 +2607,42 @@ pub(crate) fn render_browser_stage(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(
-                    div()
-                        .id("browser-back")
-                        .px(px(7.0))
-                        .py(px(3.0))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::BrowserBack, cx);
-                        }))
-                        .child("←"),
-                )
-                .child(
-                    div()
-                        .id("browser-fwd")
-                        .px(px(7.0))
-                        .py(px(3.0))
-                        .rounded(px(4.0))
-                        .bg(tokens.surface_2)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::BrowserForward, cx);
-                        }))
-                        .child("→"),
+                .children(
+                    [
+                        (
+                            "browser-back",
+                            "←",
+                            if french { "Précédent" } else { "Back" },
+                            b.history.0,
+                            GpuiAction::BrowserBack(b.tab_id),
+                        ),
+                        (
+                            "browser-fwd",
+                            "→",
+                            if french { "Suivant" } else { "Forward" },
+                            b.history.1,
+                            GpuiAction::BrowserForward(b.tab_id),
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(id, glyph, label, enabled, action)| {
+                        div()
+                            .id(id)
+                            .px(px(7.))
+                            .py(px(3.))
+                            .rounded(px(4.))
+                            .bg(tokens.surface_2)
+                            .aria_label(label)
+                            .aria_disabled(!enabled)
+                            .when(!enabled, |el| el.opacity(0.4))
+                            .when(enabled, |el| {
+                                el.cursor_pointer()
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        root.dispatch(action.clone(), cx)
+                                    }))
+                            })
+                            .child(glyph)
+                    }),
                 )
                 .child(
                     div()

@@ -1587,6 +1587,11 @@ fn render_side_browser(
     cx: &mut Context<TesselGpuiRoot>,
 ) -> gpui::AnyElement {
     let french = snapshot.french;
+    let history = snapshot
+        .side_browser
+        .as_ref()
+        .map(|page| page.history)
+        .unwrap_or_default();
     let page = div()
         .size_full()
         .flex()
@@ -1600,13 +1605,13 @@ fn render_side_browser(
                         (
                             "side-browser-back",
                             "←",
-                            snapshot.side_history.0,
+                            history.0,
                             GpuiAction::SideBrowserBack(id),
                         ),
                         (
                             "side-browser-forward",
                             "→",
-                            snapshot.side_history.1,
+                            history.1,
                             GpuiAction::SideBrowserForward(id),
                         ),
                         (
@@ -1620,6 +1625,7 @@ fn render_side_browser(
                     .map(|(key, label, enabled, action)| {
                         div()
                             .id(key)
+                            .aria_disabled(!enabled)
                             .debug_selector(move || key.into())
                             .px(px(5.))
                             .flex_shrink_0()

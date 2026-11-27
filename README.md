@@ -202,6 +202,8 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Windows browser
 
+- Back and Forward in the center and side browsers follow the current page’s history, including history entries added within a page. Unavailable directions are disabled.
+
 - Open Downloads in a center or side-panel browser tab to see file names, transfer progress, status and saved paths. Cancel an active transfer or use **Show in folder** to select a downloaded file in Windows Explorer.
 
 - Embedded WebView2, back/forward/reload (`Ctrl+R` / `F5`), address bar (`Ctrl+L`), separate persistent Rust-app profile and no website-to-native IPC bridge.
