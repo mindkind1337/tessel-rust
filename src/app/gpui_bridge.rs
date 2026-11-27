@@ -7847,21 +7847,18 @@ impl Tessel {
             GpuiAction::ImportSshConfig => self.import_ssh_config(),
             GpuiAction::TestSshHost(alias) => self.test_ssh_host(alias),
             GpuiAction::AddSshHostFromDraft => {
-                let alias = self.gpui_extra.new_ssh_alias.trim().to_owned();
-                let folder = self.gpui_extra.new_ssh_folder.trim().to_owned();
-                if !alias.is_empty() {
-                    self.state.hosts.push(crate::workspace::Host {
-                        alias,
-                        folder: if folder.is_empty() {
-                            "~".into()
-                        } else {
-                            folder
-                        },
-                        ..Default::default()
-                    });
-                    self.gpui_extra.new_ssh_alias.clear();
-                    self.gpui_extra.new_ssh_folder.clear();
-                    self.save();
+                let host = crate::workspace::Host {
+                    alias: self.gpui_extra.new_ssh_alias.trim().to_owned(),
+                    folder: self.gpui_extra.new_ssh_folder.trim().to_owned(),
+                    ..Default::default()
+                };
+                match self.change_hosts(|hosts| crate::host_actions::save(hosts, None, host)) {
+                    Ok(_) => {
+                        self.gpui_extra.new_ssh_alias.clear();
+                        self.gpui_extra.new_ssh_folder.clear();
+                        self.host_notice = Some((tr("SSH target saved").into(), false));
+                    }
+                    Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }
             }
             GpuiAction::RemoveSshHost(idx) => {
@@ -11500,6 +11497,40 @@ mod panel_snapshot_tests {
         let prefs = open().state.editor_prefs;
         assert_eq!(prefs.outline_sort, Sort::Kind);
         assert!(!prefs.outline_follow_cursor);
+    }
+
+    #[test]
+    fn ssh_settings_preserve_failed_drafts_and_the_saved_login_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        let set = |alias: &str, folder: &str| GpuiAction::SetSshDraft {
+            alias: alias.into(),
+            folder: folder.into(),
+        };
+        app.apply_gpui_action(set("lab", ""));
+        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        assert_eq!(app.state.hosts.len(), 1);
+        assert!(app.state.hosts[0].folder.is_empty());
+        assert!(app.gpui_extra.new_ssh_alias.is_empty());
+        for (alias, folder) in [("lab", ""), ("other", "../outside")] {
+            app.apply_gpui_action(set(alias, folder));
+            app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+            assert_eq!(app.state.hosts.len(), 1);
+            assert_eq!(app.gpui_extra.new_ssh_folder, folder);
+            assert_eq!(app.gpui_extra.new_ssh_alias, alias);
+            assert!(matches!(app.host_notice, Some((_, true))));
+        }
+        app.store = None;
+        app.apply_gpui_action(set("second", "/srv"));
+        app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        assert_eq!(app.state.hosts.len(), 1);
+        assert_eq!(app.gpui_extra.new_ssh_alias, "second");
+        drop(app);
+        let restored = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(restored.state.hosts.len(), 1);
+        assert_eq!(restored.state.hosts[0].alias, "lab");
+        assert!(restored.state.hosts[0].folder.is_empty());
     }
 
     #[test]
