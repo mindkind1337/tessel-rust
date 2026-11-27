@@ -40,7 +40,7 @@ enum Event {
     LoadStarted,
     LoadFailed {
         address: String,
-        reason: &'static str,
+        reason: LoadFailure,
     },
 }
 
@@ -113,7 +113,7 @@ pub struct Browser {
     pub(crate) focus_new_address: bool,
     popup: Option<String>,
     error: String,
-    failed_page: Option<(String, &'static str)>,
+    failed_page: Option<(String, LoadFailure)>,
     cookie_import_status: String,
     downloads: VecDeque<downloads::Record>,
     download_tracker: downloads::Downloads,
@@ -425,7 +425,7 @@ impl Browser {
         self.sender
             .send(Event::LoadFailed {
                 address: address.to_owned(),
-                reason: "The connection timed out.",
+                reason: LoadFailure::Timeout,
             })
             .unwrap();
         self.poll();
@@ -578,8 +578,7 @@ impl Browser {
 
     pub fn https_recovery_url(&self) -> Option<String> {
         let (address, reason) = self.failed_page.as_ref()?;
-        if *reason == CERTIFICATE_FAILURE || !crate::view_tabs_browser_model::is_local_url(address)
-        {
+        if reason.is_certificate() || !crate::view_tabs_browser_model::is_local_url(address) {
             return None;
         }
         let mut url = url::Url::parse(address).ok()?;
@@ -602,13 +601,13 @@ impl Browser {
         self.failed_page.as_ref().map(|(url, _)| url.as_str())
     }
 
-    pub fn error_str(&self) -> &str {
+    pub fn error_message(&self) -> String {
         if self.error.is_empty()
-            && let Some((_, reason)) = &self.failed_page
+            && let Some((address, reason)) = &self.failed_page
         {
-            return tr(reason);
+            return reason.message(address);
         }
-        &self.error
+        self.error.clone()
     }
 
     pub fn downloads_open(&self) -> bool {
@@ -719,7 +718,59 @@ impl Browser {
     }
 }
 
-const CERTIFICATE_FAILURE: &str = "The certificate could not be verified.";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoadFailure {
+    Dns,
+    Timeout,
+    Connection,
+    Certificate(&'static str),
+}
+
+impl LoadFailure {
+    fn from_status(
+        status: webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS,
+    ) -> Self {
+        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+        match status {
+            COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED => Self::Dns,
+            COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT => Self::Timeout,
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT => {
+                Self::Certificate("The certificate doesn't match {host}.")
+            }
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED => Self::Certificate(
+                "The certificate for {host} isn't valid at the current date and time.",
+            ),
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED => {
+                Self::Certificate("The certificate for {host} has been revoked.")
+            }
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID
+            | COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => {
+                Self::Certificate("Tessel couldn't verify the certificate for {host}.")
+            }
+            _ => Self::Connection,
+        }
+    }
+
+    fn is_certificate(self) -> bool {
+        matches!(self, Self::Certificate(_))
+    }
+
+    fn message(self, address: &str) -> String {
+        match self {
+            Self::Dns => tr("The host name could not be resolved.").into(),
+            Self::Timeout => tr("The connection timed out.").into(),
+            Self::Connection => tr("Could not connect to this page.").into(),
+            Self::Certificate(template) => {
+                let host = url::Url::parse(address).ok().and_then(|url| {
+                    url.host().map(|_| {
+                        url[url::Position::BeforeHost..url::Position::AfterPort].to_owned()
+                    })
+                });
+                tr(template).replace("{host}", host.as_deref().unwrap_or(tr("this address")))
+            }
+        }
+    }
+}
 
 fn allowed(address: &str) -> bool {
     address.len() <= 8192
@@ -1043,27 +1094,28 @@ impl Browser {
                                     let _ = notify.send(Event::PageStateChanged);
                                     let mut success = windows::core::BOOL::default();
                                     args.IsSuccess(&mut success)?;
-                                    if !success.as_bool() && let Some(address) = target.take() {
+                                    if !success.as_bool()
+                                        && let Some(address) = target.take()
+                                    {
                                         use webview2_com::Microsoft::Web::WebView2::Win32::*;
                                         use windows::core::Interface as _;
                                         let mut http = 0;
-                                        if let Ok(details) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() {
+                                        if let Ok(details) =
+                                            args.cast::<ICoreWebView2NavigationCompletedEventArgs2>(
+                                            )
+                                        {
                                             details.HttpStatusCode(&mut http)?;
                                         }
                                         let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
                                         args.WebErrorStatus(&mut status)?;
-                                        if http < 400 && status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED && address != "about:blank" {
-                                            let reason = match status {
-                                                COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED => "The host name could not be resolved.",
-                                                COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT => "The connection timed out.",
-                                                COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT
-                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED
-                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID
-                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED
-                                                | COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => CERTIFICATE_FAILURE,
-                                                _ => "Could not connect to this page.",
-                                            };
-                                            let _ = notify.send(Event::LoadFailed { address, reason });
+                                        if http < 400
+                                            && status
+                                                != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
+                                            && address != "about:blank"
+                                        {
+                                            let reason = LoadFailure::from_status(status);
+                                            let _ =
+                                                notify.send(Event::LoadFailed { address, reason });
                                         }
                                     }
                                 }
@@ -1481,9 +1533,10 @@ impl Browser {
                 }
             });
         }
-        if !self.error_str().is_empty() {
+        let message = self.error_message();
+        if !message.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(egui::Color32::LIGHT_RED, self.error_str());
+                ui.colored_label(egui::Color32::LIGHT_RED, message);
                 if let Some(url) = self.https_recovery_url()
                     && ui.button(tr("Try HTTPS")).clicked()
                 {
@@ -1779,6 +1832,28 @@ mod tests {
     }
 
     #[test]
+    fn certificate_errors_identify_only_the_host_and_port() {
+        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+        let address = "https://user:password@[::1]:8443/private?token=secret";
+        let mut messages = std::collections::HashSet::new();
+        for status in [
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT,
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED,
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED,
+            COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID,
+        ] {
+            let reason = LoadFailure::from_status(status);
+            assert!(reason.is_certificate());
+            let message = reason.message(address);
+            assert!(message.contains("[::1]:8443"));
+            for private in ["user", "password", "private", "token", "secret"] {
+                assert!(!message.contains(private));
+            }
+            assert!(messages.insert(message));
+        }
+    }
+
+    #[test]
     fn https_recovery_only_upgrades_failed_local_http_connections() {
         let mut page = Browser::default();
         for (url, expected) in [
@@ -1794,15 +1869,15 @@ mod tests {
             ("http://localhost.example/", None),
             ("https://localhost/", None),
         ] {
-            page.failed_page = Some((url.into(), "Could not connect to this page."));
+            page.failed_page = Some((url.into(), LoadFailure::Connection));
             assert_eq!(page.https_recovery_url().as_deref(), expected);
         }
-        page.failed_page = Some(("http://localhost/".into(), CERTIFICATE_FAILURE));
-        assert!(page.https_recovery_url().is_none());
         page.failed_page = Some((
-            "http://localhost/b".into(),
-            "Could not connect to this page.",
+            "http://localhost/".into(),
+            LoadFailure::Certificate("Tessel couldn't verify the certificate for {host}."),
         ));
+        assert!(page.https_recovery_url().is_none());
+        page.failed_page = Some(("http://localhost/b".into(), LoadFailure::Connection));
         page.try_https("https://localhost/a");
         assert_ne!(page.address_str(), "https://localhost/a");
         page.try_https("https://localhost/b");
@@ -1835,7 +1910,7 @@ mod tests {
             pump();
             browser.poll();
         }
-        assert!(!browser.error_str().is_empty());
+        assert!(!browser.error_message().is_empty());
         assert_eq!(browser.address_str(), url);
         assert_eq!(browser.failed_address(), Some(url.as_str()));
         let server = TcpListener::bind(addr).unwrap();
@@ -1867,7 +1942,7 @@ mod tests {
         }
         assert!(retried);
         assert!(browser.failed_address().is_none());
-        assert!(browser.error_str().is_empty());
+        assert!(browser.error_message().is_empty());
     }
 
     #[test]

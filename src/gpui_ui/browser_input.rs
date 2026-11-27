@@ -488,7 +488,7 @@ mod tests {
                 s.replace_text_in_range(Some(0..n), "javascript:alert(1)", w, cx);
             });
             navigate_for(root, false, w, cx);
-            assert!(!root.app.browser.error_str().is_empty());
+            assert!(!root.app.browser.error_message().is_empty());
             assert!(!root.app.browser.is_started());
         })
         .unwrap();

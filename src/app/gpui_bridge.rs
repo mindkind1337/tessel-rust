@@ -500,7 +500,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
             popup_url: page.popup_url().map(str::to_owned),
             downloads_open: page.downloads_open(),
             downloads: page.download_summaries(),
-            error: page.error_str().to_owned(),
+            error: page.error_message(),
             cookie_import_status: page.cookie_import_status().to_owned(),
         }
     }
@@ -9719,12 +9719,12 @@ mod panel_snapshot_tests {
             tab: current_tab.wrapping_sub(1),
             id: 1,
         });
-        assert!(app.browser.error_str().is_empty());
+        assert!(app.browser.error_message().is_empty());
         app.apply_gpui_action(GpuiAction::BrowserCancelDownload {
             tab: current_tab,
             id: 1,
         });
-        assert_eq!(app.browser.error_str(), "Unknown download ID");
+        assert_eq!(app.browser.error_message(), "Unknown download ID");
         assert!(!app.browser.downloads_open());
         app.apply_gpui_action(GpuiAction::SelectProject(ids[0]));
         assert!(
