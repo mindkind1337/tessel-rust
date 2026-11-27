@@ -3,6 +3,17 @@
 //! Command Palette & Shortcuts filtering, and 5-color Git swimlane graph palette.
 
 #[allow(dead_code)]
+#[path = "../src/agent_env.rs"]
+mod agent_env;
+#[allow(dead_code)]
+#[path = "../src/git/process.rs"]
+mod git;
+#[cfg(windows)]
+#[allow(dead_code)]
+#[path = "../src/process_job.rs"]
+mod process_job;
+
+#[allow(dead_code)]
 #[path = "../src/theme_palettes.rs"]
 mod theme_palettes;
 

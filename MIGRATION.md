@@ -59,7 +59,7 @@ Settings and sharing now open over the existing center view. Settings sections e
 
 Panel visibility and the selected Files/Changes/Tasks tab now persist in workspace settings and portable backups. Implemented source shortcuts: Ctrl+Shift+X/G/K for side panels, Ctrl+Shift+T for a terminal, Ctrl+Shift+P for commands, Ctrl+, for Settings. Routing distinguishes a focused terminal from text inputs and defers while confirmations are open; the full shortcut inventory remains pending.
 
-The file finder is integrated with Ctrl+Shift+J and the command palette. It uses Franklin's bounded walker on one worker thread, with cooperative cancellation, no automatic scanning at startup, and cached fuzzy results recomputed only when the query or enumeration changes. Closing or switching projects discards late results. Opening still uses Document::open and its project scope validation. Native visual and worker lifecycle acceptance are tracked with synthetic fixtures; shell path insertion is not yet integrated.
+The file finder is integrated with Ctrl+Shift+J and the command palette. Its single worker asks Git for tracked and unignored untracked paths relative to the project, using the bounded directory walker when Git cannot supply a complete listing. Closing the finder cancels either scan. Scanning starts on demand, and fuzzy results are recomputed when the query or enumeration changes. Closing or switching projects discards late results. Opening still uses Document::open and its project scope validation. Native UI and worker lifecycle tests cover selection, opening a document and inserting a project-relative path in the active terminal.
 
 
 ## Appearance and experimental Windows frame acceptance

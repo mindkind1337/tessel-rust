@@ -37,6 +37,7 @@ pub fn commit_shortstat(root: &Path, id: &str) -> Option<String> {
         Duration::from_secs(20),
         false,
         true,
+        CaptureLimits::default(),
     )
     .ok()?;
     (result.status.success() && !result.output.truncated).then(|| result.output.text())
@@ -86,7 +87,15 @@ fn run_bytes_config(
     guest: bool,
     allow_no_match: bool,
 ) -> Result<Capture> {
-    let completed = run_captured(root, args, input, timeout, guest, false)?;
+    let completed = run_captured(
+        root,
+        args,
+        input,
+        timeout,
+        guest,
+        false,
+        CaptureLimits::default(),
+    )?;
     if !completed.status.success() && !(allow_no_match && completed.status.code() == Some(1)) {
         return Err(completed.errors.text());
     }
@@ -97,6 +106,49 @@ struct Completed {
     output: Capture,
     errors: Capture,
 }
+struct CaptureLimits<'a> {
+    stdout_bytes: usize,
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+impl Default for CaptureLimits<'_> {
+    fn default() -> Self {
+        Self {
+            stdout_bytes: OUTPUT_LIMIT,
+            cancel: None,
+        }
+    }
+}
+
+/// Git preserves repository order and emits NUL-delimited paths relative to the project.
+pub(crate) fn finder_paths(root: &Path, cancel: &std::sync::atomic::AtomicBool) -> Result<Capture> {
+    let result = run_captured(
+        root,
+        &[
+            "-c",
+            "core.fsmonitor=false",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+        ],
+        None,
+        Duration::from_secs(20),
+        true,
+        false,
+        CaptureLimits {
+            stdout_bytes: 64 * 1024 * 1024,
+            cancel: Some(cancel),
+        },
+    )?;
+    if !result.status.success() {
+        return Err(result.errors.text());
+    }
+    Ok(result.output)
+}
+
 fn run_captured(
     root: &Path,
     args: &[&str],
@@ -104,6 +156,7 @@ fn run_captured(
     timeout: Duration,
     guest: bool,
     english: bool,
+    limits: CaptureLimits<'_>,
 ) -> Result<Completed> {
     let mut command = Command::new("git");
     crate::agent_env::clean_command(&mut command);
@@ -160,10 +213,19 @@ fn run_captured(
     });
     let stdout = child.stdout.take().ok_or("Missing Git output pipe")?;
     let stderr = child.stderr.take().ok_or("Missing Git error pipe")?;
-    let out = PipeCapture::start(stdout);
-    let err = PipeCapture::start(stderr);
+    let out = PipeCapture::start(stdout, limits.stdout_bytes);
+    let err = PipeCapture::start(stderr, OUTPUT_LIMIT);
     let deadline = Instant::now() + timeout;
     let status = loop {
+        if limits
+            .cancel
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            drop(cleanup.take());
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err("File search cancelled.".into());
+        }
         match child.try_wait() {
             Ok(Some(s)) => {
                 // Successful or refused Git can intentionally start a detached helper.
@@ -235,6 +297,7 @@ pub fn run_guest_repository(root: &Path, timeout: Duration) -> Result<GuestRepos
         timeout,
         true,
         true,
+        CaptureLimits::default(),
     )
     .map_err(|_| "Cannot verify shared repository scope")?;
     classify_repository(
@@ -400,14 +463,14 @@ struct PipeCapture {
     capture: Arc<Mutex<Option<Capture>>>,
 }
 impl PipeCapture {
-    fn start(reader: impl Read + Send + 'static) -> Self {
+    fn start(reader: impl Read + Send + 'static, limit: usize) -> Self {
         let capture = Arc::new(Mutex::new(Some(Capture::default())));
         let shared = Arc::clone(&capture);
         let (tx, done) = mpsc::channel();
         thread::spawn(move || {
             let result = drain_chunks(reader, |bytes| {
                 if let Some(capture) = shared.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                    append_capture(capture, bytes);
+                    append_capture(capture, bytes, limit);
                 }
             });
             let _ = tx.send(result);
@@ -430,8 +493,8 @@ impl PipeCapture {
         capture
     }
 }
-fn append_capture(capture: &mut Capture, bytes: &[u8]) {
-    let room = OUTPUT_LIMIT.saturating_sub(capture.bytes.len());
+fn append_capture(capture: &mut Capture, bytes: &[u8], limit: usize) {
+    let room = limit.saturating_sub(capture.bytes.len());
     capture.truncated |= bytes.len() > room;
     capture
         .bytes
@@ -453,7 +516,9 @@ fn drain_chunks(mut reader: impl Read, mut consume: impl FnMut(&[u8])) -> std::i
 #[cfg(test)]
 pub(super) fn drain(reader: impl Read) -> std::io::Result<Capture> {
     let mut capture = Capture::default();
-    drain_chunks(reader, |bytes| append_capture(&mut capture, bytes))?;
+    drain_chunks(reader, |bytes| {
+        append_capture(&mut capture, bytes, OUTPUT_LIMIT)
+    })?;
     Ok(capture)
 }
 

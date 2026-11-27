@@ -435,7 +435,7 @@ pub use process::{
     Capture, GuestRepository, commit_shortstat, run_bytes, run_guest_bytes, run_guest_check_ignore,
     run_guest_repository,
 };
-pub(crate) use process::{GitProcessCleanup, run_bytes_with_timeout};
+pub(crate) use process::{GitProcessCleanup, finder_paths, run_bytes_with_timeout};
 
 #[cfg(test)]
 mod tests {

@@ -219,7 +219,7 @@ pub fn is_within_canonical_scope(canon_root: &Path, candidate_canon: &Path) -> b
     candidate_canon.starts_with(canon_root)
 }
 
-fn is_path_symlink_or_reparse(path: &Path) -> bool {
+pub(crate) fn is_path_symlink_or_reparse(path: &Path) -> bool {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return true;
     };

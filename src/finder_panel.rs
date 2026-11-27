@@ -14,6 +14,49 @@ use std::{
     thread,
 };
 
+fn list_files(root: &Path, cancel: &AtomicBool) -> Result<ProjectFileList, String> {
+    let limits = WalkLimits::default();
+    if !finder_model::is_path_symlink_or_reparse(root)
+        && !cancel.load(Ordering::Relaxed)
+        && let Ok(output) = crate::git::finder_paths(root, cancel)
+        && !output.truncated
+    {
+        let mut files = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut total_path_bytes = 0;
+        let mut stop_reason = None;
+        for raw in output.bytes.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+            if cancel.load(Ordering::Relaxed) {
+                stop_reason = Some(finder_model::WalkStopReason::Cancelled);
+                break;
+            }
+            if !seen.insert(raw) {
+                continue;
+            }
+            let name = String::from_utf8_lossy(raw);
+            if !Path::new(name.as_ref())
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                continue;
+            }
+            if files.len() == limits.max_files {
+                stop_reason = Some(finder_model::WalkStopReason::MaxFiles);
+                break;
+            }
+            total_path_bytes += name.len();
+            files.push(name.into_owned());
+        }
+        return Ok(ProjectFileList {
+            files,
+            total_path_bytes,
+            truncated: stop_reason.is_some(),
+            stop_reason,
+        });
+    }
+    finder_model::walk_project_files_with_limits(root, &limits, Some(cancel))
+}
+
 struct Scan {
     cancel: Arc<AtomicBool>,
     result: Receiver<Result<ProjectFileList, String>>,
@@ -132,11 +175,7 @@ impl Finder {
         let worker_root = self.root.clone();
         let (sender, result) = mpsc::sync_channel(1);
         thread::spawn(move || {
-            let result = finder_model::walk_project_files_with_limits(
-                &worker_root,
-                &WalkLimits::default(),
-                Some(&worker_cancel),
-            );
+            let result = list_files(&worker_root, &worker_cancel);
             let _ = sender.send(result);
         });
         self.scan = Some(Scan { cancel, result });
@@ -422,6 +461,39 @@ mod tests {
         assert!(finder.error.is_empty(), "{}", finder.error);
         assert_eq!(finder.results, ["README.md", "src/main.rs"]);
         assert!(!finder.state.truncated);
+    }
+
+    #[test]
+    fn git_finder_lists_tracked_and_unignored_paths_inside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(root)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            )
+        };
+        git(&["init", "-q"]);
+        let sub = root.join("sub");
+        std::fs::create_dir_all(sub.join("build")).unwrap();
+        std::fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        for file in [
+            "outside.txt",
+            "sub/free name.txt",
+            "sub/build/tracked.log",
+            "sub/ignored.log",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        git(&["add", "-f", "sub/build/tracked.log"]);
+        let files = list_files(&sub, &AtomicBool::new(false)).unwrap();
+        assert_eq!(files.files, ["free name.txt", "build/tracked.log"]);
+        assert!(!files.truncated);
     }
 
     #[test]
