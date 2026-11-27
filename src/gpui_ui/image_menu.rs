@@ -54,6 +54,24 @@ impl Menu {
                 )
             }
             GpuiCenterMode::RemoteSftp => {
+                if let Some((path, position)) = &s.remote.file_menu {
+                    return Some(Self {
+                        position: *position,
+                        menu_id: "remote-file-menu",
+                        item_id: "remote-file-download",
+                        label: if s.french {
+                            "Télécharger…"
+                        } else {
+                            "Download…"
+                        },
+                        enabled: !s.remote.busy,
+                        close: GpuiAction::Remote(Command::CloseFileMenu),
+                        activate: GpuiAction::Remote(Command::DownloadEntry {
+                            host: s.remote.connected.clone()?,
+                            path: path.clone(),
+                        }),
+                    });
+                }
                 let path = &s.remote.document.as_ref()?.0;
                 (
                     s.remote.image_menu?,

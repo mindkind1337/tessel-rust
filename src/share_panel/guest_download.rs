@@ -127,8 +127,7 @@ impl SharePanel {
         let Some(session) = &self.guest_session else {
             return;
         };
-        let name = key.path.rsplit('/').next().unwrap_or("download.bin");
-        let suggested = name.replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_");
+        let suggested = crate::download_name::suggest(&key.path);
         let Some(dest) = choose(&suggested) else {
             return;
         };

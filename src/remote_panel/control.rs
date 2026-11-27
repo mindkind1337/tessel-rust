@@ -39,6 +39,16 @@ pub(crate) enum Command {
     Discard,
     ImageMenu(String, Option<(f32, f32)>),
     Download(String),
+    FileMenu {
+        host: String,
+        path: String,
+        position: (f32, f32),
+    },
+    CloseFileMenu,
+    DownloadEntry {
+        host: String,
+        path: String,
+    },
     PdfZoom(u64, f32),
     PdfFit(u64),
     OfficeSection(usize),
@@ -55,6 +65,8 @@ pub(crate) struct Snapshot {
     pub live: bool,
     pub dirty: bool,
     pub error: String,
+    pub downloaded: Option<std::path::PathBuf>,
+    pub file_menu: Option<(String, (f32, f32))>,
     pub entries: Vec<(String, String, bool, u64)>,
     pub new_name: String,
     pub rename: Option<(String, String)>,
@@ -233,6 +245,8 @@ impl RemotePanel {
             html_plain: self.document.as_ref().and_then(|d| d.html_plain.clone()),
             dirty: self.document.as_ref().is_some_and(RemoteDocument::dirty),
             error: self.error.clone(),
+            downloaded: self.downloaded.clone(),
+            file_menu: self.file_menu.clone(),
             entries: self
                 .entries
                 .iter()
@@ -265,6 +279,10 @@ impl RemotePanel {
     pub(crate) fn command(&mut self, command: Command, hosts: &[Host]) {
         if let Some(doc) = &mut self.document {
             doc.image_menu = None;
+        }
+        self.file_menu = None;
+        if matches!(command, Command::CloseFileMenu) {
+            return;
         }
         if matches!(command, Command::CancelDialog) {
             self.rename = None;
@@ -401,6 +419,7 @@ impl RemotePanel {
                     self.tree_attempted_alias = None;
                     self.tree_alignment_attempted = false;
                     self.selected = index;
+                    self.downloaded = None;
                     self.host = Some(host.clone());
                     self.root.clear();
                     self.path.clear();
@@ -410,6 +429,7 @@ impl RemotePanel {
                 }
             }
             Command::Disconnect => {
+                self.downloaded = None;
                 self.host = None;
                 self.root.clear();
                 self.path.clear();
@@ -427,6 +447,36 @@ impl RemotePanel {
                 } else {
                     parent.into()
                 }));
+            }
+            Command::FileMenu {
+                host,
+                path,
+                position,
+            } => {
+                if self.host.as_ref().is_some_and(|h| h.alias == host)
+                    && self.entries.iter().any(|e| !e.directory && e.path == path)
+                {
+                    self.file_menu = Some((path, position));
+                }
+            }
+            Command::DownloadEntry { host, path } => {
+                if !self
+                    .host
+                    .as_ref()
+                    .is_some_and(|h| h.alias == host && hosts.contains(h))
+                {
+                    return;
+                }
+                let Some(entry) = self.entries.iter().find(|e| !e.directory && e.path == path)
+                else {
+                    return;
+                };
+                let name = crate::download_name::suggest(&entry.name);
+                if let Some(destination) = crate::files::choose_download_destination(name.as_ref())
+                {
+                    self.downloaded = None;
+                    self.request(Action::Download { path, destination });
+                }
             }
             Command::TerminalHere { host, path } => {
                 let Some(connected) = self
@@ -499,12 +549,7 @@ impl RemotePanel {
         let Some(doc) = self.document.as_ref().filter(|d| d.path == path) else {
             return;
         };
-        let name = doc
-            .path
-            .rsplit('/')
-            .next()
-            .unwrap_or("download.bin")
-            .replace(['\\', ':'], "_");
+        let name = crate::download_name::suggest(&doc.path);
         let Some(path) = choose(&name) else { return };
         if let Err(error) = crate::files::save_download(&path, &doc.original) {
             self.error = error.to_string();

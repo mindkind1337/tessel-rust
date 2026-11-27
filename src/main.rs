@@ -60,6 +60,7 @@ pub mod dev_update;
 pub mod device_login;
 pub mod dialogs_toolbar_model;
 pub mod dialogs_toolbar_ui;
+mod download_name;
 mod empty_state_panel;
 pub mod explorer_scm_model;
 pub mod explorer_tree;

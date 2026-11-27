@@ -209,6 +209,17 @@ pub(crate) fn render(
     if !remote.error.is_empty() {
         body = body.child(SharedString::from(remote.error.clone()));
     }
+    if let Some(path) = &remote.downloaded {
+        body = body.child(format!(
+            "{} {}",
+            if fr {
+                "Fichier téléchargé."
+            } else {
+                "File downloaded."
+            },
+            path.display()
+        ));
+    }
     if remote.dirty {
         body = body.child(if fr {
             "Enregistrez ou annulez les modifications avant de changer de fichier."
@@ -325,6 +336,31 @@ pub(crate) fn render(
                                         el.child(div().flex_shrink_0().child(format!("· {size} B")))
                                     }),
                             )
+                            .when(!*directory && free, |row| {
+                                let path = path.clone();
+                                let host = connected_alias.clone();
+                                row.on_mouse_down(
+                                    gpui::MouseButton::Right,
+                                    cx.listener(
+                                        move |root, event: &gpui::MouseDownEvent, window, cx| {
+                                            window.prevent_default();
+                                            cx.stop_propagation();
+                                            root.focus_handle.focus(window, cx);
+                                            root.dispatch(
+                                                GpuiAction::Remote(Command::FileMenu {
+                                                    host: host.clone(),
+                                                    path: path.clone(),
+                                                    position: (
+                                                        f32::from(event.position.x),
+                                                        f32::from(event.position.y),
+                                                    ),
+                                                }),
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                )
+                            })
                             .child(button(
                                 format!("remote-terminal-{index}"),
                                 if fr { "Terminal ici" } else { "Terminal here" },

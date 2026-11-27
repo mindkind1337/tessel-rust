@@ -408,6 +408,16 @@ mod tests {
         let rect = visual
             .debug_bounds("remote-preview-pixels")
             .expect("SSH image");
+        let row = visual.debug_bounds("remote-file-icon-0").unwrap().center();
+        visual.simulate_mouse_down(row, gpui::MouseButton::Right, Default::default());
+        visual.simulate_mouse_up(row, gpui::MouseButton::Right, Default::default());
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-file-download").is_some());
+        visual.simulate_keystrokes("escape");
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert!(visual.debug_bounds("remote-file-menu").is_none());
         let pane = visual.debug_bounds("remote-image-viewport").unwrap();
         let width = f32::from(rect.size.width);
         let height = f32::from(rect.size.height);

@@ -152,6 +152,8 @@ pub struct RemotePanel {
     submitted: Option<Vec<u8>>,
     document: Option<RemoteDocument>,
     error: String,
+    downloaded: Option<std::path::PathBuf>,
+    file_menu: Option<(String, (f32, f32))>,
     tree_watch: crate::remote_tree_watch::Watch,
     tree_attempted_alias: Option<String>,
     tree_live: bool,
@@ -252,7 +254,7 @@ impl RemotePanel {
         };
         // A replacement watcher must agree with the authoritative SFTP listing
         // before its deltas can update the displayed directory.
-        if !matches!(action, Action::Read(_)) {
+        if !matches!(action, Action::Read(_) | Action::Download { .. }) {
             self.tree_watch.invalidate();
             self.tree_live = false;
             self.tree_trusted = false;
@@ -509,6 +511,7 @@ impl RemotePanel {
                 }
                 #[cfg(windows)]
                 Ok(Reply::PreviewTooLarge) => self.error = "Remote preview exceeds 50 MiB".into(),
+                Ok(Reply::Downloaded(path)) => self.downloaded = Some(path),
                 Ok(Reply::Saved) => {
                     if let Some(bytes) = self.submitted.take()
                         && let Some(doc) = &mut self.document
@@ -625,20 +628,10 @@ impl RemotePanel {
                                 }
                             });
                         if ui.button(tr("Connect / change host")).clicked() {
-                            self.tree_attempted_alias = None;
-                            self.tree_alignment_attempted = false;
-                            self.host = Some(hosts[self.selected].clone());
-                            self.root.clear();
-                            self.path.clear();
-                            self.entries.clear();
-                            self.document = None;
-                            self.request(Action::List(String::new()));
+                            self.command(control::Command::Connect(self.selected), hosts);
                         }
                         if self.host.is_some() && ui.button(tr("Disconnect")).clicked() {
-                            self.host = None;
-                            self.root.clear();
-                            self.entries.clear();
-                            self.document = None;
+                            self.command(control::Command::Disconnect, hosts);
                         }
                     });
                 },
@@ -657,6 +650,9 @@ impl RemotePanel {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
         }
+        if let Some(path) = &self.downloaded {
+            ui.label(format!("{} {}", tr("File downloaded."), path.display()));
+        }
         if dirty {
             ui.label(tr(
                 "Save or discard local edits before opening another remote file or host.",
@@ -664,6 +660,7 @@ impl RemotePanel {
         }
         let mut action = None;
         let mut terminal_path = None;
+        let mut download_entry = None;
         let mut compare = None;
         let mut download = None;
         let mut git_request = None;
@@ -735,6 +732,10 @@ impl RemotePanel {
                                 }
                             ));
                             response.context_menu(|ui| {
+                                if !entry.directory && ui.button(tr("Download…")).clicked() {
+                                    download_entry = Some(entry.path.clone());
+                                    ui.close();
+                                }
                                 if ui.button(tr("Open a terminal here")).clicked() {
                                     terminal_path = Some(entry.path.clone());
                                     ui.close();
@@ -761,6 +762,15 @@ impl RemotePanel {
                 );
             },
         );
+        if let (Some(host), Some(path)) = (&self.host, download_entry) {
+            self.command(
+                control::Command::DownloadEntry {
+                    host: host.alias.clone(),
+                    path,
+                },
+                hosts,
+            );
+        }
         if let (Some(host), Some(path)) = (&self.host, terminal_path) {
             self.command(
                 control::Command::TerminalHere {

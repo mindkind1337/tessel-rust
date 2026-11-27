@@ -38,6 +38,10 @@ pub enum Action {
     },
     List(String),
     Read(String),
+    Download {
+        path: String,
+        destination: std::path::PathBuf,
+    },
     #[cfg(windows)]
     PreviewAsset {
         expected_root: String,
@@ -71,6 +75,7 @@ pub enum Reply {
     },
     #[cfg(windows)]
     PreviewTooLarge,
+    Downloaded(std::path::PathBuf),
     Saved,
     Created {
         parent: String,
@@ -545,6 +550,14 @@ async fn operate_inner(
                 bytes,
             })
         }
+        Action::Download { path, destination } => {
+            let path = scoped(session, root, &path).await?;
+            let (bytes, _) = read_bounded(session, &path, MAX_PREVIEW_BYTES)
+                .await?
+                .ok_or("Remote download exceeds 50 MiB")?;
+            crate::files::save_download(&destination, &bytes).map_err(|e| e.to_string())?;
+            Ok(Reply::Downloaded(destination))
+        }
         Action::Read(requested) => {
             let path = scoped(session, root, &requested).await?;
             let (bytes, _) = read(session, &path).await?;
@@ -697,6 +710,40 @@ mod tests {
                     panic!("expected the file in the home-relative project");
                 };
                 assert_eq!(bytes, b"page");
+                let target_dir = tempfile::tempdir().unwrap();
+                let target = target_dir.path().join("original.bin");
+                let download = |name: &str| Action::Download {
+                    path: name.into(),
+                    destination: target.clone(),
+                };
+                let reply = operate(&session, &root, download("site.css"), false)
+                    .await
+                    .unwrap();
+                assert!(matches!(reply, Reply::Downloaded(path) if path == target));
+                assert_eq!(std::fs::read(&target).unwrap(), b"body{}");
+                assert!(
+                    operate(&session, &root, download(".hidden"), false)
+                        .await
+                        .is_err()
+                );
+                assert_eq!(std::fs::read(&target).unwrap(), b"body{}");
+                std::fs::remove_file(&target).unwrap();
+                assert!(
+                    operate(&session, &root, download("large.bin"), false)
+                        .await
+                        .is_err()
+                );
+                assert!(
+                    operate(
+                        &session,
+                        &nested,
+                        download(&format!("{root}/site.css")),
+                        false
+                    )
+                    .await
+                    .is_err()
+                );
+                assert!(!target.exists());
                 assert!(
                     canonical_project_root(&session, "~/../outside")
                         .await
