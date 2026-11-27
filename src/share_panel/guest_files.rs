@@ -8,6 +8,7 @@ pub(crate) struct GuestFilesView {
     pub directory: String,
     pub tabs: Vec<FileKey>,
     pub confirm_close: bool,
+    pub can_save_then_close: bool,
     pub entries: Vec<crate::guest_file_listing::Entry>,
     pub document: Option<crate::guest_file_editor::Document>,
     pub notices: Vec<String>,
@@ -77,6 +78,9 @@ impl SharePanel {
             directory: self.guest_file_listing.path.clone(),
             tabs: self.guest_file_editor.tabs.clone(),
             confirm_close: self.confirm_guest_file_discard,
+            can_save_then_close: self.confirm_guest_file_discard
+                && self.guest_file_editor.editable()
+                && !self.guest_file_editor.busy(),
             entries: self.guest_file_listing.entries.clone(),
             document: doc,
             notices,
@@ -203,6 +207,46 @@ impl SharePanel {
             && (!self.guest_tab_active(&key) || self.next_guest_file.is_some())
         {
             self.open_guest_file(key);
+        }
+    }
+
+    pub(super) fn start_guest_save_then_close(&mut self, key: &FileKey) {
+        // Match saveDocs in the Vue editor: at most three writes per close request.
+        self.save_guest_close_revision(key, 2);
+    }
+
+    fn save_guest_close_revision(&mut self, key: &FileKey, retries: u8) {
+        self.poll_guest_scope();
+        if self.confirm_guest_file_discard
+            && self.guest_files_scope == Some(key.scope)
+            && self.guest_file_editor.editable()
+            && self.active_workspace_file() == Some(key)
+            && self.save_guest_file(key)
+            && self.guest_file_editor.busy()
+        {
+            self.confirm_guest_file_discard = false;
+            self.save_then_close = Some((key.clone(), retries));
+        }
+    }
+
+    pub(super) fn finish_guest_save_then_close(&mut self) {
+        let Some((key, retries)) = self.save_then_close.take() else {
+            return;
+        };
+        if self.guest_files_scope != Some(key.scope)
+            || self.active_workspace_file() != Some(&key)
+            || self.guest_file_notice() != Some(crate::guest_file_editor::Notice::Saved)
+        {
+            return;
+        }
+        if self.guest_file_editor.has_draft() {
+            // An edit arrived while the host was acknowledging the previous revision.
+            self.confirm_guest_file_discard = true;
+            if retries > 0 {
+                self.save_guest_close_revision(&key, retries - 1);
+            }
+        } else {
+            self.discard_guest_tab(&key);
         }
     }
 
@@ -673,8 +717,26 @@ impl SharePanel {
                 self.confirm_guest_file_discard = false;
             }
             if self.confirm_guest_file_discard {
-                ui.label(if french {"Abandonner ce brouillon non enregistré ? Copiez-le d’abord si vous voulez le conserver."}else{"Discard this unsaved draft? Copy it first if you want to keep it."});
+                if self.guest_file_editor.editable() {
+                    ui.label(close_draft_question(&document.key, french));
+                } else {
+                    ui.label(if french {"Abandonner ce brouillon non enregistré ? Copiez-le d’abord si vous voulez le conserver."}else{"Discard this unsaved draft? Copy it first if you want to keep it."});
+                }
                 ui.horizontal(|ui| {
+                    if self.guest_file_editor.editable()
+                        && ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(if french {
+                                    "Enregistrer et fermer"
+                                } else {
+                                    "Save and close"
+                                }),
+                            )
+                            .clicked()
+                    {
+                        self.start_guest_save_then_close(&document.key);
+                    }
                     if ui
                         .button(if french {
                             "Conserver le brouillon"
@@ -721,4 +783,15 @@ fn guest_path_heading(ui: &mut Ui, path: &str, french: bool) {
             ui.ctx().copy_text(path.to_owned());
         }
     });
+}
+
+pub(crate) fn close_draft_question(key: &FileKey, french: bool) -> String {
+    if french {
+        format!(
+            "Enregistrer les modifications de « {} » avant de fermer l’onglet ?",
+            key.path
+        )
+    } else {
+        format!("Save changes to “{}” before closing the tab?", key.path)
+    }
 }

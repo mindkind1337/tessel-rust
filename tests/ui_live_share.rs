@@ -920,8 +920,12 @@ fn compatibility_guest_timeline_opens_history_for_the_selected_file() {
     ));
 }
 
+// The host intentionally rejects overlapping guest saves within a process.
+static HOST_SAVE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn compatibility_guest_file_reads_and_saves_exact_project_and_path() {
+    let _host_save = HOST_SAVE_FIXTURE.lock().unwrap_or_else(|e| e.into_inner());
     let (dir, _host, mut panel) = guest_file_fixture();
     let scope = panel.guest_task_snapshot().scope.unwrap();
     let a = guest_file_editor::Key {
@@ -1000,6 +1004,104 @@ fn compatibility_guest_file_reads_and_saves_exact_project_and_path() {
         "A in 2"
     );
 }
+#[test]
+fn compatibility_guest_file_save_and_close_waits_for_newer_edit_and_preserves_conflicts() {
+    let _host_save = HOST_SAVE_FIXTURE.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let scope = panel.guest_task_snapshot().scope.unwrap();
+    let a = guest_file_editor::Key {
+        scope,
+        path: "a.txt".into(),
+    };
+    let b = guest_file_editor::Key {
+        scope,
+        path: "b.txt".into(),
+    };
+    for key in [&a, &b] {
+        assert!(panel.open_guest_file(key.clone()));
+        await_guest_document(&mut panel, key);
+    }
+    panel.edit_guest_file(&b, "first edit".into());
+    panel.apply_gpui_share_action(share_panel::ShareGpuiAction::GuestCloseTab(b.clone()), &[]);
+    let ctx = egui::Context::default();
+    draw_guest_files(&ctx, &mut panel, vec![]);
+    let output = draw_guest_files(&ctx, &mut panel, vec![]);
+    let save = find_text_center(&output.shapes, "Save and close").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(save));
+    assert!(panel.edit_guest_file(&b, "typed while saving".into()));
+    await_guest_document(&mut panel, &a);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p1/b.txt")).unwrap(),
+        "typed while saving"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p2/b.txt")).unwrap(),
+        "B in 2"
+    );
+
+    panel.edit_guest_file(&a, "local draft".into());
+    std::fs::write(dir.path().join("p1/a.txt"), "changed on host").unwrap();
+    panel.apply_gpui_share_action(share_panel::ShareGpuiAction::GuestCloseTab(a.clone()), &[]);
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestSaveThenClose(a.clone()),
+        &[],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while panel.guest_file_notice() != Some(guest_file_editor::Notice::Conflict) {
+        panel.poll_guest_requests();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let draft = panel.guest_file_document().unwrap();
+    assert_eq!(draft.key, a);
+    assert_eq!(draft.text.as_str(), "local draft");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p1/a.txt")).unwrap(),
+        "changed on host"
+    );
+}
+
+#[test]
+fn compatibility_guest_file_save_and_close_bounds_writes_while_typing() {
+    let _host_save = HOST_SAVE_FIXTURE.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, _host, mut panel) = guest_file_fixture();
+    let key = guest_file_editor::Key {
+        scope: panel.guest_task_snapshot().scope.unwrap(),
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(key.clone());
+    await_guest_document(&mut panel, &key);
+    panel.edit_guest_file(&key, "1".into());
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestCloseTab(key.clone()),
+        &[],
+    );
+    panel.apply_gpui_share_action(
+        share_panel::ShareGpuiAction::GuestSaveThenClose(key.clone()),
+        &[],
+    );
+    let path = dir.path().join("p1/a.txt");
+    for n in 1..=3 {
+        assert!(panel.edit_guest_file(&key, (n + 1).to_string()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            panel.poll_guest_requests();
+            // Compare against the acknowledged baseline without changing the live draft.
+            let mut probe = panel.guest_file_document().unwrap();
+            probe.text = std::sync::Arc::new(n.to_string());
+            if !probe.dirty() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let draft = panel.guest_file_document().unwrap();
+    assert!(draft.dirty());
+    assert_eq!(draft.text.as_str(), "4");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "3");
+}
+
 #[test]
 fn compatibility_guest_file_disconnect_keeps_draft_and_requires_confirmed_discard() {
     let (_dir, _host, mut panel) = guest_file_fixture();

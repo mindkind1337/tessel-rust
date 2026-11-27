@@ -3597,6 +3597,24 @@ pub(super) fn render_guest_document(
         }
     }
     if let Some(doc) = &files.document {
+        if files.can_save_then_close {
+            content = content.child(crate::share_panel::guest_files::close_draft_question(
+                &doc.key, french,
+            ));
+            content = content.child(modal_btn(
+                "guest-save-and-close",
+                if french {
+                    "Enregistrer et fermer"
+                } else {
+                    "Save and close"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::Share(ShareGpuiAction::GuestSaveThenClose(doc.key.clone())),
+                cx,
+            ));
+        }
         if files.confirm_close {
             for (discard, label) in [
                 (

@@ -207,6 +207,7 @@ pub struct SharePanel {
     next_guest_file: Option<crate::guest_file_editor::Key>,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
+    save_then_close: Option<(crate::guest_file_editor::Key, u8)>,
     pub guest_new_file_name: String,
     guest_git: crate::guest_git::Controller,
     confirm_guest_git_discard: bool,
@@ -264,6 +265,7 @@ impl Default for SharePanel {
             next_guest_file: None,
             guest_files_scope: None,
             confirm_guest_file_discard: false,
+            save_then_close: None,
             guest_new_file_name: String::new(),
             guest_git: Default::default(),
             confirm_guest_git_discard: false,
@@ -402,6 +404,7 @@ impl SharePanel {
         self.confirm_guest_git_discard = false;
         self.next_guest_file = None;
         self.guest_files_scope = None;
+        self.save_then_close = None;
         self.confirm_guest_file_discard = false;
         self.guest_selected_project = None;
         self.guest_session = Some(session);
@@ -468,7 +471,10 @@ impl SharePanel {
     pub fn poll_guest_requests(&mut self) -> bool {
         let mut changed = self.poll_guest_scope();
         changed |= self.guest_task_board.poll(Instant::now());
-        changed |= self.guest_file_editor.poll(Instant::now());
+        if self.guest_file_editor.poll(Instant::now()) {
+            changed = true;
+            self.finish_guest_save_then_close();
+        }
         if self.guest_image.poll() {
             changed = true;
             if !self.guest_image.failed
@@ -544,6 +550,7 @@ impl SharePanel {
         changed |= self.guest_git.bind(scope, rights.git);
         if self.guest_files_scope != scope {
             self.next_guest_file = None;
+            self.save_then_close = None;
             self.guest_image = Default::default();
             self.guest_download = Default::default();
             self.guest_history.bind(None);
@@ -3411,6 +3418,7 @@ pub(crate) enum ShareGpuiAction {
     GuestOpenFile(crate::guest_file_editor::Key),
     GuestSelectTab(crate::guest_file_editor::Key),
     GuestCloseTab(crate::guest_file_editor::Key),
+    GuestSaveThenClose(crate::guest_file_editor::Key),
     GuestConfirmClose(crate::guest_file_editor::Key, bool),
     GuestVersion(crate::guest_file_editor::Key, Option<String>),
     GuestHistory(crate::guest_file_editor::Key, bool),
@@ -3693,6 +3701,7 @@ impl SharePanel {
                     self.confirm_guest_close(&key, discard);
                 }
             }
+            ShareGpuiAction::GuestSaveThenClose(key) => self.start_guest_save_then_close(&key),
             ShareGpuiAction::GuestCloseTab(key) => self.close_guest_tab(&key),
             ShareGpuiAction::GuestOpenFile(key) => {
                 self.open_guest_file(key);
