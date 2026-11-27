@@ -13,76 +13,120 @@ pub(crate) struct Citations {
 
 pub(crate) fn parse(role: &str, source: &str) -> Option<Citations> {
     if !(role == "Codex" || role.starts_with("Codex · "))
-        || !source.contains(":codex-file-citation{")
+        || !(source.contains(":codex-file-citation{") || source.contains("]("))
     {
         return None;
     }
-    static DIRECTIVE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r":{1,2}codex-file-citation\{([^{}]+)\}").unwrap());
-    static ATTR: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap());
-    let mut protected = Parser::new(source)
-        .into_offset_iter()
-        .filter_map(|(event, span)| {
-            matches!(
-                event,
-                Event::Code(_)
-                    | Event::Html(_)
-                    | Event::InlineHtml(_)
-                    | Event::Start(Tag::CodeBlock(_) | Tag::Link { .. } | Tag::Image { .. })
-            )
-            .then_some(span)
-        })
-        .peekable();
     let mut result = Citations {
         text: String::new(),
-        links: vec![],
+        links: Vec::new(),
     };
     let mut end = 0;
-    for captures in DIRECTIVE.captures_iter(source) {
-        if captures[1].len() > 8192 {
+    let mut events = Parser::new(source).into_offset_iter();
+    while let Some((event, span)) = events.next() {
+        if span.start < end {
             continue;
         }
-        let whole = captures.get(0)?;
-        while protected
-            .next_if(|span| span.end <= whole.start())
-            .is_some()
-        {}
-        if protected
-            .peek()
-            .is_some_and(|span| span.start < whole.end())
-        {
-            continue;
+        match event {
+            Event::Start(Tag::Link {
+                link_type: pulldown_cmark::LinkType::Inline,
+                dest_url,
+                ..
+            }) => {
+                result.append_prose(&source[end..span.start]);
+                if let Some(path) = markdown_path(&dest_url) {
+                    let mut label = String::new();
+                    for (event, _) in events.by_ref() {
+                        match event {
+                            Event::End(pulldown_cmark::TagEnd::Link) => break,
+                            Event::Text(text) | Event::Code(text) => label.push_str(&text),
+                            Event::SoftBreak | Event::HardBreak => label.push(' '),
+                            _ => {}
+                        }
+                    }
+                    if label.is_empty() {
+                        result.text.push_str(&source[span.clone()]);
+                    } else {
+                        result.append_link(&label, path);
+                    }
+                } else {
+                    result.text.push_str(&source[span.clone()]);
+                }
+            }
+            Event::Code(_)
+            | Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Start(Tag::CodeBlock(_) | Tag::Link { .. } | Tag::Image { .. }) => {
+                result.append_prose(&source[end..span.start]);
+                result.text.push_str(&source[span.clone()]);
+            }
+            _ => continue,
         }
-        let Some(value) = ATTR
-            .captures_iter(&captures[1])
-            .filter(|a| &a[1] == "path")
-            .last()
-        else {
-            continue;
-        };
-        let raw = value.get(2).or_else(|| value.get(3))?.as_str();
-        let Some(path) = local_path(raw) else {
-            continue;
-        };
-        let Some(name) = path
-            .to_str()
-            .and_then(|p| p.rsplit(['/', '\\']).next())
-            .filter(|n| !n.is_empty())
-        else {
-            continue;
-        };
-        result.text.push_str(&source[end..whole.start()]);
-        let start = result.text.len();
-        result.text.push_str(name);
-        result.links.push((start..result.text.len(), path));
-        end = whole.end();
+        end = span.end;
     }
-    if result.links.is_empty() {
-        return None;
+    result.append_prose(&source[end..]);
+    (!result.links.is_empty()).then_some(result)
+}
+
+fn markdown_path(raw: &str) -> Option<PathBuf> {
+    if raw
+        .get(..5)
+        .is_some_and(|s| s.eq_ignore_ascii_case("file:"))
+    {
+        return local_path(raw);
     }
-    result.text.push_str(&source[end..]);
-    Some(result)
+    let decoded = percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .ok()?;
+    local_path(&decoded)
+}
+
+impl Citations {
+    fn append_link(&mut self, label: &str, path: PathBuf) {
+        let start = self.text.len();
+        self.text.push_str(label);
+        self.links.push((start..self.text.len(), path));
+    }
+
+    fn append_prose(&mut self, prose: &str) {
+        static DIRECTIVE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r":{1,2}codex-file-citation\{([^{}]+)\}").unwrap());
+        static ATTR: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r#"([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap());
+        let mut end = 0;
+        for captures in DIRECTIVE.captures_iter(prose) {
+            if captures[1].len() > 8192 {
+                continue;
+            }
+            let Some(value) = ATTR
+                .captures_iter(&captures[1])
+                .filter(|a| &a[1] == "path")
+                .last()
+            else {
+                continue;
+            };
+            let Some(path) = value
+                .get(2)
+                .or_else(|| value.get(3))
+                .and_then(|m| local_path(m.as_str()))
+            else {
+                continue;
+            };
+            let Some(name) = path
+                .to_str()
+                .and_then(|p| p.rsplit(['/', '\\']).next())
+                .filter(|n| !n.is_empty())
+            else {
+                continue;
+            };
+            let whole = captures.get(0).unwrap();
+            self.text.push_str(&prose[end..whole.start()]);
+            let name = name.to_owned();
+            self.append_link(&name, path);
+            end = whole.end();
+        }
+        self.text.push_str(&prose[end..]);
+    }
 }
 
 fn local_path(raw: &str) -> Option<PathBuf> {
@@ -163,6 +207,28 @@ purpose="source"}"#;
             assert_eq!(path, Path::new("C:/My reports/été.pdf"));
         }
         assert!(parse("You", &source).is_none());
+    }
+    #[test]
+    fn markdown_labels_and_directives_share_the_original_text_order() {
+        let source = r#"Before [**first** report](<docs/my report.pdf> "Title"), :codex-file-citation{path='two.pdf'}, and [third](docs/three%20four.txt).
+`[example](ignore.pdf)` ![image](ignore.png) [website](https://example.org) [network](%2F%2Fserver/share)"#;
+        let parsed = parse("Codex", source).unwrap();
+        let links: Vec<_> = parsed
+            .links
+            .iter()
+            .map(|(r, p)| (&parsed.text[r.clone()], p.as_path()))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                ("first report", Path::new("docs/my report.pdf")),
+                ("two.pdf", Path::new("two.pdf")),
+                ("third", Path::new("docs/three four.txt"))
+            ]
+        );
+        assert!(parsed.text.ends_with("`[example](ignore.pdf)` ![image](ignore.png) [website](https://example.org) [network](%2F%2Fserver/share)"));
+        let windows = parse("Codex", r"[report](C:\Reports\summary.pdf)").unwrap();
+        assert_eq!(windows.links[0].1, Path::new(r"C:\Reports\summary.pdf"));
     }
     #[test]
     fn invalid_destinations_remain_literal_and_outside_files_cannot_open() {
