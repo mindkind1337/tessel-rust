@@ -146,7 +146,28 @@ impl SharePanel {
         self.guest_file_editor
             .open(key, Instant::now(), |payload| session.request(payload))
     }
-    fn guest_tab_active(&self, key: &FileKey) -> bool {
+    pub(crate) fn workspace_tabs(&self) -> &[FileKey] {
+        &self.guest_file_editor.tabs
+    }
+
+    pub(crate) fn select_workspace_file(&mut self, key: FileKey) -> bool {
+        self.poll_guest_scope();
+        if self.guest_files_scope != Some(key.scope) || !self.workspace_tabs().contains(&key) {
+            return false;
+        }
+        self.guest_sub_view = GuestSubView::Files;
+        self.select_guest_tab(key);
+        true
+    }
+
+    pub(crate) fn guest_tab_dirty(&self, key: &FileKey) -> bool {
+        self.guest_file_editor
+            .document
+            .as_ref()
+            .is_some_and(|doc| &doc.key == key && doc.dirty())
+    }
+
+    pub(crate) fn guest_tab_active(&self, key: &FileKey) -> bool {
         self.guest_file_editor
             .document
             .as_ref()
@@ -177,7 +198,7 @@ impl SharePanel {
         }
     }
 
-    pub(super) fn close_guest_tab(&mut self, key: &FileKey) {
+    pub(crate) fn close_guest_tab(&mut self, key: &FileKey) {
         self.poll_guest_scope();
         if self.guest_files_scope != Some(key.scope)
             || self.guest_file_editor.busy()
@@ -397,6 +418,24 @@ impl SharePanel {
         if let Some(key) = selected {
             self.select_guest_tab(key);
         }
+        if let Some(key) = self
+            .workspace_tabs()
+            .iter()
+            .find(|key| self.guest_tab_active(key))
+            && ui
+                .button(if french {
+                    "Ouvrir dans l’espace de travail"
+                } else {
+                    "Open in workspace"
+                })
+                .clicked()
+        {
+            self.workspace_file_request = Some(key.clone());
+        }
+        self.render_guest_document(ui, french, false);
+    }
+
+    pub(crate) fn render_guest_document(&mut self, ui: &mut Ui, french: bool, workspace: bool) {
         if self.guest_image.busy() {
             ui.spinner();
             ui.ctx().request_repaint_after(Duration::from_millis(50));
@@ -409,9 +448,14 @@ impl SharePanel {
         {
             guest_path_heading(ui, &key.path, french);
             let mut save = false;
+            let height = if workspace {
+                ui.available_height().max(180.)
+            } else {
+                270.
+            };
             ui.add(
                 egui::Image::new(texture)
-                    .max_size(egui::vec2(ui.available_width(), 270.))
+                    .max_size(egui::vec2(ui.available_width(), height))
                     .sense(egui::Sense::click()),
             )
             .context_menu(|ui| {
@@ -431,7 +475,15 @@ impl SharePanel {
                 self.choose_guest_download(&key);
             }
         }
-        self.render_guest_file_editor(ui, french);
+        if !workspace
+            || self
+                .guest_file_editor
+                .document
+                .as_ref()
+                .is_none_or(|d| Some(d.key.scope) == self.guest_files_scope)
+        {
+            self.render_guest_file_editor(ui, french);
+        }
     }
     pub(super) fn render_guest_file_editor(&mut self, ui: &mut Ui, french: bool) {
         if self.guest_file_editor.busy() {

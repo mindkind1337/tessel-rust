@@ -325,6 +325,9 @@ fn native_guest_image_preview_offers_original_on_right_click(cx: &mut TestAppCon
         "guest-entry-1",
         "guest-doc-tab-1",
         "guest-doc-tab-0",
+        "guest-open-workspace",
+        "view-tab-0",
+        "view-tab-1",
         "viewer-copy-path",
         "guest-image-preview",
         "guest-image-download",
@@ -571,7 +574,12 @@ fn native_guest_copy_text_includes_the_part_beyond_preview(cx: &mut TestAppConte
     let (dir, _host, _cards, view, _) = joined_guest(cx);
     let full_text = "guest preview line\n".repeat(3800) + "end of document";
     std::fs::write(dir.path().join("project-1/notes.txt"), &full_text).unwrap();
-    for selector in ["guest-tab-files", "guest-entry-0", "guest-copy-text"] {
+    for selector in [
+        "guest-tab-files",
+        "guest-entry-0",
+        "guest-open-workspace",
+        "guest-copy-text",
+    ] {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             view.update(cx, |root, _, cx| {
@@ -610,9 +618,10 @@ fn native_guest_file_tabs_return_to_the_first_document(cx: &mut TestAppContext) 
         ("guest-entry-1", None),
         ("guest-doc-tab-1", None),
         ("guest-copy-text", Some("b.txt")),
-        ("guest-doc-tab-0", None),
+        ("guest-open-workspace", None),
+        ("view-tab-1", None),
         ("guest-copy-text", Some("a.txt")),
-        ("guest-doc-close-0", None),
+        ("view-tab-close-1", None),
         ("guest-copy-text", Some("b.txt")),
     ] {
         let deadline = Instant::now() + Duration::from_secs(15);

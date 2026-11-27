@@ -1205,3 +1205,33 @@ fn guest_file_navigation_honors_the_last_click_while_reading() {
         "B in 2"
     );
 }
+
+#[test]
+fn compatibility_guest_workspace_opens_only_the_joined_project_file() {
+    let (_dir, _host, mut panel) = guest_file_fixture();
+    let key = guest_file_editor::Key {
+        scope: panel.guest_task_snapshot().scope.unwrap(),
+        path: "a.txt".into(),
+    };
+    panel.open_guest_file(key.clone());
+    await_guest_document(&mut panel, &key);
+    let ctx = egui::Context::default();
+    draw_guest_files(&ctx, &mut panel, vec![]);
+    let out = draw_guest_files(&ctx, &mut panel, vec![]);
+    let open = find_text_center(&out.shapes, "Open in workspace").unwrap();
+    draw_guest_files(&ctx, &mut panel, click_events(open));
+    let chosen = panel.workspace_file_request.take().unwrap();
+    assert_eq!(chosen, key);
+    assert!(panel.select_workspace_file(chosen));
+    let out = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| panel.render_guest_document(ui, false, true));
+    });
+    assert!(has_text_containing(&out.shapes, "A in 1"));
+    panel.edit_guest_file(&key, "private unsaved draft".into());
+    panel.apply_gpui_share_action(share_panel::ShareGpuiAction::DisconnectGuest, &[]);
+    assert!(!panel.select_workspace_file(key));
+    let out = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| panel.render_guest_document(ui, false, true));
+    });
+    assert!(!has_text_containing(&out.shapes, "private unsaved draft"));
+}

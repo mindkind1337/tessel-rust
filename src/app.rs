@@ -650,6 +650,7 @@ enum TimelineOrigin {
 }
 #[derive(PartialEq)]
 enum View {
+    GuestFiles,
     Work,
     Files,
     Remote,
@@ -2361,6 +2362,13 @@ impl Tessel {
     }
     fn poll(&mut self) -> bool {
         let mut native_changed = self.share.poll_guest_requests();
+        if self.view == View::GuestFiles
+            && (self.share.workspace_tabs().is_empty()
+                || self.share.guest_sub_view != crate::share_panel::GuestSubView::Files)
+        {
+            self.view = View::Work;
+            native_changed = true;
+        }
         native_changed |= self.timeline.poll();
         let mut completed_switches = Vec::new();
         for session in &mut self.sessions {
@@ -3523,6 +3531,34 @@ impl Tessel {
                         } else if tab.body.clicked() {
                             self.view = View::Files;
                             self.active_document = i;
+                        }
+                    }
+                    let mut clicked = None;
+                    for key in self.share.workspace_tabs() {
+                        let tab = crate::view_tabs::show(
+                            ui,
+                            crate::view_tabs::Tab {
+                                title: key.path.rsplit('/').next().unwrap_or(&key.path),
+                                hint: &key.path,
+                                kind: crate::view_tabs::Kind::Editor,
+                                selected: self.view == View::GuestFiles
+                                    && self.share.guest_tab_active(key),
+                                dirty: self.share.guest_tab_dirty(key),
+                                closable: true,
+                                preview: false,
+                                deleted: false,
+                                has_file_menu: false,
+                            },
+                        );
+                        if tab.close || tab.body.clicked() {
+                            clicked = Some((key.clone(), tab.close));
+                        }
+                    }
+                    if let Some((key, close)) = clicked {
+                        if close {
+                            self.share.close_guest_tab(&key);
+                        } else if self.share.select_workspace_file(key) {
+                            self.view = View::GuestFiles;
                         }
                     }
                 });
@@ -9965,6 +10001,12 @@ impl Tessel {
             if self.share.show_dialog_modal(ctx, &all_projects, french) {
                 self.overlay = None;
             }
+            if let Some(key) = self.share.workspace_file_request.take()
+                && self.share.select_workspace_file(key)
+            {
+                self.overlay = None;
+                self.view = View::GuestFiles;
+            }
             return;
         }
         let mut close = false;
@@ -14553,6 +14595,14 @@ impl eframe::App for Tessel {
             match self.view {
                 View::Work => self.work(ui),
                 View::Files => self.editor(ui),
+                View::GuestFiles => {
+                    egui::ScrollArea::vertical()
+                        .id_salt("guest-workspace-document")
+                        .show(ui, |ui| {
+                            self.share
+                                .render_guest_document(ui, crate::i18n::is_french(), true)
+                        });
+                }
                 View::Remote => {
                     self.remote
                         .show(ui, &self.state.hosts, self.state.editor_prefs.font_size);

@@ -74,6 +74,18 @@ pub(crate) fn render_workspace_body(
                 browser_input,
                 focus_input,
                 tokens,
+                (f32::from(window.viewport_size().width)
+                    - if snapshot.toolbar.left_open {
+                        left_width_px
+                    } else {
+                        super::theme::SIDEBAR_RAIL_WIDTH_PX
+                    }
+                    - if snapshot.toolbar.right_open {
+                        right_width_px
+                    } else {
+                        0.
+                    })
+                .max(1.),
                 stage_height_px,
                 window,
                 cx,
@@ -106,6 +118,7 @@ fn render_center_column(
     browser_input: &super::browser_input::Input,
     focus_input: FocusInputTarget,
     tokens: &GpuiThemeTokens,
+    stage_width_px: f32,
     stage_height_px: f32,
     window: &mut Window,
     cx: &mut Context<TesselGpuiRoot>,
@@ -155,6 +168,29 @@ fn render_center_column(
                         cx,
                     )
                     .into_any_element(),
+                    GpuiCenterMode::GuestFiles => {
+                        let body = div()
+                            .id("guest-workspace")
+                            .debug_selector(|| "guest-workspace".into())
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .overflow_y_scroll();
+                        if let Some(files) = &snapshot.modals.share.guest_files {
+                            super::modals_view::render_guest_document(
+                                body,
+                                files,
+                                snapshot.french,
+                                tokens,
+                                Some((stage_width_px, (stage_height_px - 80.).max(1.))),
+                                cx,
+                            )
+                            .into_any_element()
+                        } else {
+                            body.into_any_element()
+                        }
+                    }
                     GpuiCenterMode::RemoteSftp => super::remote_view::render(
                         snapshot,
                         remote_inputs,
@@ -198,6 +234,7 @@ fn render_view_tabs_bar(
     for (idx, tab) in snapshot.view_tabs.iter().enumerate() {
         let selected = tab.selected;
         let doc_index = tab.doc_index;
+        let guest_key = tab.guest_key.clone();
         let kind = tab.kind;
         let closable = tab.closable;
         let tint = if selected {
@@ -222,7 +259,12 @@ fn render_view_tabs_bar(
         let close = match kind {
             #[cfg(windows)]
             crate::view_tabs::Kind::Browser => Some(GpuiAction::CloseBrowserTab),
-            _ => doc_index.map(GpuiAction::CloseDocumentTab),
+            _ => guest_key
+                .clone()
+                .map(|key| {
+                    GpuiAction::Share(crate::share_panel::ShareGpuiAction::GuestCloseTab(key))
+                })
+                .or_else(|| doc_index.map(GpuiAction::CloseDocumentTab)),
         }
         .filter(|_| closable);
         let mut hint = tab.hint.clone();
@@ -286,7 +328,9 @@ fn render_view_tabs_bar(
                             root.dispatch(GpuiAction::SelectBrowserTab, cx)
                         }
                         crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
-                            if let Some(doc_idx) = doc_index {
+                            if let Some(key) = &guest_key {
+                                root.dispatch(GpuiAction::SelectGuestDocument(key.clone()), cx);
+                            } else if let Some(doc_idx) = doc_index {
                                 root.dispatch(GpuiAction::SelectDocumentTab(doc_idx), cx);
                                 if event.click_count() == 2 {
                                     root.dispatch(GpuiAction::KeepDocumentTab(doc_idx), cx);

@@ -230,6 +230,7 @@ pub(crate) enum GpuiCenterMode {
     WorkGrid,
     DocumentEditor,
     RemoteSftp,
+    GuestFiles,
     BrowserTab,
 }
 
@@ -325,6 +326,7 @@ pub(crate) struct GpuiViewTabItem {
     pub hint: String,
     pub kind: crate::view_tabs::Kind,
     pub doc_index: Option<usize>,
+    pub guest_key: Option<crate::guest_file_editor::Key>,
     pub selected: bool,
     pub dirty: bool,
     pub closable: bool,
@@ -909,6 +911,7 @@ pub(crate) enum GpuiAction {
     SaveActiveDocument,
     OpenEditorExternally(u64),
     CopyGuestFileText(crate::guest_file_editor::Key),
+    SelectGuestDocument(crate::guest_file_editor::Key),
     #[cfg(windows)]
     OpenHtmlInBrowser(u64),
     #[cfg(windows)]
@@ -2713,7 +2716,7 @@ impl Tessel {
                 }
             }
             View::Files => GpuiFocusTarget::EditorBody,
-            View::Remote => GpuiFocusTarget::None,
+            View::GuestFiles | View::Remote => GpuiFocusTarget::None,
             #[cfg(windows)]
             View::Browser => GpuiFocusTarget::None,
         }
@@ -3575,6 +3578,7 @@ impl Tessel {
             hint: tr("Terminal").into(),
             kind: crate::view_tabs::Kind::Terminal,
             doc_index: None,
+            guest_key: None,
             selected: self.view == View::Work,
             dirty: false,
             closable: false,
@@ -3589,6 +3593,7 @@ impl Tessel {
                 hint: tr("Browser").into(),
                 kind: crate::view_tabs::Kind::Browser,
                 doc_index: None,
+                guest_key: None,
                 selected: self.view == View::Browser,
                 dirty: false,
                 closable: true,
@@ -3608,6 +3613,7 @@ impl Tessel {
                 hint: paths[i].clone(),
                 kind,
                 doc_index: Some(i),
+                guest_key: None,
                 selected: self.view == View::Files && self.active_document == i,
                 dirty: doc.dirty(),
                 closable: true,
@@ -3616,7 +3622,26 @@ impl Tessel {
             });
         }
 
+        for key in self.share.workspace_tabs() {
+            view_tabs.push(GpuiViewTabItem {
+                id: format!(
+                    "guest:{}:{}:{}",
+                    key.scope.session, key.scope.project, key.path
+                ),
+                title: key.path.rsplit('/').next().unwrap_or(&key.path).into(),
+                hint: key.path.clone(),
+                kind: crate::view_tabs::Kind::Editor,
+                doc_index: None,
+                guest_key: Some(key.clone()),
+                selected: self.view == View::GuestFiles && self.share.guest_tab_active(key),
+                dirty: self.share.guest_tab_dirty(key),
+                closable: true,
+                preview: false,
+                deleted: false,
+            });
+        }
         let center_mode = match self.view {
+            View::GuestFiles => GpuiCenterMode::GuestFiles,
             View::Files if !self.documents.is_empty() => GpuiCenterMode::DocumentEditor,
             View::Remote => GpuiCenterMode::RemoteSftp,
             #[cfg(windows)]
@@ -5814,9 +5839,16 @@ impl Tessel {
                     }
                 }
             }
+            GpuiAction::SelectGuestDocument(key) => {
+                if self.share.select_workspace_file(key) {
+                    self.overlay = None;
+                    self.view = View::GuestFiles;
+                }
+            }
             GpuiAction::CopyGuestFileText(key) => {
-                if matches!(self.overlay, Some(Overlay::Share))
-                    && self.share.tab == crate::share_panel::DialogTab::Join
+                if (self.overlay == Some(Overlay::Share)
+                    && self.share.tab == crate::share_panel::DialogTab::Join)
+                    || (self.overlay.is_none() && self.view == View::GuestFiles)
                 {
                     self.gpui_extra.copied_clipboard = self.share.current_guest_file_text(&key);
                 }

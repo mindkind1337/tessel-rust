@@ -203,6 +203,7 @@ pub struct SharePanel {
     guest_download: guest_download::Download,
     guest_versions: guest_versions::Versions,
     guest_history: guest_history::Timeline,
+    pub(crate) workspace_file_request: Option<crate::guest_file_editor::Key>,
     next_guest_file: Option<crate::guest_file_editor::Key>,
     guest_files_scope: Option<crate::guest_task_board::Scope>,
     confirm_guest_file_discard: bool,
@@ -259,6 +260,7 @@ impl Default for SharePanel {
             guest_download: Default::default(),
             guest_versions: Default::default(),
             guest_history: Default::default(),
+            workspace_file_request: None,
             next_guest_file: None,
             guest_files_scope: None,
             confirm_guest_file_discard: false,
@@ -3815,7 +3817,7 @@ impl SharePanel {
 #[path = "share_panel/guest_download.rs"]
 mod guest_download;
 #[path = "share_panel/guest_files.rs"]
-mod guest_files;
+pub(crate) mod guest_files;
 #[path = "share_panel/guest_history.rs"]
 mod guest_history;
 #[path = "share_panel/guest_image.rs"]

@@ -1268,308 +1268,7 @@ fn render_share_modal(
                             }
                         }
                     }
-                    if !files.tabs.is_empty() {
-                        let mut tabs = div().flex().flex_wrap().gap(px(3.));
-                        for (index, key) in files.tabs.iter().enumerate() {
-                            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key)
-                                || files
-                                    .image
-                                    .as_ref()
-                                    .is_some_and(|(image_key, _)| image_key == key);
-                            tabs = tabs.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .child(modal_btn(
-                                        format!("guest-doc-tab-{index}"),
-                                        key.path.clone(),
-                                        active,
-                                        tokens,
-                                        GpuiAction::Share(ShareGpuiAction::GuestSelectTab(
-                                            key.clone(),
-                                        )),
-                                        cx,
-                                    ))
-                                    .child(modal_btn(
-                                        format!("guest-doc-close-{index}"),
-                                        "×".into(),
-                                        false,
-                                        tokens,
-                                        GpuiAction::Share(ShareGpuiAction::GuestCloseTab(
-                                            key.clone(),
-                                        )),
-                                        cx,
-                                    )),
-                            );
-                        }
-                        if let Some(doc) = &files.document {
-                            tabs = tabs
-                                .child(super::chrome::copy_path_button(
-                                    doc.key.path.clone(),
-                                    french,
-                                    *tokens,
-                                ))
-                                .child(modal_btn(
-                                    "guest-copy-text",
-                                    if french {
-                                        "Copier le texte"
-                                    } else {
-                                        "Copy text"
-                                    }
-                                    .into(),
-                                    false,
-                                    tokens,
-                                    GpuiAction::CopyGuestFileText(doc.key.clone()),
-                                    cx,
-                                ));
-                        }
-                        content = content.child(tabs);
-                    }
-                    if let Some((key, pixels)) = &files.image {
-                        let size = pixels.size(0);
-                        let scale = (600.0f32 / size.width.0 as f32)
-                            .min(270. / size.height.0 as f32)
-                            .min(1.);
-                        let action =
-                            GpuiAction::Share(ShareGpuiAction::GuestImageMenu(key.clone()));
-                        content = content
-                            .child(key.path.clone())
-                            .child(div().id("guest-image-actions").child(
-                                super::chrome::copy_path_button(key.path.clone(), french, *tokens),
-                            ))
-                            .child(
-                                div()
-                                    .id("guest-image-preview")
-                                    .debug_selector(|| "guest-image-preview".into())
-                                    .w(px(scale * size.width.0 as f32))
-                                    .h(px(scale * size.height.0 as f32))
-                                    .on_mouse_down(
-                                        gpui::MouseButton::Right,
-                                        cx.listener(move |root, _, _, cx| {
-                                            cx.stop_propagation();
-                                            root.dispatch_action(action.clone(), cx);
-                                        }),
-                                    )
-                                    .child(gpui::img(pixels.clone()).size_full()),
-                            );
-                        if files.image_menu {
-                            content = content.child(modal_btn(
-                                "guest-image-download",
-                                if french {
-                                    "Télécharger l’original…"
-                                } else {
-                                    "Download original…"
-                                }
-                                .into(),
-                                false,
-                                tokens,
-                                GpuiAction::Share(ShareGpuiAction::GuestDownload(key.clone())),
-                                cx,
-                            ));
-                        }
-                    }
-                    if let Some(doc) = &files.document {
-                        if files.confirm_close {
-                            for (discard, label) in [
-                                (
-                                    false,
-                                    if french {
-                                        "Conserver le brouillon"
-                                    } else {
-                                        "Keep draft"
-                                    },
-                                ),
-                                (
-                                    true,
-                                    if french {
-                                        "Abandonner le brouillon"
-                                    } else {
-                                        "Discard draft"
-                                    },
-                                ),
-                            ] {
-                                content = content.child(modal_btn(
-                                    format!("guest-close-confirm-{discard}"),
-                                    label.into(),
-                                    false,
-                                    tokens,
-                                    GpuiAction::Share(ShareGpuiAction::GuestConfirmClose(
-                                        doc.key.clone(),
-                                        discard,
-                                    )),
-                                    cx,
-                                ));
-                            }
-                        }
-                        let (preview, partial) = doc.preview();
-                        content = content.child(
-                            div()
-                                .id("guest-file-preview")
-                                .max_h(px(160.))
-                                .overflow_y_scroll()
-                                .child(preview.to_owned()),
-                        );
-                        if partial {
-                            content = content.child(if french {
-                                "Aperçu partiel (64 Kio)."
-                            } else {
-                                "Partial preview (64 KiB)."
-                            });
-                        }
-                        if !files.busy {
-                            content = content.child(modal_btn(
-                                "guest-history-refresh",
-                                if french { "Chronologie" } else { "Timeline" }.into(),
-                                false,
-                                tokens,
-                                GpuiAction::Share(ShareGpuiAction::GuestHistory(
-                                    doc.key.clone(),
-                                    false,
-                                )),
-                                cx,
-                            ));
-                        }
-                        if !files.busy {
-                            content = content.child(modal_btn(
-                                "guest-versions",
-                                if french {
-                                    "Historique local"
-                                } else {
-                                    "Local History"
-                                }
-                                .into(),
-                                false,
-                                tokens,
-                                GpuiAction::Share(ShareGpuiAction::GuestVersion(
-                                    doc.key.clone(),
-                                    None,
-                                )),
-                                cx,
-                            ));
-                        }
-                        if let Some(rows) = &files.versions {
-                            let mut list = div()
-                                .id("guest-version-list")
-                                .max_h(px(140.))
-                                .overflow_y_scroll();
-                            if rows.is_empty() {
-                                list = list.child(if french {
-                                    "Aucune sauvegarde."
-                                } else {
-                                    "No saved versions."
-                                });
-                            }
-                            for (index, row) in rows.iter().enumerate() {
-                                list = list.child(modal_btn(
-                                    format!("guest-version-{index}"),
-                                    row.label(),
-                                    false,
-                                    tokens,
-                                    GpuiAction::Share(ShareGpuiAction::GuestVersion(
-                                        doc.key.clone(),
-                                        Some(row.id.clone()),
-                                    )),
-                                    cx,
-                                ));
-                            }
-                            content = content.child(list);
-                        }
-                        if let Some(patch) = &files.version_diff {
-                            let mut section = div()
-                                .debug_selector(|| "guest-saved-diff".into())
-                                .child(crate::share_panel::guest_versions::comparison_title(
-                                    french,
-                                    patch.line_count() == 0,
-                                ));
-                            if patch.line_count() > 0 {
-                                let patch = patch.clone();
-                                section = section.child(
-                                    gpui::uniform_list(
-                                        "guest-saved-diff-lines",
-                                        patch.line_count(),
-                                        cx.processor(
-                                            move |_, rows: std::ops::Range<usize>, _, _| {
-                                                rows.map(|i| {
-                                                    div()
-                                                        .font_family(
-                                                            super::theme::mono_font_family(),
-                                                        )
-                                                        .child(patch.line(i).to_owned())
-                                                })
-                                                .collect::<Vec<_>>()
-                                            },
-                                        ),
-                                    )
-                                    .h(px(180.)),
-                                );
-                            }
-                            content = content.child(section);
-                        }
-                        if let Some(text) = &files.version_text {
-                            content = content.child(
-                                div()
-                                    .id("guest-version-text")
-                                    .debug_selector(|| "guest-version-text".into())
-                                    .max_h(px(180.))
-                                    .overflow_y_scroll()
-                                    .child(text.as_ref().clone()),
-                            );
-                        }
-                        if let Some(page) = &files.history {
-                            if page.uncommitted {
-                                content = content.child(if french {
-                                    "Modifications non commitées"
-                                } else {
-                                    "Uncommitted Changes"
-                                });
-                            }
-                            if !page.uncommitted && page.items.is_empty() {
-                                content = content.child(if french {
-                                    "Aucun historique."
-                                } else {
-                                    "No history."
-                                });
-                            }
-                            for row in &page.items {
-                                let date = crate::regional_date::long_local(row.time, french)
-                                    .unwrap_or_default();
-                                content = content
-                                    .child(
-                                        div()
-                                            .debug_selector(|| "guest-history-commit".into())
-                                            .child(format!(
-                                                "{} · {} · {}",
-                                                &row.id[..7],
-                                                row.author,
-                                                date
-                                            )),
-                                    )
-                                    .child(div().child(row.message.clone()));
-                            }
-                            if files.more && !files.busy {
-                                content = content.child(modal_btn(
-                                    "guest-history-more",
-                                    if french {
-                                        "Charger la suite"
-                                    } else {
-                                        "Load More"
-                                    }
-                                    .into(),
-                                    false,
-                                    tokens,
-                                    GpuiAction::Share(ShareGpuiAction::GuestHistory(
-                                        doc.key.clone(),
-                                        true,
-                                    )),
-                                    cx,
-                                ));
-                            }
-                        }
-                    }
-                    for notice in &files.notices {
-                        content =
-                            content.child(div().text_color(tokens.warn).child(notice.clone()));
-                    }
+                    content = render_guest_document(content, files, french, tokens, None, cx);
                     return el.child(content);
                 }
                 content = content.child(projects).child(
@@ -3758,6 +3457,324 @@ fn modal_header(
                 .child(GpuiIcon::Close.render(13.0, tokens.text_dim)),
         )
         .into_any_element()
+}
+
+pub(super) fn render_guest_document(
+    mut content: gpui::Stateful<gpui::Div>,
+    files: &crate::share_panel::guest_files::GuestFilesView,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    workspace: Option<(f32, f32)>,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::Stateful<gpui::Div> {
+    if !files.tabs.is_empty() {
+        let mut tabs = div().flex().flex_wrap().gap(px(3.));
+        for (index, key) in files
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|_| workspace.is_none())
+        {
+            let active = files.document.as_ref().is_some_and(|doc| doc.key == *key)
+                || files
+                    .image
+                    .as_ref()
+                    .is_some_and(|(image_key, _)| image_key == key);
+            tabs = tabs.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(modal_btn(
+                        format!("guest-doc-tab-{index}"),
+                        key.path.clone(),
+                        active,
+                        tokens,
+                        GpuiAction::Share(ShareGpuiAction::GuestSelectTab(key.clone())),
+                        cx,
+                    ))
+                    .child(modal_btn(
+                        format!("guest-doc-close-{index}"),
+                        "×".into(),
+                        false,
+                        tokens,
+                        GpuiAction::Share(ShareGpuiAction::GuestCloseTab(key.clone())),
+                        cx,
+                    )),
+            );
+        }
+        if let Some(doc) = &files.document {
+            tabs = tabs
+                .child(super::chrome::copy_path_button(
+                    doc.key.path.clone(),
+                    french,
+                    *tokens,
+                ))
+                .child(modal_btn(
+                    "guest-copy-text",
+                    if french {
+                        "Copier le texte"
+                    } else {
+                        "Copy text"
+                    }
+                    .into(),
+                    false,
+                    tokens,
+                    GpuiAction::CopyGuestFileText(doc.key.clone()),
+                    cx,
+                ));
+        }
+        if workspace.is_none()
+            && let Some(key) = files
+                .document
+                .as_ref()
+                .map(|doc| &doc.key)
+                .or_else(|| files.image.as_ref().map(|(key, _)| key))
+        {
+            tabs = tabs.child(modal_btn(
+                "guest-open-workspace",
+                if french {
+                    "Ouvrir dans l’espace de travail"
+                } else {
+                    "Open in workspace"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::SelectGuestDocument(key.clone()),
+                cx,
+            ));
+        }
+        content = content.child(tabs);
+    }
+    if let Some((key, pixels)) = &files.image {
+        let size = pixels.size(0);
+        let (width, height) = workspace.unwrap_or((600., 270.));
+        let scale = (width / size.width.0 as f32)
+            .min(height / size.height.0 as f32)
+            .min(1.);
+        let action = GpuiAction::Share(ShareGpuiAction::GuestImageMenu(key.clone()));
+        content = content
+            .child(key.path.clone())
+            .child(
+                div()
+                    .id("guest-image-actions")
+                    .child(super::chrome::copy_path_button(
+                        key.path.clone(),
+                        french,
+                        *tokens,
+                    )),
+            )
+            .child(
+                div()
+                    .id("guest-image-preview")
+                    .debug_selector(|| "guest-image-preview".into())
+                    .w(px(scale * size.width.0 as f32))
+                    .h(px(scale * size.height.0 as f32))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |root, _, _, cx| {
+                            cx.stop_propagation();
+                            root.dispatch_action(action.clone(), cx);
+                        }),
+                    )
+                    .child(gpui::img(pixels.clone()).size_full()),
+            );
+        if files.image_menu {
+            content = content.child(modal_btn(
+                "guest-image-download",
+                if french {
+                    "Télécharger l’original…"
+                } else {
+                    "Download original…"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::Share(ShareGpuiAction::GuestDownload(key.clone())),
+                cx,
+            ));
+        }
+    }
+    if let Some(doc) = &files.document {
+        if files.confirm_close {
+            for (discard, label) in [
+                (
+                    false,
+                    if french {
+                        "Conserver le brouillon"
+                    } else {
+                        "Keep draft"
+                    },
+                ),
+                (
+                    true,
+                    if french {
+                        "Abandonner le brouillon"
+                    } else {
+                        "Discard draft"
+                    },
+                ),
+            ] {
+                content = content.child(modal_btn(
+                    format!("guest-close-confirm-{discard}"),
+                    label.into(),
+                    false,
+                    tokens,
+                    GpuiAction::Share(ShareGpuiAction::GuestConfirmClose(doc.key.clone(), discard)),
+                    cx,
+                ));
+            }
+        }
+        let (preview, partial) = doc.preview();
+        content = content.child(
+            div()
+                .id("guest-file-preview")
+                .max_h(px(workspace.map_or(160., |(_, height)| height)))
+                .overflow_y_scroll()
+                .child(preview.to_owned()),
+        );
+        if partial {
+            content = content.child(if french {
+                "Aperçu partiel (64 Kio)."
+            } else {
+                "Partial preview (64 KiB)."
+            });
+        }
+        if !files.busy {
+            content = content.child(modal_btn(
+                "guest-history-refresh",
+                if french { "Chronologie" } else { "Timeline" }.into(),
+                false,
+                tokens,
+                GpuiAction::Share(ShareGpuiAction::GuestHistory(doc.key.clone(), false)),
+                cx,
+            ));
+        }
+        if !files.busy {
+            content = content.child(modal_btn(
+                "guest-versions",
+                if french {
+                    "Historique local"
+                } else {
+                    "Local History"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::Share(ShareGpuiAction::GuestVersion(doc.key.clone(), None)),
+                cx,
+            ));
+        }
+        if let Some(rows) = &files.versions {
+            let mut list = div()
+                .id("guest-version-list")
+                .max_h(px(140.))
+                .overflow_y_scroll();
+            if rows.is_empty() {
+                list = list.child(if french {
+                    "Aucune sauvegarde."
+                } else {
+                    "No saved versions."
+                });
+            }
+            for (index, row) in rows.iter().enumerate() {
+                list = list.child(modal_btn(
+                    format!("guest-version-{index}"),
+                    row.label(),
+                    false,
+                    tokens,
+                    GpuiAction::Share(ShareGpuiAction::GuestVersion(
+                        doc.key.clone(),
+                        Some(row.id.clone()),
+                    )),
+                    cx,
+                ));
+            }
+            content = content.child(list);
+        }
+        if let Some(patch) = &files.version_diff {
+            let mut section = div().debug_selector(|| "guest-saved-diff".into()).child(
+                crate::share_panel::guest_versions::comparison_title(
+                    french,
+                    patch.line_count() == 0,
+                ),
+            );
+            if patch.line_count() > 0 {
+                let patch = patch.clone();
+                section = section.child(
+                    gpui::uniform_list(
+                        "guest-saved-diff-lines",
+                        patch.line_count(),
+                        cx.processor(move |_, rows: std::ops::Range<usize>, _, _| {
+                            rows.map(|i| {
+                                div()
+                                    .font_family(super::theme::mono_font_family())
+                                    .child(patch.line(i).to_owned())
+                            })
+                            .collect::<Vec<_>>()
+                        }),
+                    )
+                    .h(px(180.)),
+                );
+            }
+            content = content.child(section);
+        }
+        if let Some(text) = &files.version_text {
+            content = content.child(
+                div()
+                    .id("guest-version-text")
+                    .debug_selector(|| "guest-version-text".into())
+                    .max_h(px(180.))
+                    .overflow_y_scroll()
+                    .child(text.as_ref().clone()),
+            );
+        }
+        if let Some(page) = &files.history {
+            if page.uncommitted {
+                content = content.child(if french {
+                    "Modifications non commitées"
+                } else {
+                    "Uncommitted Changes"
+                });
+            }
+            if !page.uncommitted && page.items.is_empty() {
+                content = content.child(if french {
+                    "Aucun historique."
+                } else {
+                    "No history."
+                });
+            }
+            for row in &page.items {
+                let date = crate::regional_date::long_local(row.time, french).unwrap_or_default();
+                content = content
+                    .child(
+                        div()
+                            .debug_selector(|| "guest-history-commit".into())
+                            .child(format!("{} · {} · {}", &row.id[..7], row.author, date)),
+                    )
+                    .child(div().child(row.message.clone()));
+            }
+            if files.more && !files.busy {
+                content = content.child(modal_btn(
+                    "guest-history-more",
+                    if french {
+                        "Charger la suite"
+                    } else {
+                        "Load More"
+                    }
+                    .into(),
+                    false,
+                    tokens,
+                    GpuiAction::Share(ShareGpuiAction::GuestHistory(doc.key.clone(), true)),
+                    cx,
+                ));
+            }
+        }
+    }
+    for notice in &files.notices {
+        content = content.child(div().text_color(tokens.warn).child(notice.clone()));
+    }
+    content
 }
 
 fn modal_btn(
