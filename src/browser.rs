@@ -129,6 +129,14 @@ impl Default for Browser {
 }
 
 impl Browser {
+    pub(crate) fn change_presentation(&mut self) {
+        self.visible(false);
+        self.close_popups();
+        self.cancel_native_address_edit();
+        self.tab_id = next_address_generation();
+        self.invalidate_address_input();
+    }
+
     pub(crate) fn speaker_state(&self) -> Option<bool> {
         (self.playing_audio || self.muted).then_some(self.muted)
     }
@@ -1484,7 +1492,22 @@ mod tests {
         );
         app.apply_gpui_action(GpuiAction::CloseBrowserPage(ids[2]));
         assert_eq!(app.browser.tab_id, ids[0]);
-        app.apply_gpui_action(GpuiAction::CloseBrowserPage(ids[0]));
+        app.apply_gpui_action(GpuiAction::DockBrowser(ids[0]));
+        assert_eq!(app.browser.tab_id, ids[1]);
+        let side = app.selected_side_browser.unwrap();
+        assert_ne!(side, ids[0]);
+        wait_for(
+            app.side_browsers[&side].view.as_ref().unwrap(),
+            "document.querySelector('#draft').value === 'first!'",
+        );
+        app.apply_gpui_action(GpuiAction::UndockBrowser(side));
+        assert!(app.side_browsers.is_empty());
+        assert_ne!(app.browser.tab_id, side);
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.querySelector('#draft').value === 'first!'",
+        );
+        app.apply_gpui_action(GpuiAction::CloseBrowserPage(app.browser.tab_id));
         assert_eq!(app.browser.tab_id, ids[1]);
         wait_for(
             app.browser.view.as_ref().unwrap(),

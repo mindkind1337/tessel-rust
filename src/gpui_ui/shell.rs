@@ -128,6 +128,10 @@ fn render_center_column(
 ) -> impl IntoElement {
     div()
         .id("gpui-center-column")
+        .debug_selector(|| "browser-center-drop".into())
+        .on_drop(cx.listener(|root, page: &SideBrowserDrag, _, cx| {
+            root.dispatch(GpuiAction::UndockBrowser(page.0), cx)
+        }))
         .relative()
         .flex_1()
         .min_w_0()
@@ -307,6 +311,12 @@ fn render_view_tabs_bar(
         let speaker = tab.browser_id.zip(tab.sound);
         #[cfg(not(windows))]
         let speaker: Option<(u64, bool)> = None;
+        #[cfg(windows)]
+        let browser_drag = tab.browser_id.map(CenterBrowserDrag);
+        #[cfg(not(windows))]
+        let browser_drag: Option<CenterBrowserDrag> = None;
+        let drag_title = tab.title.clone();
+        let drag_tokens = *tokens;
         let mut hint = tab.hint.clone();
         if tab.preview {
             hint.push_str(if snapshot.french {
@@ -319,6 +329,14 @@ fn render_view_tabs_bar(
         bar = bar.child(
             div()
                 .id(("view-tab", idx))
+                .when_some(browser_drag, |el, drag| {
+                    el.on_drag(drag, move |_, _, _, cx| {
+                        cx.new(|_| super::task_card_input::Ghost {
+                            title: drag_title.clone(),
+                            tokens: drag_tokens,
+                        })
+                    })
+                })
                 .debug_selector(move || format!("view-tab-{idx}"))
                 .role(gpui::Role::Tab)
                 .key_context("TesselViewTab")
@@ -866,6 +884,10 @@ fn render_work_grid(
 }
 
 #[derive(Clone)]
+struct SideBrowserDrag(u64);
+#[derive(Clone)]
+struct CenterBrowserDrag(u64);
+#[derive(Clone)]
 struct DraggedPane {
     id: u64,
     title: String,
@@ -1412,6 +1434,68 @@ fn render_split_divider(
     el
 }
 
+fn render_side_browser(
+    id: u64,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::AnyElement {
+    let mut page = div().size_full().flex().flex_col().child(
+        div()
+            .id("side-browser-return")
+            .debug_selector(|| "side-browser-return".into())
+            .cursor_pointer()
+            .p(px(6.))
+            .text_color(tokens.text)
+            .text_size(px(11.))
+            .on_click(
+                cx.listener(move |root, _, _, cx| root.dispatch(GpuiAction::UndockBrowser(id), cx)),
+            )
+            .child(if french {
+                "Ramener au centre"
+            } else {
+                "Move to center"
+            }),
+    );
+    #[cfg(windows)]
+    {
+        let entity = cx.weak_entity();
+        page = page.child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), window, cx| {
+                    let dragging = cx.has_active_drag();
+                    let _ = entity.update(cx, |root, cx| {
+                        let show = !dragging && root.app.side_browser_visible(id);
+                        if let Some(page) = root.app.side_browsers.get_mut(&id) {
+                            if show {
+                                page.auto_start_if_pending(window);
+                            }
+                            if page.sync_gpui_bounds(
+                                bounds.origin.x.into(),
+                                bounds.origin.y.into(),
+                                bounds.size.width.into(),
+                                bounds.size.height.into(),
+                                window.scale_factor(),
+                                show,
+                                None,
+                                !show,
+                            ) {
+                                root.focus_input = FocusInputTarget::None;
+                                window.blur(cx);
+                            }
+                        }
+                    });
+                },
+            )
+            .flex_1()
+            .min_h_0()
+            .w_full(),
+        );
+    }
+    page.into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_right_panel(
     snapshot: &GpuiWorkspaceSnapshot,
@@ -1450,7 +1534,7 @@ fn render_right_panel(
 
     let mut tabs_left = div().flex().items_center().gap(px(2.0));
     for (idx, (tab, en_lbl, fr_lbl)) in tabs.iter().copied().enumerate() {
-        let active = snapshot.right_tab == tab;
+        let active = snapshot.selected_side_browser.is_none() && snapshot.right_tab == tab;
         let label = if snapshot.french { fr_lbl } else { en_lbl };
         tabs_left = tabs_left.child(
             div()
@@ -1478,6 +1562,33 @@ fn render_right_panel(
         );
     }
 
+    for (id, title) in &snapshot.side_browser_tabs {
+        let id = *id;
+        let drag_title = title.clone();
+        let drag_tokens = *tokens;
+        tabs_left = tabs_left.child(
+            div()
+                .id(("side-browser-tab", id))
+                .debug_selector(move || format!("side-browser-tab-{id}"))
+                .px(px(7.))
+                .py(px(3.5))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .when(snapshot.selected_side_browser == Some(id), |el| {
+                    el.bg(tokens.accent_soft_bg)
+                })
+                .on_click(cx.listener(move |root, _, _, cx| {
+                    root.dispatch(GpuiAction::SelectSideBrowser(id), cx)
+                }))
+                .on_drag(SideBrowserDrag(id), move |_, _, _, cx| {
+                    cx.new(|_| super::task_card_input::Ghost {
+                        title: drag_title.clone(),
+                        tokens: drag_tokens,
+                    })
+                })
+                .child(title.clone()),
+        );
+    }
     tab_strip = tab_strip.child(tabs_left).child(
         div()
             .id("btn-right-fullscreen")
@@ -1500,6 +1611,10 @@ fn render_right_panel(
 
     let mut panel = div()
         .id("gpui-right-panel")
+        .debug_selector(|| "browser-side-drop".into())
+        .on_drop(cx.listener(|root, page: &CenterBrowserDrag, _, cx| {
+            root.dispatch(GpuiAction::DockBrowser(page.0), cx)
+        }))
         .relative()
         .h_full()
         .flex()
@@ -1524,18 +1639,23 @@ fn render_right_panel(
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .child(side_panels_view::render_side_panel_tab_body(
-                    snapshot,
-                    scm_input,
-                    explorer_input,
-                    panel_query_inputs,
-                    task_rename_input,
-                    task_card_input,
-                    task_agent_inputs,
-                    task_decision_inputs,
-                    tokens,
-                    cx,
-                )),
+                .child(if let Some(id) = snapshot.selected_side_browser {
+                    render_side_browser(id, snapshot.french, tokens, cx)
+                } else {
+                    side_panels_view::render_side_panel_tab_body(
+                        snapshot,
+                        scm_input,
+                        explorer_input,
+                        panel_query_inputs,
+                        task_rename_input,
+                        task_card_input,
+                        task_agent_inputs,
+                        task_decision_inputs,
+                        tokens,
+                        cx,
+                    )
+                    .into_any_element()
+                }),
         )
         .when(!snapshot.right_fullscreen, |el| {
             el.child(

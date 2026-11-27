@@ -864,6 +864,10 @@ pub struct Tessel {
     #[cfg(windows)]
     other_browser_pages: std::collections::BTreeMap<(Option<u64>, u64), crate::browser::Browser>,
     #[cfg(windows)]
+    pub(crate) side_browsers: std::collections::BTreeMap<u64, crate::browser::Browser>,
+    #[cfg(windows)]
+    pub(crate) selected_side_browser: Option<u64>,
+    #[cfg(windows)]
     finishing_browser_pages: Vec<(Option<u64>, crate::browser::Browser)>,
     #[cfg(windows)]
     pub(crate) browser: crate::browser::Browser,
@@ -1127,6 +1131,10 @@ impl Tessel {
             background_browsers: Default::default(),
             #[cfg(windows)]
             other_browser_pages: Default::default(),
+            #[cfg(windows)]
+            side_browsers: Default::default(),
+            #[cfg(windows)]
+            selected_side_browser: None,
             #[cfg(windows)]
             finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
@@ -2617,6 +2625,9 @@ impl Tessel {
                 browser.poll();
             }
             for page in self.other_browser_pages.values_mut() {
+                native_changed |= page.poll();
+            }
+            for page in self.side_browsers.values_mut() {
                 native_changed |= page.poll();
             }
             self.finishing_browser_pages.retain_mut(|(_, page)| {
@@ -4659,6 +4670,13 @@ impl Tessel {
         }
         #[cfg(windows)]
         if self.view == View::Browser {
+            if !self.show_agent_browser {
+                commands.push(PaletteCommand::new(
+                    "browser:dock",
+                    tr("Browser"),
+                    tr("Move browser to side panel"),
+                ));
+            }
             commands.push(PaletteCommand::new(
                 "browser:mute",
                 tr("Browser"),
@@ -4870,6 +4888,10 @@ impl Tessel {
             }
             #[cfg(windows)]
             "browser" => self.new_browser_page(),
+            #[cfg(windows)]
+            "browser:dock" if self.view == View::Browser && !self.show_agent_browser => {
+                self.dock_browser(self.browser.tab_id)
+            }
             #[cfg(windows)]
             "browser:mute" if self.view == View::Browser => self.browser.toggle_mute(),
             #[cfg(windows)]
@@ -6129,7 +6151,7 @@ impl Tessel {
             self.error = error.to_string();
         }
     }
-    fn right_panel(&mut self, ctx: &egui::Context) {
+    fn right_panel(&mut self, ctx: &egui::Context, _frame: &eframe::Frame) {
         if !self.state.panels.right_open {
             self.right_fullscreen = false;
             return;
@@ -6225,6 +6247,8 @@ impl Tessel {
                         format!("{} ({shortcut})", tr(label))
                     };
                     let selected = self.state.panels.right_tab == tab;
+                    #[cfg(windows)]
+                    let selected = selected && self.selected_side_browser.is_none();
                     let clicked = if badge > 0 {
                         crate::chrome::side_tab_with_badge(ui, icon, &tab_label, selected, badge)
                             .clicked()
@@ -6232,6 +6256,10 @@ impl Tessel {
                         crate::chrome::side_tab(ui, icon, &tab_label, selected).clicked()
                     };
                     if clicked {
+                        #[cfg(windows)]
+                        {
+                            self.selected_side_browser = None;
+                        }
                         if tab == RightTab::History
                             && self.past_sessions_cache.is_empty()
                             && !self.gpui_extra.session_discovery.requested()
@@ -6273,6 +6301,34 @@ impl Tessel {
                 });
             });
             ui.separator();
+            #[cfg(windows)]
+            if !self.side_browsers.is_empty() {
+                egui::ScrollArea::horizontal()
+                    .id_salt("side-browser-tabs")
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (id, page) in &self.side_browsers {
+                                if ui
+                                    .selectable_label(
+                                        Some(*id) == self.selected_side_browser,
+                                        page.tab_label().0,
+                                    )
+                                    .clicked()
+                                {
+                                    self.selected_side_browser = Some(*id);
+                                }
+                            }
+                        });
+                    });
+                if let Some(id) = self.selected_side_browser {
+                    if ui.button(tr("Move to center")).clicked() {
+                        self.undock_browser(id);
+                    } else if let Some(page) = self.side_browsers.get_mut(&id) {
+                        page.show(ui, _frame);
+                    }
+                    return;
+                }
+            }
             match self.state.panels.right_tab {
                 RightTab::Dashboard => self.dashboard_view(ui),
                 RightTab::Files => self.explorer(ui),
@@ -8607,6 +8663,8 @@ impl Tessel {
             let _ = self.agent_browsers.sync_presentation(None, None, false);
             self.agent_browsers = Default::default();
             self.background_browsers.clear();
+            self.side_browsers.clear();
+            self.selected_side_browser = None;
             self.other_browser_pages.clear();
             self.finishing_browser_pages.clear();
             self.browser.visible(false);
@@ -14950,7 +15008,11 @@ impl eframe::App for Tessel {
         }
         self.render_status_bar(ctx);
         self.sidebar(ctx);
-        self.right_panel(ctx);
+        #[cfg(windows)]
+        for page in self.side_browsers.values_mut() {
+            page.begin_frame();
+        }
+        self.right_panel(ctx, frame);
         #[cfg(windows)]
         {
             if self.view == View::Browser {
@@ -15385,8 +15447,7 @@ impl eframe::App for Tessel {
             self.dispatch_native_actions(ctx);
             self.show_native_picker(ctx);
             self.show_native_drain(ctx);
-            let browser_unblocked = self.view == View::Browser
-                && !self.dev_update_dialog_open
+            let pages_unblocked = !self.dev_update_dialog_open
                 && !self.native_modal_open()
                 && !self.side_panels_ui.any_modal_open()
                 && !self.dialogs_toolbar_ui.any_modal_open()
@@ -15413,6 +15474,18 @@ impl eframe::App for Tessel {
                 && !egui::Popup::is_any_open(ctx);
             let reclaim_parent_focus = (!had_floating_keyboard && self.floating.ui.has_keyboard())
                 || ctx.input(|i| i.pointer.any_pressed());
+            let browser_unblocked =
+                pages_unblocked && self.view == View::Browser && !self.right_fullscreen;
+            let mut side_took_focus = false;
+            for (id, page) in &mut self.side_browsers {
+                side_took_focus |= page.sync_presentation(
+                    pages_unblocked
+                        && self.state.panels.right_open
+                        && Some(*id) == self.selected_side_browser,
+                    floating_rect,
+                    reclaim_parent_focus,
+                );
+            }
             let owner_took_focus = self.browser.sync_presentation(
                 browser_unblocked && !self.show_agent_browser,
                 floating_rect,
@@ -15428,7 +15501,9 @@ impl eframe::App for Tessel {
                 floating_rect,
                 reclaim_parent_focus,
             );
-            if (owner_took_focus || agent_took_focus) && self.floating.ui.has_keyboard() {
+            if (side_took_focus || owner_took_focus || agent_took_focus)
+                && self.floating.ui.has_keyboard()
+            {
                 self.floating.ui.keyboard = false;
                 let floating_focus = egui::Id::new("floating-terminal-content");
                 if ctx.memory(|m| m.focused()) == Some(floating_focus) {

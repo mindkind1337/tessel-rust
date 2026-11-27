@@ -757,6 +757,8 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     pub font_size: f32,
     pub editor_font_size: u8,
     pub renderer: RendererPreference,
+    pub side_browser_tabs: Vec<(u64, String)>,
+    pub selected_side_browser: Option<u64>,
     pub right_fullscreen: bool,
     pub right_tab: SideTab,
     pub center_mode: GpuiCenterMode,
@@ -792,6 +794,9 @@ pub(crate) enum GpuiAction {
     ToggleLeftSidebar,
     ToggleRightSidebar,
     SelectSideTab(SideTab),
+    DockBrowser(u64),
+    UndockBrowser(u64),
+    SelectSideBrowser(u64),
     ToggleRightFullscreen,
     SelectProject(u64),
     AddProjectPath(PathBuf),
@@ -1653,6 +1658,10 @@ impl Tessel {
             #[cfg(windows)]
             other_browser_pages: Default::default(),
             #[cfg(windows)]
+            side_browsers: Default::default(),
+            #[cfg(windows)]
+            selected_side_browser: None,
+            #[cfg(windows)]
             finishing_browser_pages: Vec::new(),
             #[cfg(windows)]
             browser,
@@ -2271,6 +2280,14 @@ impl Tessel {
         false
     }
 
+    #[cfg(windows)]
+    pub(crate) fn side_browser_visible(&self, id: u64) -> bool {
+        self.selected_side_browser == Some(id)
+            && self.state.panels.right_open
+            && !self.gpui_has_open_modal()
+            && !self.floating.ui.is_open()
+    }
+
     pub(crate) fn gpui_has_open_modal(&self) -> bool {
         self.command_palette.open || self.finder.is_open() || self.gpui_has_non_search_modal()
     }
@@ -2522,7 +2539,7 @@ impl Tessel {
         }
     }
 
-    #[cfg(all(test, feature = "visual-test"))]
+    #[cfg(test)]
     pub(crate) fn gpui_chat_sender_for_test(
         &mut self,
         pane: u64,
@@ -3949,6 +3966,18 @@ impl Tessel {
             editor_font_size: self.state.editor_prefs.font_size,
             font_size,
             renderer: self.state.renderer,
+            #[cfg(windows)]
+            side_browser_tabs: self
+                .side_browsers
+                .iter()
+                .map(|(id, page)| (*id, page.tab_label().0))
+                .collect(),
+            #[cfg(not(windows))]
+            side_browser_tabs: Vec::new(),
+            #[cfg(windows)]
+            selected_side_browser: self.selected_side_browser,
+            #[cfg(not(windows))]
+            selected_side_browser: None,
             right_fullscreen: self.right_fullscreen,
             right_tab: self.state.panels.right_tab,
             center_mode,
@@ -5424,7 +5453,32 @@ impl Tessel {
                 }
                 self.save();
             }
+            GpuiAction::DockBrowser(id) => {
+                #[cfg(windows)]
+                self.dock_browser(id);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
+            GpuiAction::UndockBrowser(id) => {
+                #[cfg(windows)]
+                self.undock_browser(id);
+                #[cfg(not(windows))]
+                let _ = id;
+            }
+            GpuiAction::SelectSideBrowser(id) => {
+                #[cfg(windows)]
+                if self.side_browsers.contains_key(&id) {
+                    self.selected_side_browser = Some(id);
+                    self.state.panels.right_open = true;
+                }
+                #[cfg(not(windows))]
+                let _ = id;
+            }
             GpuiAction::SelectSideTab(tab) => {
+                #[cfg(windows)]
+                if self.selected_side_browser.take().is_some() {
+                    self.state.panels.right_open = false;
+                }
                 self.state.panels.toggle_right(tab);
                 if !self.state.panels.right_open {
                     self.right_fullscreen = false;
@@ -6361,6 +6415,9 @@ impl Tessel {
                     if !trusted {
                         self.browser.revoke_preview_scripts(&folder);
                         for page in self.other_browser_pages.values_mut() {
+                            page.revoke_preview_scripts(&folder);
+                        }
+                        for page in self.side_browsers.values_mut() {
                             page.revoke_preview_scripts(&folder);
                         }
                         for (_, page) in &mut self.finishing_browser_pages {

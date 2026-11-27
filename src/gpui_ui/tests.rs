@@ -751,6 +751,52 @@ fn view_tab_layout_keeps_long_unicode_titles_and_controls_separate(
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn browser_tab_drags_into_right_panel_and_returns(cx: &mut gpui::TestAppContext) {
+    use gpui::MouseButton::Left;
+    let dir = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+        root.app
+            .execute_palette_command(&eframe::egui::Context::default(), "browser");
+        // This fixture exercises pointer routing without an OS browser window.
+        root.app.browser = crate::browser::Browser::default();
+        root.dispatch(GpuiAction::SelectWorkTab, cx);
+        if !root.app.gpui_snapshot(960., 640., 4.).toolbar.right_open {
+            root.dispatch(GpuiAction::ToggleRightSidebar, cx);
+        }
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let src = visual.debug_bounds("view-tab-1").unwrap().center();
+    let dst = visual.debug_bounds("browser-side-drop").unwrap().center();
+    visual.simulate_mouse_down(src, Left, Default::default());
+    visual.simulate_mouse_move(
+        src + gpui::point(gpui::px(12.), gpui::px(0.)),
+        Some(Left),
+        Default::default(),
+    );
+    visual.simulate_mouse_move(dst, Some(Left), Default::default());
+    visual.simulate_mouse_up(dst, Left, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let button = visual.debug_bounds("side-browser-return").unwrap();
+    visual.simulate_click(button.center(), Default::default());
+    let snapshot = view
+        .update(cx, |root, _, _| root.app.gpui_snapshot(960., 640., 4.))
+        .unwrap();
+    assert!(snapshot.side_browser_tabs.is_empty());
+    assert!(
+        snapshot
+            .view_tabs
+            .iter()
+            .any(|tab| tab.browser_id.is_some() && tab.selected)
+    );
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn tab_sound_click_unmutes_without_selecting_browser(cx: &mut gpui::TestAppContext) {
     use crate::app::gpui_bridge::GpuiAction;
     let dir = tempfile::tempdir().unwrap();

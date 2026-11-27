@@ -83,8 +83,11 @@ impl Tessel {
         self.view = View::Browser;
     }
 
-    pub(super) fn close_browser_page(&mut self, id: u64) {
-        let mut closed = if id == self.browser.tab_id {
+    fn take_center_browser(&mut self, id: u64) -> Option<Browser> {
+        if id == self.browser.tab_id && !self.browser_tab_open && self.view != View::Browser {
+            return None;
+        }
+        let page = if id == self.browser.tab_id {
             let owner = self.state.active_project;
             let key = self
                 .other_browser_pages
@@ -108,12 +111,54 @@ impl Tessel {
                 dormant
             });
             self.replace_browser_page(next)
-        } else if let Some(page) = self
-            .other_browser_pages
-            .remove(&(self.state.active_project, id))
-        {
-            page
         } else {
+            self.other_browser_pages
+                .remove(&(self.state.active_project, id))?
+        };
+        Some(page)
+    }
+
+    pub(super) fn dock_browser(&mut self, id: u64) {
+        if self.gpui_has_open_modal() {
+            return;
+        }
+        if let Some(mut page) = self.take_center_browser(id) {
+            page.change_presentation();
+            let id = page.tab_id;
+            self.side_browsers.insert(id, page);
+            self.selected_side_browser = Some(id);
+            self.state.panels.right_open = true;
+            self.save();
+        }
+    }
+
+    pub(super) fn undock_browser(&mut self, id: u64) {
+        if self.state.active_project.is_none()
+            || self.view == View::GuestFiles
+            || self.gpui_has_open_modal()
+        {
+            return;
+        }
+        if let Some(mut page) = self.side_browsers.remove(&id) {
+            if self.selected_side_browser == Some(id) {
+                self.selected_side_browser = None;
+            }
+            page.change_presentation();
+            let was_open = self.browser_tab_open || self.view == View::Browser;
+            let previous = self.replace_browser_page(page);
+            if was_open {
+                self.other_browser_pages
+                    .insert((self.state.active_project, previous.tab_id), previous);
+            }
+            self.browser_tab_open = true;
+            self.right_fullscreen = false;
+            self.view = View::Browser;
+            self.save();
+        }
+    }
+
+    pub(super) fn close_browser_page(&mut self, id: u64) {
+        let Some(mut closed) = self.take_center_browser(id) else {
             return;
         };
         closed.poll();

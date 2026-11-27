@@ -1339,7 +1339,22 @@ impl Render for TesselGpuiRoot {
         let grid_h = (viewport_h - chrome_h).max(120.0);
 
         #[cfg(windows)]
-        if prelim.center_mode == GpuiCenterMode::BrowserTab {
+        {
+            let selected = self
+                .app
+                .selected_side_browser
+                .filter(|id| self.app.side_browser_visible(*id) && !cx.has_active_drag());
+            for (id, page) in &mut self.app.side_browsers {
+                if Some(*id) != selected {
+                    page.visible(false);
+                }
+            }
+        }
+        #[cfg(windows)]
+        if prelim.center_mode == GpuiCenterMode::BrowserTab
+            && !prelim.right_fullscreen
+            && !cx.has_active_drag()
+        {
             self.app.browser.auto_start_if_pending(window);
         } else {
             self.app.browser.visible(false);

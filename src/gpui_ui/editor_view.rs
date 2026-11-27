@@ -2247,7 +2247,8 @@ pub(crate) fn render_browser_stage(
     let french = snapshot.french;
     let b = &snapshot.browser;
     let expected_address_input = browser_input.state().cloned();
-    let can_show = snapshot.overlay_title.is_none() && !snapshot.floating.open;
+    let can_show =
+        snapshot.overlay_title.is_none() && !snapshot.floating.open && !snapshot.right_fullscreen;
 
     #[cfg(windows)]
     let view_entity = cx.entity().downgrade();
@@ -2309,7 +2310,8 @@ pub(crate) fn render_browser_stage(
                     let w = f32::from(bounds.size.width);
                     let h = f32::from(bounds.size.height);
                     let _ = view_entity.update(cx, |root, cx| {
-                        let can_show = can_show && !root.app.gpui_has_open_modal();
+                        let can_show =
+                            can_show && !cx.has_active_drag() && !root.app.gpui_has_open_modal();
                         if root
                             .app
                             .browser
