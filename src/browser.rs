@@ -117,6 +117,42 @@ impl Default for Browser {
 }
 
 impl Browser {
+    fn restorable_url(url: &str) -> Option<String> {
+        if url.len() > 8192 {
+            return None;
+        }
+        crate::view_tabs_browser_model::allowed_browser_url(url, false).filter(|url| {
+            !url::Url::parse(url).ok().is_some_and(|url| {
+                url.host_str().is_some_and(|host| {
+                    host.starts_with("tesselpreview.") && host.ends_with(".localhost")
+                })
+            })
+        })
+    }
+
+    pub(crate) fn restart_location(&self) -> (String, String) {
+        let location = if self.view.is_none() && self.auto_start_pending && !self.address_editing {
+            &self.address
+        } else {
+            &self.committed_address
+        };
+        match Self::restorable_url(location) {
+            Some(url) => (url, self.title.clone()),
+            None => ("about:blank".into(), String::new()),
+        }
+    }
+
+    pub(crate) fn from_restart_location(url: &str, title: &str) -> Self {
+        let mut page = Self::default();
+        let url = Self::restorable_url(url).unwrap_or_else(|| "about:blank".into());
+        page.open_url(&url);
+        page.committed_address = url.clone();
+        if url != "about:blank" {
+            page.title = title.chars().take(200).collect();
+        }
+        page
+    }
+
     pub(crate) fn tab_label(&self) -> (String, String) {
         let pending = (self.view.is_none() && self.auto_start_pending && !self.address_editing)
             .then(|| crate::view_tabs_browser_model::allowed_browser_url(&self.address, true))
@@ -969,6 +1005,78 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn restart_loads_saved_owner_tab_in_webview() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::{hidden_parent, wait_for};
+        use std::io::{BufRead, BufReader, Write};
+        let temp = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let start = || Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/saved-tab", server.local_addr().unwrap());
+        let mut app = start();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        app.apply_gpui_action(GpuiAction::AddProjectPath(project));
+        app.execute_palette_command(&eframe::egui::Context::default(), "browser");
+        app.browser.open_url(&url);
+        drop(app);
+        let mut app = start();
+        assert!(!app.browser.is_started());
+        assert_eq!(app.browser.address_str(), url);
+        server.set_nonblocking(true).unwrap();
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let request = std::thread::spawn(move || {
+            let mut served = false;
+            while matches!(
+                stopped.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ) {
+                let (mut socket, _) = match server.accept() {
+                    Ok(pair) => pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("fixture accept failed: {e}"),
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_millis(250)))
+                    .unwrap();
+                let mut reader = BufReader::new(&socket);
+                let mut first = String::new();
+                if reader.read_line(&mut first).is_err() || !first.starts_with("GET /saved-tab ") {
+                    continue;
+                }
+                for line in reader.lines() {
+                    if !matches!(line, Ok(header) if !header.is_empty()) {
+                        break;
+                    }
+                }
+                let body = "<title>Restored owner tab</title>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                served |= socket.write_all(response.as_bytes()).is_ok();
+            }
+            served
+        });
+        app.browser
+            .create_with_profile(&parent, temp.path().join("profile"))
+            .unwrap();
+        app.browser.navigate_now();
+        wait_for(
+            app.browser.view.as_ref().unwrap(),
+            "document.title === 'Restored owner tab'",
+        );
+        drop(stop);
+        assert!(request.join().unwrap());
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn project_switch_keeps_both_native_browser_documents_alive() {

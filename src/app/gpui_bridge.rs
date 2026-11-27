@@ -1671,6 +1671,8 @@ impl Tessel {
         app.scm_panel
             .set_view_mode(app.state.git_prefs.scm_view_mode.into_panel());
         if app.state.general_prefs.restore_workspaces {
+            #[cfg(windows)]
+            app.restore_owner_browser_layout();
             let initial_scrollback = app.state.terminal_prefs.scrollback;
             for saved in &app.state.sessions {
                 app.next_session = app.next_session.max(saved.id + 1);
