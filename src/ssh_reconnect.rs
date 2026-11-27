@@ -427,7 +427,7 @@ mod openssh_tests {
             persistent_sessions: Some(false),
             ..Default::default()
         });
-        let open = || {
+        let open = |diagnostics: &Path| {
             let channel = Channel::for_launch(&host, false).unwrap();
             let mut command = crate::launch::pane_command(
                 &host,
@@ -439,18 +439,35 @@ mod openssh_tests {
             )
             .unwrap();
             assert_eq!(command.get_argv().last().unwrap(), "fixture");
-            command
-                .get_argv_mut()
-                .splice(1..1, ["-F".into(), config.as_os_str().to_owned()]);
+            command.get_argv_mut().splice(
+                1..1,
+                [
+                    "-E".into(),
+                    diagnostics.as_os_str().to_owned(),
+                    "-o".into(),
+                    "LogLevel=ERROR".into(),
+                    "-F".into(),
+                    config.as_os_str().to_owned(),
+                ],
+            );
             let mut shell = Terminal::spawn_command(command).unwrap();
             wait_until(&mut shell, |t| t.output().contains("fixture-login>"));
             shell
         };
-        let mut shell = open();
+        let log = local.path().join("client-errors");
+        let mut shell = open(&log);
+        // Remote output can imitate OpenSSH. Only the client diagnostic stream is evidence.
+        shell
+            .run_quick_command("echo Connection reset by 'peer' >&2", true)
+            .unwrap();
+        wait_until(&mut shell, |t| {
+            t.output().contains("Connection reset by peer")
+        });
         shell.run_quick_command("exit 255", true).unwrap();
         wait_until(&mut shell, Terminal::exited);
         assert_eq!(shell.exit_code(), Some(255));
-        let mut shell = open();
+        assert!(std::fs::read(&log).unwrap().is_empty());
+        let mut shell = open(&log);
         wsl(&[
             "sh",
             "-c",
@@ -460,6 +477,15 @@ mod openssh_tests {
         ]);
         wait_until(&mut shell, Terminal::exited);
         assert_eq!(shell.exit_code(), Some(255));
+        let diagnostic = std::fs::read_to_string(log).unwrap().to_ascii_lowercase();
+        assert!(
+            diagnostic
+                .lines()
+                .any(|line| line.starts_with("client_loop: send disconnect:"))
+                || diagnostic.contains("closed")
+                || diagnostic.contains("reset")
+                || diagnostic.contains("broken pipe")
+        );
     }
 
     #[test]
