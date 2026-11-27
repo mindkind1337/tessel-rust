@@ -3081,6 +3081,13 @@ fn render_ssh_page(
                 )),
         );
 
+    if let Some((text, bad)) = &s.ssh_notice {
+        col = col.child(
+            div()
+                .text_color(if *bad { tokens.danger } else { tokens.text })
+                .child(text.clone()),
+        );
+    }
     for (idx, host) in s.ssh_hosts.iter().enumerate() {
         col = col.child(
             div()
@@ -3106,6 +3113,25 @@ fn render_ssh_page(
                     div()
                         .flex()
                         .gap(px(4.0))
+                        .child(if s.ssh_tests.contains(&host.alias) {
+                            div()
+                                .child(if french {
+                                    "Test en cours…"
+                                } else {
+                                    "Testing…"
+                                })
+                                .into_any_element()
+                        } else {
+                            setting_btn(
+                                format!("gpui-ssh-test-{idx}"),
+                                if french { "Tester" } else { "Test" }.into(),
+                                false,
+                                tokens,
+                                GpuiAction::TestSshHost(host.alias.clone()),
+                                cx,
+                            )
+                            .into_any_element()
+                        })
                         .child(setting_btn(
                             format!("gpui-ssh-conn-{idx}"),
                             "Open Terminal".to_owned(),

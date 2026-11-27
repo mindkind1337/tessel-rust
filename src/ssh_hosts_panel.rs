@@ -128,7 +128,7 @@ impl SshHostsCapabilities {
             can_edit: true,
             can_remove: true,
             can_connect: true,
-            can_test: false,
+            can_test: true,
             can_disconnect: false,
             can_import_config: false,
         }

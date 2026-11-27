@@ -617,6 +617,7 @@ struct PendingDocument {
     pinned: bool,
 }
 enum Message {
+    SshTestFinished(String, Result<(), crate::ssh_connection_test::Failure>),
     TranscriptTrash(
         crate::side_panels_model::SessionHistoryEntry,
         Result<(), String>,
@@ -815,6 +816,7 @@ pub struct Tessel {
     #[cfg(windows)]
     native_terminals: native_terminals::State,
     host_notice: Option<(String, bool)>,
+    host_tests: std::collections::HashSet<String>,
     host_import: Option<Receiver<crate::ssh_config::Discovery>>,
     tasks_board: crate::tasks_board_panel::TasksBoard,
     tasks_board_project: Option<u64>,
@@ -1070,6 +1072,7 @@ impl Tessel {
             #[cfg(windows)]
             native_terminals: Default::default(),
             host_notice: None,
+            host_tests: Default::default(),
             host_import: None,
             tasks_board: Default::default(),
             tasks_board_project: None,
@@ -2934,6 +2937,16 @@ impl Tessel {
                     self.dialogs_toolbar_ui.clone_parent = path;
                 }
                 Message::CloneParentPicked(None) => {}
+                Message::SshTestFinished(alias, result) => {
+                    self.host_tests.remove(&alias);
+                    if self.state.hosts.iter().any(|h| h.alias == alias) {
+                        self.host_notice = Some(crate::ssh_connection_test::notice(
+                            &alias,
+                            result,
+                            self.state.language == crate::i18n::Language::French,
+                        ));
+                    }
+                }
                 Message::InitParentPicked(Some(path)) => {
                     self.dialogs_toolbar_ui.init_parent = path;
                 }
@@ -10251,7 +10264,7 @@ impl Tessel {
                 // A running SSH process alone does not prove authenticated connectivity.
                 status: None,
                 error: None,
-                busy: false,
+                busy: self.host_tests.contains(&host.alias),
             })
             .collect();
         let mut capabilities = SshHostsCapabilities::native_openssh();
@@ -10302,6 +10315,15 @@ impl Tessel {
             host_daemon: host.host_daemon,
         };
         match action {
+            Some(SshHostsAction::Test { index, host })
+                if self
+                    .state
+                    .hosts
+                    .get(index)
+                    .is_some_and(|saved| saved.alias == host.alias) =>
+            {
+                self.test_ssh_host(host.alias)
+            }
             Some(SshHostsAction::ImportConfig) if self.host_import.is_none() => {
                 if let Some(base) = directories::BaseDirs::new() {
                     let home = base.home_dir().to_owned();
@@ -10358,6 +10380,32 @@ impl Tessel {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn test_ssh_host(&mut self, alias: String) {
+        if !self.state.hosts.iter().any(|h| h.alias == alias)
+            || !self.host_tests.insert(alias.clone())
+        {
+            return;
+        }
+        self.host_notice = None;
+        let sender = self.sender.clone();
+        let target = alias.clone();
+        if thread::Builder::new()
+            .name("ssh-connection-test".into())
+            .spawn(move || {
+                let result = crate::ssh_connection_test::probe(&target);
+                let _ = sender.send(Message::SshTestFinished(target, result));
+            })
+            .is_err()
+        {
+            self.host_tests.remove(&alias);
+            self.host_notice = Some(crate::ssh_connection_test::notice(
+                &alias,
+                Err(crate::ssh_connection_test::Failure::Failed),
+                self.state.language == crate::i18n::Language::French,
+            ));
         }
     }
 

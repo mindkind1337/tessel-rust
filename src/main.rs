@@ -180,6 +180,7 @@ pub mod side_panels_model;
 pub mod side_panels_ui;
 pub mod sidebar_model;
 mod ssh_config;
+mod ssh_connection_test;
 pub mod ssh_hosts_panel;
 mod ssh_reconnect;
 pub mod ssh_tmux;

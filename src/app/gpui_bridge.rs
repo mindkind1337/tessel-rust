@@ -642,6 +642,8 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub new_quick_cmd_name: String,
     pub new_quick_cmd_text: String,
     pub new_quick_cmd_enter: bool,
+    pub ssh_tests: std::collections::HashSet<String>,
+    pub ssh_notice: Option<(String, bool)>,
     pub ssh_hosts: Vec<crate::workspace::Host>,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
@@ -1284,6 +1286,7 @@ pub(crate) enum GpuiAction {
         alias: String,
         folder: String,
     },
+    TestSshHost(String),
     AddSshHostFromDraft,
     RemoveSshHost(usize),
     LaunchSshHost(usize),
@@ -1689,6 +1692,7 @@ impl Tessel {
             #[cfg(windows)]
             native_terminals: Default::default(),
             host_notice: None,
+            host_tests: Default::default(),
             host_import: None,
             tasks_board: Default::default(),
             tasks_board_project: None,
@@ -1894,6 +1898,7 @@ impl Tessel {
                 .as_ref()
                 .is_some_and(|c| c.loading())
             || self.gpui_extra.session_discovery.busy()
+            || !self.host_tests.is_empty()
             || !self.document_pending.is_empty()
             || (self.view == View::Files
                 && self.documents.get(self.active_document).is_some_and(|doc| {
@@ -5225,6 +5230,8 @@ impl Tessel {
             new_quick_cmd_name: self.gpui_extra.new_quick_cmd_name.clone(),
             new_quick_cmd_text: self.gpui_extra.new_quick_cmd_text.clone(),
             new_quick_cmd_enter: self.gpui_extra.new_quick_cmd_enter,
+            ssh_tests: self.host_tests.clone(),
+            ssh_notice: self.host_notice.clone(),
             ssh_hosts: self.state.hosts.clone(),
             new_ssh_alias: self.gpui_extra.new_ssh_alias.clone(),
             new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
@@ -7831,6 +7838,7 @@ impl Tessel {
                 self.gpui_extra.new_ssh_alias = alias;
                 self.gpui_extra.new_ssh_folder = folder;
             }
+            GpuiAction::TestSshHost(alias) => self.test_ssh_host(alias),
             GpuiAction::AddSshHostFromDraft => {
                 let alias = self.gpui_extra.new_ssh_alias.trim().to_owned();
                 let folder = self.gpui_extra.new_ssh_folder.trim().to_owned();

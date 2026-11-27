@@ -402,6 +402,40 @@ mod openssh_tests {
         (fixture, local, config)
     }
 
+    #[test]
+    #[ignore = "requires WSL sshd and Windows OpenSSH"]
+    fn saved_host_connection_test_authenticates_refuses_unknown_keys_and_times_out() {
+        use crate::ssh_connection_test::{Failure, run};
+        let (fixture, local, config) = isolated_server();
+        let ssh = || {
+            let mut cmd = tokio::process::Command::new("ssh");
+            cmd.arg("-F").arg(&config);
+            cmd
+        };
+        assert_eq!(run(ssh(), "fixture", Duration::from_secs(10)), Ok(()));
+        let mut unknown = ssh();
+        let absent = local.path().join("absent_known_hosts");
+        unknown
+            .arg("-o")
+            .arg(format!("UserKnownHostsFile={}", absent.display()));
+        assert!(matches!(
+            run(unknown, "fixture", Duration::from_secs(10)),
+            Err(Failure::Detail(_))
+        ));
+        assert!(!absent.exists());
+        wsl(&[
+            "sh",
+            "-c",
+            r#"printf '#!/bin/sh\nsleep 3\n' > "$1/login""#,
+            "sh",
+            &fixture.0,
+        ]);
+        assert_eq!(
+            run(ssh(), "fixture", Duration::from_millis(500)),
+            Err(Failure::Timeout)
+        );
+    }
+
     fn fixture_terminal(
         config: &Path,
         host: &Launch,

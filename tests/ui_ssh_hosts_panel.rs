@@ -500,7 +500,7 @@ fn strict_capability_gating_and_unobserved_status_honesty() {
         );
     }
 
-    // 2. `native_openssh()` renders Add/Connect/Edit/Remove, never Import/Test/Disconnect, and
+    // 2. `native_openssh()` renders Add/Connect/Edit/Remove, Test, never Import/Disconnect, and
     //    still paints zero status dots while `status` is `None`.
     let (_, shapes_native) = run_panel_frame(
         &ctx,
@@ -521,7 +521,7 @@ fn strict_capability_gating_and_unobserved_status_honesty() {
     assert!(has_painted_text(&shapes_native, "Add target"));
     assert!(has_painted_text(&shapes_native, "Connect"));
     assert!(!has_painted_text(&shapes_native, "Import"));
-    assert!(!has_painted_text(&shapes_native, "Test"));
+    assert!(has_painted_text(&shapes_native, "Test"));
     assert!(!has_painted_text(&shapes_native, "Disconnect"));
 
     // 3. Full capabilities + observed statuses render exact semantic dots & emit Import/Test/Disconnect.
@@ -999,11 +999,9 @@ fn remove_confirmation_requires_explicit_confirm_and_cancel_never_deletes() {
         &mut panel,
         mk_input(),
     );
-    // On card 0: `[Pencil (28px)] [ gap 4px ] [Trash2 (28px)] [ gap 4px ] [Connect]`.
-    let connect0 = find_painted_text_rect(&shapes0, "Connect").expect("Connect");
-    // Connect button has an 8px left pad + 12px icon + 6px gap before "Connect" text; trash sits left of it.
-    let trash_pos = Pos2::new(connect0.left() - 26.0 - 4.0 - 14.0, connect0.center().y);
-
+    // Trash precedes Test. Anchor the click to the painted label in that row.
+    let test_label = find_painted_text_rect(&shapes0, "Test").expect("Test");
+    let trash_pos = Pos2::new(test_label.left() - 26.0 - 4.0 - 14.0, test_label.center().y);
     let (act_open, _) = run_panel_frame(
         &ctx,
         Vec2::new(840.0, 620.0),
