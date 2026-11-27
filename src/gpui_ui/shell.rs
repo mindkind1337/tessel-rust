@@ -1592,6 +1592,10 @@ fn render_side_browser(
         .as_ref()
         .map(|page| page.history)
         .unwrap_or_default();
+    let loading = snapshot
+        .side_browser
+        .as_ref()
+        .and_then(|page| page.loading_navigation);
     let page = div()
         .size_full()
         .flex()
@@ -1605,26 +1609,35 @@ fn render_side_browser(
                         (
                             "side-browser-back",
                             "←",
+                            if french { "Précédent" } else { "Back" },
                             history.0,
                             GpuiAction::SideBrowserBack(id),
                         ),
                         (
                             "side-browser-forward",
                             "→",
+                            if french { "Suivant" } else { "Forward" },
                             history.1,
                             GpuiAction::SideBrowserForward(id),
                         ),
                         (
                             "side-browser-reload",
-                            "⟳",
+                            if loading.is_some() { "■" } else { "⟳" },
+                            crate::i18n::tr(if loading.is_some() { "Stop" } else { "Reload" }),
                             true,
-                            GpuiAction::SideBrowserReload(id),
+                            loading.map_or(GpuiAction::SideBrowserReload(id), |navigation| {
+                                GpuiAction::BrowserStop {
+                                    tab: id,
+                                    navigation,
+                                }
+                            }),
                         ),
                     ]
                     .into_iter()
-                    .map(|(key, label, enabled, action)| {
+                    .map(|(key, label, description, enabled, action)| {
                         div()
                             .id(key)
+                            .aria_label(description)
                             .aria_disabled(!enabled)
                             .debug_selector(move || key.into())
                             .px(px(5.))

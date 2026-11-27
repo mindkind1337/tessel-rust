@@ -202,7 +202,7 @@ The migration targets identical Tessel appearance, layout, menus, shortcuts and 
 
 ### Windows browser
 
-- Back and Forward in the center and side browsers follow the current page’s history, including history entries added within a page. Unavailable directions are disabled.
+- Back and Forward in the center and side browsers follow the current page’s history, including history entries added within a page. Unavailable directions are disabled. During navigation, the reload button changes to **Stop** and can interrupt the current page load.
 
 - Open Downloads in a center or side-panel browser tab to see file names, transfer progress, status and saved paths. Cancel an active transfer or use **Show in folder** to select a downloaded file in Windows Explorer.
 

@@ -472,6 +472,7 @@ pub type DownloadSummaryRow = (u64, String, u64, Option<u64>, String, Option<Str
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpuiBrowserSnapshot {
+    pub loading_navigation: Option<u64>,
     pub history: (bool, bool),
     pub tab_id: u64,
     pub started: bool,
@@ -490,6 +491,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
             tab_id: page.tab_id,
             history: page.history_directions(),
             started: page.is_started(),
+            loading_navigation: page.loading_navigation(),
             address: page.address_str().to_owned(),
             popup_url: page.popup_url().map(str::to_owned),
             downloads_open: page.downloads_open(),
@@ -1086,7 +1088,11 @@ pub(crate) enum GpuiAction {
     SideBrowserReload(u64),
     BrowserBack(u64),
     BrowserForward(u64),
-    BrowserReload,
+    BrowserReload(u64),
+    BrowserStop {
+        tab: u64,
+        navigation: u64,
+    },
     BrowserImportCookies,
     BrowserAcceptPopup,
     BrowserDismissPopup,
@@ -6903,9 +6909,25 @@ impl Tessel {
                 #[cfg(not(windows))]
                 let _ = tab;
             }
-            GpuiAction::BrowserReload => {
+            GpuiAction::BrowserReload(tab) => {
                 #[cfg(windows)]
-                self.browser.reload_now();
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.reload_now();
+                }
+                #[cfg(not(windows))]
+                let _ = tab;
+            }
+            GpuiAction::BrowserStop { tab, navigation } => {
+                #[cfg(windows)]
+                if self.browser.tab_id == tab && self.gpui_browser_address().is_some() {
+                    self.browser.stop_navigation(navigation);
+                } else if self.side_browser_visible(tab)
+                    && let Some(page) = self.side_browsers.get(&tab)
+                {
+                    page.stop_navigation(navigation);
+                }
+                #[cfg(not(windows))]
+                let _ = (tab, navigation);
             }
             GpuiAction::BrowserImportCookies => {
                 #[cfg(windows)]

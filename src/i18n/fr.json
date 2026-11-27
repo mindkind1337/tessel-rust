@@ -170,6 +170,7 @@
   "Send follow-up": "Envoyer une précision",
   "Private browser profile for this Rust app. No cookies or passwords are imported from Tessel.": "Profil privé pour cette application Rust. Aucun témoin ni mot de passe n’est importé de Tessel.",
   "Start browser": "Démarrer le navigateur",
+  "Stop": "Arrêter",
   "Reload": "Recharger",
   "Go": "Ouvrir",
   "Downloads": "Téléchargements",

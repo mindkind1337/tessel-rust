@@ -32,7 +32,7 @@ enum Event {
     Popup(String),
     Error(String),
     Navigation(String),
-    HistoryChanged,
+    PageStateChanged,
 }
 
 use crate::app::gpui_bridge::DownloadSummaryRow;
@@ -45,6 +45,12 @@ fn next_address_generation() -> u64 {
         |id| id.checked_add(1),
     )
     .expect("browser address identity exhausted")
+}
+
+#[derive(Clone, Copy)]
+struct PageLoad {
+    native_id: u64,
+    generation: u64,
 }
 
 struct FinishingView {
@@ -69,6 +75,7 @@ pub struct Browser {
     // Drop child OAuth popups first, then main view, then shared WebContext environment.
     popups: crate::browser_popup::win32::PopupManager,
     view: Option<WebView>,
+    navigation: std::rc::Rc<std::cell::Cell<Option<PageLoad>>>,
     // Drop view before its environment.
     context: Option<WebContext>,
     finishing_views: Vec<FinishingView>,
@@ -116,6 +123,7 @@ impl Default for Browser {
             address_generation: next_address_generation(),
             popups: Default::default(),
             view: None,
+            navigation: Default::default(),
             context: None,
             finishing_views: Vec::new(),
             address: "https://example.com".into(),
@@ -423,6 +431,22 @@ impl Browser {
             && view.can_go_forward().unwrap_or(false)
         {
             let _ = view.go_forward();
+        }
+    }
+
+    pub(crate) fn loading_navigation(&self) -> Option<u64> {
+        self.view
+            .as_ref()
+            .and_then(|_| self.navigation.get())
+            .map(|load| load.generation)
+    }
+
+    pub(crate) fn stop_navigation(&self, id: u64) {
+        use wry::WebViewExtWindows as _;
+        if self.loading_navigation() == Some(id)
+            && let Some(view) = &self.view
+        {
+            let _ = unsafe { view.webview().Stop() };
         }
     }
 
@@ -842,11 +866,57 @@ impl Browser {
         // `dispatch_handler` invokes `with_new_window_req_handler` on the next message-loop tick.
         unsafe {
             use wry::WebViewExtWindows as _;
+            // Each controller owns its navigation IDs. A retired controller can finish
+            // outstanding work after this browser tab moves to another panel.
+            self.navigation = Default::default();
+            let loading = self.navigation.clone();
+            let notify = self.sender.clone();
+            view.webview()
+                .add_NavigationStarting(
+                    &webview2_com::NavigationStartingEventHandler::create(Box::new(
+                        move |_, args| {
+                            if let Some(args) = args {
+                                let mut id = 0;
+                                args.NavigationId(&mut id)?;
+                                if loading.get().is_none_or(|load| load.native_id != id) {
+                                    loading.set(Some(PageLoad {
+                                        native_id: id,
+                                        generation: next_address_generation(),
+                                    }));
+                                }
+                                let _ = notify.send(Event::PageStateChanged);
+                            }
+                            Ok(())
+                        },
+                    )),
+                    &mut 0,
+                )
+                .map_err(|e| e.to_string())?;
+            let loading = self.navigation.clone();
+            let notify = self.sender.clone();
+            view.webview()
+                .add_NavigationCompleted(
+                    &webview2_com::NavigationCompletedEventHandler::create(Box::new(
+                        move |_, args| {
+                            if let Some(args) = args {
+                                let mut id = 0;
+                                args.NavigationId(&mut id)?;
+                                if loading.get().is_some_and(|load| load.native_id == id) {
+                                    loading.set(None);
+                                    let _ = notify.send(Event::PageStateChanged);
+                                }
+                            }
+                            Ok(())
+                        },
+                    )),
+                    &mut 0,
+                )
+                .map_err(|e| e.to_string())?;
             let history = self.sender.clone();
             view.webview()
                 .add_HistoryChanged(
                     &webview2_com::HistoryChangedEventHandler::create(Box::new(move |_, _| {
-                        let _ = history.send(Event::HistoryChanged);
+                        let _ = history.send(Event::PageStateChanged);
                         Ok(())
                     })),
                     &mut 0,
@@ -968,7 +1038,7 @@ impl Browser {
                 Event::Title(title) => self.title = title.trim().chars().take(200).collect(),
                 Event::Popup(address) => self.popup = Some(address),
                 Event::Error(e) => self.error = e,
-                Event::HistoryChanged => {}
+                Event::PageStateChanged => {}
                 Event::Navigation(address) => self.observe_navigation(address),
             }
         }
@@ -1101,7 +1171,13 @@ impl Browser {
                 if ui.add_enabled(forward, egui::Button::new("→")).clicked() {
                     self.go_forward_now();
                 }
-                if ui.button(tr("Reload")).clicked() || reload_shortcut {
+                let loading = self.loading_navigation();
+                let clicked = ui
+                    .button(tr(if loading.is_some() { "Stop" } else { "Reload" }))
+                    .clicked();
+                if clicked && let Some(id) = loading {
+                    self.stop_navigation(id);
+                } else if clicked || reload_shortcut {
                     let _ = view.reload();
                 }
             }
@@ -1255,6 +1331,69 @@ fn webview_owns_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
+    fn stop_button_interrupts_only_the_current_webview_navigation() {
+        use crate::app::{Tessel, gpui_bridge::GpuiAction};
+        use crate::webview_test_support::{hidden_parent, pump};
+        use std::{
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::SelectBrowserTab);
+        app.browser
+            .create_with_profile(&parent, dir.path().join("profile"))
+            .unwrap();
+        let tab = app.browser.tab_id;
+        let mut previous = None;
+        for _ in 0..2 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/waiting", listener.local_addr().unwrap());
+            app.browser.open_url(&url);
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut connection = None;
+            let navigation = loop {
+                assert!(Instant::now() < deadline, "slow navigation never started");
+                pump();
+                app.poll_for_gpui();
+                if connection.is_none() {
+                    connection = listener.accept().ok();
+                }
+                if connection.is_some()
+                    && let Some(id) = app.gpui_snapshot(960., 640., 4.).browser.loading_navigation
+                {
+                    break id;
+                }
+            };
+            if let Some(old) = previous {
+                assert_ne!(old, navigation);
+                app.apply_gpui_action(GpuiAction::BrowserStop {
+                    tab,
+                    navigation: old,
+                });
+                pump();
+                assert_eq!(app.browser.loading_navigation(), Some(navigation));
+            }
+            app.apply_gpui_action(GpuiAction::BrowserStop { tab, navigation });
+            while app.browser.loading_navigation().is_some() {
+                assert!(Instant::now() < deadline, "Stop left the request loading");
+                pump();
+                app.poll_for_gpui();
+            }
+            assert!(
+                app.gpui_snapshot(960., 640., 4.)
+                    .browser
+                    .loading_navigation
+                    .is_none()
+            );
+            previous = Some(navigation);
+        }
+    }
+
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
     fn tab_sound_targets_the_background_webview_without_switching_pages() {

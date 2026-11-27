@@ -2501,6 +2501,13 @@ pub(crate) fn render_browser_stage(
 ) -> impl IntoElement {
     let french = snapshot.french;
     let b = &snapshot.browser;
+    let reload = match b.loading_navigation {
+        Some(navigation) => GpuiAction::BrowserStop {
+            tab: b.tab_id,
+            navigation,
+        },
+        None => GpuiAction::BrowserReload(b.tab_id),
+    };
     let expected_address_input = browser_input.state().cloned();
     let can_show =
         snapshot.overlay_title.is_none() && !snapshot.floating.open && !snapshot.right_fullscreen;
@@ -2653,10 +2660,14 @@ pub(crate) fn render_browser_stage(
                         .bg(tokens.surface_2)
                         .text_size(px(11.0))
                         .cursor_pointer()
-                        .on_click(cx.listener(|root, _, _, cx| {
-                            root.dispatch(GpuiAction::BrowserReload, cx);
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            root.dispatch(reload.clone(), cx);
                         }))
-                        .child(if french { "Actualiser" } else { "Reload" }),
+                        .child(crate::i18n::tr(if b.loading_navigation.is_some() {
+                            "Stop"
+                        } else {
+                            "Reload"
+                        })),
                 )
                 .child(browser_input.render(french, tokens, cx))
                 .child(
