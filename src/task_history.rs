@@ -85,7 +85,7 @@ pub fn record(state: &mut Workspace, id: u64) {
                 crate::launch::Launch::CodexChat => "codex".into(),
                 crate::launch::Launch::ClaudeChat => "claude".into(),
                 crate::launch::Launch::Shell => "shell".into(),
-                crate::launch::Launch::Ssh(h) => format!("ssh:{}", h.alias),
+                crate::launch::Launch::Ssh(h) => format!("ssh:{}", h.target.alias),
             };
             (s.pane_name.clone().unwrap_or_else(|| s.title.clone()), kind)
         })

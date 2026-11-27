@@ -144,7 +144,7 @@ pub struct RemotePanel {
     rename: Option<(String, String)>,
     delete: Option<Entry>,
     host: Option<Host>,
-    pub(crate) terminal_request: Option<Host>,
+    pub(crate) terminal_request: Option<(Host, String)>,
     root: String,
     path: String,
     entries: Vec<Entry>,

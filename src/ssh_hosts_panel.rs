@@ -3289,9 +3289,9 @@ const fn remove_title_label(french: bool) -> &'static str {
 
 const fn remove_desc_label(french: bool) -> &'static str {
     if french {
-        "La cible sera supprimée et sa vue Fichiers sera fermée. Les modifications non enregistrées dans cette vue seront perdues."
+        "La cible sera supprimée et ses terminaux et sa vue Fichiers seront fermés. Les modifications non enregistrées dans cette vue seront perdues."
     } else {
-        "This will remove the target and close its Files view. Unsaved changes in that view will be lost."
+        "This will remove the target and close its terminals and Files view. Unsaved changes in that view will be lost."
     }
 }
 

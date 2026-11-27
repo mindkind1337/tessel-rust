@@ -4521,7 +4521,7 @@ impl Tessel {
             Launch::CodexChat => "Codex Chat".into(),
             Launch::ClaudeChat => "Claude Chat".into(),
             Launch::Agent(agent) => agent.clone(),
-            Launch::Ssh(host) => format!("SSH · {}", host.alias),
+            Launch::Ssh(host) => format!("SSH · {}", host.target.alias),
         };
         let model_chip = sess
             .last_model
@@ -4672,7 +4672,7 @@ impl Tessel {
             Launch::CodexChat => "Codex Chat".into(),
             Launch::ClaudeChat => "Claude Chat".into(),
             Launch::Agent(agent) => agent.clone(),
-            Launch::Ssh(host) => format!("SSH · {}", host.alias),
+            Launch::Ssh(host) => format!("SSH · {}", host.target.alias),
         };
         let task_line = if self.state.sidebar.hide_agent_task_line || !is_agent {
             None
@@ -7870,7 +7870,7 @@ impl Tessel {
             GpuiAction::LaunchSshHost(idx) => {
                 if let Some(host) = self.state.hosts.get(idx).cloned() {
                     self.overlay = None;
-                    self.new_session_placed(Launch::Ssh(host), None);
+                    self.new_session_placed(Launch::ssh(host), None);
                 }
             }
             GpuiAction::ToggleSshHostPersistentSessions(idx) => {
@@ -10526,7 +10526,7 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
         let (id, _input) = app.install_terminal_find_fixture();
         let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
-        pane.launch = Launch::Ssh(crate::workspace::Host {
+        pane.launch = Launch::ssh(crate::workspace::Host {
             alias: "-invalid-fixture".into(),
             ..Default::default()
         });
@@ -10561,7 +10561,7 @@ mod panel_snapshot_tests {
         app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
         let (id, _input) = app.install_terminal_find_fixture();
         let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
-        pane.launch = Launch::Ssh(crate::workspace::Host {
+        pane.launch = Launch::ssh(crate::workspace::Host {
             // Reaching alias validation proves the replacement launch was attempted
             // without contacting any network host or using an SSH profile.
             alias: "-fixture".into(),
@@ -11497,6 +11497,50 @@ mod panel_snapshot_tests {
         let prefs = open().state.editor_prefs;
         assert_eq!(prefs.outline_sort, Sort::Kind);
         assert!(!prefs.outline_follow_cursor);
+    }
+
+    #[test]
+    #[cfg(all(windows, feature = "visual-test"))]
+    fn ssh_settings_removal_closes_owned_panes_including_subfolder_terminals() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().into()));
+        let first = crate::workspace::Host {
+            alias: "test-host".into(),
+            folder: "/srv".into(),
+            ..Default::default()
+        };
+        let nested = crate::workspace::Host {
+            folder: "/srv/tools".into(),
+            ..first.clone()
+        };
+        app.state.hosts = vec![first.clone(), nested.clone()];
+        let launches = [
+            Launch::ssh(first.clone()),
+            Launch::Ssh(crate::launch::SshLaunch {
+                target: first.clone(),
+                start_folder: Some(nested.folder.clone()),
+            }),
+            Launch::ssh(nested.clone()),
+            Launch::Shell,
+        ];
+        let ids = launches.map(|launch| {
+            let (id, _) = app.install_terminal_find_fixture();
+            let pane = app.sessions.iter_mut().find(|s| s.id == id).unwrap();
+            pane.terminal = None;
+            pane.launch = launch;
+            id
+        });
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(1, first.clone()));
+        assert!(
+            ids.iter()
+                .all(|id| app.sessions.iter().any(|s| s.id == *id))
+        );
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, first));
+        assert_eq!(app.state.hosts, [nested]);
+        for (i, id) in ids.iter().enumerate() {
+            assert_eq!(app.sessions.iter().any(|s| s.id == *id), i >= 2);
+        }
     }
 
     #[test]

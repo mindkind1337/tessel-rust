@@ -46,7 +46,7 @@ impl Channel {
         automatic: bool,
     ) -> Result<Option<Self>, String> {
         if cfg!(windows)
-            && matches!(launch, crate::launch::Launch::Ssh(host) if host.persistent_sessions_enabled() || !host.folder.is_empty())
+            && matches!(launch, crate::launch::Launch::Ssh(host) if host.target.persistent_sessions_enabled() || !host.folder().is_empty())
         {
             Self::new(automatic).map(Some)
         } else if cfg!(windows) && matches!(launch, crate::launch::Launch::Ssh(_)) {
@@ -458,7 +458,7 @@ mod openssh_tests {
     #[ignore = "requires WSL with OpenSSH server and public-key login to self"]
     fn ssh_reconnect_preserves_searchable_output_after_real_transport_loss() {
         let (fixture, _local, config) = isolated_server();
-        let host = Launch::Ssh(Host {
+        let host = Launch::ssh(Host {
             alias: "fixture".into(),
             folder: "~".into(),
             persistent_sessions: Some(false),
@@ -501,7 +501,7 @@ mod openssh_tests {
     #[ignore = "requires WSL with OpenSSH server and public-key login to self"]
     fn direct_ssh_login_preserves_shell_request_and_reports_both_255_outcomes() {
         let (fixture, local, config) = isolated_server();
-        let host = Launch::Ssh(Host {
+        let host = Launch::ssh(Host {
             alias: "fixture".into(),
             folder: String::new(),
             persistent_sessions: Some(false),
@@ -564,7 +564,7 @@ mod openssh_tests {
     #[ignore = "requires the console companion, Windows OpenSSH and WSL sshd"]
     fn direct_login_retries_only_transport_loss_and_opens_a_new_shell() {
         let (fixture, local, config) = isolated_server();
-        let host = Launch::Ssh(Host {
+        let host = Launch::ssh(Host {
             alias: "fixture".into(),
             persistent_sessions: Some(false),
             ..Default::default()
@@ -646,7 +646,7 @@ mod openssh_tests {
     fn ssh_reconnect_after_transport_loss_keeps_the_remote_process_and_honors_exit_255() {
         let (fixture, _local, config) = isolated_server();
         let root = fixture.0.as_str();
-        let host = Launch::Ssh(Host {
+        let host = Launch::ssh(Host {
             alias: "fixture".into(),
             folder: "~".into(),
             ..Default::default()

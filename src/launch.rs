@@ -8,10 +8,36 @@ pub enum Launch {
     CodexChat,
     ClaudeChat,
     Agent(String),
-    Ssh(Host),
+    Ssh(SshLaunch),
+}
+
+/// Keep the saved target separate from the directory chosen in Remote Files.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SshLaunch {
+    #[serde(flatten)]
+    pub target: Host,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_folder: Option<String>,
+}
+
+impl SshLaunch {
+    pub fn folder(&self) -> &str {
+        self.start_folder.as_deref().unwrap_or(&self.target.folder)
+    }
 }
 
 impl Launch {
+    pub fn ssh(target: Host) -> Self {
+        Self::Ssh(SshLaunch {
+            target,
+            start_folder: None,
+        })
+    }
+
+    pub fn belongs_to_ssh_target(&self, target: &Host) -> bool {
+        matches!(self, Self::Ssh(ssh) if ssh.target.alias == target.alias && ssh.target.folder == target.folder)
+    }
+
     pub fn native_chat(&self) -> Option<&'static str> {
         match self {
             Self::CodexChat => Some("Codex"),
@@ -216,7 +242,7 @@ pub fn command_with_preferences(
 
 /// Allocate once per pane. The SSH alias identifies the machine, not a terminal on it.
 pub(crate) fn prepare_ssh_tmux_id(launch: &Launch, id: &mut Option<String>) -> Result<()> {
-    if matches!(launch, Launch::Ssh(host) if host.persistent_sessions_enabled())
+    if matches!(launch, Launch::Ssh(host) if host.target.persistent_sessions_enabled())
         && !id.as_deref().is_some_and(crate::claude::valid_uuid)
     {
         *id = Some(crate::claude::uuid()?);
@@ -308,9 +334,10 @@ pub(crate) fn pane_command(
                 }
             }
         }
-        Launch::Ssh(host) => {
+        Launch::Ssh(ssh) => {
+            let host = &ssh.target;
             validate_host(&host.alias)?;
-            if host.folder.contains(['\0', '\n', '\r']) {
+            if ssh.folder().contains(['\0', '\n', '\r']) {
                 return Err("Invalid remote directory.".into());
             }
             let mut c = if let Some((helper, channel)) =
@@ -342,7 +369,7 @@ pub(crate) fn pane_command(
             }
             if let Some(remote_script) = crate::ssh_tmux::build_ssh_launch_remote_script(
                 &host.alias,
-                &host.folder,
+                ssh.folder(),
                 host.persistent_sessions_enabled(),
                 ssh_tmux_id,
                 true,
@@ -385,6 +412,24 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ssh_target_roundtrip_keeps_legacy_targets_and_subfolder_ownership() {
+        let legacy = serde_json::json!({"Ssh": {"alias":"lab","folder":"/srv"}});
+        let launch: Launch = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&launch).unwrap(), legacy);
+        let Launch::Ssh(mut ssh) = launch else {
+            panic!("expected SSH")
+        };
+        let owner = ssh.target.clone();
+        ssh.start_folder = Some("/srv/other".into());
+        let saved = serde_json::to_vec(&Launch::Ssh(ssh)).unwrap();
+        let restored: Launch = serde_json::from_slice(&saved).unwrap();
+        assert!(restored.belongs_to_ssh_target(&owner));
+        let Launch::Ssh(restored) = restored else {
+            panic!("expected SSH")
+        };
+        assert_eq!(restored.folder(), "/srv/other");
+    }
     #[cfg(windows)]
     #[test]
     #[ignore = "requires WSL with fish and tcsh"]
@@ -416,7 +461,7 @@ mod tests {
     #[test]
     fn persistent_ssh_panes_keep_distinct_tmux_targets_across_reconnect() {
         let dir = tempfile::tempdir().unwrap();
-        let host = Launch::Ssh(crate::workspace::Host {
+        let host = Launch::ssh(crate::workspace::Host {
             alias: "fixture".into(),
             ..Default::default()
         });
@@ -466,7 +511,7 @@ mod tests {
             process::{Command, Stdio},
         };
         let dir = tempfile::tempdir().unwrap();
-        let host = Launch::Ssh(crate::workspace::Host {
+        let host = Launch::ssh(crate::workspace::Host {
             alias: "fixture".into(),
             folder: "~/".into(),
             ..Default::default()

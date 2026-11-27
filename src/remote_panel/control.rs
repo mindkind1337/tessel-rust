@@ -537,10 +537,7 @@ impl RemotePanel {
                     && crate::remote::within(&self.root, folder)
                     && !self.root.is_empty()
                 {
-                    self.terminal_request = Some(Host {
-                        folder: folder.clone(),
-                        ..connected.clone()
-                    });
+                    self.terminal_request = Some((connected.clone(), folder.clone()));
                 }
             }
             Command::Open(path) => {
@@ -787,10 +784,7 @@ mod tests {
             panel.command(command(&host.alias, path), hosts);
             assert_eq!(
                 panel.terminal_request.take(),
-                Some(Host {
-                    folder: expected.into(),
-                    ..host.clone()
-                })
+                Some((host.clone(), expected.into()))
             );
         }
         for (alias, path) in [

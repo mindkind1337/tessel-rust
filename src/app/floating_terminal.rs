@@ -39,7 +39,7 @@ mod tests {
             ..Default::default()
         };
         state.pending_launch = Some(FloatingLaunch {
-            launch: Launch::Ssh(host),
+            launch: Launch::ssh(host),
             cwd: std::env::temp_dir(),
             preferred_shell: None,
             tmux_id: Some(crate::claude::uuid().unwrap()),
@@ -66,6 +66,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         state
+    }
+
+    #[test]
+    fn removed_ssh_target_closes_its_hidden_drawer_without_reconnect() {
+        let mut state = disconnected_drawer();
+        let other = workspace::Host {
+            alias: "-fixture-only".into(),
+            folder: "/other".into(),
+            ..Default::default()
+        };
+        state.close_for_target(&other);
+        assert!(!state.target_removed);
+        state.close_for_target(&workspace::Host {
+            folder: "/original".into(),
+            ..other
+        });
+        until(&mut state, Phase::Closed);
+        assert!(state.active_launch.is_none());
+        assert!(state.runtime.error().is_none());
     }
 
     #[test]
@@ -168,6 +187,7 @@ pub(super) struct State {
     title: String,
     pending_launch: Option<FloatingLaunch>,
     active_launch: Option<FloatingLaunch>,
+    target_removed: bool,
     ssh_retry: crate::ssh_reconnect::Retry,
     toggle_id: Option<egui::Id>,
     pub(super) exit_pending: bool,
@@ -189,6 +209,7 @@ impl State {
             title: "Terminal".into(),
             pending_launch: None,
             active_launch: None,
+            target_removed: false,
             ssh_retry: Default::default(),
             toggle_id: None,
             exit_pending: false,
@@ -198,6 +219,18 @@ impl State {
     }
     pub fn busy(&self) -> bool {
         self.runtime.phase() != Phase::Closed
+    }
+    pub(super) fn close_for_target(&mut self, target: &workspace::Host) {
+        if self
+            .pending_launch
+            .as_ref()
+            .or(self.active_launch.as_ref())
+            .is_some_and(|plan| plan.launch.belongs_to_ssh_target(target))
+        {
+            self.target_removed = true;
+            self.poll();
+            self.ui.close();
+        }
     }
     pub fn process_id(&self) -> Option<u32> {
         self.runtime.process_ref().and_then(Terminal::process_id)
@@ -241,9 +274,16 @@ impl State {
         let before = self.runtime.phase();
         self.runtime.poll();
         if self.runtime.phase() == Phase::Closed {
+            self.target_removed = false;
             self.active_launch = None;
             self.pending_launch = None;
             self.ssh_retry = Default::default();
+            return;
+        }
+        if self.target_removed {
+            // A saturated worker pool can refuse shutdown. Keep the close pending
+            // and suppress reconnect until the owning process has stopped.
+            let _ = self.runtime.close();
             return;
         }
         if before != Phase::Ready && self.runtime.phase() == Phase::Ready {
@@ -253,7 +293,7 @@ impl State {
                 self.ssh_retry.give_up();
             } else if let Some(plan) = self.pending_launch.take() {
                 self.title = match &plan.launch {
-                    Launch::Ssh(host) => format!("SSH · {}", host.alias),
+                    Launch::Ssh(host) => format!("SSH · {}", host.target.alias),
                     _ => "Terminal".into(),
                 };
                 self.active_launch = Some(plan);
@@ -393,7 +433,7 @@ impl Tessel {
             .map(|p| p.path.clone())
             .unwrap_or_else(launch::default_directory);
         let launch = if self.view == View::Remote {
-            Launch::Ssh(
+            Launch::ssh(
                 self.remote
                     .terminal_host(&self.state.hosts)
                     .ok_or("Select a remote host first.")?,
@@ -404,6 +444,9 @@ impl Tessel {
         Ok((launch, cwd))
     }
     fn start_floating(&mut self, restart: bool) {
+        if self.floating.target_removed {
+            return;
+        }
         if !cfg!(windows) {
             self.error = crate::i18n::tr("Floating terminals require verified process-group shutdown, currently available on Windows only.").into();
             return;
@@ -417,7 +460,7 @@ impl Tessel {
         };
         let mut tmux_id = self.floating.active_launch.as_ref()
             .filter(|previous| matches!((&launch, &previous.launch),
-                (Launch::Ssh(next), Launch::Ssh(old)) if next.alias == old.alias && next.folder == old.folder))
+                (Launch::Ssh(next), Launch::Ssh(old)) if next.target.alias == old.target.alias && next.folder() == old.folder()))
             .and_then(|previous| previous.tmux_id.clone());
         if let Err(error) = launch::prepare_ssh_tmux_id(&launch, &mut tmux_id) {
             self.error = error;

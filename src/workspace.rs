@@ -1076,7 +1076,7 @@ impl Workspace {
                 {
                     return Err("Unknown saved agent.".into());
                 }
-                crate::launch::Launch::Ssh(host) => validate_host(&host.alias)?,
+                crate::launch::Launch::Ssh(host) => validate_host(&host.target.alias)?,
                 _ => {}
             }
         }

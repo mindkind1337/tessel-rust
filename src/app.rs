@@ -91,7 +91,7 @@ struct Session {
 impl Session {
     fn ssh_terminal_alias(&self) -> Option<&str> {
         match &self.launch {
-            Launch::Ssh(host) if self.native_host.is_none() => Some(&host.alias),
+            Launch::Ssh(host) if self.native_host.is_none() => Some(&host.target.alias),
             _ => None,
         }
     }
@@ -3380,7 +3380,7 @@ impl Tessel {
                 .iter()
                 .find(|c| c.id == *n)
                 .map_or_else(|| n.clone(), |c| c.name.clone()),
-            Launch::Ssh(h) => format!("SSH · {}", h.alias),
+            Launch::Ssh(h) => format!("SSH · {}", h.target.alias),
         };
         let id = self.next_session;
         let Some(next) = self.next_session.checked_add(1) else {
@@ -6156,7 +6156,7 @@ impl Tessel {
         }
     }
     fn open_requested_remote_terminal(&mut self) {
-        if let Some(host) = self.remote.terminal_request.take() {
+        if let Some((target, folder)) = self.remote.terminal_request.take() {
             let split = self
                 .active_session
                 .filter(|id| {
@@ -6165,7 +6165,13 @@ impl Tessel {
                         .any(|s| s.id == *id && s.project == self.state.active_project)
                 })
                 .map(|id| (id, crate::pane_grid::SplitDir::Col));
-            self.new_session_placed(Launch::Ssh(host), split);
+            self.new_session_placed(
+                Launch::Ssh(crate::launch::SshLaunch {
+                    target,
+                    start_folder: Some(folder),
+                }),
+                split,
+            );
         }
     }
 
@@ -10358,7 +10364,7 @@ impl Tessel {
             Some(SshHostsAction::Connect { index, host }) => {
                 let host = to_host(host);
                 if self.state.hosts.get(index) == Some(&host) {
-                    self.new_session(Launch::Ssh(host));
+                    self.new_session(Launch::ssh(host));
                     self.overlay = None;
                 } else {
                     self.host_notice =
@@ -10471,6 +10477,36 @@ impl Tessel {
         })?;
         self.remote
             .saved_target_removed(index, expected, self.state.hosts.len());
+        #[cfg(windows)]
+        if self
+            .pending_browser_launch
+            .as_ref()
+            .is_some_and(|request| request.launch.belongs_to_ssh_target(expected))
+        {
+            self.pending_browser_launch = None;
+        }
+        let panes: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|s| s.launch.belongs_to_ssh_target(expected))
+            .map(|s| s.id)
+            .collect();
+        for id in panes {
+            #[cfg(windows)]
+            if self
+                .sessions
+                .iter_mut()
+                .find(|s| s.id == id)
+                .and_then(|s| s.terminal.as_mut())
+                .is_some_and(Terminal::cancel_pending_native_open)
+            {
+                // The opening worker must finish releasing its lease before the pane goes away.
+                continue;
+            }
+            self.remove_session(id);
+        }
+        self.floating.close_for_target(expected);
+        self.save();
         Ok(())
     }
 
@@ -13457,7 +13493,7 @@ impl Tessel {
                     } else {
                         DashboardState::Idle
                     };
-                    (format!("SSH ({})", host.alias), st)
+                    (format!("SSH ({})", host.target.alias), st)
                 }
             };
             let branch = s
@@ -14335,7 +14371,7 @@ impl Tessel {
                 remote_dir,
             } => {
                 self.dialogs_toolbar_ui.add_project_open = false;
-                self.new_session(Launch::Ssh(workspace::Host {
+                self.new_session(Launch::ssh(workspace::Host {
                     alias: host_alias,
                     folder: remote_dir,
                     ..Default::default()
@@ -17681,7 +17717,7 @@ $lock.Dispose()
             (Launch::CodexChat, None),
             (Launch::ClaudeChat, None),
             (
-                Launch::Ssh(Host {
+                Launch::ssh(Host {
                     alias: "fixture".into(),
                     folder: String::new(),
                     ..Default::default()

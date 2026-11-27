@@ -3204,7 +3204,7 @@ fn render_ssh_page(
                                         "Remove SSH target?"
                                     };
                                     let target = format!("{} {}", expected.alias, expected.folder);
-                                    let warning = if french { "La vue Fichiers de cette cible sera fermée et ses modifications non enregistrées seront perdues." } else { "The Files view for this target will close and its unsaved changes will be lost." };
+                                    let warning = if french { "Les terminaux et la vue Fichiers de cette cible seront fermés. Les modifications non enregistrées dans cette vue seront perdues." } else { "Terminals and the Files view for this target will close. Unsaved changes in that view will be lost." };
                                     let detail = format!("{}\n{warning}", target.trim_end());
                                     let answer = window.prompt(
                                         gpui::PromptLevel::Warning,

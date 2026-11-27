@@ -959,6 +959,14 @@ impl Terminal {
     }
 
     #[cfg(windows)]
+    pub fn cancel_pending_native_open(&mut self) -> bool {
+        match &mut self.backend {
+            backend::Backend::Native(native) => native.cancel_opening(&mut self.status),
+            _ => false,
+        }
+    }
+
+    #[cfg(windows)]
     pub fn native_cancelled(&self) -> bool {
         matches!(&self.backend, backend::Backend::Native(native)
             if matches!(native.failure, Some(host_opening::Failure::Cancelled)))
