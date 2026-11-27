@@ -2844,6 +2844,26 @@ impl Tessel {
         self.view == View::Remote && self.remote.set_pdf_viewport(id, viewport)
     }
 
+    pub(crate) fn navigate_editor_find(
+        &mut self,
+        id: u64,
+        range: std::ops::Range<usize>,
+        backwards: bool,
+        query: Option<&str>,
+    ) {
+        if self.gpui_editor_tool_document_id() == Some(id)
+            && let Some(doc) = self.documents.get_mut(self.active_document)
+        {
+            if let Some(query) = query
+                && query != doc.tools.find_query
+            {
+                doc.tools.find_query.clear();
+                doc.tools.find_query.push_str(query);
+            }
+            doc.navigate_find(range, backwards);
+        }
+    }
+
     pub(crate) fn seed_editor_find(
         &mut self,
         id: u64,

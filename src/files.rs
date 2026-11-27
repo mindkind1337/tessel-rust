@@ -620,6 +620,43 @@ impl Document {
         true
     }
 
+    pub(crate) fn navigate_find(&mut self, selection: std::ops::Range<usize>, backwards: bool) {
+        self.tools.pending_char_range = None;
+        self.tools.pending_scroll_line = None;
+        self.tools.match_index = 0;
+        self.tools.find_open = true;
+        if self.tools.find_query.is_empty() {
+            self.seed_find_from_selection(selection.clone(), true);
+        }
+        let mut target = None;
+        let mut wrap = None;
+        let mut index = 0;
+        visit_find_matches(&self.text, &self.tools.find_query, |hit| {
+            let entry = (index, hit);
+            index += 1;
+            if backwards {
+                wrap = Some(entry);
+                if hit.1 <= selection.start {
+                    target = Some(entry);
+                } else if target.is_some() {
+                    return false;
+                }
+            } else {
+                wrap.get_or_insert(entry);
+                if hit.0 >= selection.end {
+                    target = Some(entry);
+                    return false;
+                }
+            }
+            true
+        });
+        if let Some((index, (start, end, line))) = target.or(wrap) {
+            self.tools.match_index = index;
+            self.tools.pending_char_range = Some((start, end));
+            self.tools.pending_scroll_line = Some(line);
+        }
+    }
+
     pub(crate) fn display_text(&mut self) -> DisplayText {
         if let Some(cached) = &self.tools.display_text
             && cached.text.as_str() == self.text
@@ -1593,6 +1630,31 @@ mod tests {
         assert_eq!(goto_line_char_offset("", "::1"), Some((0, 0)));
         assert_eq!(goto_line_char_offset(text, "x:3"), None);
         assert_eq!(goto_line_char_offset(text, "::"), None);
+    }
+
+    #[test]
+    fn f3_navigates_from_the_actual_selection_and_wraps_without_moving_on_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("find.txt");
+        std::fs::write(&path, "cat\nCAT\ncat").unwrap();
+        let mut doc = super::Document::open(dir.path(), &path).unwrap();
+        for (range, backwards, expected) in [
+            (0..3, false, (4, 7)),
+            (4..7, false, (8, 11)),
+            (8..11, false, (0, 3)),
+            (0..0, true, (8, 11)),
+            (5..5, true, (0, 3)),
+            (4..4, false, (4, 7)),
+        ] {
+            doc.navigate_find(range, backwards);
+            assert_eq!(doc.tools.pending_char_range, Some(expected));
+            assert_eq!(doc.tools.find_query, "cat");
+            assert!(doc.tools.find_open);
+        }
+        doc.tools.find_query = "missing".into();
+        doc.navigate_find(4..4, false);
+        assert!(doc.tools.pending_char_range.is_none());
+        assert!(doc.tools.pending_scroll_line.is_none());
     }
 
     #[test]

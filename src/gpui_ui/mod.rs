@@ -818,6 +818,24 @@ impl TesselGpuiRoot {
         {
             return;
         }
+        if key == "f3"
+            && !ctrl
+            && !alt
+            && !event.keystroke.modifiers.platform
+            && matches!(
+                native_target,
+                Some(
+                    FocusInputTarget::EditorBody
+                        | FocusInputTarget::EditorFind
+                        | FocusInputTarget::EditorReplace
+                )
+            )
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            editor_tool_inputs::navigate_find(self, shift, window, cx);
+            return;
+        }
         if alt
             && !ctrl
             && !shift

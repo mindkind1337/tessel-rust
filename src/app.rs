@@ -8272,6 +8272,48 @@ impl Tessel {
         } else {
             None
         };
+        if allow_panel_shortcut
+            && !d.preview_mode
+            && ui.memory(|m| {
+                [
+                    source_id,
+                    egui::Id::new(("local-find", d.instance_id())),
+                    egui::Id::new(("local-replace", d.instance_id())),
+                ]
+                .into_iter()
+                .any(|id| m.has_focus(id))
+            })
+            && let Some(selection) = egui::text_edit::TextEditState::load(ui.ctx(), source_id)
+                .and_then(|s| s.cursor.char_range())
+        {
+            let backwards = ui.input_mut(|input| {
+                let (index, shift) =
+                    input.events.iter().enumerate().find_map(|(index, event)| {
+                        let egui::Event::Key {
+                            key: egui::Key::F3,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = event
+                        else {
+                            return None;
+                        };
+                        let allowed = if modifiers.shift {
+                            egui::Modifiers::SHIFT
+                        } else {
+                            egui::Modifiers::NONE
+                        };
+                        modifiers
+                            .matches_exact(allowed)
+                            .then_some((index, modifiers.shift))
+                    })?;
+                input.events.remove(index);
+                Some(shift)
+            });
+            if let Some(backwards) = backwards {
+                d.navigate_find(selection.as_sorted_char_range(), backwards);
+            }
+        }
         let (close_clicked, prefs_changed, open_external) = document_toolbar(
             ui,
             d,
@@ -17261,6 +17303,27 @@ $lock.Dispose()
             app.documents[0].instance_id()
         )))));
         assert_eq!(app.documents[0].tools.find_query, "ph");
+        app.documents[0].text.push_str(" ph");
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::F3,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let cursor = egui::text_edit::TextEditState::load(&ctx, source)
+            .unwrap()
+            .cursor
+            .char_range()
+            .unwrap();
+        assert_eq!(cursor.as_sorted_char_range(), 11..13);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new((
+            "local-replace",
+            app.documents[0].instance_id()
+        )))));
     }
 
     #[test]

@@ -252,6 +252,57 @@ fn acknowledge(root: &mut TesselGpuiRoot, id: u64, f: EditorToolField) {
         b.synced = value.to_owned();
     }
 }
+pub(crate) fn navigate_find(
+    root: &mut TesselGpuiRoot,
+    backwards: bool,
+    window: &mut Window,
+    cx: &mut Context<TesselGpuiRoot>,
+) {
+    let Some(doc) = root.app.gpui_editor_document() else {
+        return;
+    };
+    let id = doc.instance_id();
+    let Some(source) = root.editor_input.get(id).cloned() else {
+        return;
+    };
+    if doc.text != source.read(cx).as_str() {
+        return;
+    }
+    let find = root
+        .editor_input
+        .tools
+        .get(id, EditorToolField::Find)
+        .cloned();
+    for field in [
+        Some(source.clone()),
+        find.clone(),
+        root.editor_input
+            .tools
+            .get(id, EditorToolField::Replace)
+            .cloned(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if field.update(cx, |s, cx| s.marked_text_range(window, cx).is_some()) {
+            return;
+        }
+    }
+    let Some(range) = source.update(cx, |s, cx| {
+        let range = s.selected_text_range(false, window, cx)?.range;
+        Some(utf16_to_char(s.as_str(), range.start)..utf16_to_char(s.as_str(), range.end))
+    }) else {
+        return;
+    };
+    let query = find.as_ref().map(|s| s.read(cx).as_str());
+    if query.is_some_and(|q| q.len() > crate::files::MAX_TEXT) {
+        return;
+    }
+    root.app.navigate_editor_find(id, range, backwards, query);
+    apply_pending_selection(root, id, cx);
+    cx.notify();
+}
+
 pub(crate) fn open(
     root: &mut TesselGpuiRoot,
     f: EditorToolField,
@@ -519,6 +570,49 @@ mod tests {
             };
             cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
         });
+    }
+    #[gpui::test]
+    fn f3_shortcuts_select_unicode_matches_without_editing(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f3.txt");
+        let text = "😀 one\n😀 ONE";
+        std::fs::write(&path, text).unwrap();
+        let doc = Document::open(dir.path(), &path).unwrap();
+        let id = doc.instance_id();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.app.install_editor_input_fixture(vec![doc], 0);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            root.focus_input = FocusInputTarget::EditorBody;
+            let source = root.editor_input.get(id).unwrap().clone();
+            window.focus(&source.read(cx).focus_handle(cx), cx);
+            source.update(cx, |s, cx| s.set_selected_text_range(3..6, window, cx));
+        })
+        .unwrap();
+        for (key, expected) in [("f3", 10..13), ("f3", 3..6), ("shift-f3", 10..13)] {
+            cx.simulate_keystrokes(view.into(), key);
+            cx.refresh().unwrap();
+            view.update(cx, |root, window, cx| {
+                assert_eq!(
+                    root.app.gpui_editor_tool_value(id, EditorToolField::Find),
+                    Some("one")
+                );
+                let source = root.editor_input.get(id).unwrap().clone();
+                assert!(source.read(cx).focus_handle(cx).is_focused(window));
+                assert_eq!(source.read(cx).as_str(), text);
+                source.update(cx, |s, cx| {
+                    assert_eq!(
+                        s.selected_text_range(false, window, cx).unwrap().range,
+                        expected
+                    )
+                });
+            })
+            .unwrap();
+        }
     }
     #[gpui::test]
     fn ctrl_h_routes_selection_and_focus_like_the_local_editor(cx: &mut TestAppContext) {
