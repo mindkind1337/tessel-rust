@@ -230,16 +230,14 @@ impl Inputs {
                 b.too_long
                     || (f == EditorToolField::Replace && self.replacement_too_large == Some(id)),
                 |el| {
-                    el.child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(tokens.warn)
-                            .child(if french {
-                                "Limite de 2 Mio dépassée"
-                            } else {
-                                "2 MiB limit exceeded"
-                            }),
-                    )
+                    el.child(div().text_size(px(10.)).text_color(tokens.warn).child(
+                        match (b.too_long, french) {
+                            (true, true) => "Limite du champ de 2 Mio dépassée",
+                            (true, false) => "Field exceeds 2 MiB",
+                            (false, true) => "Le document dépasserait 50 Mio",
+                            (false, false) => "Document would exceed 50 MiB",
+                        },
+                    ))
                 },
             )
             .into_any_element()
@@ -901,7 +899,14 @@ mod tests {
             Some((2..3, "x".into()))
         );
         assert!(
-            plan_replacement("aaa", "a", &"x".repeat(crate::files::MAX_TEXT), 0, true).is_err()
+            plan_replacement(
+                "aaa",
+                "a",
+                &"x".repeat(crate::files::MAX_LOCAL_EDIT_BYTES / 3 + 1),
+                0,
+                true
+            )
+            .is_err()
         );
         assert_eq!(plan_replacement("abc", "", "x", 0, true).unwrap(), None);
     }

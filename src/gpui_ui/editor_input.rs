@@ -104,7 +104,9 @@ fn apply_indent(
         ) else {
             return;
         };
-        if source.len() - edit.range.len() + edit.replacement.len() > crate::files::MAX_TEXT {
+        if source.len() - edit.range.len() + edit.replacement.len()
+            > crate::files::MAX_LOCAL_EDIT_BYTES
+        {
             return;
         }
         let range = source[..edit.range.start].encode_utf16().count()

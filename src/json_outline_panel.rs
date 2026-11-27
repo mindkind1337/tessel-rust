@@ -180,6 +180,9 @@ enum Provider {
     Stylesheet(crate::css_outline::Language),
 }
 fn provider(doc: &Document) -> Option<Provider> {
+    if doc.text.len() > crate::files::MAX_TEXT {
+        return None;
+    }
     // Tessel treats the leading dot of a dotfile as an extension delimiter.
     let name = doc.path.file_name()?.to_str()?;
     let (_, ext) = name.rsplit_once('.')?;

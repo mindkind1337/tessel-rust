@@ -10,6 +10,7 @@ pub mod playback;
 const DISK_CHANGED: &str =
     "File changed on disk. Compare the versions, reload the file, or keep your edits.";
 pub const MAX_TEXT: usize = 2 * 1024 * 1024;
+pub const MAX_LOCAL_EDIT_BYTES: usize = 50 * 1024 * 1024;
 
 pub fn confined(root: &Path, path: &Path) -> Result<PathBuf> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
@@ -68,9 +69,13 @@ fn split_bom(mut text: String) -> (String, bool) {
     (text, bom)
 }
 
+pub(crate) fn has_binary_prefix(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(8192)].contains(&0)
+}
+
 fn read_editor_text(path: &Path) -> Result<(String, bool)> {
     let bytes = read(path)?;
-    if bytes.contains(&0) {
+    if has_binary_prefix(&bytes) {
         return Err("Binary file: text editing is disabled.".into());
     }
     String::from_utf8(bytes)
@@ -88,14 +93,19 @@ pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
         options.custom_flags(libc::O_NONBLOCK);
     }
     let file = options.open(path).map_err(|e| e.to_string())?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
         return Err("This is not a regular file.".into());
     }
-    file.take((MAX_TEXT + 1) as u64)
+    if metadata.len() > MAX_LOCAL_EDIT_BYTES as u64 {
+        return Err("Text editor limit is 50 MiB.".into());
+    }
+    bytes.reserve_exact(metadata.len() as usize);
+    file.take((MAX_LOCAL_EDIT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_TEXT {
-        return Err("Text editor limit is 2 MiB.".into());
+    if bytes.len() > MAX_LOCAL_EDIT_BYTES {
+        return Err("Text editor limit is 50 MiB.".into());
     }
     Ok(bytes)
 }
@@ -257,10 +267,10 @@ pub(crate) fn replacement_edit(
     let first = byte_at(hits[0].0);
     let mut cursor = first;
     let mut insert = String::new();
-    let limit = "Text editor limit is 2 MiB.";
+    let limit = "Text editor limit is 50 MiB.";
     for &(start, end, _) in hits {
         let gap = &source[cursor..byte_at(start)];
-        let room = MAX_TEXT.saturating_sub(first + insert.len());
+        let room = MAX_LOCAL_EDIT_BYTES.saturating_sub(first + insert.len());
         if gap.len() > room || replacement.len() > room - gap.len() {
             return Err(limit.into());
         }
@@ -268,7 +278,7 @@ pub(crate) fn replacement_edit(
         insert.push_str(replacement);
         cursor = byte_at(end);
     }
-    if first + insert.len() + (source.len() - cursor) > MAX_TEXT {
+    if first + insert.len() + (source.len() - cursor) > MAX_LOCAL_EDIT_BYTES {
         return Err(limit.into());
     }
     Ok(Some((first..cursor, insert)))
@@ -560,7 +570,7 @@ impl Document {
         if self.instance_id != instance_id
             || self.media
             || self.text != base
-            || text.len() > MAX_TEXT
+            || text.len() > MAX_LOCAL_EDIT_BYTES
         {
             return false;
         }
@@ -761,6 +771,7 @@ impl Document {
         let (text, utf8_bom) = read_editor_text(&path)?;
         let original = text.as_bytes().to_vec();
         let is_md = matches!(extension.as_str(), "md" | "markdown");
+        let preview_fits = text.len() <= MAX_TEXT;
         let md_source_only = is_md
             && matches!(
                 crate::rich_previews::classify_markdown_size(text.len()),
@@ -775,7 +786,8 @@ impl Document {
             original,
             utf8_bom,
             error: String::new(),
-            preview_mode: !md_source_only
+            preview_mode: preview_fits
+                && !md_source_only
                 && matches!(
                     extension.as_str(),
                     "html" | "htm" | "md" | "markdown" | "csv" | "tsv"
@@ -977,8 +989,8 @@ impl Document {
 
     fn encoded_draft(&self) -> Result<String> {
         if self.utf8_bom {
-            if self.text.len() > MAX_TEXT - UTF8_BOM.len_utf8() {
-                return Err("Text editor limit is 2 MiB.".into());
+            if self.text.len() > MAX_LOCAL_EDIT_BYTES - UTF8_BOM.len_utf8() {
+                return Err("Text editor limit is 50 MiB.".into());
             }
             Ok(format!("{UTF8_BOM}{}", self.text))
         } else {
@@ -1028,8 +1040,8 @@ impl Document {
         if self.media {
             return Err("This document is read-only".into());
         }
-        if self.text.len() > MAX_TEXT {
-            return Err("Text editor limit is 2 MiB.".into());
+        if self.text.len() > MAX_LOCAL_EDIT_BYTES {
+            return Err("Text editor limit is 50 MiB.".into());
         }
         self.tools.disk_revision = self.tools.disk_revision.wrapping_add(1);
         let missing = match fs::symlink_metadata(&self.path) {
@@ -1134,6 +1146,61 @@ mod tests {
     }
 
     #[test]
+    fn local_editor_checks_binary_prefix_and_validates_utf8_in_the_entire_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefix.txt");
+        let mut bytes = vec![b'x'; 8193];
+        bytes[8191] = 0;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            super::read_editor_text(&path)
+                .unwrap_err()
+                .contains("Binary")
+        );
+        bytes[8191] = b'x';
+        bytes[8192] = 0;
+        std::fs::write(&path, &bytes).unwrap();
+        let mut doc = super::Document::open(dir.path(), &path).unwrap();
+        doc.text.push('!');
+        doc.save(None).unwrap();
+        bytes.push(b'!');
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        bytes[8192] = 0xff;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            super::read_editor_text(&path)
+                .unwrap_err()
+                .contains("UTF-8")
+        );
+    }
+
+    #[test]
+    fn local_editor_roundtrips_at_limit_and_rejects_one_more_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("limit.txt");
+        std::fs::write(&path, vec![b'x'; super::MAX_LOCAL_EDIT_BYTES]).unwrap();
+        let mut doc = super::Document::open(dir.path(), &path).unwrap();
+        doc.text.replace_range(..1, "y");
+        assert!(doc.dirty());
+        doc.save(None).unwrap();
+        drop(doc);
+        let doc = super::Document::open(dir.path(), &path).unwrap();
+        assert_eq!(doc.text.len(), super::MAX_LOCAL_EDIT_BYTES);
+        assert!(doc.text.starts_with('y') && doc.text.ends_with('x'));
+        drop(doc);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(super::MAX_LOCAL_EDIT_BYTES as u64 + 1)
+            .unwrap();
+        assert_eq!(
+            super::read(&path).unwrap_err(),
+            "Text editor limit is 50 MiB."
+        );
+    }
+
+    #[test]
     fn native_editor_edits_reject_stale_reopened_readonly_and_oversized_events() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.txt");
@@ -1146,7 +1213,11 @@ mod tests {
         assert!(!doc.unpinned_preview);
         assert!(doc.last_edited_at.is_some());
         assert!(!doc.apply_native_edit(id, "aé😀z\r\n", "stale".into()));
-        assert!(!doc.apply_native_edit(id, "aÉ😀z\r\n", "x".repeat(super::MAX_TEXT + 1)));
+        assert!(!doc.apply_native_edit(
+            id,
+            "aÉ😀z\r\n",
+            "x".repeat(super::MAX_LOCAL_EDIT_BYTES + 1)
+        ));
         let mut reopened = super::Document::open(dir.path(), &path).unwrap();
         assert_ne!(reopened.instance_id(), id);
         assert!(!reopened.apply_native_edit(id, "aé😀z\r\n", "queued".into()));

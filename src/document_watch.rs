@@ -25,7 +25,7 @@ enum Stamp {
 
 fn stamp(target: &Target) -> io::Result<Stamp> {
     match fs::symlink_metadata(&target.path) {
-        Ok(meta) if !meta.is_file() || meta.len() > crate::files::MAX_TEXT as u64 => {
+        Ok(meta) if !meta.is_file() || meta.len() > crate::files::MAX_LOCAL_EDIT_BYTES as u64 => {
             Ok(Stamp::Unsupported)
         }
         Ok(meta) => Ok(Stamp::Present(
@@ -83,7 +83,7 @@ impl Worker {
                                     if stamp(&target).ok().as_ref() != Some(&current) {
                                         continue;
                                     }
-                                    if !bytes.contains(&0)
+                                    if !crate::files::has_binary_prefix(&bytes)
                                         && let Ok(text) = String::from_utf8(bytes)
                                         && results
                                             .send(Event::Disk(target.clone(), Some(text)))

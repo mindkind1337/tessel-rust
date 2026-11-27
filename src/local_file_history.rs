@@ -134,7 +134,7 @@ pub fn diff(profile: &Path, root: &Path, file: &Path, id: &str) -> Result<String
     let dir = folder(profile, file).ok_or("Invalid history path")?;
     let old = version_text(&dir, file, id)?;
     let path = crate::files::confined(root, file)?;
-    let current = bounded_text(&path, crate::files::MAX_TEXT)?;
+    let current = bounded_text(&path, crate::files::MAX_LOCAL_EDIT_BYTES)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     Ok(crate::saved_version_diff::text_diff(&name, &old, &current))
 }
