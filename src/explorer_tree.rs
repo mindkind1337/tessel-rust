@@ -271,6 +271,10 @@ pub enum TreeAction {
         line: usize,
     },
     CopyPath(PathBuf),
+    Download {
+        root: PathBuf,
+        path: PathBuf,
+    },
     TerminalHere {
         root: PathBuf,
         path: PathBuf,
@@ -514,6 +518,7 @@ pub struct ExplorerTree {
     total_cached_entries: usize,
     truncated: bool,
     error: String,
+    pub(crate) download_notice: Option<(PathBuf, String)>,
     open_dirs: HashSet<String>,
     restore_open: HashSet<String>,
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
@@ -567,6 +572,7 @@ impl ExplorerTree {
             total_cached_entries: 0,
             truncated: false,
             error: String::new(),
+            download_notice: None,
             open_dirs: HashSet::new(),
             restore_open: HashSet::new(),
             expanded_by_project: VecDeque::new(),
@@ -1110,6 +1116,13 @@ impl ExplorerTree {
         let root_key = norm_tree_key(&root_path);
         self.ensure_rows_built(&root_key);
 
+        if let Some((_, note)) = self
+            .download_notice
+            .as_ref()
+            .filter(|(r, _)| *r == root_path)
+        {
+            ui.small(note);
+        }
         let mut emitted: Option<TreeAction> = None;
         let root_title = root_path
             .file_name()
@@ -1598,6 +1611,14 @@ impl ExplorerTree {
                             ui.close();
                             return;
                         }
+                        if ui.button(tr("Download…")).clicked() {
+                            emitted = Some(TreeAction::Download {
+                                root: root_path.clone(),
+                                path: menu_path.clone(),
+                            });
+                            ui.close();
+                            return;
+                        }
                         if ui.button(tr("Copy path")).clicked() {
                             emitted = Some(TreeAction::CopyPath(menu_path.clone()));
                             ui.close();
@@ -1945,6 +1966,11 @@ impl ExplorerTree {
         let Some(root_path) = self.project_root.clone() else {
             return ExplorerGpuiSnapshot::default();
         };
+        let download_notice = self
+            .download_notice
+            .as_ref()
+            .filter(|(r, _)| *r == root_path)
+            .map(|(_, s)| s.clone());
         let root_key = norm_tree_key(&root_path);
         self.ensure_rows_built(&root_key);
         let root_title = root_path
@@ -1988,6 +2014,7 @@ impl ExplorerTree {
                 .collect();
             return ExplorerGpuiSnapshot {
                 has_root: true,
+                download_notice,
                 root_path,
                 root_title,
                 new_target_dir,
@@ -2036,6 +2063,7 @@ impl ExplorerTree {
                     .collect();
                 return ExplorerGpuiSnapshot {
                     has_root: true,
+                    download_notice,
                     root_path,
                     root_title,
                     new_target_dir,
@@ -2123,6 +2151,7 @@ impl ExplorerTree {
 
         ExplorerGpuiSnapshot {
             has_root: true,
+            download_notice,
             root_path,
             root_title,
             new_target_dir,
@@ -2180,6 +2209,7 @@ pub(crate) struct ExplorerGpuiSnapshot {
     pub loading: bool,
     pub truncated: bool,
     pub error: String,
+    pub download_notice: Option<String>,
     pub rows: Vec<ExplorerGpuiRow>,
     pub reveal: Option<(u64, usize)>,
     pub content_hits: Vec<ExplorerGpuiContentHit>,

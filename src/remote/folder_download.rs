@@ -8,7 +8,7 @@ use russh_sftp::{
 };
 use std::{
     collections::VecDeque,
-    fs, io,
+    fs,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -73,22 +73,6 @@ impl Report {
         }
         message
     }
-}
-
-fn reserve(parent: &Path, name: &str) -> io::Result<PathBuf> {
-    for i in 1..100 {
-        let dest = if i == 1 {
-            parent.join(name)
-        } else {
-            parent.join(format!("{name} ({i})"))
-        };
-        match fs::create_dir(&dest) {
-            Ok(()) => return Ok(dest),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::ErrorKind::AlreadyExists.into())
 }
 
 async fn list(
@@ -160,8 +144,11 @@ pub(super) async fn download(
     .await
     .map_err(|_| "Remote directory lookup timed out")??;
     let local_parent = fs::canonicalize(parent).map_err(|e| e.to_string())?;
-    let local = reserve(&local_parent, &crate::download_name::suggest(&source))
-        .map_err(|e| e.to_string())?;
+    let local = crate::download_name::reserve_folder(
+        &local_parent,
+        &crate::download_name::suggest(&source),
+    )
+    .map_err(|e| e.to_string())?;
     let mut report = Report {
         path: dunce::simplified(&local).to_owned(),
         ..Report::default()

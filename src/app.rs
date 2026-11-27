@@ -617,6 +617,8 @@ enum Message {
     ),
     #[cfg(windows)]
     RevealError(String),
+    DownloadProgress(PathBuf, usize),
+    DownloadFinished(PathBuf, Result<crate::local_download::Report, String>),
     FileAction(Result<crate::file_actions::Change, String>),
     Folder(Option<PathBuf>),
     AddProjectPickedFolder(Option<PathBuf>),
@@ -2633,6 +2635,25 @@ impl Tessel {
                 }
                 #[cfg(windows)]
                 Message::RevealError(error) => self.error = error,
+                Message::DownloadProgress(root, n) => {
+                    native_changed = true;
+                    self.explorer_tree.download_notice =
+                        Some((root, format!("{} {n}", tr("Files copied:"))));
+                }
+                Message::DownloadFinished(root, result) => {
+                    native_changed = true;
+                    self.file_action_pending = false;
+                    match result {
+                        Ok(report) => {
+                            self.explorer_tree.download_notice =
+                                Some((root, report.message(crate::i18n::is_french())))
+                        }
+                        Err(error) => {
+                            self.explorer_tree.download_notice = None;
+                            self.error = error;
+                        }
+                    }
+                }
                 Message::FileAction(result) => {
                     self.file_action_pending = false;
                     match result {
@@ -5425,6 +5446,9 @@ impl Tessel {
                 TreeAction::Reveal { root: owner, path } if root.as_ref() == Some(&owner) => {
                     self.reveal_project_item(owner, path)
                 }
+                TreeAction::Download { root: owner, path } if root.as_ref() == Some(&owner) => {
+                    self.download_project_item(owner, path)
+                }
                 TreeAction::TerminalHere { root: owner, path } => {
                     self.open_project_terminal_here(&owner, &path)
                 }
@@ -5486,6 +5510,56 @@ impl Tessel {
                 })
                 .map(|id| (id, crate::pane_grid::SplitDir::Col));
             self.new_session_placed(Launch::Ssh(host), split);
+        }
+    }
+
+    fn download_project_item(&mut self, root: PathBuf, path: PathBuf) {
+        if self.file_action_pending
+            || self
+                .state
+                .active()
+                .is_none_or(|project| project.path != root)
+        {
+            return;
+        }
+        let src = match crate::local_download::source(&root, &path) {
+            Ok(src) => src,
+            Err(error) => {
+                self.error = error;
+                return;
+            }
+        };
+        let folder = src.is_dir();
+        let dest = if folder {
+            rfd::FileDialog::new()
+                .set_title(tr("Download the folder into"))
+                .pick_folder()
+        } else {
+            let name = crate::download_name::suggest(
+                &path.file_name().unwrap_or_default().to_string_lossy(),
+            );
+            crate::files::choose_download_destination(name.as_ref())
+        };
+        let Some(dest) = dest else { return };
+        self.file_action_pending = true;
+        self.explorer_tree.download_notice = Some((root.clone(), tr("Copying…").into()));
+        let sender = self.sender.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("explorer-download".into())
+            .spawn(move || {
+                let mut last = std::time::Instant::now();
+                let result = crate::local_download::copy(&root, &path, &dest, folder, |n| {
+                    if last.elapsed() >= std::time::Duration::from_millis(200) {
+                        let _ = sender.send(Message::DownloadProgress(root.clone(), n));
+                        last = std::time::Instant::now();
+                    }
+                });
+                let _ = sender.send(Message::DownloadFinished(root, result));
+            })
+        {
+            self.file_action_pending = false;
+            self.explorer_tree.download_notice = None;
+            self.error = error.to_string();
         }
     }
 

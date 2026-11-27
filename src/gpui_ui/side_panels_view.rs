@@ -730,6 +730,15 @@ fn render_explorer_tab(
     } else {
         ex.rows.len()
     };
+    if let Some(note) = &ex.download_notice {
+        scroll = scroll.child(
+            div()
+                .px(px(6.))
+                .text_size(px(11.))
+                .text_color(tokens.text_dim)
+                .child(note.clone()),
+        );
+    }
     if ex.truncated {
         let message = if !searching {
             if french {

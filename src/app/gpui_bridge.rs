@@ -43,6 +43,7 @@ pub(crate) enum ExplorerCommand {
     Trash,
     CopyPath,
     CopyRelative,
+    Download,
     TerminalHere,
     #[cfg(windows)]
     Reveal,
@@ -6514,6 +6515,7 @@ impl Tessel {
                 use ExplorerCommand::*;
                 match command {
                     Select => {}
+                    Download if key.is_some() => self.download_project_item(root, path),
                     TerminalHere => self.open_project_terminal_here(&root, &path),
                     Open if !directory => self.open_document_preview(path),
                     CopyPath => {
@@ -7843,6 +7845,56 @@ impl Tessel {
 
 #[cfg(test)]
 mod panel_snapshot_tests {
+    #[test]
+    fn explorer_download_dispatch_copies_the_selected_file_and_reports_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("sample.bin"), [0, 255, 9]).unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        app.apply_gpui_action(GpuiAction::AddProjectPath(root));
+        let snapshot = app.gpui_snapshot(960., 640., 4.);
+        if !snapshot.toolbar.right_open || snapshot.right_tab != SideTab::Files {
+            app.apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let key = loop {
+            let snap = app.gpui_snapshot(960., 640., 4.);
+            if let Some(row) = snap
+                .side_panels
+                .explorer
+                .rows
+                .iter()
+                .find(|r| r.name == "sample.bin")
+            {
+                break row.key.clone();
+            }
+            assert!(std::time::Instant::now() < end);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let (scope, _) = app.gpui_explorer_input().unwrap();
+        let action = GpuiAction::ExplorerMenu(scope, Some(key), ExplorerCommand::Download);
+        app.apply_gpui_action(action.clone());
+        assert!(!app.file_action_pending);
+        let dest = dir.path().join("my copy.bin");
+        crate::files::TEST_DOWNLOAD_DESTINATION.with(|next| next.set(Some(dest.clone())));
+        app.apply_gpui_action(action);
+        while app.file_action_pending {
+            app.poll();
+            assert!(std::time::Instant::now() < end);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read(&dest).unwrap(), [0, 255, 9]);
+        assert!(
+            app.gpui_snapshot(960., 640., 4.)
+                .side_panels
+                .explorer
+                .download_notice
+                .unwrap()
+                .contains("my copy.bin")
+        );
+    }
+
     #[cfg(all(windows, feature = "visual-test"))]
     #[test]
     fn explorer_terminal_here_runs_in_file_parent_and_restores_its_directory() {

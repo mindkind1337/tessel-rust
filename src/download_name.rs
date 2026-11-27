@@ -31,6 +31,27 @@ pub(crate) fn suggest(path: &str) -> String {
         .collect()
 }
 
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+pub(crate) fn reserve_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
+    for i in 1..100 {
+        let dest = if i == 1 {
+            parent.join(name)
+        } else {
+            parent.join(format!("{name} ({i})"))
+        };
+        match fs::create_dir(&dest) {
+            Ok(()) => return Ok(dest),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::ErrorKind::AlreadyExists.into())
+}
+
 #[test]
 fn download_names_match_explorer_suggestions() {
     assert_eq!(suggest(r"docs\CON.csv. "), "download-CON.csv");

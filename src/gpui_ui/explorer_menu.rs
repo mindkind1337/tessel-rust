@@ -101,6 +101,9 @@ impl Menu {
             TerminalHere,
             translate("Open a terminal here", "Ouvrir un terminal ici"),
         ));
+        if self.key.is_some() {
+            choices.push((Download, translate("Download…", "Télécharger…")));
+        }
         if editable {
             choices.push((NewFile, translate("New file", "Nouveau fichier")));
             choices.push((NewFolder, translate("New folder", "Nouveau dossier")));
