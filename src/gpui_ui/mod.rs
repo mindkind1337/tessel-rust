@@ -447,9 +447,6 @@ impl TesselGpuiRoot {
         if matches!(&action, GpuiAction::ExplorerToggleFolder) {
             self.explorer_input.menu = None;
         }
-        if matches!(&action, GpuiAction::NewSideBrowser) {
-            self.side_browser_input.select_all = true;
-        }
         guest_document_input::flush(self, cx);
         if !matches!(
             &action,
@@ -1876,6 +1873,10 @@ impl Render for TesselGpuiRoot {
                 .browser_address_for(side)
                 .map(|(s, t)| (s, t.to_owned()))
             {
+                #[cfg(windows)]
+                if self.app.take_new_address_focus(scope) {
+                    address.select_all = true;
+                }
                 address.sync(scope, &text, cx);
                 if (address.select_all
                     || (browser_was_focused && previous_browser_input.as_ref() != address.state()))

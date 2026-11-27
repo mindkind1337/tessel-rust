@@ -88,6 +88,7 @@ impl Tessel {
                 .insert((self.state.active_project, previous.tab_id), previous);
         }
         self.browser.open_url("about:blank");
+        self.browser.focus_new_address = true;
         self.browser_tab_open = true;
         self.view = View::Browser;
     }
@@ -196,6 +197,7 @@ impl Tessel {
             return;
         }
         let mut page = Browser::new_address_page();
+        page.focus_new_address = true;
         page.set_default_zoom(self.state.browser_prefs.zoom_half_steps);
         let id = page.tab_id;
         self.side_browsers.insert(id, page);

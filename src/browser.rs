@@ -83,6 +83,7 @@ pub struct Browser {
     address: String,
     committed_address: String,
     address_editing: bool,
+    pub(crate) focus_new_address: bool,
     popup: Option<String>,
     error: String,
     cookie_import_status: String,
@@ -130,6 +131,7 @@ impl Default for Browser {
             address: "https://example.com".into(),
             committed_address: "https://example.com".into(),
             address_editing: false,
+            focus_new_address: false,
             popup: None,
             error: String::new(),
             cookie_import_status: String::new(),
@@ -154,6 +156,7 @@ impl Default for Browser {
 
 impl Browser {
     pub(crate) fn change_presentation(&mut self, to_side: bool) {
+        self.focus_new_address = false;
         self.poll();
         let address = self
             .view
@@ -351,7 +354,18 @@ impl Browser {
         &self.address
     }
 
+    pub(crate) fn display_address(&self) -> &str {
+        if !self.address_editing && self.address == "about:blank" {
+            ""
+        } else {
+            &self.address
+        }
+    }
+
     pub(crate) fn begin_native_address_edit(&mut self) {
+        if !self.address_editing && self.address == "about:blank" {
+            self.address.clear();
+        }
         self.address_editing = true;
     }
     pub(crate) fn cancel_native_address_edit(&mut self) {
@@ -1160,6 +1174,7 @@ impl Browser {
         }
     }
     pub fn open_url(&mut self, url: &str) {
+        self.focus_new_address = false;
         self.address_editing = false;
         self.address_generation = next_address_generation();
         self.address = url.to_owned();
@@ -1235,8 +1250,8 @@ impl Browser {
             self.cancel_native_address_edit();
             self.error.clear();
         }
-        let focus_url =
-            shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
+        let focus_url = std::mem::take(&mut self.focus_new_address)
+            || shortcuts && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::L));
         let hard_reload = crate::app::take_fresh_shortcut(
             ui.ctx(),
             shortcuts,
@@ -1279,11 +1294,15 @@ impl Browser {
                     let _ = view.reload();
                 }
             }
+            let mut shown = self.display_address().to_owned();
             let response = ui.add(
-                egui::TextEdit::singleline(&mut self.address)
+                egui::TextEdit::singleline(&mut shown)
                     .id(address_id)
                     .desired_width((ui.available_width() - 140.0).max(100.0)),
             );
+            if response.changed() || response.has_focus() || focus_url || restore_url {
+                self.address = shown;
+            }
             if focus_url || restore_url {
                 response.request_focus();
                 if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), address_id)

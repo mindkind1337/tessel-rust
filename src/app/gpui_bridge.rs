@@ -492,7 +492,7 @@ impl From<&crate::browser::Browser> for GpuiBrowserSnapshot {
             history: page.history_directions(),
             started: page.is_started(),
             loading_navigation: page.loading_navigation(),
-            address: page.address_str().to_owned(),
+            address: page.display_address().to_owned(),
             popup_url: page.popup_url().map(str::to_owned),
             downloads_open: page.downloads_open(),
             downloads: page.download_summaries(),
@@ -2792,7 +2792,10 @@ impl Tessel {
                 return None;
             }
             let page = self.side_browsers.get(&id)?;
-            return Some(((page.address_generation(), Some(id)), page.address_str()));
+            return Some((
+                (page.address_generation(), Some(id)),
+                page.display_address(),
+            ));
         }
         #[cfg(not(windows))]
         let _ = side;
@@ -2804,7 +2807,7 @@ impl Tessel {
         {
             return Some((
                 (self.browser.address_generation(), self.state.active_project),
-                self.browser.address_str(),
+                self.browser.display_address(),
             ));
         }
         None
@@ -2822,6 +2825,18 @@ impl Tessel {
             return self.side_browsers.get_mut(&scope.1?);
         }
         (self.gpui_browser_address()?.0 == scope).then_some(&mut self.browser)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn take_new_address_focus(&mut self, scope: (u64, Option<u64>)) -> bool {
+        if let Some(page) = self.address_page_mut(scope)
+            && std::mem::take(&mut page.focus_new_address)
+        {
+            page.begin_native_address_edit();
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn gpui_terminal_find_ids(&self) -> Vec<u64> {
@@ -6879,7 +6894,7 @@ impl Tessel {
                 #[cfg(windows)]
                 if text.len() <= 8192
                     && let Some(page) = self.address_page_mut(scope)
-                    && page.address_str() == base
+                    && page.display_address() == base
                 {
                     page.set_native_address_draft(text);
                     if navigate {

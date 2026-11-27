@@ -286,6 +286,38 @@ mod tests {
         });
     }
     #[gpui::test]
+    fn new_center_page_focuses_empty_address_for_immediate_typing(cx: &mut TestAppContext) {
+        bindings(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.dispatch(GpuiAction::PaletteExecute("browser".into()), cx);
+            root
+        });
+        cx.refresh().unwrap();
+        view.update(cx, |root, window, cx| {
+            assert!(root.browser_input.focused(window, cx));
+            assert!(
+                root.browser_input
+                    .state()
+                    .unwrap()
+                    .read(cx)
+                    .as_str()
+                    .is_empty()
+            );
+            assert_eq!(root.app.browser.restart_location().0, "about:blank");
+        })
+        .unwrap();
+        cx.simulate_keystrokes(view.into(), "a b c");
+        cx.run_until_parked();
+        view.update(cx, |root, _, _| {
+            assert_eq!(root.app.browser.address_str(), "abc")
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn side_plus_focuses_address_and_enter_only_navigates_the_selected_page(
         cx: &mut TestAppContext,
     ) {
