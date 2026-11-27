@@ -5,7 +5,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Options {
+pub(crate) struct Options {
     pub size: usize,
     pub spaces: bool,
 }
@@ -96,23 +96,28 @@ impl Options {
 }
 
 fn visible_columns(text: &str, size: usize) -> usize {
-    text.graphemes(true).fold(0, |column, cluster| {
-        let ch = cluster.chars().next().unwrap_or(' ') as u32;
-        if ch == 9 { return column + size - column % size; }
-        let wide = matches!(ch, 0x2e80..=0xd7af | 0xf900..=0xfaff | 0xff01..=0xff5e | 0xffe0..=0xffe6
-            | 0x1f1e6..=0x1f1ff | 8986 | 8987 | 9200 | 9203 | 9728..=10175 | 11088 | 11093
-            | 127744..=128591 | 128640..=128764 | 128992..=129008 | 129280..=129535 | 129648..=129782);
-        column + if wide { 2 } else { 1 }
-    })
+    text.graphemes(true)
+        .fold(0, |column, cluster| next_column(column, cluster, size))
 }
 
-pub(super) struct Edit {
+fn next_column(column: usize, cluster: &str, size: usize) -> usize {
+    let ch = cluster.chars().next().unwrap_or(' ') as u32;
+    if ch == 9 {
+        return column + size - column % size;
+    }
+    let wide = matches!(ch, 0x2e80..=0xd7af | 0xf900..=0xfaff | 0xff01..=0xff5e | 0xffe0..=0xffe6
+            | 0x1f1e6..=0x1f1ff | 8986 | 8987 | 9200 | 9203 | 9728..=10175 | 11088 | 11093
+            | 127744..=128591 | 128640..=128764 | 128992..=129008 | 129280..=129535 | 129648..=129782);
+    column + if wide { 2 } else { 1 }
+}
+
+pub(crate) struct Edit {
     pub range: Range<usize>,
     pub replacement: String,
     pub selection: Range<usize>,
 }
 
-pub(super) fn plan(
+pub(crate) fn plan(
     text: &str,
     selected: Range<usize>,
     outdent: bool,
@@ -235,6 +240,30 @@ pub(super) fn plan(
     })
 }
 
+/// Return a character offset at the nearest displayed column. A tie selects
+/// the preceding grapheme, including when the requested position is inside a tab.
+pub(crate) fn column_offset(line: &str, one_based: i64, size: usize) -> usize {
+    let requested = if one_based < 0 {
+        (visible_columns(line, size) as i64 + one_based).max(0)
+    } else {
+        one_based.saturating_sub(1).max(0)
+    } as usize;
+    let mut chars = 0;
+    let mut before = 0;
+    for cluster in line.graphemes(true) {
+        let after = next_column(before, cluster, size);
+        if requested <= after {
+            if after - requested < requested - before {
+                chars += cluster.chars().count();
+            }
+            break;
+        }
+        chars += cluster.chars().count();
+        before = after;
+    }
+    chars
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +271,7 @@ mod tests {
     #[test]
     fn native_indent_block_edits_match_monaco_reference() {
         let data: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/editor_shift_reference.json"
+            "../tests/fixtures/editor_shift_reference.json"
         ))
         .unwrap();
         for vector in data["vectors"].as_array().unwrap() {
@@ -276,7 +305,7 @@ mod tests {
     #[test]
     fn native_indent_detection_matches_monaco_reference() {
         let data: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/editor_indent_reference.json"
+            "../tests/fixtures/editor_indent_reference.json"
         ))
         .unwrap();
         for vector in data["vectors"].as_array().unwrap() {

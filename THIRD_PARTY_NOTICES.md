@@ -7,12 +7,13 @@ copyright and permission notices are reproduced in full.
 
 `resources/codicons/codicon.ttf` is an unmodified copy of the Microsoft Codicons font bundled with Tessel. The artwork is © Microsoft Corporation and distributed under [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/). [Upstream project](https://github.com/microsoft/vscode-codicons).
 
-## Monaco indentation rules
+## Monaco indentation and cursor navigation
 
-`src/gpui_ui/editor_indent.rs` adapts indentation detection, tab stops and character
+`src/editor_indent.rs` adapts indentation detection, tab stops and character
 width rules from Microsoft Monaco Editor 0.57.0 (`indentationGuesser.js`,
 `shiftCommand.js`, `cursorTypeEditOperations.js`, `cursorColumns.js`, `strings.js`,
-`cursor.js` and `intervalTree.js`).
+`cursor.js` and `intervalTree.js`). The Go to Line parser in `src/files.rs` follows
+`gotoLineQuickAccess.js` from the same version.
 The synthetic detection vectors can be regenerated with
 `scripts/extract_editor_indent_reference.mjs` and
 `scripts/extract_editor_shift_reference.mjs` against that version. This is native

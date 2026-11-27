@@ -7,7 +7,6 @@ mod browser_input;
 mod chat_inputs;
 pub(crate) mod chat_view;
 pub(crate) mod chrome;
-mod editor_indent;
 pub(crate) mod editor_input;
 mod editor_syntax;
 mod editor_tool_inputs;

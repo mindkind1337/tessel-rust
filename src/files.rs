@@ -311,46 +311,91 @@ pub fn char_range_to_byte_range(text: &str, start_char: usize, end_char: usize) 
     (start_byte, end_byte)
 }
 
-/// Converts a 1-based `"line"` or `"line:col"` input into `(char_offset, zero_based_line)`.
+/// Resolves a Go to Line entry to a character offset and zero-based line.
 pub fn goto_line_char_offset(text: &str, spec: &str) -> Option<(usize, usize)> {
-    let trimmed = spec.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let (line_part, col_part) = trimmed
-        .split_once(':')
-        .map_or((trimmed, None), |(l, c)| (l.trim(), Some(c.trim())));
-    let line_1 = line_part.parse::<usize>().ok()?.max(1);
-    let col_1 = col_part
-        .and_then(|c| c.parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1);
-    let target_line = line_1 - 1;
-    let mut cur_line = 0usize;
-    let mut line_start_char = 0usize;
-    let mut line_len_chars = 0usize;
-    let mut found_line = target_line == 0;
-    for (ci, ch) in text.chars().enumerate() {
-        if cur_line == target_line {
-            if ch == '\n' || ch == '\r' {
-                break;
-            }
-            line_len_chars += 1;
-        } else if ch == '\n' {
-            cur_line += 1;
-            if cur_line == target_line {
-                line_start_char = ci + 1;
-                found_line = true;
-            }
+    // Monaco accepts a signed decimal prefix as JavaScript parseInt does.
+    fn number(part: &str) -> Option<i64> {
+        let part = part.trim_start();
+        let digits = part.strip_prefix(['+', '-']).unwrap_or(part);
+        let end = digits.bytes().take_while(u8::is_ascii_digit).count();
+        if end == 0 {
+            return None;
         }
+        let value = digits[..end].parse::<i64>().unwrap_or(i64::MAX);
+        Some(if part.starts_with('-') { -value } else { value })
     }
-    if !found_line {
-        // Clamp to the last line of the buffer
-        let total_chars = text.chars().count();
-        return Some((total_chars, cur_line));
+
+    let lines = || {
+        let mut remaining = Some(text);
+        std::iter::from_fn(move || {
+            let rest = remaining.take()?;
+            let end = rest.find(['\r', '\n']).unwrap_or(rest.len());
+            let tail = &rest[end..];
+            let eol = if tail.starts_with("\r\n") {
+                2
+            } else {
+                usize::from(!tail.is_empty())
+            };
+            if eol != 0 {
+                remaining = Some(&tail[eol..]);
+            }
+            Some((&rest[..end], eol))
+        })
+    };
+    let spec = spec.trim();
+    if let Some(offset) = spec.strip_prefix("::").or_else(|| spec.strip_prefix(':')) {
+        let offset = number(offset)?;
+        let mut left = if offset < 0 {
+            (text.encode_utf16().count() as i64 + offset + 1).max(0)
+        } else {
+            offset.saturating_sub(1).max(0)
+        } as usize;
+        let mut chars = 0;
+        let mut last_line = 0;
+        for (index, (line, eol)) in lines().enumerate() {
+            last_line = index;
+            for ch in line.chars() {
+                if left < ch.len_utf16() {
+                    return Some((chars, index));
+                }
+                left -= ch.len_utf16();
+                chars += 1;
+            }
+            if left < eol {
+                return Some((chars, index));
+            }
+            left -= eol;
+            chars += eol;
+        }
+        return Some((chars, last_line));
     }
-    let col_offset = (col_1 - 1).min(line_len_chars);
-    Some((line_start_char + col_offset, target_line))
+
+    let mut parts = spec.split([',', ':', '#']);
+    let requested = number(parts.next()?)?;
+    let index = if requested < 0 {
+        (lines().count() as i64 + requested).max(0)
+    } else {
+        requested.saturating_sub(1).max(0)
+    } as usize;
+    let mut it = lines().enumerate().peekable();
+    let mut start = 0;
+    while let Some((i, (line, eol))) = it.next() {
+        if i == index || it.peek().is_none() {
+            let col = parts.next().and_then(number).unwrap_or(1);
+            let offset = if col == 1 || col == 0 {
+                0
+            } else {
+                crate::editor_indent::column_offset(
+                    line,
+                    col,
+                    crate::editor_indent::Options::detect(text).size,
+                )
+            };
+            return Some((start + offset, i));
+        }
+        start += line.chars().count() + eol;
+    }
+    None
 }
 
 /// Computes the 0-based `(char_offset, zero_based_line)` start of contiguous changed hunks
@@ -1460,6 +1505,34 @@ mod tests {
         assert_eq!(find_char_matches("x\nx\nx", "X\n"), [(0, 2, 0), (2, 4, 1)]);
         assert_eq!(find_char_matches("😀İi\nI", "i"), [(2, 3, 0), (4, 5, 1)]);
         assert_eq!(find_char_matches("😀İi\nI", "i\u{307}"), [(1, 2, 0)]);
+    }
+
+    #[test]
+    fn goto_resolves_visible_columns_signed_lines_and_utf16_offsets() {
+        let text = "a\r\n\t😀e\u{301}z\rlast";
+        for (spec, expected) in [
+            ("-2", (3, 1)),
+            ("2:3", (3, 1)),
+            ("2,4", (4, 1)),
+            ("2#6", (4, 1)),
+            ("2:7", (5, 1)),
+            ("2:8", (7, 1)),
+            ("2:-1", (7, 1)),
+            ("88", (9, 2)),
+            ("-99", (0, 0)),
+            (":3", (1, 0)),
+            ("::4", (3, 1)),
+            (":6", (4, 1)),
+            (":7", (5, 1)),
+            (":-1", (13, 2)),
+            (":999", (13, 2)),
+        ] {
+            assert_eq!(goto_line_char_offset(text, spec), Some(expected), "{spec}");
+        }
+        assert_eq!(goto_line_char_offset("a\r\n", "-1"), Some((3, 1)));
+        assert_eq!(goto_line_char_offset("", "::1"), Some((0, 0)));
+        assert_eq!(goto_line_char_offset(text, "x:3"), None);
+        assert_eq!(goto_line_char_offset(text, "::"), None);
     }
 
     #[test]

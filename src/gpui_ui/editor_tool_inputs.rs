@@ -678,7 +678,7 @@ mod tests {
             let selection = state.update(cx, |s, cx| {
                 s.selected_text_range(false, window, cx).unwrap()
             });
-            assert_eq!(selection.range, 8..8); // first\n + UTF-16 emoji
+            assert_eq!(selection.range, 6..6); // Column two is halfway across the emoji.
             root.dispatch(GpuiAction::SelectDocumentTab(1), cx);
             root.dispatch(GpuiAction::ToggleEditorGoto, cx);
         })

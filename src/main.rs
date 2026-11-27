@@ -62,6 +62,7 @@ pub mod dialogs_toolbar_model;
 pub mod dialogs_toolbar_ui;
 mod document_watch;
 mod download_name;
+mod editor_indent;
 mod empty_state_panel;
 pub mod explorer_scm_model;
 pub mod explorer_tree;

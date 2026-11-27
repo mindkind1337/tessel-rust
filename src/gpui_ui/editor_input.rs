@@ -1,6 +1,7 @@
 //! Native editor entities are retained per open document, never per filename or tab index.
-use super::{TesselGpuiRoot, editor_indent, editor_syntax};
+use super::{TesselGpuiRoot, editor_syntax};
 use crate::app::gpui_bridge::{GpuiAction, GpuiActiveDocumentSummary};
+use crate::editor_indent;
 use gpui::{App, AppContext, Context, Entity, Focusable, Subscription, Window};
 use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
 use std::collections::HashMap;
@@ -1331,7 +1332,7 @@ mod tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
         view.update(cx, |root, _, cx| {
-            root.dispatch(GpuiAction::SetEditorGotoSpec("600:3".into()), cx);
+            root.dispatch(GpuiAction::SetEditorGotoSpec("-2#4".into()), cx);
             root.dispatch(GpuiAction::ApplyEditorGoto, cx);
             // Layout uses multiple snapshots; none may consume the navigation request.
             root.app
