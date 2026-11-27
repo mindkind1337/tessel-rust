@@ -121,6 +121,24 @@ pub fn posix_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+// ssh passes its remote command to the account's login shell. Keep POSIX
+// syntax inside sh, and escape these three bytes outside single quotes:
+// fish interprets backslashes in quotes and tcsh expands history there.
+fn remote_sh_command(script: &str) -> String {
+    let mut command = String::from("exec sh -c '");
+    for ch in script.chars() {
+        if matches!(ch, '\'' | '\\' | '!') {
+            command.push_str("'\\");
+            command.push(ch);
+            command.push('\'');
+        } else {
+            command.push(ch);
+        }
+    }
+    command.push('\'');
+    command
+}
+
 fn agent_command(preset: &crate::agent_catalog::Preset) -> CommandBuilder {
     if cfg!(windows) {
         // CLI shims may be .cmd or .ps1. Only static catalog executable names and quoted static arguments are used.
@@ -288,11 +306,11 @@ pub fn command_with_shell(
             c.args([
                 "-tt",
                 "-o",
-                "ConnectTimeout=15",
+                crate::ssh_config::CONNECT_TIMEOUT,
                 "-o",
-                "ServerAliveInterval=30",
+                crate::ssh_config::KEEPALIVE_INTERVAL,
                 "-o",
-                "ServerAliveCountMax=6",
+                crate::ssh_config::KEEPALIVE_COUNT,
                 "--",
                 &host.alias,
             ]);
@@ -308,7 +326,7 @@ pub fn command_with_shell(
                 ssh_tmux_id,
                 true,
             )? {
-                c.arg(remote_script);
+                c.arg(remote_sh_command(&remote_script));
             }
             c
         }
@@ -343,6 +361,34 @@ pub fn default_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires WSL with fish and tcsh"]
+    fn ssh_login_shells_pass_the_remote_script_to_sh_intact() {
+        let root = std::env::var("TESSEL_TEST_WSL_SHELL_ROOT").unwrap_or_default();
+        let payload = r#"two\\slashes !history 'quotes' "$HOME" ; `id`"#;
+        let script = format!("value={}; printf %s \"$value\"", posix_quote(payload));
+        for shell in ["bin/sh", "usr/bin/fish", "bin/tcsh"] {
+            let output = std::process::Command::new("wsl.exe")
+                .args(["--exec", "env"])
+                .arg(format!("LD_LIBRARY_PATH={root}/usr/lib/x86_64-linux-gnu"))
+                .arg(if shell == "bin/sh" {
+                    "/bin/sh".to_owned()
+                } else {
+                    format!("{root}/{shell}")
+                })
+                .args(["-c", &remote_sh_command(&script)])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, payload.as_bytes(), "{shell}");
+        }
+    }
+
     #[test]
     fn persistent_ssh_panes_keep_distinct_tmux_targets_across_reconnect() {
         let dir = tempfile::tempdir().unwrap();
@@ -353,6 +399,13 @@ mod tests {
         let script = |id: &mut Option<String>| {
             prepare_ssh_tmux_id(&host, id).unwrap();
             let command = command_with_shell(&host, dir.path(), None, None, id.as_deref()).unwrap();
+            for required in [
+                "ConnectTimeout=30",
+                "ServerAliveInterval=15",
+                "ServerAliveCountMax=12",
+            ] {
+                assert!(command.get_argv().iter().any(|arg| arg == required));
+            }
             command
                 .get_argv()
                 .last()
@@ -366,10 +419,16 @@ mod tests {
         let other = script(&mut second);
         assert_ne!(first, second);
         assert_ne!(initial, other);
-        assert!(initial.contains(&format!(
-            "new-session -A -D -s 'tessel-{}'",
-            first.as_ref().unwrap()
-        )));
+        let expected = crate::ssh_tmux::build_ssh_launch_remote_script(
+            "fixture",
+            "",
+            true,
+            first.as_deref(),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(initial, remote_sh_command(&expected));
         assert_eq!(script(&mut first), initial);
         assert!(command_with_shell(&host, dir.path(), None, None, None).is_err());
     }

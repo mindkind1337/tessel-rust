@@ -8,6 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Transport defaults shared with Vue's sshConnection. Individual requests
+// keep their own deadlines, independent of SSH's idle-link detection.
+pub(crate) const CONNECT_TIMEOUT: &str = "ConnectTimeout=30";
+pub(crate) const KEEPALIVE_INTERVAL: &str = "ServerAliveInterval=15";
+pub(crate) const KEEPALIVE_COUNT: &str = "ServerAliveCountMax=12";
+
 #[derive(Default, Debug)]
 pub struct Discovery {
     pub aliases: Vec<String>,

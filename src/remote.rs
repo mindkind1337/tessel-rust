@@ -138,11 +138,11 @@ fn transport_args(host: &Host, sftp: bool) -> Result<Vec<String>, String> {
         "-o",
         "StrictHostKeyChecking=yes",
         "-o",
-        "ConnectTimeout=10",
+        crate::ssh_config::CONNECT_TIMEOUT,
         "-o",
-        "ServerAliveInterval=15",
+        crate::ssh_config::KEEPALIVE_INTERVAL,
         "-o",
-        "ServerAliveCountMax=2",
+        crate::ssh_config::KEEPALIVE_COUNT,
         "-o",
         "ControlMaster=no",
         "-o",
@@ -863,6 +863,9 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        assert!(args.contains(&"ConnectTimeout=30".into()));
+        assert!(args.contains(&"ServerAliveInterval=15".into()));
+        assert!(args.contains(&"ServerAliveCountMax=12".into()));
         assert!(args.contains(&"StrictHostKeyChecking=yes".into()));
         assert!(args.contains(&"BatchMode=yes".into()));
         assert_eq!(&args[args.len() - 2..], ["dev", "sftp"]);

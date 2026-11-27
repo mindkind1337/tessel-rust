@@ -115,11 +115,11 @@ pub fn verified_args(alias: &str, command: &str) -> Result<Vec<String>, Transpor
         "-o",
         "StrictHostKeyChecking=yes",
         "-o",
-        "ConnectTimeout=10",
+        crate::ssh_config::CONNECT_TIMEOUT,
         "-o",
-        "ServerAliveInterval=15",
+        crate::ssh_config::KEEPALIVE_INTERVAL,
         "-o",
-        "ServerAliveCountMax=2",
+        crate::ssh_config::KEEPALIVE_COUNT,
         "-o",
         "ControlMaster=no",
         "-o",
@@ -334,6 +334,9 @@ mod tests {
             "BatchMode=yes",
             "ControlPath=none",
             "ClearAllForwardings=yes",
+            "ConnectTimeout=30",
+            "ServerAliveInterval=15",
+            "ServerAliveCountMax=12",
         ] {
             assert!(args.iter().any(|v| v == required));
         }
