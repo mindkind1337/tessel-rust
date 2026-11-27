@@ -10,14 +10,7 @@ pub fn apply(
 ) -> Option<String> {
     if !can_reply {
         parser.process(bytes);
-        if bytes.len() >= 4 {
-            query_tail.clear();
-            query_tail.extend_from_slice(&bytes[bytes.len() - 4..]);
-        } else {
-            query_tail.extend_from_slice(bytes);
-            let excess = query_tail.len().saturating_sub(4);
-            query_tail.drain(..excess);
-        }
+        query_tail.clear();
         return None;
     }
     let mut error = None;
@@ -79,6 +72,27 @@ mod tests {
         );
         assert_eq!(replies, [b"\x1b[1;2R".to_vec(), b"\x1b[2;2R".to_vec()]);
         assert_eq!(parser.screen().contents(), "é\nXend");
+    }
+
+    #[test]
+    fn taking_control_only_answers_queries_received_as_writer() {
+        for split in 1..4 {
+            let mut parser = vt100::Parser::new(10, 20, 0);
+            let mut tail = Vec::new();
+            let query = b"\x1b[6n";
+            let mut replies = Vec::new();
+            apply(&mut parser, &mut tail, &query[..split], false, |_| {
+                panic!("observer replied")
+            });
+            apply(&mut parser, &mut tail, &query[split..], true, |_| {
+                panic!("replied across control change")
+            });
+            apply(&mut parser, &mut tail, query, true, |bytes| {
+                replies.push(bytes);
+                Ok(())
+            });
+            assert_eq!(replies, [b"\x1b[1;1R".to_vec()]);
+        }
     }
 
     #[test]

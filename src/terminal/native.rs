@@ -541,29 +541,28 @@ impl Native {
             let anchor = self.scroll.before_poll(&feed.history, parser);
             let previous = feed.applied;
             let control = self.control.as_ref();
-            feed.poll(
-                parser,
-                self.allow_replies && control.is_some_and(host_worker::Control::writable),
-                |parser, bytes, can_reply, reset| {
-                    if reset {
-                        query_tail.clear();
-                    }
-                    if let Some(error) =
-                        host_emulator::apply(parser, query_tail, bytes, can_reply, |reply| {
-                            control
-                                .ok_or_else(|| {
-                                    crate::i18n::tr("Remote terminal detached").to_owned()
-                                })?
-                                .input(&reply)
-                                .map_err(|_| {
-                                    crate::i18n::tr("Remote cursor reply was not queued").to_owned()
-                                })
-                        })
-                    {
-                        *status = error;
-                    }
-                },
-            );
+            let writable =
+                self.allow_replies && control.is_some_and(host_worker::Control::writable);
+            if !writable {
+                query_tail.clear();
+            }
+            feed.poll(parser, writable, |parser, bytes, can_reply, reset| {
+                if reset {
+                    query_tail.clear();
+                }
+                if let Some(error) =
+                    host_emulator::apply(parser, query_tail, bytes, can_reply, |reply| {
+                        control
+                            .ok_or_else(|| crate::i18n::tr("Remote terminal detached").to_owned())?
+                            .input(&reply)
+                            .map_err(|_| {
+                                crate::i18n::tr("Remote cursor reply was not queued").to_owned()
+                            })
+                    })
+                {
+                    *status = error;
+                }
+            });
             changed |= previous != feed.applied;
             self.selection_invalidated = self
                 .scroll
