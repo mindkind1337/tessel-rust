@@ -611,8 +611,8 @@ impl Session {
     }
 }
 struct PendingDocument {
-    position: Option<crate::files::FilePosition>,
-    request: std::sync::Arc<()>,
+    position: Option<(u64, crate::files::FilePosition)>,
+    request: u64,
     pinned: bool,
 }
 enum Message {
@@ -633,7 +633,7 @@ enum Message {
     Document {
         project: Option<u64>,
         path: PathBuf,
-        request: std::sync::Arc<()>,
+        request: u64,
         result: Result<Box<Document>, String>,
     },
     DiffDocument {
@@ -749,6 +749,7 @@ pub struct Tessel {
     documents: Vec<Document>,
     editor_match_case: bool,
     document_watch: crate::document_watch::DocumentWatch,
+    next_document_request: u64,
     document_pending: std::collections::HashMap<(Option<u64>, PathBuf), PendingDocument>,
     active_document: usize,
     view: View,
@@ -1005,6 +1006,7 @@ impl Tessel {
             documents: vec![],
             editor_match_case: false,
             document_watch: Default::default(),
+            next_document_request: 0,
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
@@ -2224,6 +2226,9 @@ impl Tessel {
         position: Option<crate::files::FilePosition>,
     ) {
         let project = self.state.active_project;
+        self.next_document_request += 1;
+        let request = self.next_document_request;
+        let position = position.map(|pos| (request, pos));
         let key = dunce::simplified(&path);
         if let Some(i) = self.documents.iter().position(|d| {
             d.project == project && d.diff_title.is_none() && dunce::simplified(&d.path) == key
@@ -2249,12 +2254,11 @@ impl Tessel {
             self.error = "Close a document before opening more (24-tab limit)".into();
             return;
         }
-        let request = std::sync::Arc::new(());
         self.document_pending.insert(
             pending_key,
             PendingDocument {
                 position,
-                request: request.clone(),
+                request,
                 pinned,
             },
         );
@@ -2944,7 +2948,7 @@ impl Tessel {
                     else {
                         continue;
                     };
-                    if !std::sync::Arc::ptr_eq(&entry.get().request, &request) {
+                    if entry.get().request != request {
                         continue;
                     }
                     let pending = entry.remove();

@@ -1614,6 +1614,7 @@ impl Tessel {
             documents: vec![],
             editor_match_case: false,
             document_watch: Default::default(),
+            next_document_request: 0,
             document_pending: Default::default(),
             active_document: 0,
             view: View::Work,
@@ -11502,8 +11503,10 @@ mod panel_snapshot_tests {
         app.documents
             .push(crate::files::Document::open(&project, &other).unwrap());
         app.active_document = 0;
+        let alias = project.join("nested");
+        std::fs::create_dir(&alias).unwrap();
         app.apply_gpui_action(GpuiAction::ExplorerOpenContentHit {
-            path: path.clone(),
+            path: alias.join("..").join("two.md"),
             line: 3,
         });
         assert!(app.documents[0].tools.pending_scroll_line.is_none());
@@ -11515,6 +11518,26 @@ mod panel_snapshot_tests {
         };
         app.apply_gpui_action(cite("[doc](two.md:2:4)"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Reproduce an older search result finishing after the newer citation.
+        let mut loads = Vec::new();
+        let mut other_messages = Vec::new();
+        while loads.len() < 2 {
+            let msg = app
+                .receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .unwrap();
+            match msg {
+                super::super::Message::Document { request, .. } => loads.push((request, msg)),
+                _ => other_messages.push(msg),
+            }
+        }
+        loads.sort_by_key(|(request, _)| std::cmp::Reverse(*request));
+        for msg in other_messages
+            .into_iter()
+            .chain(loads.into_iter().map(|(_, msg)| msg))
+        {
+            app.sender.send(msg).unwrap();
+        }
         while !app.document_pending.is_empty() {
             app.poll_for_gpui();
             assert!(std::time::Instant::now() < deadline);
