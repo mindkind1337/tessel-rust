@@ -1291,7 +1291,7 @@ pub(crate) enum GpuiAction {
     ImportSshConfig,
     TestSshHost(String),
     AddSshHostFromDraft,
-    RemoveSshHost(usize),
+    RemoveSshHost(usize, crate::workspace::Host),
     LaunchSshHost(usize),
     ToggleSshHostPersistentSessions(usize),
     ToggleSshHostDaemon(usize),
@@ -7861,10 +7861,12 @@ impl Tessel {
                     Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }
             }
-            GpuiAction::RemoveSshHost(idx) => {
-                if idx < self.state.hosts.len() {
-                    self.state.hosts.remove(idx);
-                    self.save();
+            GpuiAction::RemoveSshHost(index, expected) => {
+                match self.change_hosts(|hosts| {
+                    crate::host_actions::remove(hosts, index, &expected).map(|()| true)
+                }) {
+                    Ok(_) => self.host_notice = Some((tr("SSH target removed").into(), false)),
+                    Err(error) => self.host_notice = Some((tr(&error).into(), true)),
                 }
             }
             GpuiAction::LaunchSshHost(idx) => {
@@ -11497,6 +11499,33 @@ mod panel_snapshot_tests {
         let prefs = open().state.editor_prefs;
         assert_eq!(prefs.outline_sort, Sort::Kind);
         assert!(!prefs.outline_follow_cursor);
+    }
+
+    #[test]
+    fn ssh_settings_confirmed_removal_checks_the_displayed_target_before_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        for alias in ["first", "second"] {
+            app.apply_gpui_action(GpuiAction::SetSshDraft {
+                alias: alias.into(),
+                folder: String::new(),
+            });
+            app.apply_gpui_action(GpuiAction::AddSshHostFromDraft);
+        }
+        let first = app.state.hosts[0].clone();
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(1, first.clone()));
+        assert_eq!(app.state.hosts.len(), 2);
+        assert!(matches!(app.host_notice, Some((_, true))));
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, first));
+        let second = app.state.hosts[0].clone();
+        app.store = None;
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, second.clone()));
+        assert_eq!(app.state.hosts.as_slice(), std::slice::from_ref(&second));
+        assert!(matches!(app.host_notice, Some((_, true))));
+        drop(app);
+        let reopened = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(reopened.state.hosts, [second]);
     }
 
     #[test]

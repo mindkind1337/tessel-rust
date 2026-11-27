@@ -3183,14 +3183,55 @@ fn render_ssh_page(
                             GpuiAction::ToggleSshHostDaemon(idx),
                             cx,
                         ))
-                        .child(setting_btn(
-                            format!("gpui-ssh-rm-{idx}"),
-                            "Remove".to_owned(),
-                            false,
-                            tokens,
-                            GpuiAction::RemoveSshHost(idx),
-                            cx,
-                        )),
+                        .child({
+                            let expected = host.clone();
+                            let remove = if french { "Supprimer" } else { "Remove" };
+                            div()
+                                .id(SharedString::from(format!("gpui-ssh-rm-{idx}")))
+                                .px(px(9.0))
+                                .py(px(4.5))
+                                .rounded(px(tokens.radius_px))
+                                .border_1()
+                                .border_color(tokens.border)
+                                .text_size(px(11.0))
+                                .text_color(tokens.danger)
+                                .hover(|style| style.bg(tokens.surface_2))
+                                .child(remove)
+                                .on_click(cx.listener(move |_, _, window, cx| {
+                                    let title = if french {
+                                        "Supprimer la cible SSH?"
+                                    } else {
+                                        "Remove SSH target?"
+                                    };
+                                    let detail = format!("{} {}", expected.alias, expected.folder);
+                                    let answer = window.prompt(
+                                        gpui::PromptLevel::Warning,
+                                        title,
+                                        Some(detail.trim_end()),
+                                        &[
+                                            gpui::PromptButton::cancel(if french {
+                                                "Annuler"
+                                            } else {
+                                                "Cancel"
+                                            }),
+                                            gpui::PromptButton::ok(remove),
+                                        ],
+                                        cx,
+                                    );
+                                    let target = expected.clone();
+                                    cx.spawn(async move |this, cx| {
+                                        if matches!(answer.await, Ok(1)) {
+                                            let _ = this.update(cx, |this, cx| {
+                                                this.dispatch_action(
+                                                    GpuiAction::RemoveSshHost(idx, target),
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                                }))
+                        }),
                 ),
         );
     }
