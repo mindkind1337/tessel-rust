@@ -511,12 +511,10 @@ pub(crate) fn render_toolbar(
                                     }),
                             ),
                     )
-                    .child(toolbar_icon_btn(
-                        "btn-autotile-grid",
-                        GpuiIcon::LayoutGrid,
-                        false,
+                    .child(layout_button(
+                        tb.layout_menu_right.is_some(),
+                        french,
                         tokens,
-                        GpuiAction::AutoTilePanes,
                         cx,
                     ))
                     .child(toolbar_icon_btn(
@@ -842,6 +840,59 @@ pub(crate) fn render_toolbar(
                                 .child(GpuiIcon::WinClose.render(10.0, tokens.titlebar_symbol)),
                         ),
                 ),
+        )
+}
+
+fn layout_button(
+    open: bool,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> impl IntoElement {
+    let right = std::rc::Rc::new(std::cell::Cell::new(0.0));
+    let measured = right.clone();
+    let label = crate::layout_broadcast_ui::layout_toolbar_label(french);
+    let (bg, fg, border) = (tokens.surface_2, tokens.text_strong, tokens.border);
+    div()
+        .id("toolbar-layout")
+        .debug_selector(|| "toolbar-layout".into())
+        .focusable()
+        .tab_stop(true)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .aria_expanded(open)
+        .relative()
+        .w(px(TOOLBAR_ICON_BTN_WIDTH_PX))
+        .h(px(TOOLBAR_BTN_HEIGHT_PX))
+        .rounded(px(tokens.radius_px))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(open, |el| el.bg(tokens.accent_soft_bg))
+        .hover(|s| s.bg(tokens.surface_2))
+        .tooltip(move |_, cx| {
+            cx.new(|_| ToolbarTooltip {
+                text: crate::layout_broadcast_ui::layout_toolbar_tooltip(french).into(),
+                bg,
+                fg,
+                border,
+            })
+            .into()
+        })
+        .on_click(cx.listener(move |root, _, _, cx| {
+            root.dispatch(GpuiAction::LayoutMenu((!open).then(|| right.get())), cx);
+        }))
+        .child(
+            GpuiIcon::LayoutGrid.render(14.5, if open { tokens.accent } else { tokens.text_dim }),
+        )
+        .child(
+            gpui::canvas(
+                move |bounds, _, _| measured.set(f32::from(bounds.right())),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
         )
 }
 

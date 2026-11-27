@@ -565,6 +565,40 @@ impl TesselGpuiRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app.gpui_extra.layout_menu_right.is_some() {
+            let key = &event.keystroke;
+            if matches!(key.key.as_str(), "tab" | "up" | "down") {
+                let backwards = key.key == "up" || (key.key == "tab" && key.modifiers.shift);
+                let mut first = None;
+                loop {
+                    if backwards {
+                        window.focus_prev(cx);
+                    } else {
+                        window.focus_next(cx);
+                    }
+                    let focused = window.focused(cx);
+                    if focused.is_none()
+                        || focused == first
+                        || window
+                            .context_stack()
+                            .iter()
+                            .any(|context| context.contains("TesselLayoutMenu"))
+                    {
+                        break;
+                    }
+                    if first.is_none() {
+                        first = focused;
+                    }
+                }
+                window.prevent_default();
+                cx.stop_propagation();
+            } else if key.key == "escape" {
+                self.dispatch(GpuiAction::LayoutMenu(None), cx);
+                window.prevent_default();
+                cx.stop_propagation();
+            }
+            return;
+        }
         if self.app.new_task.open {
             if event.keystroke.key == "escape" && self.app.new_task.reviewer_menu {
                 self.app.new_task_command(
@@ -1736,6 +1770,12 @@ impl Render for TesselGpuiRoot {
             ),
         ) {
             cx.drop_image(retired, Some(window));
+        }
+        if snapshot.toolbar.layout_menu_right.is_some()
+            && chrome::toolbar_fit_level(&snapshot, viewport_w) != 0
+        {
+            self.app.apply_gpui_action(GpuiAction::LayoutMenu(None));
+            cx.notify();
         }
         if self.app.gpui_issues_menu_open() && chrome::toolbar_fit_level(&snapshot, viewport_w) != 0
         {

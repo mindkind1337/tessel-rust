@@ -5,7 +5,7 @@
 
 use super::{Launch, Overlay, Session, SettingsSection, Store, Tessel, View, floating_terminal};
 use crate::i18n::tr;
-use crate::pane_grid::{FocusDir, GridPreset, PxRect, SplitDir};
+use crate::pane_grid::{FocusDir, PxRect, SplitDir};
 use crate::theme_palettes::ThemeId;
 use crate::workspace::{KeepAwakeSetting, RendererPreference, SideTab, Workspace};
 use std::{
@@ -75,6 +75,7 @@ pub(crate) struct GpuiExtraUiState {
     pub dummy_egui_ctx: eframe::egui::Context,
     pub usage_popover_open: bool,
     pub toolbar_more_open: bool,
+    pub layout_menu_right: Option<f32>,
     pub issues_menu_open: bool,
     pub notifications_popover_open: bool,
     pub status_popover: Option<crate::status_strip::StatusBarItemId>,
@@ -122,6 +123,7 @@ impl Default for GpuiExtraUiState {
             dummy_egui_ctx: eframe::egui::Context::default(),
             usage_popover_open: false,
             toolbar_more_open: false,
+            layout_menu_right: None,
             issues_menu_open: false,
             notifications_popover_open: false,
             status_popover: None,
@@ -247,7 +249,10 @@ pub(crate) struct GpuiToolbarSnapshot {
     pub share_pill_badge: Option<String>,
     pub share_pill_dot_live: bool,
     pub more_menu_open: bool,
+    pub layout_menu_right: Option<f32>,
     pub issues_menu_open: bool,
+    pub has_layout_pane: bool,
+    pub can_apply_grid: bool,
     pub can_arrange_panes: bool,
     pub waiting_agents_count: usize,
     pub first_waiting_pane: Option<u64>,
@@ -803,8 +808,8 @@ pub(crate) enum GpuiAction {
     ToggleMaximizeSession(u64),
     ToggleSessionBroadcast(u64),
     ToggleBroadcastMode,
-    ApplyGridPreset(GridPreset),
-    AutoTilePanes,
+    LayoutMenu(Option<f32>),
+    ChooseLayout(crate::layout_broadcast_ui::LayoutMenuAction),
     ResizeSplitDivider {
         split_id: String,
         dir: SplitDir,
@@ -2254,6 +2259,7 @@ impl Tessel {
     fn gpui_has_aux_modal_except_sessions(&self) -> bool {
         self.new_task.open
             || self.linear.view.open
+            || self.gpui_extra.layout_menu_right.is_some()
             || self.gpui_extra.issues_menu_open
             || self.gpui_extra.launch_menu_open
             || self.gpui_extra.toolbar_more_open
@@ -3894,14 +3900,12 @@ impl Tessel {
                 share_pill_tooltip: share_snap.pill_tooltip,
                 share_pill_badge: share_snap.pill_badge,
                 share_pill_dot_live: share_snap.pill_dot_live,
+                layout_menu_right: self.gpui_extra.layout_menu_right,
+                has_layout_pane: !project_session_ids.is_empty(),
+                can_apply_grid: !project_session_ids.is_empty() || self.sessions.len() < 100,
                 more_menu_open: self.gpui_extra.toolbar_more_open,
                 issues_menu_open: self.gpui_extra.issues_menu_open,
-                can_arrange_panes: self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.project == self.state.active_project)
-                    .count()
-                    >= 2,
+                can_arrange_panes: project_session_ids.len() >= 2,
                 waiting_agents_count: total_waiting_agents,
                 first_waiting_pane,
                 unread_notifications: self.notifications.unread_count(),
@@ -5497,12 +5501,14 @@ impl Tessel {
                 self.state.broadcast = !self.state.broadcast;
                 self.save();
             }
-            GpuiAction::ApplyGridPreset(preset) => {
-                self.apply_grid_preset(preset);
+            GpuiAction::LayoutMenu(right) => {
+                self.gpui_extra.layout_menu_right = right;
             }
-            GpuiAction::AutoTilePanes => {
-                self.tile_sessions(None);
-                self.save();
+            GpuiAction::ChooseLayout(action) => {
+                if self.gpui_extra.layout_menu_right.take().is_some() {
+                    self.apply_layout_action(action);
+                    self.save();
+                }
             }
             GpuiAction::ResizeSplitDivider {
                 split_id,
@@ -7585,6 +7591,7 @@ impl Tessel {
                 self.finder.close();
                 self.gpui_extra.launch_menu_open = false;
                 self.gpui_extra.usage_popover_open = false;
+                self.gpui_extra.layout_menu_right = None;
                 self.gpui_extra.toolbar_more_open = false;
                 self.gpui_extra.issues_menu_open = false;
                 self.gpui_extra.notifications_popover_open = false;

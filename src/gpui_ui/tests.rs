@@ -18,6 +18,86 @@ use serde_json::json;
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn toolbar_layout_menu_changes_the_grid_only_after_a_choice(cx: &mut gpui::TestAppContext) {
+    use gpui::MouseButton::Left;
+    let temp = tempfile::tempdir().unwrap();
+    let view = cx.add_window(|w, cx| {
+        w.activate();
+        let mut root =
+            super::TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+        root.dispatch(GpuiAction::AddProjectPath(temp.path().to_owned()), cx);
+        root.app.install_terminal_find_fixture();
+        root.app.install_terminal_find_fixture();
+        root
+    });
+    let click = |name: &'static str, cx: &mut gpui::TestAppContext| {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds(name).unwrap().center();
+        visual.simulate_mouse_down(point, Left, Default::default());
+        visual.simulate_mouse_up(point, Left, Default::default());
+    };
+    let panes = |cx: &mut gpui::TestAppContext| {
+        view.update(cx, |root, _, _| {
+            root.app.gpui_snapshot(1000., 700., 4.).tiles
+        })
+        .unwrap()
+    };
+    let original: Vec<_> = panes(cx).iter().map(|tile| tile.session_id).collect();
+    click("toolbar-layout", cx);
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    for id in [
+        "layout-1x2",
+        "layout-2x1",
+        "layout-2x2",
+        "layout-3x2",
+        "layout-3x3",
+    ] {
+        assert!(visual.debug_bounds(id).is_some(), "{id}");
+    }
+    assert!(visual.debug_bounds("layout-arrange").is_some());
+    cx.simulate_keystrokes(view.into(), "escape");
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("toolbar-layout-menu")
+            .is_none()
+    );
+    click("toolbar-layout", cx);
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(view.into(), "tab tab tab");
+    cx.refresh().unwrap();
+    let enter = gpui::Keystroke::parse("enter").unwrap();
+    cx.dispatch_keystroke(view.into(), enter.clone());
+    gpui::VisualTestContext::from_window(view.into(), cx)
+        .simulate_event(gpui::KeyUpEvent { keystroke: enter });
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("toolbar-layout-menu")
+            .is_none()
+    );
+    click("toolbar-layout", cx);
+    click("layout-2x1", cx);
+    cx.refresh().unwrap();
+    assert!(
+        gpui::VisualTestContext::from_window(view.into(), cx)
+            .debug_bounds("toolbar-layout-menu")
+            .is_none()
+    );
+    let tiles = panes(cx);
+    assert_eq!(
+        tiles.iter().map(|tile| tile.session_id).collect::<Vec<_>>(),
+        original
+    );
+    assert_eq!(tiles.len(), 2);
+    assert_ne!(tiles[0].rect_px.left, tiles[1].rect_px.left);
+    assert_eq!(tiles[0].rect_px.top, tiles[1].rect_px.top);
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn maximized_grid_restores_on_escape_and_project_switch(cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let mut terminals = Vec::new();

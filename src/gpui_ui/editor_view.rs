@@ -2309,6 +2309,7 @@ pub(crate) fn render_browser_stage(
                     let w = f32::from(bounds.size.width);
                     let h = f32::from(bounds.size.height);
                     let _ = view_entity.update(cx, |root, cx| {
+                        let can_show = can_show && !root.app.gpui_has_open_modal();
                         if root
                             .app
                             .browser

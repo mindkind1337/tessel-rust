@@ -1749,6 +1749,7 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        self.gpui_extra.layout_menu_right = None;
         let visible = crate::terminal_layout::project_key(self.state.active_project);
         for (key, layout) in &mut self.state.terminal_layouts {
             if key != &visible {
@@ -13109,6 +13110,7 @@ impl Tessel {
         if self.linear.view.open {
             return;
         }
+        self.gpui_extra.layout_menu_right = None;
         self.gpui_extra.issues_menu_open = false;
         self.command_palette.open = false;
         self.toolbar_menu_open = false;

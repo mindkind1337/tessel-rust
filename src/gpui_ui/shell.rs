@@ -15,7 +15,7 @@ use crate::{
         GpuiAction, GpuiCenterMode, GpuiDividerSnapshot, GpuiPaneTileSnapshot,
         GpuiWorkspaceSnapshot,
     },
-    pane_grid::{GridPreset, SplitDir},
+    pane_grid::SplitDir,
     teams_relay::WakeChannel,
     teams_ui::TeamsUiAction,
     workspace::SideTab,
@@ -461,72 +461,7 @@ fn render_view_tabs_bar(
         );
     }
 
-    // Grid preset quick pills on right side of view-tabs bar when in WorkGrid
-    if snapshot.center_mode == GpuiCenterMode::WorkGrid {
-        bar = bar.child(
-            div()
-                .ml_auto()
-                .pr(px(8.0))
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(preset_btn(
-                    "preset-1x2",
-                    "1×2",
-                    GridPreset::OneByTwo,
-                    tokens,
-                    cx,
-                ))
-                .child(preset_btn(
-                    "preset-2x1",
-                    "2×1",
-                    GridPreset::TwoByOne,
-                    tokens,
-                    cx,
-                ))
-                .child(preset_btn(
-                    "preset-2x2",
-                    "2×2",
-                    GridPreset::TwoByTwo,
-                    tokens,
-                    cx,
-                ))
-                .child(preset_btn(
-                    "preset-3x2",
-                    "3×2",
-                    GridPreset::ThreeByTwo,
-                    tokens,
-                    cx,
-                )),
-        );
-    }
-
     bar
-}
-
-fn preset_btn(
-    id: &'static str,
-    label: &'static str,
-    preset: GridPreset,
-    tokens: &GpuiThemeTokens,
-    cx: &mut Context<TesselGpuiRoot>,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(4.0))
-        .bg(tokens.surface)
-        .border_1()
-        .border_color(tokens.border)
-        .text_size(px(10.5))
-        .text_color(tokens.text_dim)
-        .cursor_pointer()
-        .hover(|s| s.bg(tokens.surface_2).text_color(tokens.text_strong))
-        .on_click(cx.listener(move |root, _, _, cx| {
-            root.dispatch(GpuiAction::ApplyGridPreset(preset), cx);
-        }))
-        .child(label)
 }
 
 fn render_no_projects_welcome(

@@ -59,6 +59,9 @@ pub(crate) fn render_active_modals_and_popovers(
     if m.usage_popover_open {
         layers.push(render_usage_popover(m, french, tokens, cx));
     }
+    if let Some(right) = snapshot.toolbar.layout_menu_right {
+        layers.push(render_layout_menu(right, snapshot, tokens, cx));
+    }
     if snapshot.toolbar.more_menu_open {
         layers.push(render_toolbar_more_menu(snapshot, tokens, cx));
     }
@@ -3394,6 +3397,155 @@ fn modal_backdrop(
 
 /// Toolbar `⋯` menu (`App.vue` `.toolbar-menu.align-right`): the hidden secondary buttons'
 /// actions, with their shortcuts and a check on what is on.
+fn render_layout_menu(
+    right: f32,
+    snapshot: &GpuiWorkspaceSnapshot,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    use crate::layout_broadcast_ui::{self as layout, LayoutMenuAction as Action};
+    let fr = snapshot.french;
+    let row = |id: &'static str,
+               label: &'static str,
+               shortcut: &'static str,
+               action: Action,
+               enabled: bool,
+               cx: &mut Context<TesselGpuiRoot>| {
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .role(gpui::Role::MenuItem)
+            .focusable()
+            .tab_stop(enabled)
+            .aria_disabled(!enabled)
+            .aria_label(label)
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(28.))
+            .px(px(9.))
+            .rounded(px(4.))
+            .text_color(if action == Action::CloseActive {
+                tokens.danger
+            } else {
+                tokens.text
+            })
+            .when(!enabled, |el| el.opacity(0.45))
+            .when(enabled, |el| {
+                el.cursor_pointer()
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.dispatch_action(GpuiAction::ChooseLayout(action), cx)
+                    }))
+            })
+            .child(label)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(tokens.text_dim)
+                    .child(shortcut),
+            )
+    };
+    let mut chips = div().flex().gap(px(4.)).px(px(4.));
+    for preset in crate::pane_grid::GridPreset::ALL {
+        let label = layout::preset_display_label(preset);
+        chips = chips.child(
+            div()
+                .id(label)
+                .debug_selector(move || format!("layout-{}", preset.label()))
+                .role(gpui::Role::Button)
+                .aria_label(layout::arrange_preset_tooltip(fr, preset))
+                .focusable()
+                .tab_stop(snapshot.toolbar.can_apply_grid)
+                .aria_disabled(!snapshot.toolbar.can_apply_grid)
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(24.))
+                .rounded(px(4.))
+                .border_1()
+                .border_color(tokens.border)
+                .when(snapshot.toolbar.can_apply_grid, |el| {
+                    el.cursor_pointer()
+                        .hover(|s| s.bg(tokens.surface_2))
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            root.dispatch_action(
+                                GpuiAction::ChooseLayout(Action::ApplyPreset(preset)),
+                                cx,
+                            )
+                        }))
+                })
+                .child(label),
+        );
+    }
+    let active = snapshot.toolbar.has_layout_pane;
+    let divider = || div().h(px(1.)).my(px(3.)).bg(tokens.border);
+    let menu = div()
+        .id("toolbar-layout-menu")
+        .key_context("TesselLayoutMenu")
+        .debug_selector(|| "toolbar-layout-menu".into())
+        .role(gpui::Role::Menu)
+        .flex()
+        .flex_col()
+        .text_size(px(12.))
+        .text_color(tokens.text)
+        .child(row(
+            "layout-split-right",
+            layout::split_right_label(fr),
+            "Ctrl+Shift+E",
+            Action::SplitRight,
+            active,
+            cx,
+        ))
+        .child(row(
+            "layout-split-down",
+            layout::split_down_label(fr),
+            "Ctrl+Shift+O",
+            Action::SplitDown,
+            active,
+            cx,
+        ))
+        .when(snapshot.toolbar.can_arrange_panes, |el| {
+            el.child(row(
+                "layout-arrange",
+                layout::arrange_grid_label(fr),
+                "",
+                Action::ArrangeGrid,
+                true,
+                cx,
+            ))
+        })
+        .child(divider())
+        .child(
+            div()
+                .px(px(8.))
+                .py(px(3.))
+                .text_color(tokens.text_dim)
+                .child(layout::even_grid_heading(fr)),
+        )
+        .child(chips)
+        .child(divider())
+        .child(row(
+            "layout-close",
+            layout::close_active_menu_label(fr),
+            "Ctrl+Shift+W",
+            Action::CloseActive,
+            active,
+            cx,
+        ));
+    popover_card(
+        "toolbar-layout-backdrop",
+        (right - 290.).max(0.),
+        super::theme::TOOLBAR_HEIGHT_PX,
+        290.,
+        tokens,
+        GpuiAction::LayoutMenu(None),
+        menu.into_any_element(),
+        cx,
+    )
+}
+
 fn render_toolbar_more_menu(
     snapshot: &GpuiWorkspaceSnapshot,
     tokens: &GpuiThemeTokens,
