@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) mod blocks;
 pub(crate) mod citations;
 mod questions;
 pub use questions::QuestionView;

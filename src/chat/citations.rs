@@ -17,6 +17,32 @@ pub(crate) fn show_message(
     text: &str,
     clicked: &mut Option<PathBuf>,
 ) {
+    for block in super::blocks::message_blocks(role, text) {
+        match block {
+            super::blocks::Block::Prose(prose) => show_prose(ui, role, prose, clicked),
+            super::blocks::Block::Code { language, text } => {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        if !language.is_empty() {
+                            ui.strong(language);
+                        }
+                        if !text.is_empty()
+                            && ui.small_button(crate::i18n::tr("Copy code")).clicked()
+                        {
+                            ui.ctx().copy_text(text.clone());
+                        }
+                    });
+                    ui.add(
+                        eframe::egui::Label::new(eframe::egui::RichText::new(text).monospace())
+                            .selectable(true),
+                    );
+                });
+            }
+        }
+    }
+}
+
+fn show_prose(ui: &mut eframe::egui::Ui, role: &str, text: &str, clicked: &mut Option<PathBuf>) {
     if let Some(message) = parse(role, text) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -39,9 +65,12 @@ pub(crate) fn show_message(
     }
 }
 
+pub(super) fn assistant_role(role: &str) -> bool {
+    matches!(role, "Codex" | "Claude") || role.starts_with("Codex \u{b7} ")
+}
+
 pub(crate) fn parse(role: &str, source: &str) -> Option<Citations> {
-    if !(matches!(role, "Codex" | "Claude") || role.starts_with("Codex · "))
-        || !(source.contains(":codex-file-citation{") || source.contains("]("))
+    if !assistant_role(role) || !(source.contains(":codex-file-citation{") || source.contains("]("))
     {
         return None;
     }

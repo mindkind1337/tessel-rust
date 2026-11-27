@@ -17,6 +17,106 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 
+fn render_reply_prose(
+    idx: usize,
+    pane_id: u64,
+    role: &str,
+    body: &str,
+    font_size: f32,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::AnyElement {
+    let citations = crate::chat::citations::parse(role, body);
+    div()
+        .when(citations.is_some(), |el| {
+            el.debug_selector(|| "chat-citation-body".into())
+        })
+        .text_size(px(font_size - 0.5))
+        .line_height(px((font_size * 1.42).round()))
+        .when(role.contains("Tool"), |el| {
+            el.font_family(mono_font_family())
+        })
+        .text_color(tokens.text)
+        .child(if let Some(cited) = citations {
+            let (ranges, paths): (Vec<_>, Vec<_>) = cited.links.into_iter().unzip();
+            let styled = gpui::StyledText::new(cited.text).with_highlights(
+                ranges.iter().cloned().map(|range| {
+                    (
+                        range,
+                        gpui::HighlightStyle {
+                            color: Some(gpui::rgb_to_hsla(tokens.accent)),
+                            ..Default::default()
+                        },
+                    )
+                }),
+            );
+            let owner = cx.weak_entity();
+            gpui::InteractiveText::new(("chat-citation", idx), styled)
+                .on_click(ranges, move |index, _, cx| {
+                    cx.stop_propagation();
+                    let _ = owner.update(cx, |root, cx| {
+                        root.dispatch(
+                            GpuiAction::OpenChatCitation(pane_id, paths[index].clone()),
+                            cx,
+                        )
+                    });
+                })
+                .into_any_element()
+        } else {
+            SharedString::from(body.to_owned()).into_any_element()
+        })
+        .into_any_element()
+}
+
+fn render_code_block(
+    idx: usize,
+    language: String,
+    text: String,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> gpui::AnyElement {
+    let copy = text.clone();
+    let bar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(SharedString::from(language))
+        .when(!copy.is_empty(), |bar| {
+            bar.child(
+                div()
+                    .id(("copy-reply-code", idx))
+                    .debug_selector(|| "copy-reply-code".into())
+                    .px(px(6.))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                    }))
+                    .child(if french {
+                        "Copier le code"
+                    } else {
+                        "Copy code"
+                    }),
+            )
+        });
+    div()
+        .min_w_0()
+        .p(px(8.))
+        .bg(tokens.chrome)
+        .rounded(px(6.))
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(bar)
+        .child(
+            div()
+                .font_family(mono_font_family())
+                .child(SharedString::from(text)),
+        )
+        .into_any_element()
+}
+
 pub(crate) fn render_native_chat_pane_body(
     pane_id: u64,
     chat: &NativeChatViewSnapshot,
@@ -169,7 +269,6 @@ pub(crate) fn render_native_chat_pane_body(
         );
     } else {
         for (msg_idx, (role, body)) in chat.messages.iter().enumerate() {
-            let citations = crate::chat::citations::parse(role, body);
             let is_user = role == "You";
             let is_tool = role.contains("Tool");
             let bubble_bg = if is_user {
@@ -209,46 +308,17 @@ pub(crate) fn render_native_chat_pane_body(
                                 .child(SharedString::from(role.clone())),
                         ),
                     )
-                    .child(
-                        div()
-                            .when(citations.is_some(), |el| {
-                                el.debug_selector(|| "chat-citation-body".into())
-                            })
-                            .text_size(px(font_size - 0.5))
-                            .line_height(px((font_size * 1.42).round()))
-                            .when(is_tool, |el| el.font_family(mono_font_family()))
-                            .text_color(tokens.text)
-                            .child(if let Some(cited) = citations {
-                                let (ranges, paths): (Vec<_>, Vec<_>) =
-                                    cited.links.into_iter().unzip();
-                                let styled = gpui::StyledText::new(cited.text).with_highlights(
-                                    ranges.iter().cloned().map(|range| {
-                                        (
-                                            range,
-                                            gpui::HighlightStyle {
-                                                color: Some(gpui::rgb_to_hsla(tokens.accent)),
-                                                ..Default::default()
-                                            },
-                                        )
-                                    }),
-                                );
-                                let owner = cx.weak_entity();
-                                gpui::InteractiveText::new(("chat-citation", msg_idx), styled)
-                                    .on_click(ranges, move |index, _, cx| {
-                                        cx.stop_propagation();
-                                        let _ = owner.update(cx, |root, cx| {
-                                            root.dispatch(
-                                                GpuiAction::OpenChatCitation(
-                                                    pane_id,
-                                                    paths[index].clone(),
-                                                ),
-                                                cx,
-                                            )
-                                        });
-                                    })
-                                    .into_any_element()
-                            } else {
-                                SharedString::from(body.clone()).into_any_element()
+                    .children(
+                        crate::chat::blocks::message_blocks(role, body)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, block)| match block {
+                                crate::chat::blocks::Block::Prose(text) => render_reply_prose(
+                                    index, pane_id, role, text, font_size, tokens, cx,
+                                ),
+                                crate::chat::blocks::Block::Code { language, text } => {
+                                    render_code_block(index, language, text, french, tokens, cx)
+                                }
                             }),
                     ),
             );

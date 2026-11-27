@@ -837,6 +837,8 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("my report.txt"), "original contents").unwrap();
+    let code = "  let text = \"[sample](unused.txt)\";\n";
+    let reply = format!("{reply}\n\n~~~rust\n{code}~~~");
     let view = cx.add_window(|_, cx| {
         let mut root = super::TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
         let app = &mut root.app;
@@ -857,6 +859,18 @@ fn check_chat_file_click(test: &mut gpui::TestAppContext, launch: GpuiAction, re
         root
     });
     cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let copy = visual
+        .debug_bounds("copy-reply-code")
+        .expect("copy button")
+        .center();
+    visual.simulate_mouse_move(copy, None, Default::default());
+    visual.simulate_click(copy, Default::default());
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some(code)
+    );
     let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
     let bounds = visual.debug_bounds("chat-citation-body").unwrap();
     let click = gpui::point(bounds.origin.x + gpui::px(5.), bounds.center().y);
