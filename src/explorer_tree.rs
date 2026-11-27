@@ -13,6 +13,9 @@
 //!   wall-clock budgets, and canonicalized root confinement refusing symlinks and Windows
 //!   junctions (`FILE_ATTRIBUTE_REPARSE_POINT`).
 
+#[path = "explorer_name_search.rs"]
+mod name_search;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write as _,
@@ -242,7 +245,7 @@ impl DirectoryLister for FsDirectoryLister {
         entries.sort_by(|a, b| {
             b.directory
                 .cmp(&a.directory)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .then_with(|| name_search::compare_names(&a.name, &b.name))
         });
         Ok(DirListing { entries, truncated })
     }
@@ -507,6 +510,7 @@ pub struct ExplorerTree {
     expanded_by_project: VecDeque<(String, HashSet<String>)>,
     selected_key: Option<String>,
     selected_hit: Option<(PathBuf, usize)>,
+    name_search: name_search::Search,
     compact_folders: bool,
     show_dotfiles: bool,
     filter_query: String,
@@ -557,6 +561,7 @@ impl ExplorerTree {
             expanded_by_project: VecDeque::new(),
             selected_key: None,
             selected_hit: None,
+            name_search: Default::default(),
             compact_folders: false,
             show_dotfiles: true,
             filter_query: String::new(),
@@ -628,6 +633,7 @@ impl ExplorerTree {
     pub fn set_show_dotfiles(&mut self, show: bool) {
         if self.show_dotfiles != show {
             self.show_dotfiles = show;
+            self.name_search = Default::default();
             self.rows_dirty = true;
         }
     }
@@ -647,6 +653,7 @@ impl ExplorerTree {
     #[allow(dead_code)]
     pub fn set_filter_query(&mut self, query: impl Into<String>) {
         self.filter_query = query.into();
+        self.name_search = Default::default();
         self.gpui_applied_filter = self.filter_query.trim().to_owned();
         self.gpui_filter_due = None;
     }
@@ -829,6 +836,7 @@ impl ExplorerTree {
         self.queued_keys.clear();
         self.selected_key = None;
         self.selected_hit = None;
+        self.name_search = Default::default();
         self.last_row_rects.clear();
         self.content_search_hits.clear();
         self.content_search_limited = false;
@@ -856,6 +864,7 @@ impl ExplorerTree {
         self.gpui_applied_filter = self.filter_query.trim().to_owned();
         self.gpui_filter_due = None;
         let preserved = self.effective_expanded_for_save();
+        self.name_search = Default::default();
         self.generation = self.generation.wrapping_add(1);
         if let Some(task) = &self.in_flight {
             task.cancel.store(true, Ordering::Relaxed);
@@ -923,6 +932,11 @@ impl ExplorerTree {
             }
             if let Some(sel) = &self.selected_key
                 && !self.path_by_key.contains_key(sel)
+                && !self
+                    .name_search
+                    .results
+                    .as_ref()
+                    .is_some_and(|r| r.entries.iter().any(|hit| norm_tree_key(&hit.path) == *sel))
             {
                 self.selected_key = None;
             }
@@ -1149,8 +1163,7 @@ impl ExplorerTree {
                 .on_hover_text(tr("Toggle file name filter vs project text search"))
                 .clicked()
             {
-                self.content_search_mode = !self.content_search_mode;
-                self.content_search_last_key.clear();
+                self.gpui_toggle_search_mode();
             }
             let hint = if self.content_search_mode {
                 tr("Search in files…")
@@ -1158,12 +1171,17 @@ impl ExplorerTree {
                 tr("Filter files…")
             };
             let avail = (ui.available_width() - 28.0_f32).max(60.0_f32);
-            ui.add_sized(
-                [avail, 20.0_f32],
-                egui::TextEdit::singleline(&mut self.filter_query).hint_text(hint),
-            );
+            if ui
+                .add_sized(
+                    [avail, 20.0_f32],
+                    egui::TextEdit::singleline(&mut self.filter_query).hint_text(hint),
+                )
+                .changed()
+            {
+                self.gpui_schedule_filter(Instant::now());
+            }
             if !self.filter_query.is_empty() && ui.small_button("×").clicked() {
-                self.filter_query.clear();
+                self.set_filter_query("");
                 self.content_search_hits.clear();
                 self.content_search_limited = false;
                 self.content_search_last_key.clear();
@@ -1190,6 +1208,47 @@ impl ExplorerTree {
         }
 
         let trimmed_query = self.filter_query.trim().to_owned();
+        self.gpui_advance_filter(Instant::now());
+        if !self.content_search_mode && !trimmed_query.is_empty() {
+            if self.gpui_filter_due.is_none() {
+                self.name_search
+                    .update(&root_path, &trimmed_query, self.show_dotfiles);
+            }
+            if self.gpui_filter_due.is_some() || self.name_search.loading() {
+                ui.ctx().request_repaint_after(Duration::from_millis(40));
+            }
+            if let Some(results) = &self.name_search.results {
+                let mut clicked = None;
+                self.last_row_rects.clear();
+                if results.truncated {
+                    ui.small(tr("Search limit reached; some files are not listed."));
+                }
+                if results.entries.is_empty() {
+                    ui.label(tr("No matching files."));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("explorer-name-hits")
+                    .show_rows(ui, 22., results.entries.len(), |ui, range| {
+                        for index in range {
+                            let hit = &results.entries[index];
+                            let label = hit
+                                .path
+                                .strip_prefix(&root_path)
+                                .unwrap_or(&hit.path)
+                                .display()
+                                .to_string();
+                            let row = ui.selectable_label(
+                                self.selected_key.as_ref() == Some(&norm_tree_key(&hit.path)),
+                                label,
+                            );
+                            if row.clicked() {
+                                clicked = Some((hit.clone(), row.double_clicked()));
+                            }
+                        }
+                    });
+                return clicked.and_then(|(hit, pinned)| self.choose_name_result(hit, pinned));
+            }
+        }
         if self.content_search_mode && !trimmed_query.is_empty() {
             let query_key = format!("{}::{trimmed_query}", root_key);
             if self.content_search_last_key != query_key {
@@ -1575,6 +1634,7 @@ impl ExplorerTree {
     }
     fn gpui_schedule_filter(&mut self, now: Instant) {
         // Drop cancels an obsolete content worker before accepting any result.
+        self.name_search = Default::default();
         self.content_search_task = None;
         self.content_search_last_key.clear();
         if self.filter_query.trim().is_empty() {
@@ -1594,12 +1654,46 @@ impl ExplorerTree {
         }
     }
     pub(crate) fn gpui_needs_frame(&self) -> bool {
-        self.is_loading() || self.content_search_task.is_some() || self.gpui_filter_due.is_some()
+        self.is_loading()
+            || self.name_search.loading()
+            || self.content_search_task.is_some()
+            || self.gpui_filter_due.is_some()
     }
     #[allow(dead_code)]
     pub(crate) fn gpui_toggle_search_mode(&mut self) {
         self.content_search_mode = !self.content_search_mode;
         self.gpui_schedule_filter(Instant::now());
+    }
+
+    fn choose_name_result(&mut self, entry: TreeDirEntry, pinned: bool) -> Option<TreeAction> {
+        self.selected_key = Some(norm_tree_key(&entry.path));
+        self.selected_hit = None;
+        if !entry.directory {
+            return Some(if pinned {
+                TreeAction::OpenPinnedFile(entry.path)
+            } else {
+                TreeAction::OpenFile(entry.path)
+            });
+        }
+        let root = self.project_root.clone()?;
+        let rel = entry.path.strip_prefix(&root).ok()?;
+        self.set_filter_query("");
+        let mut parent = root;
+        for (index, component) in rel.components().enumerate() {
+            if index + 1 > self.limits.max_depth
+                || self.open_dirs.len() >= self.limits.max_cached_dirs
+            {
+                self.truncated = true;
+                break;
+            }
+            parent.push(component);
+            self.open_dirs.insert(norm_tree_key(&parent));
+            self.enqueue_dir(parent.clone(), index + 1);
+        }
+        self.rows_dirty = true;
+        self.save_current_expanded();
+        self.pump_worker();
+        None
     }
 
     fn hit_selected(&self, hit: &ContentMatch) -> bool {
@@ -1615,6 +1709,14 @@ impl ExplorerTree {
 
     #[allow(dead_code)]
     pub(crate) fn gpui_click_row(&mut self, key: &str, pinned: bool) -> Option<TreeAction> {
+        if let Some(results) = &self.name_search.results {
+            let hit = results
+                .entries
+                .iter()
+                .find(|e| norm_tree_key(&e.path) == key)?
+                .clone();
+            return self.choose_name_result(hit, pinned);
+        }
         let idx = self.cached_tree.rows.iter().position(|r| r.path == key)?;
         let row = self.cached_tree.rows[idx].clone();
         let row_path = self
@@ -1756,6 +1858,48 @@ impl ExplorerTree {
         }
 
         let active_key = active.map(norm_tree_key);
+        if !trimmed_query.is_empty() && self.gpui_filter_due.is_none() {
+            self.name_search
+                .update(&root_path, &trimmed_query, self.show_dotfiles);
+            if let Some(results) = &self.name_search.results {
+                let rows = results
+                    .entries
+                    .iter()
+                    .map(|hit| {
+                        let key = norm_tree_key(&hit.path);
+                        ExplorerGpuiRow {
+                            selected: self.selected_key.as_ref() == Some(&key),
+                            active_doc: active_key.as_ref() == Some(&key),
+                            key,
+                            path: hit.path.clone(),
+                            name: hit.name.clone(),
+                            display_name: hit
+                                .path
+                                .strip_prefix(&root_path)
+                                .unwrap_or(&hit.path)
+                                .display()
+                                .to_string(),
+                            depth: 0,
+                            dir: hit.directory,
+                            open: false,
+                        }
+                    })
+                    .collect();
+                return ExplorerGpuiSnapshot {
+                    has_root: true,
+                    root_path,
+                    root_title,
+                    new_target_dir,
+                    filter_query: self.filter_query.clone(),
+                    show_dotfiles: self.show_dotfiles,
+                    compact_folders: self.compact_folders,
+                    rows,
+                    truncated: results.truncated,
+                    loading: self.gpui_needs_frame(),
+                    ..Default::default()
+                };
+            }
+        }
         let filter_lc = trimmed_query.to_lowercase();
         let mut rows: Vec<_> = self
             .cached_tree
@@ -1883,6 +2027,87 @@ mod native_filter_tests {
             vec![],
         )
     }
+    #[test]
+    fn filename_search_opens_files_and_reveals_folders_below_collapsed_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("unopened").join("MatchFolder");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("MATCH.txt");
+        std::fs::write(&file, "unused").unwrap();
+        for skipped in [".hidden", "node_modules"] {
+            std::fs::create_dir(root.join(skipped)).unwrap();
+            std::fs::write(root.join(skipped).join("match.txt"), []).unwrap();
+        }
+        std::fs::write(nested.join("other.txt"), []).unwrap();
+        let mut tree = ExplorerTree::new();
+        tree.set_show_dotfiles(false);
+        tree.set_root(Some(root));
+        tree.set_filter_query("match");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let snapshot = loop {
+            let view = tree.gpui_rows_snapshot(Some(root), None);
+            if !view.loading {
+                break view;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(
+            snapshot
+                .rows
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            ["MatchFolder", "MATCH.txt"]
+        );
+        assert_eq!(
+            tree.gpui_click_row(&snapshot.rows[1].key, false),
+            Some(TreeAction::OpenFile(file))
+        );
+        assert_eq!(tree.gpui_click_row(&snapshot.rows[0].key, false), None);
+        assert_eq!(tree.gpui_filter_query(), "");
+        let revealed = loop {
+            let view = tree.gpui_rows_snapshot(Some(root), None);
+            if !view.loading {
+                break view;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert!(
+            revealed
+                .rows
+                .iter()
+                .any(|r| r.path == nested && r.open && r.selected)
+        );
+        assert!(revealed.rows.iter().any(|r| r.name == "other.txt"));
+    }
+
+    #[test]
+    fn filename_search_orders_numeric_names_and_reports_the_result_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..501 {
+            std::fs::write(dir.path().join(format!("entry{n}")), []).unwrap();
+        }
+        let mut tree = ExplorerTree::new();
+        tree.set_root(Some(dir.path()));
+        tree.set_filter_query("entry");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = tree.gpui_rows_snapshot(Some(dir.path()), None);
+            if !snapshot.loading {
+                assert_eq!(snapshot.rows.len(), 500);
+                assert!(snapshot.truncated);
+                assert_eq!(snapshot.rows[2].name, "entry2");
+                assert_eq!(snapshot.rows[499].name, "entry499");
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
     fn native_filter_content_budgets_bound_entries_files_hits_and_deadline() {
         let dir = tempfile::tempdir().unwrap();
