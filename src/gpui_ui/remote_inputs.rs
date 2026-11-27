@@ -397,6 +397,14 @@ mod tests {
         });
         cx.refresh().unwrap();
         let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        assert_eq!(
+            visual
+                .debug_bounds("remote-file-icon-0")
+                .unwrap()
+                .size
+                .width,
+            gpui::px(16.)
+        );
         let rect = visual
             .debug_bounds("remote-preview-pixels")
             .expect("SSH image");

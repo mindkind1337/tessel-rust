@@ -268,6 +268,10 @@ pub(crate) fn render(
                                 div()
                                     .id(("remote-open", index))
                                     .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
                                     .px(px(5.))
                                     .when(free, |el| {
                                         el.cursor_pointer().on_click(cx.listener(
@@ -279,11 +283,31 @@ pub(crate) fn render(
                                             },
                                         ))
                                     })
-                                    .child(SharedString::from(if *directory {
-                                        format!("▸ {name}")
-                                    } else {
-                                        format!("{name} · {size} B")
-                                    })),
+                                    .when_else(
+                                        *directory,
+                                        |el| {
+                                            el.child(
+                                                super::icons::GpuiIcon::ChevronRight
+                                                    .render(12., palette.text_dim),
+                                            )
+                                        },
+                                        |el| {
+                                            el.child(
+                                                super::file_icons::render(
+                                                    name,
+                                                    &palette,
+                                                    palette.text_dim,
+                                                )
+                                                .debug_selector(move || {
+                                                    format!("remote-file-icon-{index}")
+                                                }),
+                                            )
+                                        },
+                                    )
+                                    .child(div().min_w_0().truncate().child(name.clone()))
+                                    .when(!*directory, |el| {
+                                        el.child(div().flex_shrink_0().child(format!("· {size} B")))
+                                    }),
                             )
                             .child(
                                 div()

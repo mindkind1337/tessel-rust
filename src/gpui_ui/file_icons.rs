@@ -1,6 +1,6 @@
 use super::theme::GpuiThemeTokens;
 use crate::theme_palettes::FileIconStyle;
-use gpui::{App, IntoElement, ParentElement, Rgba, Styled, div, prelude::FluentBuilder, px};
+use gpui::{App, Div, ParentElement, Rgba, Styled, div, prelude::FluentBuilder, px};
 use serde::Deserialize;
 use std::{borrow::Cow, collections::HashMap, sync::OnceLock};
 
@@ -55,7 +55,7 @@ impl Catalog {
     }
 }
 
-pub(super) fn render(path: &str, tokens: &GpuiThemeTokens, fallback: Rgba) -> impl IntoElement {
+pub(super) fn render(path: &str, tokens: &GpuiThemeTokens, fallback: Rgba) -> Div {
     let slot = div()
         .size(px(16.))
         .flex_shrink_0()

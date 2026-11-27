@@ -449,6 +449,10 @@ fn native_guest_files_open_text_and_host_history(cx: &mut TestAppContext) {
             let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
             if let Some(bounds) = visual.debug_bounds(selector) {
                 if selector == "guest-entry-0" && !checked_download {
+                    assert_eq!(
+                        visual.debug_bounds("guest-file-icon-0").unwrap().size.width,
+                        gpui::px(16.)
+                    );
                     visual.simulate_mouse_down(
                         bounds.center(),
                         gpui::MouseButton::Right,

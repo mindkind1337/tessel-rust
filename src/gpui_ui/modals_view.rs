@@ -1035,9 +1035,28 @@ fn render_share_modal(
                                 path: entry.path.clone(),
                             })
                         };
-                        let button = modal_btn(
+                        let label = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .when_else(
+                                entry.directory,
+                                |el| el.child(GpuiIcon::ChevronRight.render(12., tokens.text_dim)),
+                                |el| {
+                                    el.child(
+                                        super::file_icons::render(
+                                            &entry.name,
+                                            tokens,
+                                            tokens.text_dim,
+                                        )
+                                        .debug_selector(move || format!("guest-file-icon-{index}")),
+                                    )
+                                },
+                            )
+                            .child(div().min_w_0().truncate().child(entry.name.clone()));
+                        let button = modal_btn_content(
                             format!("guest-entry-{index}"),
-                            format!("{} {}", if entry.directory { "▸" } else { "·" }, entry.name),
+                            label,
                             false,
                             tokens,
                             GpuiAction::Share(action),
@@ -3503,6 +3522,17 @@ fn modal_btn(
     action: GpuiAction,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
+    modal_btn_content(id, SharedString::from(label), active, tokens, action, cx)
+}
+
+fn modal_btn_content(
+    id: impl Into<SharedString>,
+    label: impl IntoElement,
+    active: bool,
+    tokens: &GpuiThemeTokens,
+    action: GpuiAction,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
     let sid: SharedString = id.into();
     div()
         .id(sid.clone())
@@ -3532,7 +3562,7 @@ fn modal_btn(
         .on_click(cx.listener(move |this, _, _, cx| {
             this.dispatch_action(action.clone(), cx);
         }))
-        .child(SharedString::from(label))
+        .child(label)
         .into_any_element()
 }
 
