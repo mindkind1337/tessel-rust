@@ -586,6 +586,27 @@ mod openssh_tests {
         assert!(!retry.pending());
     }
 
+    fn assert_clean_command(terminal: &mut Terminal, root: &str, marker: &str) {
+        terminal
+            .run_quick_command(&format!(r#"echo {marker} > "$HOME/first-command""#), true)
+            .unwrap();
+        let observed = wsl(&[
+            "sh",
+            "-c",
+            r#"
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                if test -s "$1/first-command"; then cat "$1/first-command"; exit; fi
+                sleep 0.1
+            done
+            TMUX_TMPDIR="$1" tmux -L tessel capture-pane -p
+        "#,
+            "sh",
+            root,
+        ]);
+        assert_eq!(observed, marker);
+        wsl(&["rm", "--", &format!("{root}/first-command")]);
+    }
+
     #[test]
     #[ignore = "requires WSL with OpenSSH server, public-key login to self, and tmux"]
     fn ssh_reconnect_after_transport_loss_keeps_the_remote_process_and_honors_exit_255() {
@@ -614,6 +635,7 @@ mod openssh_tests {
         wait_until(&mut first, |t| {
             t.ssh_channel.as_ref().unwrap().opened.is_some() && t.output().contains('$')
         });
+        assert_clean_command(&mut first, root, "initial");
         let first_pid = pid();
         assert!(first_pid.parse::<u32>().is_ok());
         wsl(&[
@@ -639,6 +661,7 @@ mod openssh_tests {
         });
         assert!(second.accepts_broadcast_input());
         assert_eq!(pid(), first_pid);
+        assert_clean_command(&mut second, root, "reattached");
         // End the remote session directly. tmux reports success when its last
         // pane closes; check a remote program's explicit 255 separately below.
         wsl(&[

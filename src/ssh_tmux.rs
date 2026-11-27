@@ -4,7 +4,7 @@
 //! Mirrors Tessel's `remoteShellTmux.js` and `tmuxBinaries.js`:
 //! - Uses isolated socket `-L tessel` (`TMUX_SOCKET`) and per-pane session `tessel-<id>`.
 //! - System `tmux` on `PATH` always takes precedence over bundled `~/.tessel-server/bin/tmux`.
-//! - Applies `status off`, `history-limit 50000`, `screen-256color`, `escape-time 10`,
+//! - Applies `status off`, `history-limit 50000`, `screen-256color`, a platform-specific escape timeout,
 //!   `focus-events on`, `mouse on`, `set-clipboard on`, alternate-screen wheel forwarding, and
 //!   RGB + OSC 52 `terminal-overrides`, plus `prefix None` only on `tmux >= 3.2`.
 //! - Fresh pane creation (`reattach = false`) kills any stale `=<name>` session before creating
@@ -237,7 +237,9 @@ pub fn tmux_server_options(version: Option<TmuxVersion>) -> Vec<String> {
         "set -g status off".to_owned(),
         "set -g history-limit 50000".to_owned(),
         "set -g default-terminal \"screen-256color\"".to_owned(),
-        "set -sg escape-time 10".to_owned(),
+        // Windows OpenSSH can deliver a ConPTY device-attribute response in
+        // fragments. tmux must finish decoding it before forwarding shell input.
+        format!("set -sg escape-time {}", if cfg!(windows) { 50 } else { 10 }),
         "set -g focus-events on".to_owned(),
         "set -g mouse on".to_owned(),
         "set -g set-clipboard on".to_owned(),
