@@ -556,14 +556,11 @@ fn render_editor_toolbar(
                 .items_center()
                 .gap(px(8.0))
                 .overflow_hidden()
-                .child(
-                    if doc.is_diff {
-                        GpuiIcon::FileDiff
-                    } else {
-                        GpuiIcon::FileCode
-                    }
-                    .render(13.0, tokens.accent),
-                )
+                .child(super::file_icons::render(
+                    &doc.path_display,
+                    tokens,
+                    tokens.text_dim,
+                ))
                 .child(
                     div()
                         .text_size(px(11.5))

@@ -8,6 +8,16 @@
 use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(test, allow(dead_code))] // Standalone palette fixtures also include this module.
+pub enum FileIconStyle {
+    #[default]
+    Color,
+    Mono,
+    Off,
+}
+
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }

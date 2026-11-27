@@ -369,3 +369,37 @@ The HTML outline provider follows Microsoft’s vscode-html-languageservice pars
 The JSON outline provider follows the document symbol behavior of Microsoft's vscode-json-languageservice bundled with Monaco. Its differential fixtures are generated from the installed provider with synthetic documents under the Microsoft MIT notice above.
 
 The JavaScript and TypeScript outline parses source with the MIT-licensed Oxc Rust parser (https://github.com/oxc-project/oxc). Its synthetic differential fixtures use the TypeScript language service (Apache-2.0) bundled with Monaco and Monaco's MIT-licensed document-symbol adapter.
+
+## Seti file icons
+
+
+VS Code's file icon font and colours (`resources/file-icons/seti.ttf`
+and `seti.json`) come from Seti UI, through VS Code's `theme-seti`.
+
+- Project: https://github.com/jesseweed/seti-ui
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Jesse Weed
+Copyright (c) Microsoft Corporation (VS Code theme and file associations)
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```

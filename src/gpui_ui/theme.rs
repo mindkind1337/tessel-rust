@@ -86,6 +86,7 @@ pub fn color_mix_srgb(a: Rgba, weight_a: f32, b: Rgba) -> Rgba {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuiThemeTokens {
+    pub file_icons: crate::theme_palettes::FileIconStyle,
     pub id: ThemeId,
     pub radius_px: f32,
     pub bg: Rgba,
@@ -142,6 +143,7 @@ impl GpuiThemeTokens {
 
         Self {
             id: theme,
+            file_icons: Default::default(),
             radius_px: spec.radius_px,
             bg: backdrop,
             panel: chrome,

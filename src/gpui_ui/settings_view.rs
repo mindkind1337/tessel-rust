@@ -544,6 +544,49 @@ fn render_appearance_page(
             tokens,
         ))
         .child(theme_grid)
+        .child(section_title(
+            if french {
+                "Icônes de fichiers"
+            } else {
+                "File icons"
+            },
+            tokens,
+        ))
+        .child(
+            div().flex().flex_wrap().gap(px(6.)).children(
+                [
+                    (
+                        "file-icons-color",
+                        crate::theme_palettes::FileIconStyle::Color,
+                        "In colour, like VS Code",
+                        "En couleur, comme VS Code",
+                    ),
+                    (
+                        "file-icons-mono",
+                        crate::theme_palettes::FileIconStyle::Mono,
+                        "One colour",
+                        "Une seule couleur",
+                    ),
+                    (
+                        "file-icons-off",
+                        crate::theme_palettes::FileIconStyle::Off,
+                        "None",
+                        "Aucune",
+                    ),
+                ]
+                .into_iter()
+                .map(|(id, style, en, fr)| {
+                    setting_btn(
+                        id,
+                        (if french { fr } else { en }).into(),
+                        style == snapshot.file_icons,
+                        tokens,
+                        GpuiAction::SetFileIcons(style),
+                        cx,
+                    )
+                }),
+            ),
+        )
         .child(renderer_section)
         .child(font_section)
         .into_any_element()

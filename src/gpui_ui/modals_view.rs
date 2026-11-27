@@ -316,14 +316,22 @@ fn render_file_finder(
                 .font_family(mono_font_family())
                 .text_size(px(11.5))
                 .text_color(tokens.text_strong)
-                .truncate()
+                .flex()
+                .items_center()
+                .gap(px(6.))
                 .hover(|s| s.bg(tokens.surface_2))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(scope) = scope {
                         super::search_inputs::choose(this, scope, &query, &relative, cx);
                     }
                 }))
-                .child(SharedString::from(rel.clone())),
+                .child(super::file_icons::render(rel, tokens, tokens.text_dim))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(rel.clone())),
+                ),
         );
     }
 

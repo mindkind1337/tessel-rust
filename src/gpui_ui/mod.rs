@@ -13,6 +13,7 @@ mod editor_syntax;
 mod editor_tool_inputs;
 pub mod editor_view;
 mod explorer_input;
+mod file_icons;
 pub mod icons;
 mod image_menu;
 mod issues_menu;
@@ -154,6 +155,7 @@ impl TesselGpuiRoot {
     }
 
     fn from_app(app: Tessel, repaint_flag: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
+        file_icons::register(cx);
         private_key_input::register(cx);
         cx.bind_keys([
             gpui::KeyBinding::new("enter", new_task_view::Submit, Some("TesselNewTaskLine")),
@@ -1637,7 +1639,10 @@ impl Render for TesselGpuiRoot {
         }
         self.linear_view.sync(&self.app.linear.view, window, cx);
         self.new_task_view.sync(&self.app.new_task, window, cx);
-        let tokens = GpuiThemeTokens::from_theme(snapshot.theme);
+        let tokens = GpuiThemeTokens {
+            file_icons: snapshot.file_icons,
+            ..GpuiThemeTokens::from_theme(snapshot.theme)
+        };
         let is_maximized = window.is_maximized();
 
         let mut image_menu = image_menu::Menu::current(&snapshot, self.app.gpui_has_open_modal());

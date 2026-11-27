@@ -714,6 +714,7 @@ pub(crate) struct GpuiWorkspaceSnapshot {
     #[cfg(windows)]
     pub held_html_link: Option<(u64, url::Url)>,
     pub theme: ThemeId,
+    pub file_icons: crate::theme_palettes::FileIconStyle,
     pub dark: bool,
     pub french: bool,
     pub font_size: f32,
@@ -1225,6 +1226,7 @@ pub(crate) enum GpuiAction {
     ConfirmModalSecondary,
     CancelConfirmModal,
     SetTheme(ThemeId),
+    SetFileIcons(crate::theme_palettes::FileIconStyle),
     SetLanguage {
         french: bool,
     },
@@ -3702,6 +3704,7 @@ impl Tessel {
             #[cfg(windows)]
             held_html_link: self.editor_page.external_prompt(),
             theme,
+            file_icons: self.state.file_icons,
             dark: self.state.dark,
             french,
             editor_font_size: self.state.editor_prefs.font_size,
@@ -7590,6 +7593,12 @@ impl Tessel {
                 self.pending_agent_install = None;
                 self.pending_transcript_trash = None;
                 self.file_action = None;
+            }
+            GpuiAction::SetFileIcons(style) => {
+                if self.state.file_icons != style {
+                    self.state.file_icons = style;
+                    self.save();
+                }
             }
             GpuiAction::SetTheme(theme) => {
                 if self.state.theme != Some(theme) {

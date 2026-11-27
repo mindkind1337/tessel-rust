@@ -200,12 +200,24 @@ fn render_view_tabs_bar(
         let doc_index = tab.doc_index;
         let kind = tab.kind;
         let closable = tab.closable;
+        let tint = if selected {
+            tokens.accent
+        } else {
+            tokens.text_dim
+        };
         let icon = match kind {
-            crate::view_tabs::Kind::Terminal => GpuiIcon::Terminal,
+            crate::view_tabs::Kind::Terminal => GpuiIcon::Terminal
+                .render(14., tint)
+                .flex_shrink_0()
+                .into_any_element(),
             #[cfg(windows)]
-            crate::view_tabs::Kind::Browser => GpuiIcon::Globe,
-            crate::view_tabs::Kind::Diff => GpuiIcon::FileDiff,
-            crate::view_tabs::Kind::Editor => GpuiIcon::FileCode,
+            crate::view_tabs::Kind::Browser => GpuiIcon::Globe
+                .render(14., tint)
+                .flex_shrink_0()
+                .into_any_element(),
+            crate::view_tabs::Kind::Editor | crate::view_tabs::Kind::Diff => {
+                super::file_icons::render(&tab.hint, tokens, tint).into_any_element()
+            }
         };
         let close = match kind {
             #[cfg(windows)]
@@ -294,17 +306,7 @@ fn render_view_tabs_bar(
                             .bg(tokens.accent),
                     )
                 })
-                .child(
-                    icon.render(
-                        14.,
-                        if selected {
-                            tokens.accent
-                        } else {
-                            tokens.text_dim
-                        },
-                    )
-                    .flex_shrink_0(),
-                )
+                .child(icon)
                 .child(
                     div()
                         .min_w_0()

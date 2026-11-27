@@ -526,15 +526,16 @@ fn render_explorer_tab(
             let del_path = row.path.clone();
             let indent = (row.depth as f32) * 12.0;
             let icon = if row.dir {
-                if row.open {
+                let arrow = if row.open {
                     GpuiIcon::ChevronDown
                 } else {
                     GpuiIcon::ChevronRight
-                }
+                };
+                arrow.render(11.5, tokens.accent).into_any_element()
             } else {
-                GpuiIcon::FileCode
+                super::file_icons::render(&row.display_name, tokens, tokens.text_dim)
+                    .into_any_element()
             };
-
             scroll = scroll.child(
                 div()
                     .id(("gpui-ex-row", idx as u64))
@@ -568,14 +569,7 @@ fn render_explorer_tab(
                             .flex()
                             .items_center()
                             .gap(px(5.0))
-                            .child(icon.render(
-                                11.5,
-                                if row.dir {
-                                    tokens.accent
-                                } else {
-                                    tokens.text_dim
-                                },
-                            ))
+                            .child(icon)
                             .child(
                                 div()
                                     .text_size(px(11.5))
@@ -1235,6 +1229,11 @@ fn render_scm_changes_tab(
                                     .text_size(px(10.5))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(tokens.accent)
+                                    .child(super::file_icons::render(
+                                        &entry.path,
+                                        tokens,
+                                        tokens.text_dim,
+                                    ))
                                     .child(st_code),
                             )
                             .child(

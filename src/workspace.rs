@@ -13,6 +13,8 @@ const fn default_pane_broadcast() -> bool {
     true
 }
 
+use crate::theme_palettes::FileIconStyle;
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RendererPreference {
@@ -708,6 +710,8 @@ pub struct Workspace {
     pub dark: bool,
     pub theme: Option<crate::theme_palettes::ThemeId>,
     #[serde(default)]
+    pub file_icons: FileIconStyle,
+    #[serde(default)]
     pub renderer: RendererPreference,
     pub language: crate::i18n::Language,
     pub columns: usize,
@@ -769,6 +773,7 @@ impl Default for Workspace {
             active_project: None,
             dark: true,
             theme: None,
+            file_icons: FileIconStyle::default(),
             renderer: Default::default(),
             language: Default::default(),
             columns: 1,
