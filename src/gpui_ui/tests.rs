@@ -414,6 +414,75 @@ fn ctrl_page_keys_cycle_workspaces_and_route_terminal_input(cx: &mut gpui::TestA
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_open_editors_controls_save_select_fold_and_close(cx: &mut gpui::TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("workspace");
+    std::fs::create_dir(&dir).unwrap();
+    let mut docs = Vec::new();
+    for name in ["one.txt", "two.txt"] {
+        let path = dir.join(name);
+        std::fs::write(&path, name).unwrap();
+        let mut doc = crate::files::Document::open(&dir, &path).unwrap();
+        doc.text.push_str(" edited");
+        docs.push(doc);
+    }
+    let view = cx.add_window(|_, cx| {
+        let mut root =
+            super::TesselGpuiRoot::new_in_dir(Some(temp.path().join("state")), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(dir.clone()));
+        root.app.install_editor_input_fixture(docs, 1);
+        let snap = root.app.gpui_snapshot(960., 640., 4.);
+        if !snap.toolbar.right_open || snap.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        root
+    });
+    for selector in [
+        "open-editors-head",
+        "open-editors-head",
+        "open-editor-0",
+        "open-editors-save-all",
+        "open-editors-close-all",
+    ] {
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        let point = visual.debug_bounds(selector).expect(selector).center();
+        visual.simulate_click(point, Default::default());
+        if selector == "open-editor-0" {
+            view.update(cx, |root, _, _| {
+                assert!(
+                    root.app
+                        .gpui_editor_document()
+                        .unwrap()
+                        .path
+                        .ends_with("one.txt")
+                )
+            })
+            .unwrap();
+        }
+    }
+    view.update(cx, |root, _, _| {
+        assert!(
+            root.app
+                .gpui_snapshot(960., 640., 4.)
+                .side_panels
+                .open_editors
+                .is_empty()
+        )
+    })
+    .unwrap();
+    for name in ["one.txt", "two.txt"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.join(name)).unwrap(),
+            format!("{name} edited")
+        );
+    }
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_insert_path_menu_pastes_selected_row_and_focuses_the_terminal(
     cx: &mut gpui::TestAppContext,
 ) {

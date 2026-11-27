@@ -485,6 +485,18 @@ pub(crate) struct GpuiSidePanelSummary {
     pub explorer_root_name: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ExplorerOpenEditor {
+    pub title: String,
+    pub folder: String,
+    pub path: String,
+    pub selected: bool,
+    pub dirty: bool,
+    pub preview: bool,
+    pub select: GpuiAction,
+    pub close: GpuiAction,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct GpuiSidePanelsSnapshot {
@@ -493,6 +505,9 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub dashboard_filter: Option<crate::side_panels_model::DashboardState>,
     pub dashboard_query: String,
     pub explorer: crate::explorer_tree::ExplorerGpuiSnapshot,
+    pub open_editors: Vec<ExplorerOpenEditor>,
+    pub editor_project: Option<u64>,
+    pub open_editors_shown: bool,
     pub explorer_editable: bool,
     pub explorer_can_insert: bool,
     pub timeline: crate::file_timeline::Snapshot,
@@ -1062,6 +1077,11 @@ pub(crate) enum GpuiAction {
         text: String,
     },
     ExplorerToggleSearchMode,
+    ExplorerToggleEditors,
+    ExplorerActivateDocument(u64),
+    ExplorerCloseDocument(u64),
+    ExplorerSaveAll(u64),
+    ExplorerCloseAll(u64),
     ExplorerToggleDotfiles,
     ExplorerToggleCompact,
     Timeline(crate::file_timeline::Action),
@@ -4714,7 +4734,61 @@ impl Tessel {
         if outline.is_none() {
             self.gpui_extra.outline_cache = None;
         }
+        let mut open_editors = Vec::new();
+        if visible == Some(SideTab::Files) && self.state.active_project.is_some() {
+            for (i, doc) in self
+                .documents
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.project == self.state.active_project)
+            {
+                let id = doc.instance_id();
+                let parent = doc
+                    .path
+                    .parent()
+                    .map(dunce::simplified)
+                    .unwrap_or(std::path::Path::new(""));
+                let folder = self
+                    .state
+                    .active()
+                    .and_then(|project| parent.strip_prefix(dunce::simplified(&project.path)).ok())
+                    .filter(|relative| !relative.as_os_str().is_empty())
+                    .unwrap_or(parent);
+                open_editors.push(ExplorerOpenEditor {
+                    folder: folder.display().to_string(),
+                    title: doc.diff_title.clone().unwrap_or_else(|| {
+                        doc.path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    }),
+                    path: doc.path.to_string_lossy().into_owned(),
+                    selected: self.view == View::Files && self.active_document == i,
+                    dirty: doc.diff_title.is_none() && doc.dirty(),
+                    preview: doc.unpinned_preview,
+                    select: GpuiAction::ExplorerActivateDocument(id),
+                    close: GpuiAction::ExplorerCloseDocument(id),
+                });
+            }
+            #[cfg(windows)]
+            for (id, title, path) in self.browser_labels() {
+                open_editors.push(ExplorerOpenEditor {
+                    folder: path.clone(),
+                    title,
+                    path,
+                    selected: self.view == View::Browser && self.browser.tab_id == id,
+                    dirty: false,
+                    preview: false,
+                    select: GpuiAction::SelectBrowserPage(id),
+                    close: GpuiAction::CloseBrowserPage(id),
+                });
+            }
+        }
         GpuiSidePanelsSnapshot {
+            open_editors,
+            editor_project: self.state.active_project,
+            open_editors_shown: self.state.editor_prefs.open_editors_shown,
             explorer_editable: self.file_actions_ready(),
             explorer_can_insert: self.explorer_terminal_id().is_some(),
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
@@ -6783,6 +6857,55 @@ impl Tessel {
             }
             GpuiAction::ExplorerSetFilter(q) => {
                 self.explorer_tree.gpui_set_filter_query(q);
+            }
+            GpuiAction::ExplorerToggleEditors => {
+                self.state.editor_prefs.open_editors_shown =
+                    !self.state.editor_prefs.open_editors_shown;
+                self.save();
+            }
+            GpuiAction::ExplorerActivateDocument(id) | GpuiAction::ExplorerCloseDocument(id) => {
+                if let Some(i) = self
+                    .documents
+                    .iter()
+                    .position(|d| d.project == self.state.active_project && d.instance_id() == id)
+                {
+                    if matches!(action, GpuiAction::ExplorerActivateDocument(_)) {
+                        self.active_document = i;
+                        self.view = View::Files;
+                    } else {
+                        self.request_document_close(i);
+                    }
+                }
+            }
+            GpuiAction::ExplorerSaveAll(project) => {
+                if self.state.active_project == Some(project)
+                    && !self.file_action_pending
+                    && !self.transcript_trash_busy
+                {
+                    for doc in self.documents.iter_mut().filter(|d| {
+                        d.project == Some(project) && d.diff_title.is_none() && d.dirty()
+                    }) {
+                        match doc.save(self.store.as_ref().map(|s| s.directory())) {
+                            Ok(()) => doc.error.clear(),
+                            Err(e) => {
+                                self.error = e.clone();
+                                doc.error = e;
+                            }
+                        }
+                    }
+                }
+            }
+            GpuiAction::ExplorerCloseAll(project) => {
+                if self.state.active_project == Some(project) && self.pending_close.is_none() {
+                    self.remaining_close_requests = self
+                        .documents
+                        .iter()
+                        .rev()
+                        .filter(|d| d.project == Some(project))
+                        .map(|d| d.instance_id())
+                        .collect();
+                    self.advance_close_requests();
+                }
             }
             GpuiAction::ExplorerToggleSearchMode => {
                 self.explorer_tree.gpui_toggle_search_mode();
@@ -9299,6 +9422,48 @@ mod panel_snapshot_tests {
         );
         app.remove_project_immediate(ids[1]);
         assert!(!app.background_browsers.contains_key(&Some(ids[1])));
+    }
+
+    #[test]
+    fn explorer_bulk_file_actions_preserve_other_projects_pages_and_external_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(temp.path().join("state")), false, || {});
+        let mut projects = Vec::new();
+        for name in ["one", "two"] {
+            let dir = temp.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            app.apply_gpui_action(GpuiAction::AddProjectPath(dir.clone()));
+            projects.push(app.state.active_project.unwrap());
+            let path = dir.join("draft.txt");
+            std::fs::write(&path, "initial").unwrap();
+            app.apply_gpui_action(GpuiAction::OpenDocumentPath(path));
+            app.documents.last_mut().unwrap().text = name.into();
+        }
+        app.apply_gpui_action(GpuiAction::ExplorerSaveAll(projects[0]));
+        app.apply_gpui_action(GpuiAction::ExplorerCloseAll(projects[0]));
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("one/draft.txt")).unwrap(),
+            "initial"
+        );
+        let second = temp.path().join("two/draft.txt");
+        std::fs::write(&second, "external").unwrap();
+        app.apply_gpui_action(GpuiAction::ExplorerSaveAll(projects[1]));
+        assert!(app.documents[1].dirty());
+        assert!(!app.documents[1].error.is_empty());
+        assert_eq!(std::fs::read_to_string(second).unwrap(), "external");
+        #[cfg(windows)]
+        app.new_browser_page();
+        app.apply_gpui_action(GpuiAction::ExplorerCloseAll(projects[1]));
+        assert_eq!(app.pending_close, Some(1));
+        app.apply_gpui_action(GpuiAction::CancelConfirmModal);
+        assert_eq!(app.documents.len(), 2);
+        app.apply_gpui_action(GpuiAction::ExplorerCloseAll(projects[1]));
+        app.apply_gpui_action(GpuiAction::ConfirmModalSecondary);
+        assert_eq!(app.documents.len(), 1);
+        assert_eq!(app.documents[0].text, "one");
+        #[cfg(windows)]
+        assert!(app.browser_tab_open);
     }
 
     #[test]

@@ -348,6 +348,182 @@ fn render_dashboard_tab(
 // 2. `SideTab::Files` (`ExplorerPanel.vue`)
 // ---------------------------------------------------------------------------
 
+fn render_open_editors(
+    sp: &GpuiSidePanelsSnapshot,
+    french: bool,
+    tokens: &GpuiThemeTokens,
+    cx: &mut Context<TesselGpuiRoot>,
+) -> AnyElement {
+    let title = if french {
+        "Éditeurs ouverts"
+    } else {
+        "Open editors"
+    };
+    let dirty = sp.open_editors.iter().filter(|e| e.dirty).count();
+    let toggle = div()
+        .id("open-editors-head")
+        .debug_selector(|| "open-editors-head".into())
+        .role(gpui::Role::Button)
+        .aria_label(title)
+        .focusable()
+        .tab_stop(true)
+        .on_key_down(cx.listener(|root, event: &gpui::KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                window.prevent_default();
+                cx.stop_propagation();
+                if !event.is_held {
+                    root.dispatch(GpuiAction::ExplorerToggleEditors, cx);
+                }
+            }
+        }))
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .cursor_pointer()
+        .on_click(
+            cx.listener(|root, _, _, cx| root.dispatch(GpuiAction::ExplorerToggleEditors, cx)),
+        )
+        .child(format!(
+            "{} {title}",
+            if sp.open_editors_shown { "▾" } else { "▸" }
+        ));
+    let mut header = div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(toggle);
+    if let Some(project) = sp.editor_project {
+        if dirty > 0 {
+            header = header.child(format!("{dirty}")).child(render_chip(
+                "open-editors-save-all",
+                if french {
+                    "Tout enregistrer"
+                } else {
+                    "Save all"
+                }
+                .into(),
+                false,
+                tokens,
+                GpuiAction::ExplorerSaveAll(project),
+                cx,
+            ));
+        }
+        if sp
+            .open_editors
+            .iter()
+            .any(|e| matches!(e.select, GpuiAction::ExplorerActivateDocument(_)))
+        {
+            header = header.child(render_chip(
+                "open-editors-close-all",
+                if french { "Tout fermer" } else { "Close all" }.into(),
+                false,
+                tokens,
+                GpuiAction::ExplorerCloseAll(project),
+                cx,
+            ));
+        }
+    }
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .text_size(px(12.))
+        .text_color(tokens.text)
+        .child(header);
+    if sp.open_editors_shown {
+        // Keep the tree row under the pointer between the preview click and the pin click.
+        let reserve_preview = usize::from(!sp.open_editors.iter().any(|entry| entry.preview));
+        let list_rows = (sp.open_editors.len() + reserve_preview).min(9);
+        let mut list = div()
+            .id("open-editors-list")
+            .role(gpui::Role::ListBox)
+            .aria_label(title)
+            .h(px(list_rows as f32 * 22.))
+            .overflow_y_scroll();
+        for (index, entry) in sp.open_editors.iter().enumerate() {
+            let select = entry.select.clone();
+            let close = entry.close.clone();
+            let middle = close.clone();
+            let path = entry.path.clone();
+            let (bg, fg, border) = (tokens.surface, tokens.text, tokens.border);
+            let icon = if matches!(select, GpuiAction::ExplorerActivateDocument(_)) {
+                super::file_icons::render(&path, tokens, tokens.text_dim).into_any_element()
+            } else {
+                GpuiIcon::Globe
+                    .render(14., tokens.text_dim)
+                    .into_any_element()
+            };
+            list = list.child(
+                div()
+                    .id(("open-editor", index))
+                    .debug_selector(move || format!("open-editor-{index}"))
+                    .role(gpui::Role::ListBoxOption)
+                    .aria_label(entry.title.clone())
+                    .aria_selected(entry.selected)
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .cursor_pointer()
+                    .when(entry.selected, |el| el.bg(tokens.accent_soft))
+                    .hover(|s| s.bg(tokens.surface_2))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| super::chrome::ToolbarTooltip {
+                            text: path.clone().into(),
+                            bg,
+                            fg,
+                            border,
+                        })
+                        .into()
+                    })
+                    .on_click(cx.listener(move |root, _, _, cx| root.dispatch(select.clone(), cx)))
+                    .on_mouse_up(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |root, _, _, cx| {
+                            cx.stop_propagation();
+                            root.dispatch(middle.clone(), cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .id(("open-editor-close", index))
+                            .role(gpui::Role::Button)
+                            .aria_label(format!(
+                                "{} {}",
+                                if french { "Fermer" } else { "Close" },
+                                entry.title
+                            ))
+                            .w(px(16.))
+                            .cursor_pointer()
+                            .child(if entry.dirty { "●" } else { "×" })
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                cx.stop_propagation();
+                                root.dispatch(close.clone(), cx);
+                            })),
+                    )
+                    .child(icon)
+                    .child(
+                        div()
+                            .truncate()
+                            .when(entry.preview, |el| el.italic())
+                            .child(entry.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(tokens.text_dim)
+                            .child(entry.folder.clone()),
+                    ),
+            );
+        }
+        section = section.child(list);
+    }
+    section.into_any_element()
+}
+
 fn render_explorer_tab(
     sp: &GpuiSidePanelsSnapshot,
     explorer_input: &super::explorer_input::Input,
@@ -1107,6 +1283,7 @@ fn render_explorer_tab(
         .gap(px(6.0))
         .child(toolbar)
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
+        .child(render_open_editors(sp, french, tokens, cx))
         .child(scroll)
         .children(explorer_input.menu.as_ref().map(|menu| {
             menu.render(
