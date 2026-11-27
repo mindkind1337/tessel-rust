@@ -2495,6 +2495,7 @@ pub(super) fn download_list(
 pub(super) fn browser_error_notice(
     page: &crate::app::gpui_bridge::GpuiBrowserSnapshot,
     tokens: &GpuiThemeTokens,
+    selector: &'static str,
 ) -> gpui::Div {
     div()
         .flex()
@@ -2504,7 +2505,9 @@ pub(super) fn browser_error_notice(
         .when_some(page.failed_address.clone(), |row, address| {
             row.child(
                 div()
-                    .id("browser-copy-failed-address")
+                    .id(selector)
+                    .debug_selector(move || selector.into())
+                    .aria_label(crate::i18n::tr("Copy Address"))
                     .cursor_pointer()
                     .text_color(tokens.accent)
                     .child(crate::i18n::tr("Copy Address"))
@@ -2814,7 +2817,11 @@ pub(crate) fn render_browser_stage(
                     .border_color(tokens.danger)
                     .text_size(px(11.0))
                     .text_color(tokens.text_strong)
-                    .child(browser_error_notice(b, tokens)),
+                    .child(browser_error_notice(
+                        b,
+                        tokens,
+                        "browser-copy-failed-address",
+                    )),
             )
         })
         .child(viewport_body)

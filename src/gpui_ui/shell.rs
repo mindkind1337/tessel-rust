@@ -1710,11 +1710,13 @@ fn render_side_browser(
                 .as_ref()
                 .filter(|page| !page.error.is_empty()),
             |el, page| {
-                el.child(
-                    div()
-                        .text_color(tokens.warn)
-                        .child(super::editor_view::browser_error_notice(page, tokens)),
-                )
+                el.child(div().text_color(tokens.warn).child(
+                    super::editor_view::browser_error_notice(
+                        page,
+                        tokens,
+                        "side-browser-copy-failed-address",
+                    ),
+                ))
             },
         );
     #[cfg(windows)]

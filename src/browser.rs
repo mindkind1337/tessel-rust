@@ -420,6 +420,16 @@ impl Browser {
             .unwrap();
         self.poll();
     }
+    #[cfg(all(test, feature = "visual-test"))]
+    pub(crate) fn connection_failure_fixture(&mut self, address: &str) {
+        self.sender
+            .send(Event::LoadFailed {
+                address: address.to_owned(),
+                reason: "The connection timed out.",
+            })
+            .unwrap();
+        self.poll();
+    }
     pub(crate) fn invalidate_address_input(&mut self) {
         self.address_generation = next_address_generation();
     }

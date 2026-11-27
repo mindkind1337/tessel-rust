@@ -286,6 +286,44 @@ mod tests {
         });
     }
     #[gpui::test]
+    fn click_copies_failed_address_from_its_own_browser_pane(cx: &mut TestAppContext) {
+        const CENTER: &str = "https://center.example/report?format=pdf&year=2025";
+        const SIDE: &str = "https://side.example/files/a%20b?download=1";
+        let dir = tempfile::tempdir().unwrap();
+        let view = cx.add_window(|_, cx| {
+            let mut root = TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
+            root.dispatch(GpuiAction::AddProjectPath(dir.path().to_owned()), cx);
+            root.dispatch(GpuiAction::PaletteExecute("browser".into()), cx);
+            if !root.app.gpui_snapshot(960., 640., 4.).toolbar.right_open {
+                root.dispatch(GpuiAction::ToggleRightSidebar, cx);
+            }
+            root.dispatch(GpuiAction::NewSideBrowser, cx);
+            root.app.browser.connection_failure_fixture(CENTER);
+            let side = root.app.selected_side_browser.unwrap();
+            root.app
+                .side_browsers
+                .get_mut(&side)
+                .unwrap()
+                .connection_failure_fixture(SIDE);
+            root
+        });
+        cx.refresh().unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+        for (selector, expected) in [
+            ("side-browser-copy-failed-address", SIDE),
+            ("browser-copy-failed-address", CENTER),
+        ] {
+            let bounds = visual.debug_bounds(selector).unwrap();
+            visual.simulate_click(bounds.center(), Default::default());
+            assert_eq!(
+                cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[gpui::test]
     fn new_center_page_focuses_empty_address_for_immediate_typing(cx: &mut TestAppContext) {
         bindings(cx);
         let dir = tempfile::tempdir().unwrap();
