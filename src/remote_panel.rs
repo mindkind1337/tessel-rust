@@ -179,7 +179,7 @@ impl RemotePanel {
         if self
             .host
             .as_ref()
-            .is_some_and(|host| host.alias == target.alias && host.folder == target.folder)
+            .is_some_and(|host| host.same_target(target))
         {
             // Drop the watch and response receiver along with the document. A late
             // reply from this target must never populate a later Files connection.
@@ -1105,10 +1105,12 @@ mod tests {
         assert_eq!(panel.selected, 0);
         assert!(panel.pending.is_some());
         assert_eq!(panel.path, "/work/notes");
-        // Changing terminal preferences never changes which Files connection belongs to the row.
         let updated = Host {
+            target_id: Some(host.identity().into_owned()),
+            alias: "renamed".into(),
+            folder: "/new".into(),
             host_daemon: !host.host_daemon,
-            ..host
+            ..Host::default()
         };
         panel.saved_target_removed(0, &updated, 0);
         assert!(panel.host.is_none());

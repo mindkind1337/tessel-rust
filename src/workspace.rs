@@ -531,6 +531,8 @@ pub struct Project {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Host {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
     pub alias: String,
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -543,6 +545,7 @@ pub struct Host {
 impl Default for Host {
     fn default() -> Self {
         Self {
+            target_id: None,
             alias: String::new(),
             folder: String::new(),
             persistent_sessions: None,
@@ -561,6 +564,26 @@ const fn is_true(value: &bool) -> bool {
 }
 
 impl Host {
+    pub fn identity(&self) -> std::borrow::Cow<'_, str> {
+        use sha2::{Digest, Sha256};
+        if let Some(id) = &self.target_id {
+            return id.as_str().into();
+        }
+        // Existing targets and restored panes predate IDs. Their original
+        // endpoint gives both snapshots the same identity on first edit.
+        let mut hash = Sha256::new();
+        hash.update(self.alias.as_bytes());
+        hash.update([0]);
+        hash.update(self.folder.as_bytes());
+        format!("legacy-{:x}", hash.finalize()).into()
+    }
+
+    pub fn same_target(&self, other: &Self) -> bool {
+        match (&self.target_id, &other.target_id) {
+            (None, None) => self.alias == other.alias && self.folder == other.folder,
+            _ => self.identity() == other.identity(),
+        }
+    }
     /// Persistent `tmux` sessions are enabled by default unless explicitly set to `Some(false)`.
     #[must_use]
     pub const fn persistent_sessions_enabled(&self) -> bool {
@@ -1181,8 +1204,27 @@ impl Workspace {
                 return Err("Invalid task metadata.".into());
             }
         }
+        // Older versions could save identical rows. Keep those readable while
+        // rejecting any explicit ID that collides with another target.
+        let mut target_ids: std::collections::HashSet<_> = self
+            .hosts
+            .iter()
+            .filter(|host| host.target_id.is_none())
+            .map(Host::identity)
+            .collect();
         for host in &self.hosts {
             validate_host(&host.alias)?;
+            if let Some(id) = &host.target_id
+                && (!crate::claude::valid_uuid(id)
+                    && !id.strip_prefix("legacy-").is_some_and(|hash| {
+                        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                    }))
+            {
+                return Err("Invalid SSH target identity".into());
+            }
+            if host.target_id.is_some() && !target_ids.insert(host.identity()) {
+                return Err("Duplicate SSH target identity".into());
+            }
         }
         Ok(())
     }

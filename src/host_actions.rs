@@ -35,13 +35,14 @@ fn validate(host: &Host) -> Result<()> {
 pub fn save(
     hosts: &mut Vec<Host>,
     original: Option<(usize, &Host)>,
-    replacement: Host,
+    mut replacement: Host,
 ) -> Result<bool> {
     validate(&replacement)?;
     let index = if let Some((index, expected)) = original {
         if hosts.get(index) != Some(expected) {
             return Err("This SSH host changed; reopen its settings.".into());
         }
+        replacement.target_id.clone_from(&expected.target_id);
         if expected == &replacement {
             return Ok(false);
         }
@@ -58,8 +59,22 @@ pub fn save(
         return Err("This SSH host and folder already exist.".into());
     }
     if let Some(index) = index {
+        let old = &hosts[index];
+        replacement.target_id = Some(
+            if old.target_id.is_none()
+                && hosts
+                    .iter()
+                    .enumerate()
+                    .any(|(i, h)| i != index && h.same_target(old))
+            {
+                crate::claude::uuid()?
+            } else {
+                old.identity().into_owned()
+            },
+        );
         hosts[index] = replacement;
     } else {
+        replacement.target_id = Some(crate::claude::uuid()?);
         hosts.push(replacement);
     }
     Ok(true)
@@ -116,7 +131,11 @@ mod tests {
             import_aliases(&mut hosts, &["existing".into(), "new".into(), "new".into()]).unwrap(),
             1
         );
-        assert_eq!(hosts, [host("existing", "/srv/custom"), host("new", "")]);
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[0], host("existing", "/srv/custom"));
+        assert_eq!(hosts[1].alias, "new");
+        assert!(hosts[1].folder.is_empty());
+        assert!(hosts[1].target_id.is_some());
         let before = hosts.clone();
         assert!(import_aliases(&mut hosts, &["valid".into(), "-bad".into()]).is_err());
         assert_eq!(hosts, before);
@@ -129,21 +148,57 @@ mod tests {
     }
 
     #[test]
+    fn ssh_target_ownership_survives_edits_restore_and_reuse_of_the_old_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let original = host("lab", "/before");
+        let launch = crate::launch::Launch::ssh(original.clone());
+        state.hosts.push(original.clone());
+        persist(&mut state, &store, |list| {
+            save(list, Some((0, &original)), host("renamed", "/after"))
+        })
+        .unwrap();
+        persist(&mut state, &store, |list| {
+            save(list, None, original.clone())
+        })
+        .unwrap();
+        drop(store);
+        let (store, reopened) = Store::open(dir.path()).unwrap();
+        assert!(launch.belongs_to_ssh_target(&reopened.hosts[0]));
+        assert!(!launch.belongs_to_ssh_target(&reopened.hosts[1]));
+        let first_new = reopened.hosts[1].clone();
+        let new_launch = crate::launch::Launch::ssh(first_new.clone());
+        persist(&mut state, &store, |list| {
+            save(list, Some((1, &first_new)), host("fresh", "/updated"))
+        })
+        .unwrap();
+        assert!(new_launch.belongs_to_ssh_target(&state.hosts[1]));
+        assert!(!launch.belongs_to_ssh_target(&state.hosts[1]));
+    }
+
+    #[test]
     fn create_edit_remove_are_snapshot_checked_and_do_not_duplicate_metadata() {
         let mut hosts = Vec::new();
         let first = host("fixture", "/srv/app");
         assert!(save(&mut hosts, None, first.clone()).unwrap());
+        let first = hosts[0].clone();
         assert!(save(&mut hosts, None, first.clone()).is_err());
         assert!(!save(&mut hosts, Some((0, &first)), first.clone()).unwrap());
         let second = host("fixture", "/srv/other");
         assert!(save(&mut hosts, None, second.clone()).unwrap());
+        let second = hosts[1].clone();
         assert!(save(&mut hosts, Some((0, &first)), second.clone()).is_err());
         assert!(save(&mut hosts, Some((1, &first)), host("wrong", "")).is_err());
         assert!(remove(&mut hosts, 1, &first).is_err());
         assert!(save(&mut hosts, Some((0, &first)), host("edited", "/srv/app")).unwrap());
         assert!(remove(&mut hosts, 0, &first).is_err());
         remove(&mut hosts, 1, &second).unwrap();
-        assert_eq!(hosts, vec![host("edited", "/srv/app")]);
+        assert_eq!(hosts.len(), 1);
+        assert!(hosts[0].same_target(&first));
+        assert_eq!(
+            (&*hosts[0].alias, &*hosts[0].folder),
+            ("edited", "/srv/app")
+        );
         assert!(remove(&mut hosts, usize::MAX, &second).is_err());
     }
 

@@ -35,7 +35,7 @@ impl Launch {
     }
 
     pub fn belongs_to_ssh_target(&self, target: &Host) -> bool {
-        matches!(self, Self::Ssh(ssh) if ssh.target.alias == target.alias && ssh.target.folder == target.folder)
+        matches!(self, Self::Ssh(ssh) if ssh.target.same_target(target))
     }
 
     pub fn native_chat(&self) -> Option<&'static str> {

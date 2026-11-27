@@ -44,6 +44,7 @@ const PRIMARY_BTN_DARK_TEXT: Color32 = Color32::from_rgb(0x0b, 0x15, 0x30);
 /// Pure-UI representation of `workspace::Host` (`alias` + optional remote `folder`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SshHostSpec {
+    pub target_id: Option<String>,
     pub alias: String,
     pub folder: String,
     /// `None` = persistent `tmux` sessions on (default); `Some(false)` = explicitly off.
@@ -64,6 +65,7 @@ impl SshHostSpec {
     pub fn new(alias: impl Into<String>, folder: impl Into<String>) -> Self {
         Self {
             alias: alias.into(),
+            target_id: None,
             folder: folder.into(),
             persistent_sessions: None,
             host_daemon: true,

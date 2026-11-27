@@ -11536,7 +11536,24 @@ mod panel_snapshot_tests {
             ids.iter()
                 .all(|id| app.sessions.iter().any(|s| s.id == *id))
         );
+        app.change_hosts(|hosts| {
+            crate::host_actions::save(
+                hosts,
+                Some((0, &first)),
+                crate::workspace::Host {
+                    alias: "renamed".into(),
+                    folder: "/new".into(),
+                    ..first.clone()
+                },
+            )
+        })
+        .unwrap();
         app.apply_gpui_action(GpuiAction::RemoveSshHost(0, first));
+        assert!(
+            ids.iter()
+                .all(|id| app.sessions.iter().any(|s| s.id == *id))
+        );
+        app.apply_gpui_action(GpuiAction::RemoveSshHost(0, app.state.hosts[0].clone()));
         assert_eq!(app.state.hosts, [nested]);
         for (i, id) in ids.iter().enumerate() {
             assert_eq!(app.sessions.iter().any(|s| s.id == *id), i >= 2);

@@ -10262,6 +10262,7 @@ impl Tessel {
             .iter()
             .map(|host| SshHostRow {
                 host: SshHostSpec {
+                    target_id: host.target_id.clone(),
                     alias: host.alias.clone(),
                     folder: host.folder.clone(),
                     persistent_sessions: host.persistent_sessions,
@@ -10315,6 +10316,7 @@ impl Tessel {
         #[cfg(not(windows))]
         let _ = native_action;
         let to_host = |host: SshHostSpec| Host {
+            target_id: host.target_id,
             alias: host.alias,
             folder: host.folder,
             persistent_sessions: host.persistent_sessions,
@@ -14371,11 +14373,22 @@ impl Tessel {
                 remote_dir,
             } => {
                 self.dialogs_toolbar_ui.add_project_open = false;
-                self.new_session(Launch::ssh(workspace::Host {
-                    alias: host_alias,
-                    folder: remote_dir,
-                    ..Default::default()
-                }));
+                let mut matching = self.state.hosts.iter().filter(|h| h.alias == host_alias);
+                let exact = matching.clone().find(|h| h.folder == remote_dir);
+                let unique = matching.next().filter(|_| matching.next().is_none());
+                let launch = if let Some(target) = exact.or(unique) {
+                    Launch::Ssh(crate::launch::SshLaunch {
+                        target: target.clone(),
+                        start_folder: (target.folder != remote_dir).then_some(remote_dir),
+                    })
+                } else {
+                    Launch::ssh(workspace::Host {
+                        alias: host_alias,
+                        folder: remote_dir,
+                        ..Default::default()
+                    })
+                };
+                self.new_session(launch);
             }
             DialogsToolbarAction::CloseAddProjectModal => {
                 self.dialogs_toolbar_ui.add_project_open = false;
