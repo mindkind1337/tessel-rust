@@ -25,6 +25,75 @@ mod tests {
         }
     }
 
+    fn disconnected_drawer() -> State {
+        let mut state = State::new_with_repaint(
+            || {},
+            workspace::FloatingPreferences {
+                open: true,
+                height: 0.45,
+            },
+        );
+        let host = workspace::Host {
+            alias: "-fixture-only".into(),
+            folder: "/original".into(),
+            ..Default::default()
+        };
+        state.pending_launch = Some(FloatingLaunch {
+            launch: Launch::Ssh(host),
+            cwd: std::env::temp_dir(),
+            preferred_shell: None,
+            tmux_id: Some(crate::claude::uuid().unwrap()),
+            scrollback: 100,
+        });
+        state
+            .runtime
+            .open(|| {
+                let mut cmd = portable_pty::CommandBuilder::new("cmd.exe");
+                cmd.args(["/d", "/c", "exit 255"]);
+                let mut terminal = Terminal::spawn_command(cmd).map_err(|e| e.to_string())?;
+                let mut channel = crate::ssh_reconnect::Channel::new(false)?;
+                channel.opened = Some(Instant::now());
+                terminal.ssh_channel = Some(channel);
+                Ok(terminal)
+            })
+            .unwrap();
+        until(&mut state, Phase::Ready);
+        state.ui.hide();
+        let end = Instant::now() + Duration::from_secs(10);
+        while !state.ssh_retry.pending() {
+            state.poll();
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        state
+    }
+
+    #[test]
+    fn hidden_ssh_drawer_retries_its_original_target() {
+        let mut state = disconnected_drawer();
+        assert_eq!(state.title_str(), "SSH · -fixture-only");
+        assert_eq!(
+            state.status_notice(true),
+            Some("Nouvelle tentative automatique prévue.")
+        );
+        until(&mut state, Phase::Closed);
+        // Validation of the saved alias proves the SSH path ran without connecting to a server.
+        assert!(state.runtime.error().unwrap().contains("SSH config alias"));
+        assert!(!state.ui.is_open());
+        assert!(state.active_launch.is_none());
+    }
+
+    #[test]
+    fn closing_ssh_drawer_during_backoff_discards_scheduled_relaunch() {
+        let mut state = disconnected_drawer();
+        state.runtime.close().unwrap();
+        until(&mut state, Phase::Closed);
+        state.poll();
+        assert!(!state.ssh_retry.pending());
+        assert!(state.active_launch.is_none());
+        assert!(state.runtime.error().is_none());
+    }
+
     #[test]
     fn floating_real_shell_survives_hide_and_closes_through_verified_adapter() {
         let ctx = egui::Context::default();
@@ -66,12 +135,40 @@ impl Process for Terminal {
     }
 }
 
+#[derive(Clone)]
+struct FloatingLaunch {
+    launch: Launch,
+    cwd: std::path::PathBuf,
+    preferred_shell: Option<String>,
+    scrollback: usize,
+    tmux_id: Option<String>,
+}
+
+impl FloatingLaunch {
+    fn spawn(self, automatic: bool) -> Result<Terminal, String> {
+        let channel = crate::ssh_reconnect::Channel::for_launch(&self.launch, automatic)?;
+        let command = launch::pane_command(
+            &self.launch,
+            &self.cwd,
+            None,
+            self.preferred_shell.as_deref(),
+            self.tmux_id.as_deref(),
+            channel.as_ref(),
+        )?;
+        let mut terminal = Terminal::spawn_command_with_scrollback(command, self.scrollback)
+            .map_err(|error| error.to_string())?;
+        terminal.ssh_channel = channel;
+        Ok(terminal)
+    }
+}
+
 pub(super) struct State {
     pub ui: FloatingTerminalState,
     runtime: Controller<Terminal>,
     title: String,
-    pending_title: Option<String>,
-    ssh_tmux_id: Option<String>,
+    pending_launch: Option<FloatingLaunch>,
+    active_launch: Option<FloatingLaunch>,
+    ssh_retry: crate::ssh_reconnect::Retry,
     toggle_id: Option<egui::Id>,
     pub(super) exit_pending: bool,
     pub(super) exit_failed: bool,
@@ -90,8 +187,9 @@ impl State {
             ui: FloatingTerminalState::from_saved(saved.open, saved.height),
             runtime: Controller::new(repaint),
             title: "Terminal".into(),
-            pending_title: None,
-            ssh_tmux_id: None,
+            pending_launch: None,
+            active_launch: None,
+            ssh_retry: Default::default(),
             toggle_id: None,
             exit_pending: false,
             exit_failed: false,
@@ -142,16 +240,42 @@ impl State {
     pub fn poll(&mut self) {
         let before = self.runtime.phase();
         self.runtime.poll();
+        if self.runtime.phase() == Phase::Closed {
+            self.active_launch = None;
+            self.pending_launch = None;
+            self.ssh_retry = Default::default();
+            return;
+        }
         if before != Phase::Ready && self.runtime.phase() == Phase::Ready {
             if self.runtime.error().is_some() {
                 self.ui.show();
-                self.pending_title = None;
-            } else if let Some(title) = self.pending_title.take() {
-                self.title = title;
+                self.pending_launch = None;
+                self.ssh_retry.give_up();
+            } else if let Some(plan) = self.pending_launch.take() {
+                self.title = match &plan.launch {
+                    Launch::Ssh(host) => format!("SSH · {}", host.alias),
+                    _ => "Terminal".into(),
+                };
+                self.active_launch = Some(plan);
             }
         }
-        if let Some(terminal) = self.runtime.process() {
-            terminal.poll();
+        let can_retry = !self.exit_pending && !self.exit_failed && self.runtime.error().is_none();
+        let Some(terminal) = self.runtime.process() else {
+            return;
+        };
+        terminal.poll();
+        if can_retry
+            && let Some(plan) = &self.active_launch
+            && let Some(channel) = &terminal.ssh_channel
+            && self
+                .ssh_retry
+                .due(std::time::Instant::now(), channel, terminal.exit_code())
+        {
+            let plan = plan.clone();
+            // Restart the original host even after the user switches projects.
+            // Worker admission failures leave the process in place; the next poll
+            // schedules another bounded attempt.
+            let _ = self.runtime.restart(move || plan.spawn(true));
         }
     }
     #[cfg(all(test, feature = "visual-test"))]
@@ -180,8 +304,15 @@ impl State {
     pub fn title_str(&self) -> &str {
         &self.title
     }
-    pub fn runtime_error(&self) -> Option<&str> {
-        self.runtime.error()
+    pub fn status_notice(&self, french: bool) -> Option<&str> {
+        self.runtime.error().or_else(|| {
+            self.ssh_retry.notice(
+                french,
+                self.runtime
+                    .process_ref()
+                    .is_some_and(Terminal::ssh_transport_lost),
+            )
+        })
     }
 }
 
@@ -277,30 +408,26 @@ impl Tessel {
                 return;
             }
         };
-        let title = match &launch {
-            Launch::Ssh(host) => format!("SSH · {}", host.alias),
-            _ => "Terminal".into(),
-        };
-        let scrollback = self.state.terminal_prefs.scrollback;
-        let preferred_shell = matches!(launch, Launch::Shell)
-            .then(|| self.state.launcher_prefs.preferred_shell.clone())
-            .flatten();
-        if let Err(error) = launch::prepare_ssh_tmux_id(&launch, &mut self.floating.ssh_tmux_id) {
+        let mut tmux_id = self.floating.active_launch.as_ref()
+            .filter(|previous| matches!((&launch, &previous.launch),
+                (Launch::Ssh(next), Launch::Ssh(old)) if next.alias == old.alias && next.folder == old.folder))
+            .and_then(|previous| previous.tmux_id.clone());
+        if let Err(error) = launch::prepare_ssh_tmux_id(&launch, &mut tmux_id) {
             self.error = error;
             return;
         }
-        let ssh_tmux_id = self.floating.ssh_tmux_id.clone();
-        let make = move || {
-            let command = launch::command_with_shell(
-                &launch,
-                &cwd,
-                None,
-                preferred_shell.as_deref(),
-                ssh_tmux_id.as_deref(),
-            )?;
-            Terminal::spawn_command_with_scrollback(command, scrollback)
-                .map_err(|error| error.to_string())
+        let preferred_shell = matches!(launch, Launch::Shell)
+            .then(|| self.state.launcher_prefs.preferred_shell.clone())
+            .flatten();
+        let plan = FloatingLaunch {
+            launch,
+            cwd,
+            preferred_shell,
+            tmux_id,
+            scrollback: self.state.terminal_prefs.scrollback,
         };
+        let target = plan.clone();
+        let make = move || target.spawn(false);
         let result = if restart {
             self.floating.runtime.restart(make)
         } else {
@@ -308,7 +435,8 @@ impl Tessel {
         };
         match result {
             Ok(()) => {
-                self.floating.pending_title = Some(title);
+                self.floating.pending_launch = Some(plan);
+                self.floating.ssh_retry = Default::default();
             }
             Err(error) => self.error = refused_text(error),
         }
@@ -446,7 +574,10 @@ impl Tessel {
             || self.toolbar_menu_open
             || self.status_bar.has_open_popover();
         let phase = self.floating.runtime.phase();
-        let error = self.floating.runtime.error().map(str::to_owned);
+        let error = self
+            .floating
+            .status_notice(self.state.language == crate::i18n::Language::French)
+            .map(str::to_owned);
         let focus_id = egui::Id::new("floating-terminal-content");
         let input = FloatingTerminalInput {
             workspace_rect: rect,

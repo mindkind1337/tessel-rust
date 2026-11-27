@@ -94,25 +94,14 @@ impl Session {
     fn exit_banner(&self, code: Option<i32>, french: bool) -> (String, &'static str, &'static str) {
         let mut labels =
             crate::terminal_exit::ended_session_copy(self.ssh_terminal_alias(), code, french);
-        if self.ssh_retry.pending() {
-            labels.0.push_str(if french {
-                " Nouvelle tentative automatique prévue."
-            } else {
-                " Automatic reconnect scheduled."
-            });
-        } else if self.ssh_retry.exhausted()
-            && code == Some(255)
-            && self
-                .terminal
+        if let Some(note) = self.ssh_retry.notice(
+            french,
+            self.terminal
                 .as_ref()
-                .and_then(|t| t.ssh_channel.as_ref())
-                .is_some_and(|channel| !channel.remote_255)
-        {
-            labels.0.push_str(if french {
-                " Les tentatives automatiques sont terminées."
-            } else {
-                " Automatic retries have ended."
-            });
+                .is_some_and(Terminal::ssh_transport_lost),
+        ) {
+            labels.0.push(' ');
+            labels.0.push_str(note);
         }
         labels
     }
@@ -477,9 +466,7 @@ impl Session {
                 if let (Some(binding), Launch::Agent(agent)) = (&profile_binding,&launch) {
                     crate::session_profile::check_account_available(binding,agent,profile_data_dir.as_deref())?;
                 }
-                let channel = if cfg!(windows) && matches!(&launch, Launch::Ssh(host) if host.persistent_sessions_enabled() || !host.folder.is_empty()) {
-                    Some(crate::ssh_reconnect::Channel::new(automatic)?)
-                } else { None };
+                let channel = crate::ssh_reconnect::Channel::for_launch(&launch, automatic)?;
                 let command = launch::pane_command(
                     &launch,
                     &cwd,

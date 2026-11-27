@@ -3384,7 +3384,7 @@ impl Tessel {
                     | crate::floating_terminal_runtime::Phase::Restarting
                     | crate::floating_terminal_runtime::Phase::Closing
             );
-            let error = self.floating.runtime_error().map(str::to_owned);
+            let error = self.floating.status_notice(french).map(str::to_owned);
             let title = self.floating.title_str().to_owned();
             let terminal_render = if open {
                 let drawer_h = (grid_room_h * height_ratio - 38.0).max(48.0);

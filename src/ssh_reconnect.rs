@@ -13,6 +13,18 @@ pub(crate) struct Channel {
 }
 
 impl Channel {
+    pub fn for_launch(
+        launch: &crate::launch::Launch,
+        automatic: bool,
+    ) -> Result<Option<Self>, String> {
+        if cfg!(windows)
+            && matches!(launch, crate::launch::Launch::Ssh(host) if host.persistent_sessions_enabled() || !host.folder.is_empty())
+        {
+            Self::new(automatic).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
     pub fn new(automatic: bool) -> Result<Self, String> {
         let nonce = crate::claude::uuid()?;
         Ok(Self {
@@ -84,6 +96,23 @@ impl Retry {
     }
     pub fn pending(&self) -> bool {
         self.deadline.is_some()
+    }
+    pub fn notice(&self, french: bool, transport_loss: bool) -> Option<&'static str> {
+        if self.pending() {
+            Some(if french {
+                "Nouvelle tentative automatique prévue."
+            } else {
+                "Automatic reconnect scheduled."
+            })
+        } else if self.exhausted() && transport_loss {
+            Some(if french {
+                "Les tentatives automatiques sont terminées."
+            } else {
+                "Automatic retries have ended."
+            })
+        } else {
+            None
+        }
     }
     pub fn due(&mut self, now: Instant, channel: &Channel, exit: Option<i32>) -> bool {
         if exit.is_none() {

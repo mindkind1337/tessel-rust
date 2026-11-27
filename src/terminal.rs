@@ -875,6 +875,9 @@ impl Terminal {
             self.status = error;
         }
     }
+    pub(crate) fn ssh_transport_lost(&self) -> bool {
+        self.exit_code == Some(255) && self.ssh_channel.as_ref().is_some_and(|c| !c.remote_255)
+    }
     pub fn exited(&self) -> bool {
         self.exited
     }
