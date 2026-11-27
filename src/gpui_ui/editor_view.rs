@@ -1817,7 +1817,8 @@ pub(crate) fn render_office_summary(
             .debug_selector(|| "office-reading".into());
     }
     if !workbook {
-        let paragraph = |heading: u8, text: &String| {
+        let paragraph = |p: &crate::office::Paragraph| {
+            let heading = p.heading;
             div()
                 .mb(px(8.))
                 .text_size(px(crate::office::heading_size(heading)))
@@ -1831,7 +1832,13 @@ pub(crate) fn render_office_summary(
                 } else {
                     tokens.text
                 })
-                .child(text.clone())
+                .when(p.list_depth > 0 && heading == 0, |el| {
+                    el.ml(px(f32::from(p.list_depth) * 20.))
+                        .flex()
+                        .gap(px(6.))
+                        .child("•")
+                })
+                .child(div().min_w_0().child(p.text.clone()))
         };
         let column = || div().mx_auto().w_full().max_w(px(820.));
         let mut list = div()
@@ -1881,7 +1888,7 @@ pub(crate) fn render_office_summary(
                             .text_size(px(12.))
                             .child(label),
                     );
-                list = list.child(page.children(paragraphs.iter().map(|(h, t)| paragraph(*h, t))));
+                list = list.child(page.children(paragraphs.iter().map(paragraph)));
             }
         } else {
             let mut page = column().debug_selector(|| "office-document-page".into());
@@ -1895,7 +1902,7 @@ pub(crate) fn render_office_summary(
                     .debug_selector(|| "office-document-empty".into()),
                 );
             } else {
-                page = page.children(summary.paragraphs.iter().map(|(h, t)| paragraph(*h, t)));
+                page = page.children(summary.paragraphs.iter().map(paragraph));
             }
             list = list.child(page);
         }

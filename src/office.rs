@@ -17,10 +17,11 @@ use std::{
 mod parse;
 const MAX_INPUT: usize = 32 * 1024 * 1024;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
-#[derive(Serialize, Deserialize)]
-struct Paragraph {
-    heading: u8,
-    text: String,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Paragraph {
+    pub heading: u8,
+    pub list_depth: u8,
+    pub text: String,
 }
 #[derive(Serialize, Deserialize)]
 struct Section {
@@ -220,13 +221,13 @@ pub struct OfficeView {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct OfficeSummary {
-    pub slides: Option<Vec<Vec<(u8, String)>>>,
+    pub slides: Option<Vec<Vec<Paragraph>>>,
     pub omitted_rows: usize,
     pub omitted_cols: usize,
     pub workbook: bool,
     pub section_titles: Vec<String>,
     pub selected: usize,
-    pub paragraphs: Vec<(u8, String)>,
+    pub paragraphs: Vec<Paragraph>,
     pub sheet: Option<Arc<crate::rich_previews::SheetTable>>,
     pub truncated: bool,
     pub busy: bool,
@@ -286,12 +287,7 @@ impl OfficeView {
                 slides: is_presentation(&self.extension).then(|| {
                     book.sections
                         .iter()
-                        .map(|page| {
-                            page.paragraphs
-                                .iter()
-                                .map(|p| (p.heading, p.text.clone()))
-                                .collect()
-                        })
+                        .map(|page| page.paragraphs.clone())
                         .collect()
                 }),
                 workbook: is_workbook(&self.extension),
@@ -302,7 +298,7 @@ impl OfficeView {
                 paragraphs: page
                     .into_iter()
                     .flat_map(|p| &p.paragraphs)
-                    .map(|p| (p.heading, p.text.clone()))
+                    .cloned()
                     .collect(),
                 sheet: sheet.map(Arc::new),
                 truncated: book.truncated,
@@ -400,6 +396,12 @@ impl OfficeView {
                                     .strong()
                                     .size(heading_size(paragraph.heading)),
                             );
+                        } else if paragraph.list_depth > 0 {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add_space(f32::from(paragraph.list_depth) * 20.);
+                                ui.label("•");
+                                ui.add(egui::Label::new(&paragraph.text).selectable(true));
+                            });
                         } else {
                             ui.add(egui::Label::new(&paragraph.text).selectable(true));
                         }

@@ -30,7 +30,7 @@ fn gpui_office_worker_completion_preserves_original_and_stops_repainting() {
     let ready = view.gpui_poll_summary();
     assert!(!ready.busy && !view.is_rendering());
     assert_eq!(ready.selected, 0);
-    assert_eq!(ready.paragraphs[1].1, "A & B");
+    assert_eq!(ready.paragraphs[1].text, "A & B");
     assert!(ready.error.is_empty());
     assert!(Arc::ptr_eq(&ready, &view.gpui_poll_summary()));
     assert!(Arc::ptr_eq(&original, &view.bytes));
@@ -67,7 +67,7 @@ fn gpui_office_sections_and_truncation_survive_worker_delivery() {
     assert!(Arc::ptr_eq(&document, &view.gpui_poll_summary()));
     assert_eq!(document.selected, 1);
     assert!(document.sheet.is_none());
-    assert_eq!(document.paragraphs[1].1, "A & B");
+    assert_eq!(document.paragraphs[1].text, "A & B");
 }
 
 #[test]
@@ -269,9 +269,9 @@ fn office_presentation_shows_all_slides_in_order_including_blank_pages(
     let summary = office.gpui_poll_summary();
     let slides = summary.slides.as_ref().unwrap();
     assert_eq!(slides.len(), 3);
-    assert_eq!(slides[0][0].1, "First");
+    assert_eq!(slides[0][0].text, "First");
     assert!(slides[1].is_empty());
-    assert_eq!(slides[2][0].1, "Last");
+    assert_eq!(slides[2][0].text, "Last");
     let window = cx.add_window(|_, cx| {
         let mut root =
             crate::gpui_ui::TesselGpuiRoot::new_in_dir(Some(dir.path().join("state")), false, cx);
@@ -378,4 +378,27 @@ fn office_heading_levels_follow_word_styles_and_odf_outlines() {
         r#"<doc xmlns:text="urn:t"><text:h text:outline-level="4">Four</text:h><text:h text:outline-level="9">Six</text:h><text:p>Body</text:p></doc>"#,
     )]);
     assert_eq!(levels(parse::parse(&odt, "odt").unwrap()), [4, 6, 0]);
+}
+
+#[test]
+fn office_list_depth_tracks_nested_items_and_resets_for_following_text() {
+    let doc = archive(&[(
+        "word/document.xml",
+        r#"<w:document xmlns:w="urn:w"><w:p><w:pPr><w:numPr/></w:pPr><w:r><w:t>First</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr><w:r><w:t>Nested</w:t></w:r></w:p><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:document>"#,
+    )]);
+    let odt = archive(&[(
+        "content.xml",
+        r#"<doc xmlns:text="urn:t"><text:list><text:list-item><text:p>First</text:p><text:list><text:list-item><text:p>Nested</text:p></text:list-item></text:list></text:list-item></text:list><text:p>Body</text:p></doc>"#,
+    )]);
+    for (data, extension) in [(doc, "docx"), (odt, "odt")] {
+        let book = parse::parse(&data, extension).unwrap();
+        assert_eq!(
+            book.sections[0]
+                .paragraphs
+                .iter()
+                .map(|p| (p.list_depth, p.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(1, "First"), (2, "Nested"), (0, "Body")]
+        );
+    }
 }

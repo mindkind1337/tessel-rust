@@ -138,6 +138,9 @@ fn text_page(
     let mut paragraphs = Vec::new();
     let mut capture = 0usize;
     let mut heading = 0;
+    let mut list_depth = 0u8;
+    let mut odf_depth = 0u8;
+    let mut numbering = false;
     let mut total = 0usize;
     let mut events = 0usize;
     loop {
@@ -151,13 +154,19 @@ fn text_page(
             Event::Start(e) | Event::Empty(e) => {
                 let n = e.name();
                 let n = n.as_ref();
+                if odf && n == "text:list" && !empty {
+                    odf_depth = odf_depth.saturating_add(1);
+                }
                 if matches!(n, "w:p" | "a:p" | "text:p" | "text:h") {
                     if !text.trim().is_empty() {
                         paragraphs.push(Paragraph {
                             heading,
+                            list_depth,
                             text: std::mem::take(&mut text),
                         });
                     }
+                    list_depth = if n == "text:p" { odf_depth } else { 0 };
+                    numbering = false;
                     heading = if n == "text:h" {
                         attribute(&e, "text:outline-level")
                             .and_then(|s| s.parse::<i32>().ok())
@@ -170,6 +179,15 @@ fn text_page(
                 if !empty && (matches!(n, "w:t" | "a:t") || odf && matches!(n, "text:p" | "text:h"))
                 {
                     capture += 1;
+                }
+                if n == "w:numPr" {
+                    numbering = !empty;
+                    list_depth = 1;
+                } else if numbering && n == "w:ilvl" {
+                    list_depth = attribute(&e, "w:val")
+                        .and_then(|v| v.parse::<u8>().ok())
+                        .unwrap_or(0)
+                        .saturating_add(1);
                 }
                 if n == "w:pStyle"
                     && let Some(id) = attribute(&e, "w:val")
@@ -203,12 +221,19 @@ fn text_page(
             Event::End(e) => {
                 let n = e.name();
                 let n = n.as_ref();
+                if n == "text:list" && odf {
+                    odf_depth = odf_depth.saturating_sub(1);
+                }
+                if n == "w:numPr" {
+                    numbering = false;
+                }
                 if matches!(n, "w:t" | "a:t") || odf && matches!(n, "text:p" | "text:h") {
                     capture = capture.saturating_sub(1);
                 }
                 if matches!(n, "w:p" | "a:p" | "text:p" | "text:h") && !text.trim().is_empty() {
                     paragraphs.push(Paragraph {
                         heading,
+                        list_depth,
                         text: std::mem::take(&mut text),
                     });
                     heading = 0;
@@ -241,7 +266,11 @@ fn text_page(
         }
     }
     if !text.trim().is_empty() {
-        paragraphs.push(Paragraph { heading, text });
+        paragraphs.push(Paragraph {
+            heading,
+            list_depth,
+            text,
+        });
     }
     Ok(Section {
         title,
