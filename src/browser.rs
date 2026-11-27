@@ -1886,6 +1886,75 @@ mod tests {
 
     #[test]
     #[ignore = "requires installed Windows WebView2 runtime"]
+    fn untrusted_local_tls_certificate_is_reported_by_webview2() {
+        use crate::webview_test_support::{hidden_parent, pump};
+        use std::{
+            io,
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+
+        let identity = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(identity.signing_key.serialize_der());
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![identity.cert.der().clone()], key.into())
+        .unwrap();
+        let config = Arc::new(config);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("https://{addr}/private-report?fixture=1");
+        let profile = tempfile::tempdir().unwrap();
+        let parent = hidden_parent();
+        let mut browser = Browser::default();
+        browser
+            .create_with_profile(&parent, profile.path().join("profile"))
+            .unwrap();
+        browser.open_url(&url);
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut presented_certificate = false;
+        while browser.failed_address().is_none() {
+            assert!(Instant::now() < deadline, "no certificate failure reported");
+            pump();
+            browser.poll();
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut tls = rustls::ServerConnection::new(config.clone()).unwrap();
+                    if tls.read_tls(&mut stream).is_ok_and(|n| n > 0) {
+                        tls.process_new_packets().unwrap();
+                        while tls.wants_write() {
+                            tls.write_tls(&mut stream).unwrap();
+                        }
+                        presented_certificate = true;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("TLS listener: {e}"),
+            }
+        }
+        assert!(presented_certificate);
+        let (failed, reason) = browser.failed_page.as_ref().unwrap();
+        assert_eq!(failed, &url);
+        assert!(reason.is_certificate(), "unexpected failure: {reason:?}");
+        assert!(browser.error_message().contains(&addr.to_string()));
+        assert!(!browser.error_message().contains("private-report"));
+        assert!(browser.https_recovery_url().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires installed Windows WebView2 runtime"]
     fn connection_failure_retries_original_address_as_the_service_returns() {
         use crate::webview_test_support::{hidden_parent, pump};
         use std::{
