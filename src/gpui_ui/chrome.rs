@@ -631,9 +631,10 @@ pub(crate) fn render_toolbar(
                             .border_color(tokens.warn)
                             .cursor_pointer()
                             .hover(|s| s.bg(rgba_with_alpha(tokens.warn, 0.28)))
-                            .on_click(cx.listener(move |root, _, _, cx| {
+                            .on_click(cx.listener(move |root, _, window, cx| {
                                 if let Some(pid) = first_waiting {
-                                    root.dispatch(GpuiAction::FocusSession(pid), cx);
+                                    root.dispatch(GpuiAction::DialogsToolbar(crate::dialogs_toolbar_ui::DialogsToolbarAction::FocusPane(pid)), cx);
+                                    root.set_focus_input(super::FocusInputTarget::None, window, cx);
                                 }
                             }))
                             .child(GpuiIcon::Activity.render(12.5, tokens.warn))

@@ -8132,6 +8132,67 @@ mod panel_snapshot_tests {
         assert_eq!(app.active_session, Some(a2));
     }
 
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn agent_request_reveals_its_project_and_maximized_pane() {
+        use crate::dialogs_toolbar_ui::DialogsToolbarAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        for name in ["agent", "other"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().join("agent")));
+        let project = app.state.active_project;
+        app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+        let agent = app.active_session.unwrap();
+        let shell = app.install_terminal_find_fixture().0;
+        app.apply_gpui_action(GpuiAction::ToggleMaximizeSession(shell));
+        let request = || GpuiAction::DialogsToolbar(DialogsToolbarAction::FocusPane(agent));
+        app.apply_gpui_action(request());
+        let snapshot = app.gpui_snapshot(900., 600., 4.);
+        assert_eq!(snapshot.tiles.len(), 1);
+        assert_eq!(app.active_session, Some(agent));
+        assert!(snapshot.tiles[0].native_chat.is_some());
+        app.apply_gpui_action(GpuiAction::AddProjectPath(dir.path().join("other")));
+        let other_shell = app.install_terminal_find_fixture().0;
+        app.apply_gpui_action(GpuiAction::ToggleMaximizeSession(other_shell));
+        app.notifications.push_coalesced(
+            crate::dialogs_toolbar_model::NotificationKind::ApprovalNeeded,
+            "Request",
+            "",
+            Some(agent),
+        );
+        app.notifications.push_coalesced(
+            crate::dialogs_toolbar_model::NotificationKind::SystemNotice,
+            "Earlier message",
+            "",
+            Some(agent),
+        );
+        app.notifications.push_coalesced(
+            crate::dialogs_toolbar_model::NotificationKind::SystemNotice,
+            "Other pane",
+            "",
+            Some(other_shell),
+        );
+        app.gpui_extra.notifications_popover_open = true;
+        let notice = app.notifications.items[0].id;
+        app.apply_gpui_action(GpuiAction::DialogsToolbar(
+            DialogsToolbarAction::OpenNotification(notice),
+        ));
+        assert!(!app.gpui_extra.notifications_popover_open);
+        assert_eq!(app.notifications.unread_count(), 1);
+        assert!(app.notifications.items.last().unwrap().unread);
+        assert_eq!(app.gpui_snapshot(900., 600., 4.).tiles.len(), 1);
+        assert_eq!(app.state.active_project, project);
+        assert_eq!(app.active_session, Some(agent));
+        drop(app);
+        let app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(app.state.active_project, project);
+        assert_eq!(app.active_session, Some(agent));
+    }
+
     #[test]
     fn explorer_download_dispatch_copies_the_selected_file_and_reports_its_path() {
         let dir = tempfile::tempdir().unwrap();

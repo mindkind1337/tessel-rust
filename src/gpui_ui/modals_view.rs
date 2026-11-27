@@ -2975,9 +2975,9 @@ fn render_notifications_popover(
                 }),
         );
     } else {
-        for item in &m.notifications_items {
+        for item in m.notifications_items.iter().rev() {
             let nid = item.id;
-            let focus_pane = item.pane_id;
+            let has_pane = item.pane_id.is_some();
             list = list.child(
                 div()
                     .id(("gpui-notif-item", nid))
@@ -2987,12 +2987,13 @@ fn render_notifications_popover(
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(pid) = focus_pane {
-                            this.dispatch_action(
-                                GpuiAction::DialogsToolbar(DialogsToolbarAction::FocusPane(pid)),
-                                cx,
-                            );
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch_action(
+                            GpuiAction::DialogsToolbar(DialogsToolbarAction::OpenNotification(nid)),
+                            cx,
+                        );
+                        if has_pane {
+                            this.set_focus_input(super::FocusInputTarget::None, window, cx);
                         }
                     }))
                     .child(

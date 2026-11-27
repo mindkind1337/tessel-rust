@@ -3700,6 +3700,40 @@ impl Tessel {
         self.select_workspace_project(next);
     }
 
+    fn reveal_workspace_pane(&mut self, id: u64) {
+        let Some(session) = self.sessions.iter().find(|session| session.id == id) else {
+            return;
+        };
+        let project = session.project;
+        let was_maximized = self
+            .state
+            .terminal_layouts
+            .get(&crate::terminal_layout::project_key(
+                self.state.active_project,
+            ))
+            .is_some_and(|layout| layout.maximized.is_some());
+        if self.state.active_project != project {
+            self.state.active_project = project;
+            self.refresh_project();
+        }
+        if let Some(layout) = self
+            .state
+            .terminal_layouts
+            .get_mut(&crate::terminal_layout::project_key(project))
+            && (was_maximized || layout.maximized.is_some())
+        {
+            layout.maximized = Some(id);
+        }
+        for notification in &mut self.notifications.items {
+            if notification.pane_id == Some(id) {
+                notification.unread = false;
+            }
+        }
+        self.active_session = Some(id);
+        self.view = View::Work;
+        self.save();
+    }
+
     fn select_workspace_project(&mut self, id: u64) {
         if self.state.active_project == Some(id)
             || !self.state.projects.iter().any(|project| project.id == id)
@@ -12829,16 +12863,7 @@ impl Tessel {
         use crate::side_panels_ui::SidePanelsAction;
         match action {
             SidePanelsAction::FocusPane(pane_id) => {
-                if let Some(proj_id) = self
-                    .sessions
-                    .iter()
-                    .find(|s| s.id == pane_id)
-                    .and_then(|s| s.project)
-                {
-                    self.state.active_project = Some(proj_id);
-                }
-                self.active_session = Some(pane_id);
-                self.view = View::Work;
+                self.reveal_workspace_pane(pane_id);
                 self.side_panels_ui.sessions_modal_open = false;
             }
             SidePanelsAction::SleepPanes(ids) => {
@@ -13398,14 +13423,20 @@ impl Tessel {
                 self.overlay = Some(Overlay::Settings);
             }
             DialogsToolbarAction::FocusPane(pane_id) => {
-                if let Some(s) = self.sessions.iter().find(|s| s.id == pane_id) {
-                    let proj = s.project;
-                    if self.state.active_project != proj {
-                        self.state.active_project = proj;
-                        self.refresh_project();
+                self.reveal_workspace_pane(pane_id);
+            }
+            DialogsToolbarAction::OpenNotification(id) => {
+                self.gpui_extra.notifications_popover_open = false;
+                if let Some(item) = self
+                    .notifications
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == id)
+                {
+                    item.unread = false;
+                    if let Some(pane) = item.pane_id {
+                        self.reveal_workspace_pane(pane);
                     }
-                    self.active_session = Some(pane_id);
-                    self.view = View::Work;
                 }
             }
             DialogsToolbarAction::MarkAllNotificationsRead => {

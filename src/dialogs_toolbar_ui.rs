@@ -82,6 +82,7 @@ pub enum DialogsToolbarAction {
     OpenStatsSettings,
     OpenAlertsSettings,
     FocusPane(u64),
+    OpenNotification(u64),
     MarkAllNotificationsRead,
     ClearNotifications,
 }
@@ -1230,10 +1231,8 @@ pub fn show_notifications_menu_contents(
                     })
                     .response
                     .interact(Sense::click());
-                if resp.clicked()
-                    && let Some(pane_id) = item.pane_id
-                {
-                    out = Some(DialogsToolbarAction::FocusPane(pane_id));
+                if resp.clicked() {
+                    out = Some(DialogsToolbarAction::OpenNotification(item.id));
                 }
                 ui.add_space(4.0_f32);
             }
