@@ -19,6 +19,11 @@ pub(super) fn document() -> Vec<u8> {
     )])
 }
 pub(super) fn spreadsheet() -> Vec<u8> {
+    spreadsheet_with_sheet(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Original value</t></is></c><c r="B1"><v>42</v></c><c r="C1"><f>B1+1</f><v>43</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Second row</t></is></c></row></sheetData></worksheet>"#,
+    )
+}
+pub(super) fn spreadsheet_with_sheet(sheet_xml: &str) -> Vec<u8> {
     archive(&[
         (
             "[Content_Types].xml",
@@ -36,9 +41,6 @@ pub(super) fn spreadsheet() -> Vec<u8> {
             "xl/_rels/workbook.xml.rels",
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
         ),
-        (
-            "xl/worksheets/sheet1.xml",
-            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Original value</t></is></c><c r="B1"><v>42</v></c><c r="C1"><f>B1+1</f><v>43</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Second row</t></is></c></row></sheetData></worksheet>"#,
-        ),
+        ("xl/worksheets/sheet1.xml", sheet_xml),
     ])
 }

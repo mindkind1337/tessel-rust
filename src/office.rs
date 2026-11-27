@@ -27,6 +27,8 @@ struct Section {
     title: String,
     paragraphs: Vec<Paragraph>,
     rows: Vec<Vec<String>>,
+    omitted_rows: usize,
+    omitted_cols: usize,
     start_row: u32,
     start_col: u32,
 }
@@ -200,6 +202,8 @@ pub struct OfficeView {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct OfficeSummary {
+    pub omitted_rows: usize,
+    pub omitted_cols: usize,
     pub workbook: bool,
     pub section_titles: Vec<String>,
     pub selected: usize,
@@ -255,12 +259,14 @@ impl OfficeView {
                         rows: page.rows.clone(),
                         start_row: page.start_row as usize,
                         start_col: page.start_col as usize,
-                        truncated_rows: usize::from(book.truncated),
-                        truncated_cols: 0,
+                        truncated_rows: page.omitted_rows,
+                        truncated_cols: page.omitted_cols,
                         delimiter_label: "Workbook sheet",
                     });
             OfficeSummary {
                 workbook: is_workbook(&self.extension),
+                omitted_rows: page.map_or(0, |p| p.omitted_rows),
+                omitted_cols: page.map_or(0, |p| p.omitted_cols),
                 section_titles: book.sections.iter().map(|s| s.title.clone()).collect(),
                 selected: idx,
                 paragraphs: page
@@ -368,8 +374,8 @@ impl OfficeView {
                             rows: page.rows.clone(),
                             start_row: page.start_row as usize,
                             start_col: page.start_col as usize,
-                            truncated_rows: usize::from(book.truncated),
-                            truncated_cols: 0,
+                            truncated_rows: page.omitted_rows,
+                            truncated_cols: page.omitted_cols,
                             delimiter_label: "Workbook sheet",
                         };
                         crate::rich_previews::show_sheet_grid(

@@ -169,6 +169,8 @@ fn office_workbook_tabs_switch_between_data_and_an_empty_sheet(cx: &mut gpui::Te
         title: "Blank".into(),
         rows: vec![],
         paragraphs: vec![],
+        omitted_rows: 0,
+        omitted_cols: 0,
         start_row: 0,
         start_col: 0,
     });
@@ -211,4 +213,20 @@ fn empty_office_workbooks_have_no_synthetic_section() {
     let summary = view.gpui_poll_summary();
     assert!(summary.workbook && summary.section_titles.is_empty() && summary.sheet.is_none());
     assert!(!summary.busy && summary.error.is_empty());
+}
+
+#[test]
+fn office_sparse_sheet_preserves_coordinates_and_counts_omitted_dimensions() {
+    let bytes = spreadsheet_with_sheet(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="5"><c r="D5"><v>7</v></c><c r="GR5"><v>200</v></c><c r="GS5"><v>201</v></c></row><row r="5002"><c r="D5002"><v>99</v></c></row></sheetData></worksheet>"#,
+    );
+    let book = parse::parse(&bytes, "xlsx").unwrap();
+    let sheet = &book.sections[0];
+    assert_eq!((sheet.start_row, sheet.start_col), (0, 0));
+    assert_eq!((sheet.omitted_rows, sheet.omitted_cols), (2, 1));
+    assert_eq!(sheet.rows.len(), 5);
+    assert!(sheet.rows[..4].iter().all(Vec::is_empty));
+    assert_eq!(&sheet.rows[4][..4], ["", "", "", "7"]);
+    assert_eq!(sheet.rows[4].len(), 200);
+    assert_eq!(sheet.rows[4][199], "200");
 }

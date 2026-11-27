@@ -1890,6 +1890,7 @@ pub(crate) fn render_office_summary(
         );
         let body = match &summary.sheet {
             Some(sheet) => super::sheet_view::render(sheet.clone(), french, tokens, cx),
+            None if summary.omitted_rows > 0 || summary.omitted_cols > 0 => div(),
             None => note(if french {
                 "Cette feuille est vide."
             } else {
@@ -1902,6 +1903,22 @@ pub(crate) fn render_office_summary(
             .flex()
             .flex_col()
             .child(div().flex_1().min_h_0().child(body))
+            .when(summary.omitted_rows > 0 || summary.omitted_cols > 0, |el| {
+                let (rows, cols) = (summary.omitted_rows, summary.omitted_cols);
+                let label = if french {
+                    format!("Hors de la zone affichée : {rows} ligne(s), {cols} colonne(s).")
+                } else {
+                    format!("Outside the displayed range: {rows} row(s), {cols} column(s).")
+                };
+                el.child(div().px(px(8.)).text_color(tokens.text_dim).child(label))
+            })
+            .when(summary.truncated, |el| {
+                el.child(note(if french {
+                    "Aperçu limité aux données prises en charge."
+                } else {
+                    "Preview limited to supported data."
+                }))
+            })
             .child(tabs);
     }
     let body = {

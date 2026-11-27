@@ -184,6 +184,8 @@ fn text_page(source: &str, title: String, odf: bool) -> Result<Section, String> 
         title,
         paragraphs,
         rows: vec![],
+        omitted_rows: 0,
+        omitted_cols: 0,
         start_row: 0,
         start_col: 0,
     })
@@ -202,46 +204,71 @@ pub(super) fn parse(bytes: &[u8], extension: &str) -> Result<Book, String> {
         }
         let mut cells = 0;
         let mut text_bytes = 0;
+        let sheet_count = names.len().min(200);
         for name in names.into_iter().take(200) {
             let range = workbook
                 .worksheet_range(&name)
                 .map_err(|_| "Cannot read spreadsheet sheet")?;
             let (start_row, start_col) = range.start().unwrap_or((0, 0));
+            use crate::rich_previews::{MAX_SHEET_COLS, MAX_SHEET_ROWS};
+            let (height, width) = range
+                .end()
+                .map_or((0, 0), |(r, c)| (r as usize + 1, c as usize + 1));
             let mut section = Section {
                 title: name,
                 paragraphs: vec![],
                 rows: vec![],
-                start_row,
-                start_col,
+                start_row: 0,
+                start_col: 0,
+                omitted_rows: height.saturating_sub(MAX_SHEET_ROWS),
+                omitted_cols: width.saturating_sub(MAX_SHEET_COLS),
             };
-            if range.height() > 5000 || range.width() > 100 {
-                book.truncated = true;
-            }
-            for row in range.rows().take(5000) {
-                let mut values = Vec::new();
-                for cell in row.iter().take(100) {
-                    if cells >= 100000 || text_bytes >= TEXT_LIMIT {
-                        book.truncated = true;
-                        break;
+            // Store blank positions only up to the last displayed value in each row.
+            // A sparse sheet beginning at D5 still displays A1 through C4.
+            let start_row = start_row as usize;
+            let start_col = start_col as usize;
+            'rows: for (r, row) in range
+                .rows()
+                .take(MAX_SHEET_ROWS.saturating_sub(start_row))
+                .enumerate()
+            {
+                for (c, cell) in row
+                    .iter()
+                    .take(MAX_SHEET_COLS.saturating_sub(start_col))
+                    .enumerate()
+                {
+                    if cell == &calamine::Data::Empty {
+                        continue;
                     }
-                    let value = cell.to_string();
-                    let value = if value.len() > 4096 {
+                    let mut value = cell.to_string();
+                    if value.is_empty() {
+                        continue;
+                    }
+                    if value.len() > 4096 {
                         book.truncated = true;
-                        value.chars().take(1024).collect::<String>()
-                    } else {
-                        value
-                    };
-                    cells += 1;
-                    text_bytes += value.len();
-                    values.push(value);
+                        value = value.chars().take(1024).collect();
+                    }
+                    let row_index = start_row + r;
+                    let col_index = start_col + c;
+                    let prev = section.rows.get(row_index).map_or(0, Vec::len);
+                    let added = col_index + 1 - prev;
+                    if cells + added > 100000 || text_bytes + value.len() > TEXT_LIMIT {
+                        book.truncated = true;
+                        break 'rows;
+                    }
+                    if row_index >= section.rows.len() {
+                        section.rows.resize_with(row_index + 1, Vec::new);
+                    }
+                    let cells_in_row = &mut section.rows[row_index];
+                    cells_in_row.resize(col_index, String::new());
+                    cells_in_row.push(value);
+                    cells += added;
+                    text_bytes += cells_in_row[col_index].len();
                 }
-                if values.is_empty() {
-                    break;
-                }
-                section.rows.push(values);
             }
             book.sections.push(section);
             if cells >= 100000 || text_bytes >= TEXT_LIMIT {
+                book.truncated |= book.sections.len() < sheet_count;
                 break;
             }
         }
