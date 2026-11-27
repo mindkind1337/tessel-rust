@@ -21,6 +21,10 @@ cat >login <<EOF
 #!/bin/sh
 unset TMUX
 export HOME=$base XDG_CONFIG_HOME=$base TMUX_TMPDIR=$base SHELL=/bin/sh
+if [ -z "\$SSH_ORIGINAL_COMMAND" ]; then
+    export PS1='fixture-login> '
+    exec /bin/sh -i
+fi
 exec sh -c "\$SSH_ORIGINAL_COMMAND"
 EOF
 cat >proxy <<'PYTHON'

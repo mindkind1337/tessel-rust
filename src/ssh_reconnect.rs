@@ -81,6 +81,7 @@ const DELAYS: [u64; 9] = [1, 2, 5, 5, 10, 10, 10, 30, 30];
 pub(crate) struct Retry {
     attempts: usize,
     deadline: Option<Instant>,
+    last_lost_session: Option<Instant>,
 }
 
 impl Retry {
@@ -115,13 +116,20 @@ impl Retry {
         }
     }
     pub fn due(&mut self, now: Instant, channel: &Channel, exit: Option<i32>) -> bool {
-        if exit.is_none() {
-            if channel
-                .opened
-                .is_some_and(|t| now.saturating_duration_since(t) >= Duration::from_secs(60))
-            {
+        // Inspect uptime on the first exit observation too. The UI may have
+        // slept across the stability threshold. Time spent waiting after exit
+        // must never make a short-lived connection look stable.
+        if let Some(opened) = channel.opened
+            && (exit.is_none() || self.last_lost_session != Some(opened))
+        {
+            if now.saturating_duration_since(opened) >= Duration::from_secs(60) {
                 self.attempts = 0;
             }
+            if exit.is_some() {
+                self.last_lost_session = Some(opened);
+            }
+        }
+        if exit.is_none() {
             return false;
         }
         if exit != Some(255)
@@ -167,6 +175,32 @@ mod tests {
         assert_eq!(channel.opened, Some(opened));
         channel.observe(frame(&channel, "X").as_bytes());
         assert!(channel.remote_255);
+    }
+
+    #[test]
+    fn retry_budget_uses_uptime_at_first_observed_exit() {
+        let opened = Instant::now();
+        let mut channel = Channel::new(true).unwrap();
+        channel.opened = Some(opened);
+        let mut retry = Retry {
+            attempts: DELAYS.len(),
+            ..Default::default()
+        };
+        let lost = opened + Duration::from_secs(60);
+        assert!(!retry.due(lost, &channel, Some(255)));
+        assert!(retry.due(lost + Duration::from_secs(1), &channel, Some(255)));
+
+        let mut retry = Retry {
+            attempts: DELAYS.len() - 1,
+            ..Default::default()
+        };
+        let lost = opened + Duration::from_secs(59);
+        assert!(!retry.due(lost, &channel, Some(255)));
+        assert!(!retry.due(lost + Duration::from_secs(1), &channel, Some(255)));
+        assert!(retry.due(lost + Duration::from_secs(30), &channel, Some(255)));
+        assert!(retry.exhausted());
+        assert!(!retry.due(lost + Duration::from_secs(31), &channel, Some(255)));
+        assert!(!retry.pending());
     }
 
     #[test]
@@ -245,9 +279,7 @@ mod openssh_tests {
         }
     }
 
-    #[test]
-    #[ignore = "requires WSL with OpenSSH server, public-key login to self, and tmux"]
-    fn ssh_reconnect_after_transport_loss_keeps_the_remote_process_and_honors_exit_255() {
+    fn isolated_server() -> (Fixture, tempfile::TempDir, std::path::PathBuf) {
         let fixture = Fixture(wsl(&["mktemp", "-d", "/tmp/tessel-reconnect.XXXXXXXX"]));
         let root = fixture.0.as_str();
         let setup = include_str!("../tests/fixtures/ssh_reconnect_setup.sh").replace("\r\n", "\n");
@@ -276,6 +308,59 @@ mod openssh_tests {
             "Host fixture\n HostName 127.0.0.1\n User {}\n IdentityFile \"{}\"\n IdentitiesOnly yes\n BatchMode yes\n StrictHostKeyChecking yes\n UserKnownHostsFile \"{}\"\n GlobalKnownHostsFile none\n ProxyCommand wsl.exe --exec {root}/proxy\n",
             wsl(&["id","-un"]), key.to_string_lossy().replace('\\',"/"), known.to_string_lossy().replace('\\',"/")
         )).unwrap();
+        (fixture, local, config)
+    }
+
+    #[test]
+    #[ignore = "requires WSL with OpenSSH server and public-key login to self"]
+    fn direct_ssh_login_preserves_shell_request_and_reports_both_255_outcomes() {
+        let (fixture, local, config) = isolated_server();
+        let host = Launch::Ssh(Host {
+            alias: "fixture".into(),
+            folder: String::new(),
+            persistent_sessions: Some(false),
+            ..Default::default()
+        });
+        let open = || {
+            let channel = Channel::for_launch(&host, false).unwrap();
+            let mut command = crate::launch::pane_command(
+                &host,
+                local.path(),
+                None,
+                None,
+                None,
+                channel.as_ref(),
+            )
+            .unwrap();
+            assert_eq!(command.get_argv().last().unwrap(), "fixture");
+            command
+                .get_argv_mut()
+                .splice(1..1, ["-F".into(), config.as_os_str().to_owned()]);
+            let mut shell = Terminal::spawn_command(command).unwrap();
+            wait_until(&mut shell, |t| t.output().contains("fixture-login>"));
+            shell
+        };
+        let mut shell = open();
+        shell.run_quick_command("exit 255", true).unwrap();
+        wait_until(&mut shell, Terminal::exited);
+        assert_eq!(shell.exit_code(), Some(255));
+        let mut shell = open();
+        wsl(&[
+            "sh",
+            "-c",
+            r#"kill -KILL "$(cat "$1/transport")""#,
+            "sh",
+            &fixture.0,
+        ]);
+        wait_until(&mut shell, Terminal::exited);
+        assert_eq!(shell.exit_code(), Some(255));
+    }
+
+    #[test]
+    #[ignore = "requires WSL with OpenSSH server, public-key login to self, and tmux"]
+    fn ssh_reconnect_after_transport_loss_keeps_the_remote_process_and_honors_exit_255() {
+        let (fixture, _local, config) = isolated_server();
+        let root = fixture.0.as_str();
         let host = Launch::Ssh(Host {
             alias: "fixture".into(),
             folder: "~".into(),
