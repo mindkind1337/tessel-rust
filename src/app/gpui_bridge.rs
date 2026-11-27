@@ -508,6 +508,7 @@ pub(crate) struct GpuiSidePanelsSnapshot {
     pub open_editors: Vec<ExplorerOpenEditor>,
     pub editor_project: Option<u64>,
     pub open_editors_shown: bool,
+    pub folder_shown: bool,
     pub explorer_editable: bool,
     pub explorer_can_insert: bool,
     pub timeline: crate::file_timeline::Snapshot,
@@ -1077,6 +1078,9 @@ pub(crate) enum GpuiAction {
         text: String,
     },
     ExplorerToggleSearchMode,
+    ExplorerSetSearchMode(bool),
+    ExplorerToggleFolder,
+    ExplorerCollapseFolders,
     ExplorerToggleEditors,
     ExplorerActivateDocument(u64),
     ExplorerCloseDocument(u64),
@@ -4789,6 +4793,7 @@ impl Tessel {
             open_editors,
             editor_project: self.state.active_project,
             open_editors_shown: self.state.editor_prefs.open_editors_shown,
+            folder_shown: self.state.editor_prefs.explorer_folder_shown,
             explorer_editable: self.file_actions_ready(),
             explorer_can_insert: self.explorer_terminal_id().is_some(),
             timeline: self.timeline_snapshot(visible == Some(SideTab::Files)),
@@ -6907,6 +6912,15 @@ impl Tessel {
                     self.advance_close_requests();
                 }
             }
+            GpuiAction::ExplorerSetSearchMode(content) => {
+                self.explorer_tree.gpui_set_search_mode(content);
+            }
+            GpuiAction::ExplorerToggleFolder => {
+                self.state.editor_prefs.explorer_folder_shown =
+                    !self.state.editor_prefs.explorer_folder_shown;
+                self.save();
+            }
+            GpuiAction::ExplorerCollapseFolders => self.explorer_tree.collapse_all(),
             GpuiAction::ExplorerToggleSearchMode => {
                 self.explorer_tree.gpui_toggle_search_mode();
             }
@@ -7112,9 +7126,10 @@ impl Tessel {
                 self.explorer_tree.refresh();
             }
             GpuiAction::ExplorerNavigate(root, key) => {
-                if self
-                    .gpui_explorer_owner()
-                    .is_none_or(|owner| owner.root != root)
+                if !self.state.editor_prefs.explorer_folder_shown
+                    || self
+                        .gpui_explorer_owner()
+                        .is_none_or(|owner| owner.root != root)
                 {
                     return;
                 }
@@ -7162,19 +7177,19 @@ impl Tessel {
                 self.open_explorer_content_hit(path, line)
             }
             GpuiAction::ExplorerNewItem { dir } => {
-                let active_root = self.state.active().map(|p| p.path.clone());
-                let snap = self
-                    .explorer_tree
-                    .gpui_rows_snapshot(active_root.as_deref(), None);
-                if snap.has_root {
+                if let Some(root) = self.state.active().map(|p| p.path.clone()) {
+                    if !self.state.editor_prefs.explorer_folder_shown {
+                        self.state.editor_prefs.explorer_folder_shown = true;
+                        self.save();
+                    }
                     self.file_action = Some(crate::file_actions::Action {
                         kind: if dir {
                             crate::file_actions::Kind::Folder
                         } else {
                             crate::file_actions::Kind::File
                         },
-                        root: snap.root_path,
-                        path: snap.new_target_dir,
+                        path: root.clone(),
+                        root,
                         name: String::new(),
                     });
                 }

@@ -384,6 +384,9 @@ impl TesselGpuiRoot {
     }
 
     pub(crate) fn dispatch(&mut self, action: GpuiAction, cx: &mut Context<Self>) {
+        if matches!(&action, GpuiAction::ExplorerToggleFolder) {
+            self.explorer_input.menu = None;
+        }
         if matches!(&action, GpuiAction::NewSideBrowser) {
             self.side_browser_input.select_all = true;
         }

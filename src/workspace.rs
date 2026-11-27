@@ -269,6 +269,8 @@ pub struct EditorPreferences {
     pub outline_filter_on_type: bool,
     #[serde(default = "default_true")]
     pub open_editors_shown: bool,
+    #[serde(default = "default_true")]
+    pub explorer_folder_shown: bool,
     pub timeline_shown: bool,
     pub timeline_git: bool,
     pub timeline_local: bool,
@@ -292,6 +294,7 @@ impl Default for EditorPreferences {
             outline_follow_cursor: true,
             outline_filter_on_type: true,
             open_editors_shown: true,
+            explorer_folder_shown: true,
             timeline_shown: false,
             timeline_git: true,
             timeline_local: true,

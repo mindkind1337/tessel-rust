@@ -348,6 +348,41 @@ fn render_dashboard_tab(
 // 2. `SideTab::Files` (`ExplorerPanel.vue`)
 // ---------------------------------------------------------------------------
 
+fn explorer_section_toggle(
+    id: &'static str,
+    title: &str,
+    open: bool,
+    action: GpuiAction,
+    cx: &Context<TesselGpuiRoot>,
+) -> gpui::Stateful<gpui::Div> {
+    let key_action = action.clone();
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .role(gpui::Role::Button)
+        .aria_label(title.to_owned())
+        .aria_expanded(open)
+        .focusable()
+        .tab_stop(true)
+        .on_key_down(
+            cx.listener(move |root, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    if !event.is_held {
+                        root.dispatch(key_action.clone(), cx);
+                    }
+                }
+            }),
+        )
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .cursor_pointer()
+        .on_click(cx.listener(move |root, _, _, cx| root.dispatch(action.clone(), cx)))
+        .child(format!("{} {title}", if open { "▾" } else { "▸" }))
+}
+
 fn render_open_editors(
     sp: &GpuiSidePanelsSnapshot,
     french: bool,
@@ -360,33 +395,13 @@ fn render_open_editors(
         "Open editors"
     };
     let dirty = sp.open_editors.iter().filter(|e| e.dirty).count();
-    let toggle = div()
-        .id("open-editors-head")
-        .debug_selector(|| "open-editors-head".into())
-        .role(gpui::Role::Button)
-        .aria_label(title)
-        .focusable()
-        .tab_stop(true)
-        .on_key_down(cx.listener(|root, event: &gpui::KeyDownEvent, window, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                window.prevent_default();
-                cx.stop_propagation();
-                if !event.is_held {
-                    root.dispatch(GpuiAction::ExplorerToggleEditors, cx);
-                }
-            }
-        }))
-        .flex_1()
-        .min_w_0()
-        .truncate()
-        .cursor_pointer()
-        .on_click(
-            cx.listener(|root, _, _, cx| root.dispatch(GpuiAction::ExplorerToggleEditors, cx)),
-        )
-        .child(format!(
-            "{} {title}",
-            if sp.open_editors_shown { "▾" } else { "▸" }
-        ));
+    let toggle = explorer_section_toggle(
+        "open-editors-head",
+        title,
+        sp.open_editors_shown,
+        GpuiAction::ExplorerToggleEditors,
+        cx,
+    );
     let mut header = div()
         .h(px(24.))
         .flex()
@@ -553,33 +568,18 @@ fn render_explorer_tab(
         .items_center()
         .justify_between()
         .gap(px(4.0))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(11.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens.text_strong)
-                .truncate()
-                .child(SharedString::from(ex.root_title.clone())),
-        )
+        .child(explorer_section_toggle(
+            "explorer-folder-head",
+            &ex.root_title,
+            sp.folder_shown,
+            GpuiAction::ExplorerToggleFolder,
+            cx,
+        ))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(3.0))
-                .child(render_chip(
-                    "gpui-ex-mode",
-                    if ex.content_search_mode {
-                        if french { "Contenu" } else { "Content" }.to_owned()
-                    } else {
-                        if french { "Nom" } else { "Name" }.to_owned()
-                    },
-                    ex.content_search_mode,
-                    tokens,
-                    GpuiAction::ExplorerToggleSearchMode,
-                    cx,
-                ))
                 .child(render_chip(
                     "gpui-ex-new-file",
                     "+F".to_owned(),
@@ -610,6 +610,19 @@ fn render_explorer_tab(
                     ex.compact_folders,
                     tokens,
                     GpuiAction::ExplorerToggleCompact,
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-collapse",
+                    if french {
+                        "Tout replier"
+                    } else {
+                        "Collapse all"
+                    }
+                    .into(),
+                    false,
+                    tokens,
+                    GpuiAction::ExplorerCollapseFolders,
                     cx,
                 ))
                 .child(
@@ -1064,13 +1077,20 @@ fn render_explorer_tab(
         }
         heading = heading.child(options);
     }
-    let mut outline = div().flex().flex_col().child(heading);
+    let mut outline = div()
+        .flex()
+        .flex_col()
+        .when(!sp.folder_shown && sp.outline_open, |el| {
+            el.flex_1().min_h_0()
+        })
+        .child(heading);
     if sp.outline_open {
         let mut reveal_index = None;
         let mut body = div()
             .id("explorer-outline-scroll")
             .track_scroll(&explorer_input.outline_scroll)
-            .max_h(px(160.0))
+            .when(sp.folder_shown, |el| el.max_h(px(160.0)))
+            .when(!sp.folder_shown, |el| el.flex_1().min_h_0())
             .overflow_y_scroll()
             .flex()
             .flex_col();
@@ -1281,22 +1301,55 @@ fn render_explorer_tab(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(toolbar)
         .child(explorer_input.render(ex.content_search_mode, french, tokens, cx))
+        .child(
+            div()
+                .flex()
+                .gap(px(4.))
+                .child(render_chip(
+                    "gpui-ex-names",
+                    if french { "Noms" } else { "Names" }.into(),
+                    !ex.content_search_mode,
+                    tokens,
+                    GpuiAction::ExplorerSetSearchMode(false),
+                    cx,
+                ))
+                .child(render_chip(
+                    "gpui-ex-content",
+                    if french { "Contenu" } else { "Content" }.into(),
+                    ex.content_search_mode,
+                    tokens,
+                    GpuiAction::ExplorerSetSearchMode(true),
+                    cx,
+                )),
+        )
         .child(render_open_editors(sp, french, tokens, cx))
-        .child(scroll)
-        .children(explorer_input.menu.as_ref().map(|menu| {
-            menu.render(
-                french,
-                sp.explorer_editable,
-                sp.explorer_can_insert,
-                ex,
-                tokens,
-                cx,
-            )
-        }))
+        .child(toolbar)
+        .when(sp.folder_shown, |el| el.child(scroll))
+        .children(
+            explorer_input
+                .menu
+                .as_ref()
+                .filter(|_| sp.folder_shown)
+                .map(|menu| {
+                    menu.render(
+                        french,
+                        sp.explorer_editable,
+                        sp.explorer_can_insert,
+                        ex,
+                        tokens,
+                        cx,
+                    )
+                }),
+        )
         .child(outline)
-        .child(render_timeline(&sp.timeline, french, tokens, cx))
+        .child(render_timeline(
+            &sp.timeline,
+            !sp.folder_shown,
+            french,
+            tokens,
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -2931,12 +2984,16 @@ fn render_chip(
 
 fn render_timeline(
     snap: &crate::file_timeline::Snapshot,
+    fill: bool,
     fr: bool,
     tokens: &GpuiThemeTokens,
     cx: &mut Context<TesselGpuiRoot>,
 ) -> AnyElement {
     use crate::file_timeline::Action;
-    let mut section = div().flex().flex_col();
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .when(fill && snap.shown, |el| el.flex_1().min_h_0());
     section = section.child(render_chip(
         "timeline-toggle",
         if fr { "Chronologie" } else { "Timeline" }.into(),
@@ -3032,7 +3089,8 @@ fn render_timeline(
     if let (Some(file), Some(Ok(history))) = (&snap.file, &snap.data) {
         let mut list = div()
             .id("timeline-entries")
-            .max_h(px(160.))
+            .when(!fill, |el| el.max_h(px(160.)))
+            .when(fill, |el| el.flex_1().min_h_0())
             .overflow_y_scroll()
             .flex()
             .flex_col();

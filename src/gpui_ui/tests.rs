@@ -414,6 +414,74 @@ fn ctrl_page_keys_cycle_workspaces_and_route_terminal_input(cx: &mut gpui::TestA
 
 #[cfg(all(windows, feature = "visual-test"))]
 #[gpui::test]
+fn explorer_folder_fold_persists_and_header_creation_reopens_the_project_root(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let file = project.join("notes.txt");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(&file, "notes").unwrap();
+    let view = cx.add_window(|_, cx| {
+        let mut root = super::TesselGpuiRoot::new_in_dir(Some(state.clone()), false, cx);
+        root.app
+            .apply_gpui_action(GpuiAction::AddProjectPath(project.clone()));
+        root.app
+            .apply_gpui_action(GpuiAction::OpenDocumentPath(file));
+        let s = root.app.gpui_snapshot(960., 640., 4.);
+        if !s.toolbar.right_open || s.right_tab != SideTab::Files {
+            root.app
+                .apply_gpui_action(GpuiAction::SelectSideTab(SideTab::Files));
+        }
+        root
+    });
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let head = visual
+        .debug_bounds("explorer-folder-head")
+        .unwrap()
+        .center();
+    visual.simulate_click(head, Default::default());
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    assert!(visual.debug_bounds("explorer-file-row-0").is_none());
+    assert!(visual.debug_bounds("open-editor-0").is_some());
+    view.update(cx, |root, _, cx| {
+        // Release the workspace lock before opening the same profile again.
+        root.app = crate::app::Tessel::new_for_gpui_in_dir(
+            Some(temp.path().join("scratch")),
+            false,
+            || {},
+        );
+        root.app = crate::app::Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert!(
+            !root
+                .app
+                .gpui_snapshot(960., 640., 4.)
+                .side_panels
+                .folder_shown
+        );
+        cx.notify();
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(view.into(), cx);
+    let add = visual.debug_bounds("gpui-ex-new-file").unwrap().center();
+    visual.simulate_click(add, Default::default());
+    view.update(cx, |root, _, _| {
+        let s = root.app.gpui_snapshot(960., 640., 4.);
+        assert!(s.side_panels.folder_shown);
+        assert_eq!(
+            std::fs::canonicalize(s.modals.prompt_modal.unwrap().subtitle).unwrap(),
+            std::fs::canonicalize(&project).unwrap()
+        );
+    })
+    .unwrap();
+}
+
+#[cfg(all(windows, feature = "visual-test"))]
+#[gpui::test]
 fn explorer_open_editors_controls_save_select_fold_and_close(cx: &mut gpui::TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().join("workspace");

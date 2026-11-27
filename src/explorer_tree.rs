@@ -1767,8 +1767,14 @@ impl ExplorerTree {
     }
     #[allow(dead_code)]
     pub(crate) fn gpui_toggle_search_mode(&mut self) {
-        self.content_search_mode = !self.content_search_mode;
-        self.gpui_schedule_filter(Instant::now());
+        self.gpui_set_search_mode(!self.content_search_mode);
+    }
+
+    pub(crate) fn gpui_set_search_mode(&mut self, content: bool) {
+        if self.content_search_mode != content {
+            self.content_search_mode = content;
+            self.gpui_schedule_filter(Instant::now());
+        }
     }
 
     fn choose_name_result(&mut self, entry: TreeDirEntry, pinned: bool) -> Option<TreeAction> {
