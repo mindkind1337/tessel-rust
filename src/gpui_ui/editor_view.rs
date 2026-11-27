@@ -2406,6 +2406,28 @@ fn render_image_stage(
 // Embedded Browser Tab (`#[cfg(windows)]` WebView2 Child HWND Sync)
 // ---------------------------------------------------------------------------
 
+pub(super) fn external_browser_button(
+    page: &crate::app::gpui_bridge::GpuiBrowserSnapshot,
+    selector: &'static str,
+    tokens: &GpuiThemeTokens,
+) -> impl IntoElement {
+    let label = crate::i18n::tr("Open in default browser");
+    div()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .flex_shrink_0()
+        .px(px(5.))
+        .py(px(3.))
+        .aria_label(label)
+        .aria_disabled(page.external_address.is_none())
+        .when(page.external_address.is_none(), |el| el.opacity(0.4))
+        .when_some(page.external_address.clone(), |el, url| {
+            el.cursor_pointer()
+                .on_click(move |_, _, cx| cx.open_url(&url))
+        })
+        .child(GpuiIcon::ExternalLink.render(15., tokens.text))
+}
+
 pub(super) fn download_toggle(
     b: &crate::app::gpui_bridge::GpuiBrowserSnapshot,
     tokens: &GpuiThemeTokens,
@@ -2724,6 +2746,7 @@ pub(crate) fn render_browser_stage(
                         })),
                 )
                 .child(browser_input.render(french, tokens, cx))
+                .child(external_browser_button(b, "browser-open-external", tokens))
                 .child(
                     div()
                         .id("browser-go")

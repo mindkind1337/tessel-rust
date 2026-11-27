@@ -307,6 +307,10 @@ impl Browser {
         })
     }
 
+    pub(crate) fn external_address(&self) -> Option<String> {
+        Self::restorable_url(&self.committed_address).filter(|url| url != "about:blank")
+    }
+
     fn current_location(&self) -> &str {
         if self.view.is_none() && self.auto_start_pending && !self.address_editing {
             &self.address
@@ -1605,6 +1609,15 @@ impl Browser {
                 || ui.button(tr("Go")).clicked()
             {
                 self.submit_address();
+            }
+            let external = self.external_address();
+            if ui
+                .add_enabled(external.is_some(), egui::Button::new("↗"))
+                .on_hover_text(tr("Open in default browser"))
+                .clicked()
+                && let Some(url) = external
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
             }
             ui.toggle_value(
                 &mut self.downloads_open,

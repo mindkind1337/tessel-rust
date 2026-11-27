@@ -332,6 +332,21 @@ mod tests {
                 Some(expected)
             );
         }
+        view.update(cx, |root, _, _| {
+            root.app
+                .browser
+                .set_native_address_draft("https://unsubmitted.example/".into());
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        for (selector, expected) in [
+            ("side-browser-open-external", SIDE),
+            ("browser-open-external", CENTER),
+        ] {
+            let bounds = visual.debug_bounds(selector).unwrap();
+            visual.simulate_click(bounds.center(), Default::default());
+            assert_eq!(cx.opened_url().as_deref(), Some(expected));
+        }
         assert!(visual.debug_bounds("browser-try-https").is_none());
         let upgrade = visual.debug_bounds("side-browser-try-https").unwrap();
         visual.simulate_click(upgrade.center(), Default::default());

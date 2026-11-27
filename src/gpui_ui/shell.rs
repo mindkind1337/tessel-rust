@@ -1672,6 +1672,13 @@ fn render_side_browser(
                     }),
                 )
                 .child(address.render(french, tokens, cx))
+                .when_some(snapshot.side_browser.as_ref(), |row, page| {
+                    row.child(editor_view::external_browser_button(
+                        page,
+                        "side-browser-open-external",
+                        tokens,
+                    ))
+                })
                 .when_some(
                     snapshot
                         .side_browser
