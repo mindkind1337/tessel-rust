@@ -8,6 +8,8 @@ use std::collections::HashSet;
 pub struct TerminalLayout {
     pub tree: Option<PaneNode>,
     pub maximized: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<u64>,
     next_split: u64,
 }
 
@@ -16,6 +18,7 @@ impl Default for TerminalLayout {
         Self {
             tree: None,
             maximized: None,
+            focused: None,
             next_split: 1,
         }
     }
@@ -81,6 +84,7 @@ impl TerminalLayout {
         }
         if self.next_split == 0
             || self.next_split > u64::MAX - 1_000
+            || self.focused.is_some_and(|id| !allowed.contains(&id))
             || self.maximized.is_some_and(|id| !allowed.contains(&id))
             || self.tree.as_ref().is_some_and(|tree| {
                 !walk(
@@ -126,6 +130,7 @@ impl TerminalLayout {
             );
             self.rebuild(leaves, &pane_grid::grid_shape(ids.len(), room[0], room[1]));
         }
+        self.focused = self.focused.filter(|id| ids.contains(id));
         if self.maximized.is_some_and(|id| !ids.contains(&id)) {
             self.maximized = None;
         }
@@ -226,6 +231,7 @@ impl TerminalLayout {
         let next = Self {
             tree: Some(candidate),
             maximized: None,
+            focused: self.focused,
             next_split: self.next_split + 1,
         };
         if next.validate(&allowed).is_err() {
@@ -329,6 +335,22 @@ mod tests {
         assert_eq!(layout, saved);
         assert!(!layout.split_with_order(2, 1, SplitDir::Row, true));
         assert_eq!(layout, saved);
+    }
+
+    #[test]
+    fn legacy_layouts_load_and_focused_panes_must_belong_to_the_project() {
+        let mut layout: TerminalLayout =
+            serde_json::from_str(r#"{"tree":null,"maximized":null,"next_split":1}"#).unwrap();
+        assert_eq!(layout.focused, None);
+        layout.sync(&[3, 4], [800., 600.]);
+        layout.focused = Some(4);
+        assert!(layout.split(3, 5, SplitDir::Row));
+        assert_eq!(layout.focused, Some(4));
+        assert!(layout.validate(&HashSet::from([3, 4, 5])).is_ok());
+        layout.focused = Some(99);
+        assert!(layout.validate(&HashSet::from([3, 4, 5])).is_err());
+        layout.sync(&[3, 4, 5], [800., 600.]);
+        assert_eq!(layout.focused, None);
     }
 
     #[test]

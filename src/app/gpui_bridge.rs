@@ -1689,11 +1689,7 @@ impl Tessel {
                     error: String::new(),
                 });
             }
-            app.active_session = app
-                .sessions
-                .iter()
-                .find(|s| s.project == app.state.active_project)
-                .map(|s| s.id);
+            app.active_session = app.active_project_work_pane();
         }
         if probe_environment {
             app.detect_agents();
@@ -2349,6 +2345,9 @@ impl Tessel {
     ) -> std::sync::mpsc::Receiver<Vec<u8>> {
         let (terminal, receiver) = crate::terminal::Terminal::native_find_fixture();
         let session = self.sessions.iter_mut().find(|s| s.id == id).unwrap();
+        // Shell fixtures must satisfy the same workspace validation as actual shell panes.
+        session.profile_binding = None;
+        session.session_options = None;
         session.launch = Launch::Shell;
         session.terminal = Some(terminal);
         receiver
@@ -5349,7 +5348,6 @@ impl Tessel {
             GpuiAction::SelectProject(id) => self.select_workspace_project(id),
             GpuiAction::AddProjectPath(path) => match self.state.add_project(&path) {
                 Ok(_) => {
-                    self.active_session = self.active_project_work_pane();
                     self.view = View::Work;
                     self.refresh_project();
                     self.save();
@@ -5393,7 +5391,10 @@ impl Tessel {
             }
             GpuiAction::FocusSession(id) => {
                 if self.sessions.iter().any(|s| s.id == id) {
-                    self.active_session = Some(id);
+                    if self.active_session != Some(id) {
+                        self.active_session = Some(id);
+                        self.save();
+                    }
                     self.view = View::Work;
                 }
             }
@@ -7959,6 +7960,49 @@ mod panel_snapshot_tests {
         app.active_session = None;
         app.insert_explorer_path(&owner, &owner.join("plain.txt"), None);
         assert!(input.try_recv().is_err());
+    }
+
+    #[cfg(all(windows, feature = "visual-test"))]
+    #[test]
+    fn workspace_focus_returns_to_each_selected_pane_and_restores_on_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        let mut projects = Vec::new();
+        for name in ["first", "second"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            app.apply_gpui_action(GpuiAction::AddProjectPath(path));
+            app.apply_gpui_action(GpuiAction::LaunchClaudeChat);
+            let first = app.active_session.unwrap();
+            let second = app.install_terminal_find_fixture().0;
+            projects.push((app.state.active_project.unwrap(), first, second));
+        }
+        let [(a, a1, a2), (b, b1, b2)] = projects[..] else {
+            unreachable!()
+        };
+        app.apply_gpui_action(GpuiAction::SelectProject(a));
+        assert_eq!(app.active_session, Some(a2), "returning to project A");
+        app.apply_gpui_action(GpuiAction::FocusSession(a1));
+        app.apply_gpui_action(GpuiAction::CycleWorkspace(1));
+        assert_eq!(app.active_session, Some(b2), "cycling to project B");
+        app.apply_gpui_action(GpuiAction::FocusSession(b1));
+        assert!(app.error.is_empty(), "save failed: {}", app.error);
+        drop(app);
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(
+            app.active_session,
+            Some(b1),
+            "restoring project B: {}",
+            app.error
+        );
+        assert!(app.sessions.iter().all(|s| s.terminal.is_none()));
+        app.apply_gpui_action(GpuiAction::SelectProject(a));
+        assert_eq!(app.active_session, Some(a1));
+        app.remove_session(a1);
+        app.apply_gpui_action(GpuiAction::SelectProject(b));
+        app.apply_gpui_action(GpuiAction::SelectProject(a));
+        assert_eq!(app.active_session, Some(a2));
     }
 
     #[test]

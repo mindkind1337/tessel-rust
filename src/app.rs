@@ -1167,6 +1167,7 @@ impl Tessel {
                 });
             }
         }
+        app.active_session = app.active_project_work_pane();
         #[cfg(feature = "visual-test")]
         {
             if let Some(id) = std::env::args()
@@ -1623,6 +1624,7 @@ impl Tessel {
             })
             .collect();
         self.state.sync_terminal_layouts(self.grid_room);
+        self.remember_active_work_pane();
         self.state.normalize_pane_numbers();
     }
     fn auto_save_documents(&mut self, now: std::time::Instant) -> bool {
@@ -1747,6 +1749,8 @@ impl Tessel {
         });
     }
     fn refresh_project(&mut self) {
+        self.remember_active_work_pane();
+        self.active_session = self.active_project_work_pane();
         if self.tasks_board_project != self.state.active_project {
             self.tasks_board.reset();
             self.tasks_board_project = self.state.active_project;
@@ -2719,7 +2723,6 @@ impl Tessel {
 
                 Message::Folder(Some(path)) => match self.state.add_project(&path) {
                     Ok(project_id) => {
-                        self.active_session = self.active_project_work_pane();
                         self.save();
                         self.refresh_project();
                         if !self.sessions.iter().any(|s| s.project == Some(project_id))
@@ -3699,7 +3702,6 @@ impl Tessel {
             return;
         }
         self.state.active_project = Some(id);
-        self.active_session = self.active_project_work_pane();
         self.view = View::Work;
         self.refresh_project();
         self.save();
@@ -5985,12 +5987,31 @@ impl Tessel {
             }
         });
     }
+    fn remember_active_work_pane(&mut self) {
+        if let Some(pane) = self
+            .active_session
+            .and_then(|id| self.sessions.iter().find(|pane| pane.id == id))
+        {
+            let key = crate::terminal_layout::project_key(pane.project);
+            self.state.terminal_layouts.entry(key).or_default().focused = Some(pane.id);
+        }
+    }
+
     fn active_project_work_pane(&self) -> Option<u64> {
         self.active_session
             .filter(|id| {
                 self.sessions
                     .iter()
                     .any(|s| s.id == *id && s.project == self.state.active_project)
+            })
+            .or_else(|| {
+                let project = self.state.active_project;
+                let key = crate::terminal_layout::project_key(project);
+                let id = self.state.terminal_layouts.get(&key)?.focused?;
+                self.sessions
+                    .iter()
+                    .any(|s| s.id == id && s.project == project)
+                    .then_some(id)
             })
             .or_else(|| {
                 self.sessions
@@ -6281,7 +6302,7 @@ impl Tessel {
             return;
         }
         if !self.active_session.is_some_and(|id| ids.contains(&id)) {
-            self.active_session = ids.first().copied();
+            self.active_session = self.active_project_work_pane();
         }
         let key = crate::terminal_layout::project_key(self.state.active_project);
         let room = ui.available_rect_before_wrap();
@@ -6431,6 +6452,7 @@ impl Tessel {
                         && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
                 })
             {
+                self.grid_dirty |= self.active_session != Some(id);
                 self.active_session = Some(id);
             }
             let active = self.active_session == Some(id);
@@ -13176,7 +13198,6 @@ impl Tessel {
             }
         }
         if let Some(project_id) = last_id {
-            self.active_session = self.active_project_work_pane();
             self.save();
             self.refresh_project();
             if !self.sessions.iter().any(|s| s.project == Some(project_id))
