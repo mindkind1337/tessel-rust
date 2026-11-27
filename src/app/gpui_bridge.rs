@@ -11532,17 +11532,20 @@ mod panel_snapshot_tests {
             }
         }
         loads.sort_by_key(|(request, _)| std::cmp::Reverse(*request));
+        let older = loads.pop().unwrap().1;
         for msg in other_messages
             .into_iter()
             .chain(loads.into_iter().map(|(_, msg)| msg))
         {
             app.sender.send(msg).unwrap();
         }
-        while !app.document_pending.is_empty() {
-            app.poll_for_gpui();
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
-        }
+        app.poll_for_gpui();
+        assert!(matches!(app.view, View::Files));
+        app.apply_gpui_action(GpuiAction::SelectWorkTab);
+        app.sender.send(older).unwrap();
+        app.poll_for_gpui();
+        assert!(app.document_pending.is_empty());
+        assert!(matches!(app.view, View::Work));
         assert_eq!(app.documents.len(), 2);
         let doc = &app.documents[app.active_document];
         assert!(!doc.preview_mode && !doc.unpinned_preview);

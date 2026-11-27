@@ -153,7 +153,7 @@ pub(crate) struct DisplayText {
 
 #[derive(Clone, Debug, Default)]
 pub struct EditorTools {
-    latest_location_request: u64,
+    latest_open_request: u64,
     display_text: Option<DisplayText>,
     pub(crate) disk_revision: u64,
     pub(crate) disk_reload: u64,
@@ -743,15 +743,26 @@ impl Document {
         )
     }
 
-    pub(crate) fn reveal_location(&mut self, position: Option<(u64, FilePosition)>) {
-        let Some((order, position)) = position else {
-            return;
-        };
-        // Distinct input paths can resolve to this document on different loader threads.
-        if self.media || order < self.tools.latest_location_request {
-            return;
+    /// A slower load through another path may pin the tab, but cannot activate
+    /// it or reposition the cursor after a newer open of the same document.
+    pub(crate) fn apply_open_request(
+        &mut self,
+        order: u64,
+        position: Option<FilePosition>,
+    ) -> bool {
+        if order < self.tools.latest_open_request {
+            return false;
         }
-        self.tools.latest_location_request = order;
+        self.tools.latest_open_request = order;
+        if let Some(position) = position
+            && !self.media
+        {
+            self.reveal_location(position);
+        }
+        true
+    }
+
+    fn reveal_location(&mut self, position: FilePosition) {
         let mut offset = 0;
         let mut lines = self.text.split('\n').enumerate().peekable();
         while let Some((index, line)) = lines.next() {

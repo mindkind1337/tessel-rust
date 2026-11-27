@@ -611,7 +611,8 @@ impl Session {
     }
 }
 struct PendingDocument {
-    position: Option<(u64, crate::files::FilePosition)>,
+    position: Option<crate::files::FilePosition>,
+    latest_open: u64,
     request: u64,
     pinned: bool,
 }
@@ -2228,7 +2229,6 @@ impl Tessel {
         let project = self.state.active_project;
         self.next_document_request += 1;
         let request = self.next_document_request;
-        let position = position.map(|pos| (request, pos));
         let key = dunce::simplified(&path);
         if let Some(i) = self.documents.iter().position(|d| {
             d.project == project && d.diff_title.is_none() && dunce::simplified(&d.path) == key
@@ -2236,13 +2236,14 @@ impl Tessel {
             if pinned {
                 self.documents[i].unpinned_preview = false;
             }
-            self.documents[i].reveal_location(position);
+            self.documents[i].apply_open_request(request, position);
             self.active_document = i;
             self.view = View::Files;
             return;
         }
         let pending_key = (project, key.to_owned());
         if let Some(pending) = self.document_pending.get_mut(&pending_key) {
+            pending.latest_open = request;
             pending.pinned |= pinned;
             if position.is_some() {
                 pending.position = position;
@@ -2257,6 +2258,7 @@ impl Tessel {
         self.document_pending.insert(
             pending_key,
             PendingDocument {
+                latest_open: request,
                 position,
                 request,
                 pinned,
@@ -2980,8 +2982,10 @@ impl Tessel {
                                 self.documents.push(d);
                                 self.documents.len() - 1
                             };
-                            self.documents[index].reveal_location(pending.position);
-                            if self.state.active_project == project {
+                            if self.documents[index]
+                                .apply_open_request(pending.latest_open, pending.position)
+                                && self.state.active_project == project
+                            {
                                 self.active_document = index;
                                 self.view = View::Files;
                             }
