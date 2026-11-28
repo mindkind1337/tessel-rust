@@ -1,6 +1,6 @@
 //! Background connection ownership. No network operation runs on an egui frame.
 use crate::native_host_install::{self, Bundle, HostInstall, InstallError};
-use crate::native_host_transport::{SshTransport, connector};
+use crate::native_host_transport::{SshTransport, connector_host};
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -73,11 +73,12 @@ enum Entry {
     Failed(Failure),
 }
 
-/// One connection per exact validated OpenSSH alias. A cancelled job retains its
+/// One connection per validated connection scope (legacy alias or complete profile arguments). A cancelled job retains its
 /// slot until it exits, so repeated clicks cannot create unbounded worker threads.
 #[derive(Default)]
 pub struct Manager {
     entries: HashMap<String, Entry>,
+    targets: HashMap<String, crate::workspace::Host>,
     workers: Arc<AtomicUsize>,
 }
 
@@ -98,6 +99,10 @@ impl Drop for WorkerSlot {
     }
 }
 impl Manager {
+    pub fn target(&self, key: &str) -> Option<&crate::workspace::Host> {
+        self.targets.get(key)
+    }
+
     pub fn aliases(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
     }
@@ -110,12 +115,21 @@ impl Manager {
         if !crate::host_remote_cache::should_use_host_daemon(host.host_daemon, false) {
             return Ok(false);
         }
-        self.start(&host.alias)?;
+        self.start_host(host)?;
         Ok(true)
     }
     /// Explicit user action only: may install the bundled daemon on this host.
+    #[cfg(test)]
     pub fn start(&mut self, alias: &str) -> Result<(), Failure> {
-        crate::workspace::validate_host(alias).map_err(|_| Failure::InvalidHost)?;
+        self.start_host(&crate::workspace::Host {
+            alias: alias.into(),
+            ..Default::default()
+        })
+    }
+    pub fn start_host(&mut self, target: &crate::workspace::Host) -> Result<(), Failure> {
+        target.connection_args().map_err(|_| Failure::InvalidHost)?;
+        let key = target.connection_key();
+        let alias = key.as_str();
         self.poll();
         if self
             .entries
@@ -132,7 +146,7 @@ impl Manager {
         let worker_cancel = cancel.clone();
         let opening = Arc::new(Opening::default());
         let worker_opening = opening.clone();
-        let host = alias.to_owned();
+        let host = target.clone();
         let (sender, reply) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("host-connect".into())
@@ -165,6 +179,7 @@ impl Manager {
                 }
             })
             .map_err(|_| Failure::Worker)?;
+        self.targets.insert(alias.to_owned(), target.clone());
         self.entries.insert(
             alias.to_owned(),
             Entry::Pending(Pending {
@@ -220,12 +235,13 @@ impl Manager {
             pending.opening.cancel();
         } else {
             self.entries.remove(alias);
+            self.targets.remove(alias);
         }
     }
 }
 
 fn connect(
-    alias: &str,
+    host: &crate::workspace::Host,
     cancel: Arc<AtomicBool>,
     opening: Arc<Opening>,
 ) -> Result<Connection, Failure> {
@@ -241,7 +257,7 @@ fn connect(
     let mut random = [0_u8; 8];
     getrandom::fill(&mut random).map_err(|_| Failure::Random)?;
     let mut transport =
-        SshTransport::new(alias.to_owned(), cancel.clone()).map_err(|_| Failure::Connect)?;
+        SshTransport::for_host(host.clone(), cancel.clone()).map_err(|_| Failure::Connect)?;
     let installation = native_host_install::install(
         &mut transport,
         &bundle,
@@ -250,7 +266,7 @@ fn connect(
     )
     .map_err(Failure::Install)?;
     cancelled()?;
-    let connector = connector(alias, &installation.connect).map_err(|_| Failure::Connect)?;
+    let connector = connector_host(host, &installation.connect).map_err(|_| Failure::Connect)?;
     let client = Client::connect_cancellable(connector, Options::default(), opening)
         .map_err(|_| Failure::Connect)?;
     let connection = Connection {
@@ -286,6 +302,34 @@ mod tests {
             }),
         );
         (cancel, sender)
+    }
+
+    #[test]
+    fn structured_ssh_profiles_do_not_reuse_a_different_connection() {
+        let profile = |port| crate::workspace::Host {
+            alias: "server".into(),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "server".into(),
+                port,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let first = profile(2222);
+        let other = profile(2223);
+        let mut manager = Manager::default();
+        let (_, _sender) = pending(&mut manager, &first.connection_key());
+        manager
+            .targets
+            .insert(first.connection_key(), first.clone());
+        // Capacity is occupied without launching any real worker.
+        manager.workers.store(MAX_HOSTS, Ordering::Release);
+        assert_eq!(manager.start_host(&first), Ok(()));
+        assert_eq!(manager.start_host(&other), Err(Failure::Capacity));
+        assert_eq!(manager.target(&first.connection_key()), Some(&first));
+        assert!(manager.target(&other.connection_key()).is_none());
+        assert!(!manager.pending("server"));
     }
 
     #[test]

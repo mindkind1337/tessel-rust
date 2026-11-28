@@ -193,10 +193,18 @@ pub(crate) fn remote_versions(
 }
 
 fn remote_resource(profile: &Path, alias: &str, path: &str) -> io::Result<(PathBuf, String)> {
-    if alias.is_empty() || alias.contains('/') || !path.starts_with('/') {
+    if !path.starts_with('/') {
         return Err(io::Error::other("Invalid SSH history resource"));
     }
-    let resource = format!("ssh://{}{path}", alias.to_ascii_lowercase());
+    let resource = if let Some(hash) = alias.strip_prefix("profile/") {
+        crate::workspace::validate_connection_key(alias).map_err(io::Error::other)?;
+        format!("ssh-profile://{hash}{path}")
+    } else {
+        if alias.is_empty() || alias.contains('/') {
+            return Err(io::Error::other("Invalid SSH history resource"));
+        }
+        format!("ssh://{}{path}", alias.to_ascii_lowercase())
+    };
     let key = format!("{:x}", Sha256::digest(resource.as_bytes()));
     let dir = profile.join("History").join("ssh").join(&key[..24]);
     Ok((dir, resource))
@@ -318,6 +326,31 @@ mod tests {
         assert!(patch.contains("-two") && patch.contains("+external"));
         assert!(diff(&profile, dir.path(), &doc.path, "../outside").is_err());
     }
+    #[test]
+    fn structured_ssh_profile_history_never_crosses_connection_namespaces() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = format!("profile/{}", "a".repeat(64));
+        let other = format!("profile/{}", "b".repeat(64));
+        remote_versions(temp.path(), &first, "/site/file.txt", Some("first")).unwrap();
+        assert!(
+            remote_versions(temp.path(), &other, "/site/file.txt", None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            remote_versions(temp.path(), "server", "/site/file.txt", None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            remote_versions(temp.path(), &first, "/site/file.txt", None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(remote_versions(temp.path(), "profile/../server", "/site/file.txt", None).is_err());
+    }
+
     #[test]
     fn local_file_history_retains_fifty_distinct_bounded_versions() {
         let temp = tempfile::tempdir().unwrap();

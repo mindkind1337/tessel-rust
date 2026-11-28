@@ -235,7 +235,7 @@ impl Pages {
             let matches = match (folder, &site.remote) {
                 (super::html_trust::Folder::Local(path), None) => site.root == *path,
                 (super::html_trust::Folder::Ssh { host, root }, Some(remote)) => {
-                    remote.alias == *host && site.root.to_str() == Some(root.as_str())
+                    remote.connection_key() == *host && site.root.to_str() == Some(root.as_str())
                 }
                 _ => false,
             };
@@ -288,8 +288,8 @@ impl Pages {
         let mut site = if let Some(i) = sites.iter().position(|s| {
             s.scripts == self.scripts
                 && s.root == root
-                && s.remote.as_ref().map(|h| (&h.alias, &h.folder))
-                    == remote.as_ref().map(|h| (&h.alias, &h.folder))
+                && s.remote.as_ref().map(|h| (h.connection_key(), &h.folder))
+                    == remote.as_ref().map(|h| (h.connection_key(), &h.folder))
         }) {
             sites.remove(i).unwrap()
         } else {
@@ -615,6 +615,46 @@ mod tests {
         assert_eq!(get(&owner, &a).body().as_ref(), b"updated");
         assert_eq!(get(&owner, &b).status(), 404);
         assert_eq!(get(&owner, &trusted).status(), 404);
+    }
+
+    #[test]
+    fn structured_ssh_profiles_keep_distinct_preview_origins_and_trust() {
+        let registry = Pages::default();
+        let host = |port| crate::workspace::Host {
+            alias: "server".into(),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "server".into(),
+                port,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let open = |port, text| {
+            registry
+                .for_open(true)
+                .open_remote(host(port), "/site", "/site/index.html", text)
+                .unwrap()
+                .replace("http://tesselpreview.", "tesselpreview://")
+        };
+        let first = open(2222, "first");
+        let second = open(2223, "second");
+        assert_ne!(first, second);
+        registry.restrict(&super::super::html_trust::Folder::Ssh {
+            host: host(2222).connection_key(),
+            root: "/site".into(),
+        });
+        let reply = registry.serve(Request::get(&first).body(vec![]).unwrap());
+        assert_eq!(reply.headers()["content-security-policy"], POLICY);
+        assert_eq!(reply.body().as_ref(), b"first");
+        let reply = registry.serve(Request::get(&second).body(vec![]).unwrap());
+        assert!(
+            reply.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'self'")
+        );
+        assert_eq!(reply.body().as_ref(), b"second");
     }
 
     #[test]

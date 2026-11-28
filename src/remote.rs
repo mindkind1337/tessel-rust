@@ -135,7 +135,7 @@ fn ssh_args(host: &Host) -> Result<Vec<String>, String> {
     transport_args(host, true)
 }
 fn transport_args(host: &Host, sftp: bool) -> Result<Vec<String>, String> {
-    crate::workspace::validate_host(&host.alias)?;
+    let connection_args = host.connection_args()?;
     if !clean(&host.folder) {
         return Err("Invalid remote folder".into());
     }
@@ -158,11 +158,11 @@ fn transport_args(host: &Host, sftp: bool) -> Result<Vec<String>, String> {
         "ControlMaster=no",
         "-o",
         "ControlPath=none",
-        "--",
-        &host.alias,
-        if sftp { "sftp" } else { "sh -s" },
     ]);
-    Ok(args.into_iter().map(str::to_owned).collect())
+    let mut args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+    args.extend(connection_args);
+    args.push(if sftp { "sftp" } else { "sh -s" }.into());
+    Ok(args)
 }
 #[path = "remote/file_history.rs"]
 pub(crate) mod file_history;
@@ -673,6 +673,32 @@ async fn operate_inner(
 mod tests {
     use super::*;
     #[cfg(windows)]
+    #[test]
+    fn structured_ssh_profile_arguments_are_shared_by_sftp_and_exec() {
+        let host = Host {
+            alias: "alias".into(),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "alias".into(),
+                port: 2222,
+                username: "deploy".into(),
+                identity_file: "C:/my keys/key".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let expected = host.connection_args().unwrap();
+        for sftp in [false, true] {
+            let args = transport_args(&host, sftp).unwrap();
+            assert_eq!(
+                &args[args.len() - expected.len() - 1..args.len() - 1],
+                &expected
+            );
+            assert_eq!(args.last().unwrap(), if sftp { "sftp" } else { "sh -s" });
+            assert!(args.iter().any(|a| a == "StrictHostKeyChecking=yes"));
+        }
+    }
+
     #[test]
     #[ignore = "requires TESSEL_TEST_SFTP_SERVER pointing to an OpenSSH sftp-server binary"]
     fn real_sftp_subsystem_preserves_files_conflicts_and_preview_scope() {

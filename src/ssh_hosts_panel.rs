@@ -44,6 +44,7 @@ const PRIMARY_BTN_DARK_TEXT: Color32 = Color32::from_rgb(0x0b, 0x15, 0x30);
 /// Pure-UI representation of `workspace::Host` (`alias` + optional remote `folder`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SshHostSpec {
+    pub profile: Option<Box<crate::ssh_profile::Profile>>,
     pub target_id: Option<String>,
     pub alias: String,
     pub folder: String,
@@ -65,6 +66,7 @@ impl SshHostSpec {
     pub fn new(alias: impl Into<String>, folder: impl Into<String>) -> Self {
         Self {
             alias: alias.into(),
+            profile: None,
             target_id: None,
             folder: folder.into(),
             persistent_sessions: None,
@@ -1486,6 +1488,25 @@ impl SshHostsPanel {
                         Some(false)
                     };
                     replacement.host_daemon = form.host_daemon;
+                    if let Some((_, original)) = &form.original {
+                        replacement.profile = original.profile.clone();
+                        if replacement.alias != original.alias
+                            && let Some(profile) = &original.profile
+                        {
+                            let mut draft = crate::ssh_profile::Draft::from_profile(profile);
+                            draft.host.clone_from(&replacement.alias);
+                            match draft.profile() {
+                                Ok(profile) => {
+                                    replacement.alias.clone_from(&profile.config_host);
+                                    replacement.profile = Some(Box::new(profile));
+                                }
+                                Err(error) => {
+                                    form.error = error.code().into();
+                                    return None;
+                                }
+                            }
+                        }
+                    }
                     // Keep `self.form` open until the caller persists the mutation and calls
                     // `cancel_dialogs()`, so backend disk/limit errors passed to `set_form_error`
                     // preserve the user's draft and remain visible inline.

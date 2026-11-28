@@ -56,7 +56,7 @@ pub fn sync_config(
 }
 
 fn validate(host: &Host) -> Result<()> {
-    validate_host(&host.alias)?;
+    host.connection_args()?;
     if host.folder.len() > 8192
         || host.folder.chars().any(char::is_control)
         || host.folder.split(['/', '\\']).any(|part| part == "..")
@@ -74,6 +74,11 @@ pub fn save(
     original: Option<(usize, &Host)>,
     mut replacement: Host,
 ) -> Result<bool> {
+    if let Some(profile) = replacement.profile.take() {
+        replacement.profile = Some(Box::new(
+            profile.checked().map_err(|e| e.code().to_owned())?,
+        ));
+    }
     validate(&replacement)?;
     let index = if let Some((index, expected)) = original {
         if hosts.get(index) != Some(expected) {
@@ -91,7 +96,9 @@ pub fn save(
         None
     };
     if hosts.iter().enumerate().any(|(i, host)| {
-        Some(i) != index && host.alias == replacement.alias && host.folder == replacement.folder
+        Some(i) != index
+            && host.connection_key() == replacement.connection_key()
+            && host.folder == replacement.folder
     }) {
         return Err("This SSH host and folder already exist.".into());
     }
@@ -211,6 +218,89 @@ mod tests {
         .unwrap();
         assert!(new_launch.belongs_to_ssh_target(&state.hosts[1]));
         assert!(!launch.belongs_to_ssh_target(&state.hosts[1]));
+    }
+
+    #[test]
+    fn structured_ssh_profiles_persist_without_sharing_connections_or_losing_legacy_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let legacy = host("server", "/srv");
+        assert_eq!(legacy.connection_key(), "server");
+        let make = |port, user: &str| Host {
+            alias: "server".into(),
+            folder: "/srv".into(),
+            profile: Some(
+                crate::ssh_profile::Profile {
+                    host: "server".into(),
+                    port,
+                    username: user.into(),
+                    ..Default::default()
+                }
+                .checked()
+                .unwrap()
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let first = make(2222, "deploy");
+        let second = make(2223, "deploy");
+        let third = make(2222, "admin");
+        for h in [first.clone(), second.clone(), third] {
+            persist(&mut state, &store, |hosts| save(hosts, None, h)).unwrap();
+        }
+        assert_ne!(first.connection_key(), second.connection_key());
+        assert!(crate::workspace::validate_connection_key(&first.connection_key()).is_ok());
+        assert!(crate::workspace::validate_host(&first.connection_key()).is_err());
+        let before = state.hosts.clone();
+        let mut bad = first.clone();
+        bad.alias = "different".into();
+        assert!(persist(&mut state, &store, |hosts| save(hosts, None, bad)).is_err());
+        assert_eq!(state.hosts, before);
+        let original = state.hosts[0].clone();
+        let mut renamed = original.clone();
+        renamed.profile.as_mut().unwrap().label = "New name".into();
+        assert_eq!(renamed.connection_key(), original.connection_key());
+        persist(&mut state, &store, |hosts| {
+            save(hosts, Some((0, &original)), renamed)
+        })
+        .unwrap();
+        assert!(state.hosts[0].same_target(&original));
+        drop(store);
+        let (_, restored) = Store::open(dir.path()).unwrap();
+        assert_eq!(restored.hosts, state.hosts);
+        let old: Host = serde_json::from_str(r#"{"alias":"server","folder":"/srv"}"#).unwrap();
+        assert!(old.profile.is_none());
+        assert_eq!(old.connection_args().unwrap(), ["--", "server"]);
+    }
+
+    #[test]
+    fn structured_ssh_profile_unicode_alias_can_be_removed_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut state) = Store::open(dir.path()).unwrap();
+        let alias = "\u{00e9}quipe.example";
+        let host = Host {
+            alias: alias.into(),
+            profile: Some(
+                crate::ssh_profile::Profile {
+                    host: alias.into(),
+                    ..Default::default()
+                }
+                .checked()
+                .unwrap()
+                .into(),
+            ),
+            ..Default::default()
+        };
+        persist(&mut state, &store, |hosts| save(hosts, None, host)).unwrap();
+        let saved = state.hosts[0].clone();
+        persist(&mut state, &store, |hosts| {
+            remove(hosts, 0, &saved)?;
+            Ok(true)
+        })
+        .unwrap();
+        drop(store);
+        let (_, restored) = Store::open(dir.path()).unwrap();
+        assert_eq!(restored.removed_ssh_aliases, [alias]);
     }
 
     #[test]

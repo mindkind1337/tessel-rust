@@ -95,20 +95,46 @@ pub fn connector(
     alias: &str,
     command: &str,
 ) -> Result<Box<dyn tessel_host_client::Connector>, TransportFailed> {
+    connector_host(
+        &crate::workspace::Host {
+            alias: alias.into(),
+            ..Default::default()
+        },
+        command,
+    )
+}
+
+pub fn connector_host(
+    host: &crate::workspace::Host,
+    command: &str,
+) -> Result<Box<dyn tessel_host_client::Connector>, TransportFailed> {
     if !crate::host_remote_cache::validate_direct_exec_connect_command(command) {
         return Err(TransportFailed);
     }
     Ok(Box::new(Connector {
-        args: verified_args(alias, command)?,
+        args: verified_host_args(host, command)?,
     }))
 }
 
 pub fn verified_args(alias: &str, command: &str) -> Result<Vec<String>, TransportFailed> {
-    crate::workspace::validate_host(alias).map_err(|_| TransportFailed)?;
+    verified_host_args(
+        &crate::workspace::Host {
+            alias: alias.into(),
+            ..Default::default()
+        },
+        command,
+    )
+}
+
+pub fn verified_host_args(
+    host: &crate::workspace::Host,
+    command: &str,
+) -> Result<Vec<String>, TransportFailed> {
+    let connection_args = host.connection_args().map_err(|_| TransportFailed)?;
     if command.is_empty() || command.len() > 8192 || command.chars().any(char::is_control) {
         return Err(TransportFailed);
     }
-    Ok([
+    let mut args: Vec<String> = [
         "-T",
         "-o",
         "BatchMode=yes",
@@ -126,30 +152,42 @@ pub fn verified_args(alias: &str, command: &str) -> Result<Vec<String>, Transpor
         "ControlPath=none",
         "-o",
         "ClearAllForwardings=yes",
-        "--",
-        alias,
-        command,
     ]
     .into_iter()
     .map(str::to_owned)
-    .collect())
+    .collect();
+    args.extend(connection_args);
+    args.push(command.into());
+    Ok(args)
 }
 
 pub struct SshTransport {
-    alias: String,
+    host: crate::workspace::Host,
     cancel: Arc<AtomicBool>,
     deadline: Instant,
     runtime: tokio::runtime::Runtime,
 }
 impl SshTransport {
     pub fn new(alias: String, cancel: Arc<AtomicBool>) -> Result<Self, TransportFailed> {
-        crate::workspace::validate_host(&alias).map_err(|_| TransportFailed)?;
+        Self::for_host(
+            crate::workspace::Host {
+                alias,
+                ..Default::default()
+            },
+            cancel,
+        )
+    }
+    pub fn for_host(
+        host: crate::workspace::Host,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Self, TransportFailed> {
+        host.connection_args().map_err(|_| TransportFailed)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|_| TransportFailed)?;
         Ok(Self {
-            alias,
+            host,
             cancel,
             deadline: Instant::now() + Duration::from_secs(120),
             runtime,
@@ -163,7 +201,7 @@ impl SshTransport {
         cancel: &AtomicBool,
     ) -> Result<CommandOutput, TransportFailed> {
         let mut process = tokio::process::Command::new("ssh");
-        process.args(verified_args(&self.alias, command)?);
+        process.args(verified_host_args(&self.host, command)?);
         self.runtime
             .block_on(run_process(&mut process, stdin, limit, cancel))
     }
@@ -279,6 +317,32 @@ mod tests {
             .env("TESSEL_HOST_TRANSPORT_FIXTURE", mode);
         command
     }
+    #[test]
+    fn structured_ssh_profile_arguments_reach_install_and_reconnect() {
+        let host = crate::workspace::Host {
+            alias: "alias".into(),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "alias".into(),
+                port: 2222,
+                username: "deploy".into(),
+                jump_host: "bastion".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let expected = host.connection_args().unwrap();
+        let command = "\"$HOME/.tessel-server/host/bin/tessel-host-0.1.0-x86_64\" connect --stdio";
+        let args = verified_host_args(&host, command).unwrap();
+        assert_eq!(
+            &args[args.len() - expected.len() - 1..args.len() - 1],
+            &expected
+        );
+        assert!(connector_host(&host, command).is_ok());
+        assert!(args.iter().any(|a| a == "StrictHostKeyChecking=yes"));
+        assert!(connector_host(&host, "arbitrary command").is_err());
+    }
+
     #[test]
     #[ignore = "Synthetic child invoked by bounded transport tests"]
     fn child_fixture() {

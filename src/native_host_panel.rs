@@ -51,17 +51,21 @@ impl Panel {
         egui::CollapsingHeader::new(tr("Native host service (preview)")).default_open(self.initially_open).show(ui, |ui| {
             ui.label(tr("Connect installs or reuses Tessel's bundled service on this Linux host. Existing SSH terminals and SFTP files keep their current connection."));
             ui.label(tr("Editors and files still use SSH/SFTP. Native terminal access is available on Windows."));
-            let mut aliases: Vec<_> = hosts.iter().map(|host| host.alias.clone()).chain(manager.aliases().map(str::to_owned)).collect();
+            let mut aliases: Vec<_> = hosts.iter().map(Host::connection_key).chain(manager.aliases().map(str::to_owned)).collect();
             aliases.sort();
             aliases.dedup();
             if !aliases.contains(&self.selected) {
                 self.selected = aliases.first().cloned().unwrap_or_default();
                 self.error = None;
             }
+            let labels: std::collections::HashMap<_, _> = aliases.iter().map(|key| {
+                let target = hosts.iter().find(|host| host.connection_key() == *key).or_else(|| manager.target(key));
+                (key.clone(), target.map_or_else(|| key.clone(), |host| host.display_label().to_owned()))
+            }).collect();
             let before = self.selected.clone();
-            egui::ComboBox::from_id_salt("native-host-alias").selected_text(&self.selected).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("native-host-alias").selected_text(labels.get(&self.selected).unwrap_or(&self.selected)).show_ui(ui, |ui| {
                 for alias in &aliases {
-                    ui.selectable_value(&mut self.selected, alias.clone(), alias);
+                    ui.selectable_value(&mut self.selected, alias.clone(), &labels[alias]);
                 }
             });
             if before != self.selected { self.error = None; }
@@ -96,7 +100,10 @@ impl Panel {
                     if ui.button(tr("Dismiss")).clicked() { manager.cancel(&self.selected); self.error = None; }
                 }
                 if ui.button(tr("Connect native host")).clicked() {
-                    self.error = manager.start(&self.selected).err();
+                    let target = hosts.iter().find(|host| host.connection_key() == self.selected)
+                        .or_else(|| manager.target(&self.selected)).cloned()
+                        .unwrap_or_else(|| Host { alias: self.selected.clone(), ..Default::default() });
+                    self.error = manager.start_host(&target).err();
                 }
             }
         });

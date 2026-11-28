@@ -532,6 +532,8 @@ pub struct Project {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Host {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Box<crate::ssh_profile::Profile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_id: Option<String>,
     pub alias: String,
     pub folder: String,
@@ -545,6 +547,7 @@ pub struct Host {
 impl Default for Host {
     fn default() -> Self {
         Self {
+            profile: None,
             target_id: None,
             alias: String::new(),
             folder: String::new(),
@@ -564,6 +567,46 @@ const fn is_true(value: &bool) -> bool {
 }
 
 impl Host {
+    pub fn connection_args(&self) -> Result<Vec<String>> {
+        if let Some(profile) = &self.profile {
+            let profile = profile
+                .clone()
+                .checked()
+                .map_err(|error| error.code().to_owned())?;
+            if self.alias != profile.config_host {
+                return Err("SSH profile alias does not match its connection profile.".into());
+            }
+            profile.argv().map_err(|error| error.code().to_owned())
+        } else {
+            validate_host(&self.alias)?;
+            Ok(vec!["--".into(), self.alias.clone()])
+        }
+    }
+
+    /// Owner-local connection/lease namespace. Legacy aliases retain their keys.
+    /// Profile keys include every connection argument, not presentation labels.
+    pub fn connection_key(&self) -> String {
+        use sha2::{Digest, Sha256};
+        if self.profile.is_none() {
+            return self.alias.clone();
+        }
+        // Invalid profiles are rejected before a connection can be installed in the manager.
+        let args = self.connection_args().unwrap_or_default();
+        let mut hash = Sha256::new();
+        for arg in args {
+            hash.update((arg.len() as u64).to_le_bytes());
+            hash.update(arg.as_bytes());
+        }
+        format!("profile/{:x}", hash.finalize())
+    }
+
+    pub fn display_label(&self) -> &str {
+        self.profile
+            .as_ref()
+            .map(|profile| profile.label.as_str())
+            .filter(|label| !label.is_empty())
+            .unwrap_or(&self.alias)
+    }
     pub fn identity(&self) -> std::borrow::Cow<'_, str> {
         use sha2::{Digest, Sha256};
         if let Some(id) = &self.target_id {
@@ -575,12 +618,18 @@ impl Host {
         hash.update(self.alias.as_bytes());
         hash.update([0]);
         hash.update(self.folder.as_bytes());
+        if self.profile.is_some() {
+            hash.update([0]);
+            hash.update(self.connection_key().as_bytes());
+        }
         format!("legacy-{:x}", hash.finalize()).into()
     }
 
     pub fn same_target(&self, other: &Self) -> bool {
         match (&self.target_id, &other.target_id) {
-            (None, None) => self.alias == other.alias && self.folder == other.folder,
+            (None, None) => {
+                self.connection_key() == other.connection_key() && self.folder == other.folder
+            }
             _ => self.identity() == other.identity(),
         }
     }
@@ -1103,7 +1152,9 @@ impl Workspace {
                 {
                     return Err("Unknown saved agent.".into());
                 }
-                crate::launch::Launch::Ssh(host) => validate_host(&host.target.alias)?,
+                crate::launch::Launch::Ssh(host) => {
+                    host.target.connection_args()?;
+                }
                 _ => {}
             }
         }
@@ -1212,7 +1263,9 @@ impl Workspace {
             return Err("Too many removed SSH aliases".into());
         }
         for alias in &self.removed_ssh_aliases {
-            validate_host(alias)?;
+            if !crate::ssh_profile::valid_config_alias(alias) {
+                validate_host(alias)?;
+            }
         }
         // Older versions could save identical rows. Keep those readable while
         // rejecting any explicit ID that collides with another target.
@@ -1223,7 +1276,7 @@ impl Workspace {
             .map(Host::identity)
             .collect();
         for host in &self.hosts {
-            validate_host(&host.alias)?;
+            host.connection_args()?;
             if let Some(id) = &host.target_id
                 && (!crate::claude::valid_uuid(id)
                     && !id.strip_prefix("legacy-").is_some_and(|hash| {
@@ -1575,6 +1628,17 @@ pub fn valid_native_thread(provider: &str, thread: &str) -> bool {
         "Claude" => crate::claude::valid_uuid(thread),
         _ => false,
     }
+}
+
+/// Internal connection identities are never accepted as SSH destinations.
+pub fn validate_connection_key(key: &str) -> Result<()> {
+    if let Some(hash) = key.strip_prefix("profile/") {
+        if hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(());
+        }
+        return Err("Invalid SSH connection identity".into());
+    }
+    validate_host(key)
 }
 
 pub fn validate_host(alias: &str) -> Result<()> {

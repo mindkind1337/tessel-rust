@@ -3163,7 +3163,7 @@ fn render_ssh_page(
                     div()
                         .flex()
                         .gap(px(4.0))
-                        .child(if s.ssh_tests.contains(&host.alias) {
+                        .child(if s.ssh_tests.contains(&host.connection_key()) {
                             div()
                                 .child(if french {
                                     "Test en cours…"

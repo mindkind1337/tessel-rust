@@ -2357,7 +2357,7 @@ impl Tessel {
                 Some((
                     id,
                     Folder::Ssh {
-                        host: host.alias,
+                        host: host.connection_key(),
                         root: root.into(),
                     },
                 ))
@@ -6487,10 +6487,10 @@ impl Tessel {
                 if self.view == View::Remote
                     && !self.gpui_has_open_modal()
                     && let Some((host, root, text)) = self.remote.html_preview(&path)
-                    && host.alias == expected
+                    && host.connection_key() == expected
                 {
                     let folder = crate::browser::html_trust::Folder::Ssh {
-                        host: host.alias.clone(),
+                        host: host.connection_key(),
                         root: root.into(),
                     };
                     let scripts = self.html_trust.decision(&folder) == Some(true);
@@ -7923,7 +7923,7 @@ impl Tessel {
                     return;
                 }
                 match command {
-                    SshRowCommand::Test => self.test_ssh_host(expected.alias),
+                    SshRowCommand::Test => self.test_ssh_host(expected),
                     SshRowCommand::Disconnect => {
                         self.disconnect_host_sessions(&expected);
                         self.host_notice = Some((tr("SSH connections closed").into(), false));

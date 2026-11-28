@@ -22,7 +22,7 @@ fn execute_for_panel(
     action: Action,
     run: impl FnOnce(Host, Action) -> Result<Reply, String>,
 ) -> PreparedReply {
-    let alias = host.alias.clone();
+    let alias = host.connection_key();
     let save = match &action {
         Action::Save {
             path, replacement, ..
@@ -332,7 +332,7 @@ impl RemotePanel {
         if !self.root.is_empty() {
             host.folder = self.root.clone();
         }
-        let alias = host.alias.clone();
+        let alias = host.connection_key();
         let path = path.to_owned();
         let id = id.to_owned();
         let (tx, rx) = mpsc::channel();
@@ -586,7 +586,7 @@ impl RemotePanel {
         let enabled = self.host.as_ref().and_then(|host| {
             hosts
                 .iter()
-                .find(|saved| saved.alias == host.alias && saved.host_daemon)
+                .find(|saved| saved.connection_key() == host.connection_key() && saved.host_daemon)
                 .cloned()
         });
         let Some(host) = enabled else {
@@ -600,17 +600,18 @@ impl RemotePanel {
         if self.busy() || self.path.is_empty() {
             return;
         }
-        if self.tree_attempted_alias.as_deref() != Some(&host.alias) {
-            self.tree_attempted_alias = Some(host.alias.clone());
+        let connection_key = host.connection_key();
+        if self.tree_attempted_alias.as_deref() != Some(&connection_key) {
+            self.tree_attempted_alias = Some(connection_key.clone());
             // Reuse a shared connection if one exists; errors retain SFTP and
             // never create a per-frame retry loop.
             let _ = manager.start_background_if_enabled(&host);
         }
         let client = manager
-            .connection(&host.alias)
+            .connection(&connection_key)
             .map(|connection| connection.client().clone());
         let key = crate::remote_tree_watch::Key {
-            alias: host.alias,
+            alias: connection_key,
             root: self.root.clone(),
             path: self.path.clone(),
         };
@@ -661,7 +662,11 @@ impl RemotePanel {
                             .selected_text(&hosts[self.selected].alias)
                             .show_ui(ui, |ui| {
                                 for (index, host) in hosts.iter().enumerate() {
-                                    ui.selectable_value(&mut self.selected, index, &host.alias);
+                                    ui.selectable_value(
+                                        &mut self.selected,
+                                        index,
+                                        host.display_label(),
+                                    );
                                 }
                             });
                         if ui.button(tr("Connect / change host")).clicked() {
@@ -805,7 +810,7 @@ impl RemotePanel {
         if let (Some(host), Some(path)) = (&self.host, download_entry) {
             self.command(
                 control::Command::DownloadEntry {
-                    host: host.alias.clone(),
+                    host: host.connection_key(),
                     path,
                 },
                 hosts,
@@ -814,7 +819,7 @@ impl RemotePanel {
         if let (Some(host), Some(path)) = (&self.host, terminal_path) {
             self.command(
                 control::Command::TerminalHere {
-                    host: host.alias.clone(),
+                    host: host.connection_key(),
                     path,
                 },
                 hosts,

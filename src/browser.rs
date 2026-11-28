@@ -1401,7 +1401,7 @@ impl Browser {
         scripts: bool,
     ) -> Result<(), String> {
         let folder = html_trust::Folder::Ssh {
-            host: host.alias.clone(),
+            host: host.connection_key(),
             root: root.into(),
         };
         let url = self

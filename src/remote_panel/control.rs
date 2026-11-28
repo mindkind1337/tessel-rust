@@ -59,6 +59,7 @@ pub(crate) struct Snapshot {
     pub hosts: Vec<String>,
     pub selected: usize,
     pub connected: Option<String>,
+    pub connected_label: Option<String>,
     pub path: String,
     pub can_parent: bool,
     pub busy: bool,
@@ -106,7 +107,11 @@ impl RemotePanel {
     }
     pub(crate) fn input_snapshot(&self) -> Snapshot {
         Snapshot {
-            connected: self.host.as_ref().map(|host| host.alias.clone()),
+            connected: self.host.as_ref().map(Host::connection_key),
+            connected_label: self
+                .host
+                .as_ref()
+                .map(|host| host.display_label().to_owned()),
             path: self.path.clone(),
             busy: self.busy(),
             html_page: self.document.as_ref().and_then(|d| d.html_page.clone()),
@@ -246,9 +251,16 @@ impl RemotePanel {
                 .as_ref()
                 .map(|doc| doc.preview_error.clone())
                 .unwrap_or_default(),
-            hosts: hosts.iter().map(|h| h.alias.clone()).collect(),
+            hosts: hosts
+                .iter()
+                .map(|host| host.display_label().to_owned())
+                .collect(),
             selected: self.selected,
-            connected: self.host.as_ref().map(|h| h.alias.clone()),
+            connected: self.host.as_ref().map(Host::connection_key),
+            connected_label: self
+                .host
+                .as_ref()
+                .map(|host| host.display_label().to_owned()),
             path: self.path.clone(),
             can_parent: !self.path.is_empty() && self.path != self.root,
             busy: self.busy(),
@@ -338,7 +350,10 @@ impl RemotePanel {
             #[cfg(windows)]
             Command::HtmlPage { host, path } => {
                 if !self.busy()
-                    && self.host.as_ref().is_some_and(|h| h.alias == host)
+                    && self
+                        .host
+                        .as_ref()
+                        .is_some_and(|h| h.connection_key() == host)
                     && let Some(doc) = self
                         .document
                         .as_mut()
@@ -353,7 +368,10 @@ impl RemotePanel {
                 enabled,
             } => {
                 if !self.busy()
-                    && self.host.as_ref().is_some_and(|h| h.alias == host)
+                    && self
+                        .host
+                        .as_ref()
+                        .is_some_and(|h| h.connection_key() == host)
                     && let Some(doc) = self.document.as_mut().filter(|d| d.path == path)
                     && is_html(&path)
                 {
@@ -468,7 +486,10 @@ impl RemotePanel {
                 path,
                 position,
             } => {
-                if self.host.as_ref().is_some_and(|h| h.alias == host)
+                if self
+                    .host
+                    .as_ref()
+                    .is_some_and(|h| h.connection_key() == host)
                     && self.entries.iter().any(|e| e.path == path)
                 {
                     self.file_menu = Some((path, position));
@@ -478,7 +499,7 @@ impl RemotePanel {
                 if !self
                     .host
                     .as_ref()
-                    .is_some_and(|h| h.alias == host && hosts.contains(h))
+                    .is_some_and(|h| h.connection_key() == host && hosts.contains(h))
                 {
                     return;
                 }
@@ -517,7 +538,7 @@ impl RemotePanel {
                 let Some(connected) = self
                     .host
                     .as_ref()
-                    .filter(|h| h.alias == host && hosts.contains(h))
+                    .filter(|h| h.connection_key() == host && hosts.contains(h))
                 else {
                     return;
                 };
@@ -744,6 +765,51 @@ mod tests {
             .unwrap();
         panel.poll();
         panel
+    }
+
+    #[test]
+    fn structured_ssh_profile_actions_reject_another_account_on_the_same_alias() {
+        let host = |user: &str| Host {
+            alias: "server".into(),
+            folder: "/project".into(),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "server".into(),
+                username: user.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let first = host("first");
+        let second = host("second");
+        let hosts = [first.clone(), second.clone()];
+        let mut panel = RemotePanel {
+            host: Some(second.clone()),
+            root: "/project".into(),
+            path: "/project/files".into(),
+            ..Default::default()
+        };
+        for key in [first.connection_key(), "server".into()] {
+            panel.command(
+                Command::TerminalHere {
+                    host: key,
+                    path: "/project/files".into(),
+                },
+                &hosts,
+            );
+            assert!(panel.terminal_request.is_none());
+        }
+        panel.command(
+            Command::TerminalHere {
+                host: second.connection_key(),
+                path: "/project/files".into(),
+            },
+            &hosts,
+        );
+        assert_eq!(
+            panel.terminal_request.take(),
+            Some((second, "/project/files".into()))
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ impl Tessel {
         let Launch::Ssh(host) = &session.launch else {
             return;
         };
-        let alias = host.target.alias.clone();
+        let alias = host.target.connection_key();
         let identity = session
             .native_host
             .as_ref()
@@ -114,7 +114,7 @@ impl Tessel {
                 } else {
                     terminal.take_native_action()
                 }?;
-                Some((session.id, host.target.alias.clone(), action))
+                Some((session.id, host.target.connection_key(), action))
             })
             .collect();
         for (id, alias, action) in actions {
@@ -167,7 +167,7 @@ impl Tessel {
                         Saved::Unknown => SavedLease::Unknown,
                     },
                     open_locally: self.sessions.iter().any(|session| {
-                        matches!(&session.launch, Launch::Ssh(host) if host.target.alias == alias)
+                        matches!(&session.launch, Launch::Ssh(host) if host.target.connection_key() == alias)
                             && session.terminal.is_some()
                             && session
                                 .native_host
@@ -270,7 +270,7 @@ impl Tessel {
                     return;
                 }
                 if let Some(session) = self.sessions.iter().find(|session| {
-                    matches!(&session.launch, Launch::Ssh(host) if host.target.alias == alias)
+                    matches!(&session.launch, Launch::Ssh(host) if host.target.connection_key() == alias)
                         && session.terminal.is_some()
                         && session
                             .native_host
@@ -430,7 +430,7 @@ impl Tessel {
             self.sessions.iter().any(|s| {
                 s.id == *id
                     && s.native_host.is_some()
-                    && matches!(&s.launch, Launch::Ssh(host) if host.target.alias == alias)
+                    && matches!(&s.launch, Launch::Ssh(host) if host.target.connection_key() == alias)
             })
         });
         if let Some((epoch, terminal, _)) = &existing
@@ -438,7 +438,7 @@ impl Tessel {
                 .sessions
                 .iter()
                 .filter(|s| {
-                    matches!(&s.launch, Launch::Ssh(host) if host.target.alias == alias)
+                    matches!(&s.launch, Launch::Ssh(host) if host.target.connection_key() == alias)
                         && s.native_host
                             .as_ref()
                             .and_then(|s| s.identity.as_ref())
@@ -481,8 +481,9 @@ impl Tessel {
             .state
             .hosts
             .iter()
-            .find(|host| host.alias == alias)
+            .find(|host| host.connection_key() == alias)
             .cloned()
+            .or_else(|| self.native_hosts.target(alias).cloned())
             .unwrap_or_else(|| Host {
                 alias: alias.to_owned(),
                 folder: String::new(),

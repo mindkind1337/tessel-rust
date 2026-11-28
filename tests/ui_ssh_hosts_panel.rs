@@ -7,6 +7,9 @@ mod settings_surface;
 #[path = "../src/ssh_hosts_panel.rs"]
 mod ssh_hosts_panel;
 #[allow(dead_code)]
+#[path = "../src/ssh_profile.rs"]
+mod ssh_profile;
+#[allow(dead_code)]
 #[path = "../src/theme.rs"]
 mod theme;
 #[allow(dead_code)]

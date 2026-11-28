@@ -412,14 +412,31 @@ mod openssh_tests {
             cmd.arg("-F").arg(&config);
             cmd
         };
-        assert_eq!(run(ssh(), "fixture", Duration::from_secs(10)), Ok(()));
+        assert_eq!(
+            run(
+                ssh(),
+                &Host {
+                    alias: "fixture".into(),
+                    ..Default::default()
+                },
+                Duration::from_secs(10)
+            ),
+            Ok(())
+        );
         let mut unknown = ssh();
         let absent = local.path().join("absent_known_hosts");
         unknown
             .arg("-o")
             .arg(format!("UserKnownHostsFile={}", absent.display()));
         assert!(matches!(
-            run(unknown, "fixture", Duration::from_secs(10)),
+            run(
+                unknown,
+                &Host {
+                    alias: "fixture".into(),
+                    ..Default::default()
+                },
+                Duration::from_secs(10)
+            ),
             Err(Failure::Detail(_))
         ));
         assert!(!absent.exists());
@@ -431,7 +448,14 @@ mod openssh_tests {
             &fixture.0,
         ]);
         assert_eq!(
-            run(ssh(), "fixture", Duration::from_millis(500)),
+            run(
+                ssh(),
+                &Host {
+                    alias: "fixture".into(),
+                    ..Default::default()
+                },
+                Duration::from_millis(500)
+            ),
             Err(Failure::Timeout)
         );
     }

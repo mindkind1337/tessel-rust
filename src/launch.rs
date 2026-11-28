@@ -1,4 +1,4 @@
-use crate::workspace::{Host, Result, validate_host};
+use crate::workspace::{Host, Result};
 use portable_pty::CommandBuilder;
 use std::path::{Path, PathBuf};
 
@@ -336,7 +336,7 @@ pub(crate) fn pane_command(
         }
         Launch::Ssh(ssh) => {
             let host = &ssh.target;
-            validate_host(&host.alias)?;
+            let connection_args = host.connection_args()?;
             if ssh.folder().contains(['\0', '\n', '\r']) {
                 return Err("Invalid remote directory.".into());
             }
@@ -361,7 +361,7 @@ pub(crate) fn pane_command(
             if channel.is_some_and(|c| c.automatic) {
                 c.args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]);
             }
-            c.args(["--", &host.alias]);
+            c.args(connection_args);
             if host.persistent_sessions_enabled()
                 && !ssh_tmux_id.is_some_and(crate::claude::valid_uuid)
             {
@@ -456,6 +456,43 @@ mod tests {
             );
             assert_eq!(output.stdout, payload.as_bytes(), "{shell}");
         }
+    }
+
+    #[test]
+    fn structured_ssh_profile_arguments_reach_the_terminal_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = crate::workspace::Host {
+            alias: "alias".into(),
+            persistent_sessions: Some(false),
+            profile: Some(Box::new(crate::ssh_profile::Profile {
+                host: "server".into(),
+                config_host: "alias".into(),
+                port: 2222,
+                username: "deploy".into(),
+                identity_file: "C:/my keys/key".into(),
+                proxy_command: "nc %h %p".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let expected = host.connection_args().unwrap();
+        let launch = Launch::ssh(host);
+        let command = command_with_shell(&launch, dir.path(), None, None, None).unwrap();
+        let args: Vec<_> = command
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(expected.len())
+                .any(|window| window == expected)
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|s| *s == "ProxyCommand=nc %h %p")
+                .count(),
+            1
+        );
     }
 
     #[test]

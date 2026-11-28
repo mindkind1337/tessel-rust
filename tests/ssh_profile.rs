@@ -132,6 +132,9 @@ fn form_precedence_and_invalid_ports_never_silently_choose_another_endpoint() {
 
 #[test]
 fn all_options_remain_separate_arguments_and_unsafe_values_are_refused_after_deserialization() {
+    assert!(ssh_profile::valid_config_alias("\u{00e9}quipe.example"));
+    assert!(!ssh_profile::valid_config_alias("profile/abcdef"));
+    assert!(!ssh_profile::valid_config_alias("-oProxyCommand=bad"));
     let profile = Profile {
         host: "server".into(),
         identity_file: "C:\\keys\\test key".into(),

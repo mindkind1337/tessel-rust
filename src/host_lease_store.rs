@@ -153,7 +153,7 @@ impl Stored {
     }
 
     fn valid(&self) -> bool {
-        crate::workspace::validate_host(&self.alias).is_ok()
+        crate::workspace::validate_connection_key(&self.alias).is_ok()
             && Epoch::parse(&self.epoch).is_some()
             && TerminalId::parse(&self.terminal).is_some()
             && LeaseKey::parse(&self.lease.0).is_some()
@@ -266,7 +266,8 @@ impl LeaseStore {
         alias: &str,
         epoch: &Epoch,
     ) -> Result<CreateToken, LeaseStoreError> {
-        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        crate::workspace::validate_connection_key(alias)
+            .map_err(|_| LeaseStoreError::InvalidSlot)?;
         let mut bytes = Zeroizing::new([0u8; 32]);
         getrandom::fill(bytes.as_mut()).map_err(|_| LeaseStoreError::Random)?;
         let id = TerminalId::from_bytes(bytes[..16].try_into().unwrap())
@@ -310,7 +311,8 @@ impl LeaseStore {
     }
 
     pub fn list_pending(&self, alias: &str) -> Result<Vec<PendingInfo>, LeaseStoreError> {
-        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        crate::workspace::validate_connection_key(alias)
+            .map_err(|_| LeaseStoreError::InvalidSlot)?;
         self.transaction(|records| {
             Ok((
                 records
@@ -331,7 +333,8 @@ impl LeaseStore {
     /// Lists saved terminal identities for this exact alias/epoch and pending
     /// metadata for this alias across epochs. One decrypt, no write, no secrets.
     pub fn index(&self, alias: &str, epoch: &Epoch) -> Result<LeaseIndex, LeaseStoreError> {
-        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        crate::workspace::validate_connection_key(alias)
+            .map_err(|_| LeaseStoreError::InvalidSlot)?;
         self.transaction(|records| {
             Ok((
                 LeaseIndex {
@@ -462,7 +465,8 @@ impl LeaseStore {
     /// and an SSH alias can be repointed. No production caller currently uses this.
     /// Returns how many leases were forgotten.
     pub fn retain_epoch(&self, alias: &str, current: &Epoch) -> Result<usize, LeaseStoreError> {
-        crate::workspace::validate_host(alias).map_err(|_| LeaseStoreError::InvalidSlot)?;
+        crate::workspace::validate_connection_key(alias)
+            .map_err(|_| LeaseStoreError::InvalidSlot)?;
         self.transaction(|records| {
             let entries = &mut records.entries;
             let before = entries.len();
@@ -567,7 +571,7 @@ impl LeaseStore {
         }
         let pending = parsed.pending.unwrap_or_default();
         for (i, item) in pending.iter().enumerate() {
-            if crate::workspace::validate_host(&item.alias).is_err()
+            if crate::workspace::validate_connection_key(&item.alias).is_err()
                 || Epoch::parse(&item.epoch).is_none()
                 || TerminalId::parse(&item.id).is_none()
                 || DedupKey::parse(&item.dedup.0).is_none()
@@ -634,7 +638,7 @@ fn serialize_records(
 }
 
 fn check(slot: &LeaseSlot) -> Result<(), LeaseStoreError> {
-    crate::workspace::validate_host(&slot.alias).map_err(|_| LeaseStoreError::InvalidSlot)
+    crate::workspace::validate_connection_key(&slot.alias).map_err(|_| LeaseStoreError::InvalidSlot)
 }
 
 #[cfg(all(test, windows))]
@@ -1028,6 +1032,23 @@ mod tests {
     }
 
     #[test]
+    fn structured_ssh_profile_lease_namespaces_are_separate_from_aliases() {
+        let (_dir, store) = store();
+        let first = format!("profile/{}", "a".repeat(64));
+        let other = format!("profile/{}", "b".repeat(64));
+        store.put(&slot(&first, 1, 1), &lease(1)).unwrap();
+        store.put(&slot(&other, 1, 1), &lease(2)).unwrap();
+        store.put(&slot("server", 1, 1), &lease(3)).unwrap();
+        assert_eq!(store.get(&slot(&first, 1, 1)).unwrap(), Some(lease(1)));
+        assert_eq!(store.get(&slot(&other, 1, 1)).unwrap(), Some(lease(2)));
+        assert_eq!(store.get(&slot("server", 1, 1)).unwrap(), Some(lease(3)));
+        assert_eq!(
+            store.put(&slot("profile/../server", 1, 1), &lease(1)),
+            Err(LeaseStoreError::InvalidSlot)
+        );
+    }
+
+    #[test]
     fn an_invalid_alias_is_refused_before_touching_the_file() {
         let (_dir, store) = store();
         for alias in ["", "-oProxyCommand=x", "host name", "host;rm"] {
@@ -1087,7 +1108,7 @@ mod tests {
         let entries: Vec<Stored> = (0..MAX_ENTRIES)
             .map(|n| {
                 let alias = format!("{n:03}{}", "a".repeat(250));
-                assert!(crate::workspace::validate_host(&alias).is_ok());
+                assert!(crate::workspace::validate_connection_key(&alias).is_ok());
                 Stored {
                     alias,
                     epoch: Epoch::from_bytes([n as u8; 16]).as_str().into(),

@@ -617,7 +617,11 @@ struct PendingDocument {
     pinned: bool,
 }
 enum Message {
-    SshTestFinished(String, Result<(), crate::ssh_connection_test::Failure>),
+    SshTestFinished(
+        String,
+        String,
+        Result<(), crate::ssh_connection_test::Failure>,
+    ),
     TranscriptTrash(
         crate::side_panels_model::SessionHistoryEntry,
         Result<(), String>,
@@ -2942,9 +2946,9 @@ impl Tessel {
                     self.dialogs_toolbar_ui.clone_parent = path;
                 }
                 Message::CloneParentPicked(None) => {}
-                Message::SshTestFinished(alias, result) => {
-                    self.host_tests.remove(&alias);
-                    if self.state.hosts.iter().any(|h| h.alias == alias) {
+                Message::SshTestFinished(key, alias, result) => {
+                    self.host_tests.remove(&key);
+                    if self.state.hosts.iter().any(|h| h.connection_key() == key) {
                         self.host_notice = Some(crate::ssh_connection_test::notice(
                             &alias,
                             result,
@@ -10039,7 +10043,7 @@ impl Tessel {
 
         let mut seen_aliases = std::collections::HashSet::new();
         let mut remote_hosts = Vec::with_capacity(self.state.hosts.len());
-        let mut push_alias = |alias: &str| {
+        let mut push_alias = |alias: &str, label: &str| {
             if alias.is_empty() || !seen_aliases.insert(alias.to_owned()) {
                 return;
             }
@@ -10062,16 +10066,21 @@ impl Tessel {
             };
             remote_hosts.push(RemoteHostRowInput {
                 alias: alias.to_owned(),
-                label: alias.to_owned(),
+                label: label.to_owned(),
                 status,
             });
         };
         for h in &self.state.hosts {
-            push_alias(&h.alias);
+            push_alias(&h.connection_key(), h.display_label());
         }
         let extra_aliases: Vec<String> = self.native_hosts.aliases().map(str::to_owned).collect();
         for alias in &extra_aliases {
-            push_alias(alias);
+            push_alias(
+                alias,
+                self.native_hosts
+                    .target(alias)
+                    .map_or(alias.as_str(), Host::display_label),
+            );
         }
 
         let target_label = if self.view == View::Work {
@@ -10234,7 +10243,18 @@ impl Tessel {
                     {
                         self.native_hosts.cancel(&alias);
                     }
-                    if let Err(err) = self.native_hosts.start(&alias) {
+                    let target = self
+                        .state
+                        .hosts
+                        .iter()
+                        .find(|host| host.connection_key() == alias)
+                        .or_else(|| self.native_hosts.target(&alias))
+                        .cloned()
+                        .unwrap_or_else(|| Host {
+                            alias: alias.clone(),
+                            ..Default::default()
+                        });
+                    if let Err(err) = self.native_hosts.start_host(&target) {
                         self.host_notice = Some((format!("{err:?}"), true));
                     }
                 }
@@ -10273,6 +10293,7 @@ impl Tessel {
                         .iter()
                         .any(|session| session.launch.belongs_to_ssh_target(host)),
                 host: SshHostSpec {
+                    profile: host.profile.clone(),
                     target_id: host.target_id.clone(),
                     alias: host.alias.clone(),
                     folder: host.folder.clone(),
@@ -10282,7 +10303,7 @@ impl Tessel {
                 // A running SSH process alone does not prove authenticated connectivity.
                 status: None,
                 error: None,
-                busy: self.host_tests.contains(&host.alias),
+                busy: self.host_tests.contains(&host.connection_key()),
             })
             .collect();
         let mut capabilities = SshHostsCapabilities::native_openssh();
@@ -10328,6 +10349,7 @@ impl Tessel {
         #[cfg(not(windows))]
         let _ = native_action;
         let to_host = |host: SshHostSpec| Host {
+            profile: host.profile,
             target_id: host.target_id,
             alias: host.alias,
             folder: host.folder,
@@ -10335,14 +10357,16 @@ impl Tessel {
             host_daemon: host.host_daemon,
         };
         match action {
-            Some(SshHostsAction::Test { index, host })
-                if self
-                    .state
-                    .hosts
-                    .get(index)
-                    .is_some_and(|saved| saved.alias == host.alias) =>
-            {
-                self.test_ssh_host(host.alias)
+            Some(SshHostsAction::Test { index, host }) => {
+                let host = to_host(host);
+                if self.state.hosts.get(index) == Some(&host) {
+                    self.test_ssh_host(host);
+                } else {
+                    self.host_notice = Some((
+                        tr("This SSH host changed; reopen its settings.").into(),
+                        true,
+                    ));
+                }
             }
             Some(SshHostsAction::ImportConfig) => self.import_ssh_config(),
             Some(SshHostsAction::Save {
@@ -10399,24 +10423,25 @@ impl Tessel {
         }
     }
 
-    fn test_ssh_host(&mut self, alias: String) {
-        if !self.state.hosts.iter().any(|h| h.alias == alias)
-            || !self.host_tests.insert(alias.clone())
-        {
+    fn test_ssh_host(&mut self, host: Host) {
+        let key = host.connection_key();
+        let alias = host.display_label().to_owned();
+        if !self.state.hosts.contains(&host) || !self.host_tests.insert(key.clone()) {
             return;
         }
         self.host_notice = None;
         let sender = self.sender.clone();
         let target = alias.clone();
+        let sent_key = key.clone();
         if thread::Builder::new()
             .name("ssh-connection-test".into())
             .spawn(move || {
-                let result = crate::ssh_connection_test::probe(&target);
-                let _ = sender.send(Message::SshTestFinished(target, result));
+                let result = crate::ssh_connection_test::probe(&host);
+                let _ = sender.send(Message::SshTestFinished(sent_key, target, result));
             })
             .is_err()
         {
-            self.host_tests.remove(&alias);
+            self.host_tests.remove(&key);
             self.host_notice = Some(crate::ssh_connection_test::notice(
                 &alias,
                 Err(crate::ssh_connection_test::Failure::Failed),

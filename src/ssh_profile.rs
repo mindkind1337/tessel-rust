@@ -6,7 +6,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Source {
     #[default]
@@ -14,7 +14,7 @@ pub enum Source {
     SshConfig,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Profile {
     pub label: String,
@@ -75,6 +75,10 @@ fn matches(value: &str, pattern: &'static str, max: usize, cell: &'static OnceLo
         && cell
             .get_or_init(|| Regex::new(pattern).unwrap())
             .is_match(value)
+}
+
+pub fn valid_config_alias(value: &str) -> bool {
+    valid_host(value)
 }
 
 fn valid_host(value: &str) -> bool {
