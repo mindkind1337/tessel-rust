@@ -56,6 +56,24 @@ pub enum Error {
 }
 
 impl Error {
+    pub const fn message(self, french: bool) -> &'static str {
+        match (self, french) {
+            (Self::HostRequired, true) => "Un hôte SSH est requis.",
+            (Self::HostRequired, false) => "An SSH host is required.",
+            (Self::HostInvalid, true) => "L’hôte ou l’alias SSH est invalide.",
+            (Self::HostInvalid, false) => "The SSH host or alias is invalid.",
+            (Self::PortInvalid, true) => "Le port doit être un entier de 1 à 65535.",
+            (Self::PortInvalid, false) => "Port must be an integer from 1 to 65535.",
+            (Self::UserInvalid, true) => "Le nom d’utilisateur SSH est invalide.",
+            (Self::UserInvalid, false) => "The SSH username is invalid.",
+            (Self::IdentityInvalid, true) => "Le chemin du fichier de clé est invalide.",
+            (Self::IdentityInvalid, false) => "The identity-file path is invalid.",
+            (Self::JumpInvalid, true) => "L’hôte de rebond est invalide.",
+            (Self::JumpInvalid, false) => "The jump host is invalid.",
+            (Self::ProxyInvalid, true) => "La commande proxy est invalide ou trop longue.",
+            (Self::ProxyInvalid, false) => "The proxy command is invalid or too long.",
+        }
+    }
     pub const fn code(self) -> &'static str {
         match self {
             Self::HostRequired => "host-required",
@@ -384,5 +402,67 @@ impl Draft {
             source: Source::Manual,
         }
         .checked()
+    }
+}
+
+/// Editable optional fields shared by the native settings renderers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Field {
+    Label,
+    Username,
+    Port,
+    IdentityFile,
+    ProxyCommand,
+    JumpHost,
+}
+impl Field {
+    pub fn label(self, french: bool) -> &'static str {
+        match (self, french) {
+            (Self::Label, true) => "Nom",
+            (Self::Label, false) => "Label",
+            (Self::Username, true) => "Utilisateur",
+            (Self::Username, false) => "Username",
+            (Self::Port, _) => "Port",
+            (Self::IdentityFile, true) => "Fichier de clé",
+            (Self::IdentityFile, false) => "Identity file",
+            (Self::ProxyCommand, true) => "Commande proxy",
+            (Self::ProxyCommand, false) => "Proxy command",
+            (Self::JumpHost, true) => "Hôte de rebond",
+            (Self::JumpHost, false) => "Jump host",
+        }
+    }
+}
+impl Draft {
+    pub fn field(&self, field: Field) -> &str {
+        match field {
+            Field::Label => &self.label,
+            Field::Username => &self.username,
+            Field::Port => &self.port,
+            Field::IdentityFile => &self.identity_file,
+            Field::ProxyCommand => &self.proxy_command,
+            Field::JumpHost => &self.jump_host,
+        }
+    }
+    pub fn set_field(&mut self, field: Field, value: String) {
+        *match field {
+            Field::Label => &mut self.label,
+            Field::Username => &mut self.username,
+            Field::Port => &mut self.port,
+            Field::IdentityFile => &mut self.identity_file,
+            Field::ProxyCommand => &mut self.proxy_command,
+            Field::JumpHost => &mut self.jump_host,
+        } = value;
+    }
+    pub fn has_options(&self) -> bool {
+        [
+            Field::Label,
+            Field::Username,
+            Field::Port,
+            Field::IdentityFile,
+            Field::ProxyCommand,
+            Field::JumpHost,
+        ]
+        .into_iter()
+        .any(|field| !self.field(field).trim().is_empty())
     }
 }

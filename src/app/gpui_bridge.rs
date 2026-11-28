@@ -97,6 +97,8 @@ pub(crate) struct GpuiExtraUiState {
     pub task_board: crate::native_task_board::State,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
+    pub ssh_profile_draft: crate::ssh_profile::Draft,
+    pub ssh_advanced_open: bool,
     editing_ssh: Option<(usize, crate::workspace::Host)>,
     pub new_custom_agent_name: String,
     pub new_custom_agent_cmd: String,
@@ -147,6 +149,8 @@ impl Default for GpuiExtraUiState {
             task_board: Default::default(),
             new_ssh_alias: String::new(),
             new_ssh_folder: String::new(),
+            ssh_profile_draft: Default::default(),
+            ssh_advanced_open: false,
             editing_ssh: None,
             new_custom_agent_name: String::new(),
             new_custom_agent_cmd: String::new(),
@@ -222,6 +226,7 @@ pub(crate) enum GpuiFocusTarget {
     SkillsGitUrl,
     SshAlias,
     SshFolder,
+    SshProfile(crate::ssh_profile::Field),
     AutomationName,
     AutomationPrompt,
     BuiltinAgentCommand,
@@ -651,6 +656,8 @@ pub(crate) struct GpuiSettingsSnapshot {
     pub ssh_hosts: Vec<crate::workspace::Host>,
     pub new_ssh_alias: String,
     pub new_ssh_folder: String,
+    pub ssh_profile_draft: crate::ssh_profile::Draft,
+    pub ssh_advanced_open: bool,
     pub editing_ssh: Option<(usize, crate::workspace::Host)>,
     pub builtin_agents: Vec<BuiltinAgentSettingRow>,
     pub builtin_agent_details: Vec<GpuiBuiltinAgentDetail>,
@@ -1300,6 +1307,8 @@ pub(crate) enum GpuiAction {
         alias: String,
         folder: String,
     },
+    SetSshProfileField(crate::ssh_profile::Field, String),
+    ToggleSshAdvanced,
     ImportSshConfig,
     SshRow(usize, crate::workspace::Host, SshRowCommand),
     BeginSshEdit(usize, crate::workspace::Host),
@@ -3387,6 +3396,19 @@ impl Tessel {
                     false
                 }
             }
+            GpuiFocusTarget::SshProfile(field) => {
+                if lower == "enter" {
+                    self.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+                    return true;
+                }
+                let mut value = self.gpui_extra.ssh_profile_draft.field(field).to_owned();
+                if apply_singleline_edit(&mut value, &lower, printable, pasted) {
+                    self.apply_gpui_action(GpuiAction::SetSshProfileField(field, value));
+                    true
+                } else {
+                    false
+                }
+            }
             GpuiFocusTarget::SshFolder => {
                 if lower == "enter" {
                     self.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
@@ -5268,6 +5290,8 @@ impl Tessel {
             ssh_hosts: self.state.hosts.clone(),
             new_ssh_alias: self.gpui_extra.new_ssh_alias.clone(),
             new_ssh_folder: self.gpui_extra.new_ssh_folder.clone(),
+            ssh_profile_draft: self.gpui_extra.ssh_profile_draft.clone(),
+            ssh_advanced_open: self.gpui_extra.ssh_advanced_open,
             editing_ssh: self.gpui_extra.editing_ssh.clone(),
             builtin_agents,
             builtin_agent_details,
@@ -7872,11 +7896,29 @@ impl Tessel {
                 self.gpui_extra.new_ssh_alias = alias;
                 self.gpui_extra.new_ssh_folder = folder;
             }
+            GpuiAction::SetSshProfileField(field, value) => {
+                self.gpui_extra.ssh_profile_draft.set_field(field, value);
+                self.host_notice = None;
+            }
+            GpuiAction::ToggleSshAdvanced => {
+                self.gpui_extra.ssh_advanced_open = !self.gpui_extra.ssh_advanced_open;
+            }
             GpuiAction::ImportSshConfig => self.import_ssh_config(),
             GpuiAction::BeginSshEdit(index, expected) => {
                 if self.state.hosts.get(index) == Some(&expected) {
                     self.gpui_extra.new_ssh_alias.clone_from(&expected.alias);
                     self.gpui_extra.new_ssh_folder.clone_from(&expected.folder);
+                    self.gpui_extra.ssh_profile_draft = expected
+                        .profile
+                        .as_deref()
+                        .map(crate::ssh_profile::Draft::from_profile)
+                        .unwrap_or_default();
+                    if let Some(profile) = &expected.profile {
+                        self.gpui_extra.new_ssh_alias.clone_from(&profile.host);
+                    }
+                    self.gpui_extra.ssh_advanced_open =
+                        !self.gpui_extra.ssh_profile_draft.proxy_command.is_empty()
+                            || !self.gpui_extra.ssh_profile_draft.jump_host.is_empty();
                     self.gpui_extra.editing_ssh = Some((index, expected));
                     self.host_notice = None;
                 } else {
@@ -7890,16 +7932,45 @@ impl Tessel {
                 self.gpui_extra.editing_ssh = None;
                 self.gpui_extra.new_ssh_alias.clear();
                 self.gpui_extra.new_ssh_folder.clear();
+                self.gpui_extra.ssh_profile_draft = Default::default();
+                self.gpui_extra.ssh_advanced_open = false;
                 self.host_notice = None;
             }
             GpuiAction::SaveSshHostFromDraft => {
                 let original = self.gpui_extra.editing_ssh.clone();
                 let expected = original.as_ref().map(|(index, host)| (*index, host));
-                let host = crate::workspace::Host {
+                let mut host = crate::workspace::Host {
                     alias: self.gpui_extra.new_ssh_alias.trim().to_owned(),
                     folder: self.gpui_extra.new_ssh_folder.trim().to_owned(),
                     ..expected.map(|(_, host)| host.clone()).unwrap_or_default()
                 };
+                if host.profile.is_some() || self.gpui_extra.ssh_profile_draft.has_options() {
+                    let mut draft = self.gpui_extra.ssh_profile_draft.clone();
+                    draft.host.clone_from(&host.alias);
+                    let unchanged = host.profile.as_deref().is_some_and(|profile| {
+                        draft == crate::ssh_profile::Draft::from_profile(profile)
+                    });
+                    let validated = if unchanged {
+                        Ok(*host.profile.clone().expect("existing profile"))
+                    } else {
+                        draft.profile()
+                    };
+                    match validated {
+                        Ok(profile) => {
+                            host.alias.clone_from(&profile.config_host);
+                            host.profile = Some(Box::new(profile));
+                        }
+                        Err(error) => {
+                            self.host_notice = Some((
+                                error
+                                    .message(self.state.language == crate::i18n::Language::French)
+                                    .into(),
+                                true,
+                            ));
+                            return;
+                        }
+                    }
+                }
                 match self.change_hosts(|hosts| crate::host_actions::save(hosts, expected, host)) {
                     Ok(_) => {
                         self.apply_gpui_action(GpuiAction::CancelSshEdit);
@@ -11672,6 +11743,90 @@ mod panel_snapshot_tests {
         drop(app);
         let reopened = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
         assert_eq!(reopened.state.hosts[0], saved);
+    }
+
+    #[test]
+    fn ssh_settings_structured_fields_save_restore_and_preserve_failed_edits() {
+        use crate::ssh_profile::Field;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut app = Tessel::new_for_gpui_in_dir(Some(state.clone()), false, || {});
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "server".into(),
+            folder: "/srv".into(),
+        });
+        for (field, value) in [
+            (Field::Label, "Development"),
+            (Field::Username, "deploy"),
+            (Field::Port, "2222"),
+            (Field::IdentityFile, "C:/my keys/id"),
+            (Field::ProxyCommand, "nc %h %p"),
+            (Field::JumpHost, "bastion"),
+        ] {
+            app.apply_gpui_action(GpuiAction::SetSshProfileField(field, value.into()));
+        }
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        let original = app.state.hosts[0].clone();
+        assert_eq!(original.profile.as_ref().unwrap().port, 2222);
+        assert_eq!(original.display_label(), "Development");
+        app.apply_gpui_action(GpuiAction::BeginSshEdit(0, original.clone()));
+        assert!(app.gpui_extra.ssh_advanced_open);
+        app.apply_gpui_action(GpuiAction::SetSshProfileField(Field::Port, "70000".into()));
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        assert_eq!(app.state.hosts[0], original);
+        assert_eq!(app.gpui_extra.ssh_profile_draft.port, "70000");
+        assert!(app.host_notice.as_ref().unwrap().1);
+        app.apply_gpui_action(GpuiAction::SetSshProfileField(Field::Port, "2222".into()));
+        assert!(app.host_notice.is_none());
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "server".into(),
+            folder: "/new".into(),
+        });
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        assert_eq!(
+            app.state.hosts[0].connection_key(),
+            original.connection_key()
+        );
+        assert_eq!(app.state.hosts[0].profile, original.profile);
+        assert_eq!(app.state.hosts[0].target_id, original.target_id);
+        drop(app);
+        let app = Tessel::new_for_gpui_in_dir(Some(state), false, || {});
+        assert_eq!(app.state.hosts[0].folder, "/new");
+        assert_eq!(app.state.hosts[0].profile, original.profile);
+    }
+
+    #[test]
+    fn ssh_settings_folder_only_edit_preserves_imported_config_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = Tessel::new_for_gpui_in_dir(Some(dir.path().join("state")), false, || {});
+        let profile = crate::ssh_profile::Profile {
+            config_host: "alias".into(),
+            host: "server".into(),
+            username: "deploy".into(),
+            source: crate::ssh_profile::Source::SshConfig,
+            ..Default::default()
+        }
+        .checked()
+        .unwrap();
+        let host = crate::workspace::Host {
+            alias: "alias".into(),
+            profile: Some(Box::new(profile)),
+            ..Default::default()
+        };
+        app.change_hosts(|hosts| crate::host_actions::save(hosts, None, host))
+            .unwrap();
+        let original = app.state.hosts[0].clone();
+        app.apply_gpui_action(GpuiAction::BeginSshEdit(0, original.clone()));
+        app.apply_gpui_action(GpuiAction::SetSshDraft {
+            alias: "server".into(),
+            folder: "/new".into(),
+        });
+        app.apply_gpui_action(GpuiAction::SaveSshHostFromDraft);
+        assert_eq!(app.state.hosts[0].profile, original.profile);
+        assert_eq!(
+            app.state.hosts[0].connection_args().unwrap(),
+            ["--", "alias"]
+        );
     }
 
     #[test]

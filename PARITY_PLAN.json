@@ -1,0 +1,309 @@
+{
+  "schema": 1,
+  "updated": "2026-11-28",
+  "started": "2026-11-02",
+  "objective": "100% native Rust clone of Tessel: same appearance, workflows and behavior. No Electron/Vue application wrapper.",
+  "reference_commit": "36f02babd0c4b948ec04caf279cc704101472418",
+  "last_verified_rust_commit": "45b63c1",
+  "baseline_complete": false,
+  "metric_rule": "No overall percentage before the reference scenario inventory is complete. Domain certification counts below are audit coverage, not percentage of code written. A passing unit suite or a commit does not certify a domain.",
+  "scope_rule": "These 20 domains seed the inventory from MIGRATION.md; they are not an exhaustive feature denominator. Preserve all source features and add reference deltas explicitly.",
+  "cadence": [
+    "Update this plan and regenerate the report after each published functional batch.",
+    "During active work, report completed work, evidence, remaining gaps and next milestone.",
+    "At every active daily checkpoint, revise dates against evidence and record delays. No unattended scheduled execution is configured."
+  ],
+  "workflow": [
+    "Reference scenario and expected behavior",
+    "Rust implementation in isolated checkout",
+    "Focused functional tests and strict all-target Clippy",
+    "Matching synthetic Vue/Rust runtime and visual comparison",
+    "Review evidence and remaining defects",
+    "Publish, record build, update status; reopen on regression"
+  ],
+  "milestones": [
+    {
+      "id": "M1",
+      "target": "2026-11-28",
+      "state": "done",
+      "name": "Establish project dashboard, source baseline and acceptance gates",
+      "exit": "Versioned tracker, reproducible report, explicit metric and report cadence.",
+      "card": "task-11-217787"
+    },
+    {
+      "id": "M2",
+      "target": "2026-11-29",
+      "state": "doing",
+      "name": "Finish structured SSH forms in GPUI and Compatibility",
+      "exit": "Both forms persist all fields; validation, edit/cancel and runtime keyboard tests; source comparison."
+    },
+    {
+      "id": "M3",
+      "target": "2026-11-30",
+      "state": "todo",
+      "name": "Audit the 20 domains into an exhaustive reference-scenario backlog",
+      "exit": "Each source feature mapped to scenario, current status, dependency, owner and acceptance command/artifact; then establish global denominator.",
+      "card": "task-12-685389"
+    },
+    {
+      "id": "M4",
+      "target": "2026-12-02",
+      "state": "todo",
+      "name": "First comparable visual/runtime acceptance report",
+      "exit": "Synthetic matched captures for shell, settings, Files, terminal and browser; list all differences and remediation tasks.",
+      "card": "task-13-672313"
+    },
+    {
+      "id": "M5",
+      "target": null,
+      "state": "todo",
+      "name": "Close all parity gaps and deliver verified release",
+      "exit": "Every reference scenario passes; installer/update/privacy/recovery verified; no open required gap."
+    }
+  ],
+  "schedule_note": "Dates M2-M4 are provisional targets, not completion promises. Re-estimate at each checkpoint. Final delivery date remains unestimated until the scenario audit exposes remaining scope and dependencies.",
+  "current_work": {
+    "card": "task-3-19649",
+    "area": "SSH",
+    "status": "GPUI structured SSH form implemented and focused tests pass. Compatibility form, complete text-input behavior and matched visual/live-server acceptance remain open."
+  },
+  "reports": [
+    {
+      "date": "2026-11-28",
+      "build": "b564 (45b63c1)",
+      "completed": "Structured SSH transports, connection identity isolation and persistence published.",
+      "validation": "11 profile integration unit tests, 5 model tests, 9 panel tests and strict all-target/all-feature Clippy passed.",
+      "remaining": "Advanced form controls and actual external-server acceptance; no claim of complete clone."
+    },
+    {
+      "date": "2026-11-28",
+      "build": "b565 (this publication)",
+      "completed": "Added the project plan and generated dashboard. GPUI SSH settings expose all structured profile fields, retain failed drafts and preserve imported OpenSSH routing on folder-only edits.",
+      "validation": "10 SSH settings tests, 6 profile model tests, 2 report-accounting tests; strict all-target/all-feature Clippy and formatting pass.",
+      "remaining": "Compatibility advanced form, complete input behavior and matching visual/runtime acceptance. Global scenario denominator has not yet been audited."
+    }
+  ],
+  "domains": [
+    {
+      "id": "P01",
+      "area": "Native application",
+      "acceptance": "Rust GUI and backend; no Electron/Vue runtime",
+      "state": "audit_pending",
+      "historical_evidence": "Initial window verified on Windows",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P02",
+      "area": "Exact UI parity",
+      "acceptance": "Same chrome, project sidebar, pane grids/tabs, side panels, menus, themes, shortcuts and behavior as Tessel",
+      "state": "audit_pending",
+      "historical_evidence": "Dual-renderer architecture integrated and verified: primary native **GPUI** (`gpui-ce 0.3`) hardware-accelerated renderer (`--renderer gpui`, default) + universal **`eframe`/`egui`** OpenGL Compatibility renderer (`--renderer compat` / `TESSEL_RENDERER=compat` + automatic runtime fallback) over one shared `app::Tessel` core, covering all 7 CSS theme palettes (`color-mix` sRGB), DirectWrite `Segoe UI Variable Text` / `Cascadia Mono` typography, 45 `resvg` vector icons + `gpui::canvas` primitives, frameless 40px caption toolbar, left project/worktree/Live-Share sidebar, center `ViewTabs` + `pane_grid` PTY terminals/Native Chats/Code-Diff-Rich-Preview editors + Windows WebView2 HWND stage, all 7 right `SidePanel` tabs (including 5-color Git swimlanes), all 22 `Settings` pages + `Passwords` vault & `Tessel Account`, and all workspace modals, menus and status/toolbar popovers",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P03",
+      "area": "Terminals",
+      "acceptance": "Real PTY, input, resize, ANSI, background draining, shutdown, scrollback",
+      "state": "audit_pending",
+      "historical_evidence": "Real PTY verified; Unicode/wrapped selection and focus controls implemented; IME event handling implemented, X10/VT200/motion with SGR/UTF-8 mouse protocols implemented and tested; real OS IME and live TUI mouse acceptance pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P04",
+      "area": "Projects",
+      "acceptance": "Persistent roots, selection, no process starts on restore",
+      "state": "audit_pending",
+      "historical_evidence": "Implemented; persistence and portable settings export/restore tests pass",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P05",
+      "area": "Files/editor",
+      "acceptance": "Confined browsing/create/rename/delete; tabs; conflict-aware atomic saving; dirty close guard",
+      "state": "audit_pending",
+      "historical_evidence": "Expandable native tree integrated with bounded background enumeration and cached rows; preserved expansions and project-switch cancellation; existing scoped file operations retained; real egui pointer, cancellation, cache and confinement tests pass; native tree rendering visually checked",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P06",
+      "area": "Layout",
+      "acceptance": "Persistent grid; project switching retains sessions",
+      "state": "audit_pending",
+      "historical_evidence": "Terminal split trees, divider resizing, maximize/restore, auto arrangement and geometric focus integrated; multiple independent native Codex/Claude chats now share the grid with pane-scoped resume metadata and dormant restoration; browser/editor leaves still require unification",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P07",
+      "area": "Agent terminals",
+      "acceptance": "Detect installed CLIs; project cwd; no invented provider flags",
+      "state": "audit_pending",
+      "historical_evidence": "In progress",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P08",
+      "area": "SSH",
+      "acceptance": "Host verification, keepalive, explicit reconnect, remote cwd",
+      "state": "audit_pending",
+      "historical_evidence": "The Rust-generated remote launch command was exercised over loopback OpenSSH in WSL with a pinned host key and temporary client key. After the SSH client was killed, the same remote shell PID survived and reattached. Desktop-to-external-host acceptance remains pending.",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P09",
+      "area": "Remote filesystem",
+      "acceptance": "SFTP listing/read/save/download/create/rename/delete/previews; host verification; conflict protection",
+      "state": "audit_pending",
+      "historical_evidence": "An OpenSSH SFTP subprocess verified exclusive creation, multi-chunk atomic saves, conflict and rename-collision refusal, listing, original bytes after rename, deletion and bounded preview reads. SSH login, host verification and reconnect still require an end-to-end server session.",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P10",
+      "area": "Task board",
+      "acceptance": "Per-project cards; persistence; safe movement",
+      "state": "audit_pending",
+      "historical_evidence": "Adaptive native board integrated with scoped persistence and native chat tools; broader orchestration parity pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P11",
+      "area": "Git",
+      "acceptance": "Nonblocking, bounded status/diff/log; explicit mutations; worktrees; no auto polling storms",
+      "state": "audit_pending",
+      "historical_evidence": "Structured Changes panel integrated with on-demand status, diff tabs, `+added / -removed` badges, staging/unstaging, confirmed discard, commits and remote operations; background Git worktree discovery, branch-prefixed creation with `.env*` secret copy, Windows NTFS junction-safe removal, sidebar sub-cards/hidden inbox, launcher toggle and `WorktreeCleanupModal` integrated and tested; native visual acceptance pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P12",
+      "area": "Native agent chat",
+      "acceptance": "Provider transports, streaming, approvals, resume and history",
+      "state": "audit_pending",
+      "historical_evidence": "Codex transport, initialization and history compatibility probe pass; history rendering is fixture-tested but unavailable on the installed server; Claude native initialization and streaming/approval/structured-question protocol fixtures pass, with French UI visually checked; Claude live model acceptance currently blocked by CLI sign-in requirement; tool execution and history plus other providers pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P13",
+      "area": "Agent tools",
+      "acceptance": "Authenticated scoped tools, approval UI, messages and task board",
+      "state": "audit_pending",
+      "historical_evidence": "Task tools, scoped structured questions, explicitly enabled project browser tools, HMAC-SHA256-authenticated Tessel Teams (`team_*`), bounded worker orchestration (`team_worker_*`, `team_heartbeat`), gated inter-project relay (`project_agents`/`project_send`/`project_inbox` with pair approval and untrusted framing) and digit-free idle wake-ups implemented and verified",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P14",
+      "area": "Browser",
+      "acceptance": "Engine integration; isolated profiles; navigation/download tests",
+      "state": "audit_pending",
+      "historical_evidence": "Windows WebView2 implemented; three native download cases and separate project-agent snapshot/click/fill/select/check/scroll/download/isolation acceptance pass; native progress, cancellation and incomplete-response acceptance implemented; scoped original PNG screenshots and native capture acceptance pass; iframe tools pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P15",
+      "area": "Documents",
+      "acceptance": "HTML trust, PDF, images, Markdown, office documents",
+      "state": "audit_pending",
+      "historical_evidence": "Native readable HTML/Markdown (with `600 KiB` / `1 MiB` size gate and native vector Mermaid `flowchart`/`sequenceDiagram` rendering), sticky-header `SheetView` (`5,000 × 200` CSV/TSV + XLSX/XLSM/ODS), collapsible JSON/JSONC/JSONL tree viewer, images and bounded original PDF/Office workers implemented and tested",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P16",
+      "area": "Credentials",
+      "acceptance": "OS-protected storage; explicit agent opt-in; never available to guests",
+      "state": "audit_pending",
+      "historical_evidence": "Windows DPAPI/CSV and owner-only UI implemented; encryption and native manual-fill tests pass; explicit agent-consent integration pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P17",
+      "area": "Live Share",
+      "acceptance": "Authenticated transport; project scope; explicit guest rights; secret-isolation tests",
+      "state": "audit_pending",
+      "historical_evidence": "Duplex TLS 1.3 LAN session with 8-flag `ShareRights`, 6-digit SAS knock approval (`900ms` arming delay + trust gating), multi-invitation management (`MAX_INVITES = 20`), `720px` dialog (`Overview`/`People`/`Invitations`/`Settings`), `24px` toolbar pill + `360px` popover, pane presence and `.osb-live` sidebar badges implemented and verified; cloud relay and Electron wire compatibility pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P18",
+      "area": "Connectors/account/sync",
+      "acceptance": "Match existing service contracts; token isolation and consent",
+      "state": "audit_pending",
+      "historical_evidence": "Native account PKCE, callback, DPAPI, HTTP fixture tests and end-to-end encrypted `scrypt` + `AES-256-GCM` cloud sync (`\"rust_schema\": 1`, bucket padding, shrink guard, `sync-floor.json` anti-rollback and restore preview) pass; backend callback deployment and OAuth connectors pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P19",
+      "area": "Packaging/update",
+      "acceptance": "Native installer, integrity verification, safe restart, CI artifacts",
+      "state": "audit_pending",
+      "historical_evidence": "Portable release packaging and SHA-256 readback implemented; installer, signing and updater pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    },
+    {
+      "id": "P20",
+      "area": "Localization/accessibility",
+      "acceptance": "EN/FR; keyboard navigation; screen reader acceptance",
+      "state": "audit_pending",
+      "historical_evidence": "Persisted EN/FR interface selection and main-panel translations implemented; searchable native shortcut help visually checked, modal Escape/focus and document shortcut isolation tests pass; external/technical diagnostics and screen-reader acceptance pending",
+      "evidence_source": "MIGRATION.md (historical claims; not current end-to-end certification)",
+      "implementation_complete": false,
+      "parity_verified": false,
+      "next_action": "Split into reference scenarios, inspect current implementation, run matching Rust/Vue acceptance; attach evidence."
+    }
+  ],
+  "scenarios": []
+}

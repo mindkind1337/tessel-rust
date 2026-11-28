@@ -3045,60 +3045,111 @@ fn render_ssh_page(
         },
         tokens,
     ));
+    use crate::ssh_profile::Field;
+    let mut profile_fields = div().flex().flex_col().gap(px(6.0));
+    for field in [
+        Field::Label,
+        Field::Username,
+        Field::Port,
+        Field::IdentityFile,
+        Field::ProxyCommand,
+        Field::JumpHost,
+    ] {
+        if matches!(field, Field::ProxyCommand | Field::JumpHost) && !s.ssh_advanced_open {
+            continue;
+        }
+        let target = FocusInputTarget::SshProfile(field);
+        let id = format!("gpui-ssh-profile-{field:?}");
+        profile_fields = profile_fields.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(field.label(french))
+                .child(render_focus_input_box(
+                    id,
+                    target,
+                    focus_input == target,
+                    s.ssh_profile_draft.field(field),
+                    match field {
+                        Field::Port => "22",
+                        Field::IdentityFile => "~/.ssh/id_ed25519",
+                        _ => "",
+                    },
+                    tokens,
+                    cx,
+                )),
+        );
+    }
+    profile_fields = profile_fields.child(setting_btn(
+        "gpui-ssh-advanced",
+        if french { "Avancé" } else { "Advanced" }.into(),
+        s.ssh_advanced_open,
+        tokens,
+        GpuiAction::ToggleSshAdvanced,
+        cx,
+    ));
     let mut form = Some(
         div()
             .flex()
-            .gap(px(6.0))
-            .child(div().flex_1().child(render_focus_input_box(
-                "gpui-ssh-alias",
-                FocusInputTarget::SshAlias,
-                focus_input == FocusInputTarget::SshAlias,
-                &s.new_ssh_alias,
-                if french {
-                    "utilisateur@hôte ou alias SSH…"
-                } else {
-                    "user@host or SSH config alias…"
-                },
-                tokens,
-                cx,
-            )))
-            .child(div().flex_1().child(render_focus_input_box(
-                "gpui-ssh-folder",
-                FocusInputTarget::SshFolder,
-                focus_input == FocusInputTarget::SshFolder,
-                &s.new_ssh_folder,
-                if french {
-                    "Dossier distant (~)…"
-                } else {
-                    "Remote folder (~)…"
-                },
-                tokens,
-                cx,
-            )))
-            .child(setting_btn(
-                "gpui-ssh-add",
-                match (s.editing_ssh.is_some(), french) {
-                    (true, true) => "Enregistrer",
-                    (true, false) => "Save",
-                    (false, true) => "Ajouter",
-                    (false, false) => "Add Host",
-                }
-                .to_owned(),
-                true,
-                tokens,
-                GpuiAction::SaveSshHostFromDraft,
-                cx,
-            ))
-            .when(s.editing_ssh.is_some(), |row| {
-                row.child(setting_btn(
-                    "gpui-ssh-cancel",
-                    if french { "Annuler" } else { "Cancel" }.into(),
-                    false,
-                    tokens,
-                    GpuiAction::CancelSshEdit,
-                    cx,
-                ))
-            }),
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.0))
+                    .child(div().flex_1().child(render_focus_input_box(
+                        "gpui-ssh-alias",
+                        FocusInputTarget::SshAlias,
+                        focus_input == FocusInputTarget::SshAlias,
+                        &s.new_ssh_alias,
+                        if french {
+                            "utilisateur@hôte ou alias SSH…"
+                        } else {
+                            "user@host or SSH config alias…"
+                        },
+                        tokens,
+                        cx,
+                    )))
+                    .child(div().flex_1().child(render_focus_input_box(
+                        "gpui-ssh-folder",
+                        FocusInputTarget::SshFolder,
+                        focus_input == FocusInputTarget::SshFolder,
+                        &s.new_ssh_folder,
+                        if french {
+                            "Dossier distant (~)…"
+                        } else {
+                            "Remote folder (~)…"
+                        },
+                        tokens,
+                        cx,
+                    )))
+                    .child(setting_btn(
+                        "gpui-ssh-add",
+                        match (s.editing_ssh.is_some(), french) {
+                            (true, true) => "Enregistrer",
+                            (true, false) => "Save",
+                            (false, true) => "Ajouter",
+                            (false, false) => "Add Host",
+                        }
+                        .to_owned(),
+                        true,
+                        tokens,
+                        GpuiAction::SaveSshHostFromDraft,
+                        cx,
+                    ))
+                    .when(s.editing_ssh.is_some(), |row| {
+                        row.child(setting_btn(
+                            "gpui-ssh-cancel",
+                            if french { "Annuler" } else { "Cancel" }.into(),
+                            false,
+                            tokens,
+                            GpuiAction::CancelSshEdit,
+                            cx,
+                        ))
+                    }),
+            )
+            .child(profile_fields),
     );
 
     let edited_row = s.editing_ssh.as_ref().and_then(|(index, expected)| {
@@ -3156,7 +3207,7 @@ fn render_ssh_page(
                         .text_color(tokens.text_strong)
                         .child(SharedString::from(format!(
                             "{} : {}",
-                            host.alias, host.folder
+                            host.display_label(), host.folder
                         ))),
                 )
                 .child(

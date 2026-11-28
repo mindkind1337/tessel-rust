@@ -162,3 +162,37 @@ fn all_options_remain_separate_arguments_and_unsafe_values_are_refused_after_des
         assert!(loaded.argv().is_err(), "{value}");
     }
 }
+
+#[test]
+fn native_form_fields_build_a_profile_and_preserve_invalid_input() {
+    use ssh_profile::Field;
+    let mut draft = Draft {
+        host: "server".into(),
+        ..Default::default()
+    };
+    assert!(!draft.has_options());
+    for (field, value) in [
+        (Field::Label, "Development"),
+        (Field::Username, "deploy"),
+        (Field::Port, "2222"),
+        (Field::IdentityFile, "C:/my keys/id"),
+        (Field::ProxyCommand, "nc %h %p"),
+        (Field::JumpHost, "bastion"),
+    ] {
+        assert!(!field.label(true).is_empty());
+        assert!(!field.label(false).is_empty());
+        draft.set_field(field, value.into());
+    }
+    let profile = draft.profile().unwrap();
+    assert_eq!(profile.port, 2222);
+    assert_eq!(profile.username, "deploy");
+    assert_eq!(profile.identity_file, "C:/my keys/id");
+    assert_eq!(profile.proxy_command, "nc %h %p");
+    assert_eq!(profile.jump_host, "bastion");
+    assert!(draft.has_options());
+    draft.set_field(Field::Port, "70000".into());
+    assert_eq!(draft.profile(), Err(Error::PortInvalid));
+    assert!(Error::PortInvalid.message(true).contains("65535"));
+    assert!(Error::PortInvalid.message(false).contains("65535"));
+    assert_eq!(draft.field(Field::Port), "70000");
+}

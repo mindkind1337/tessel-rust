@@ -438,3 +438,11 @@ The current Vue `RemoteHostForm.vue` still exposes structured label, username, p
 ### Structured SSH profiles — model work in progress
 
 `src/ssh_profile.rs` defines the shared connection fields, edited/imported alias rules, pasted endpoint parsing, validation and separated OpenSSH argument construction. `tests/fixtures/ssh_profile_vue.json` records synthetic validation/argument/parser results produced by the Vue source at its recorded commit. The model does not read keys or execute proxy commands. The model is now carried by optional `workspace::Host.profile` metadata and used by terminal, SFTP, Test and native daemon transports. Complete connection arguments determine separate native connection/lease, file-history and HTML-preview scopes; legacy aliases retain their keys. Both forms still need the advanced editable fields, and live remote acceptance remains open. Existing daemon defaults have not been changed as part of this work.
+
+### GPUI structured SSH form — 2026-11-28
+
+The GPUI Settings form now exposes label, username, port, identity file, proxy command and jump host using the shared profile validator and saved Host profile. Edit/cancel, failed-draft preservation and connection-key persistence are tested. Compatibility still uses its alias/folder form. Source layout, text editing behavior and real-server acceptance remain open; this is not full SSH UI parity.
+
+### Current project tracking
+
+`PARITY_PLAN.json` and generated `PARITY_REPORT.html` track dated milestones and evidence gates against Vue `36f02babd0c4b948ec04caf279cc704101472418`. The historical baseline references above remain useful provenance, not a current completion claim. The initial 20 domains must be expanded into a complete scenario inventory before computing global completion.
